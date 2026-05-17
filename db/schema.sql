@@ -1,11 +1,9 @@
 -- ============================================================
--- Patron — Supabase Schema v1
+-- Patron — Supabase Schema v1  (fully idempotent — safe to re-run)
 -- Run in Supabase SQL Editor (https://supabase.com/dashboard)
 -- ============================================================
 
 -- ─── TRIGGER: auto-create profile on signup ──────────────────
--- Runs as superuser (security definer) so it bypasses RLS.
--- Works whether email confirmation is enabled or disabled.
 create or replace function handle_new_user()
 returns trigger language plpgsql security definer set search_path = public as $$
 begin
@@ -26,7 +24,7 @@ create trigger on_auth_user_created
   after insert on auth.users
   for each row execute function handle_new_user();
 
--- ─── PROFILES (extends auth.users) ───────────────────────────
+-- ─── PROFILES ────────────────────────────────────────────────
 create table if not exists profiles (
   id         uuid        references auth.users(id) on delete cascade primary key,
   name       text        not null,
@@ -40,14 +38,13 @@ create table if not exists profiles (
 
 alter table profiles enable row level security;
 
-create policy "Voir son profil"
-  on profiles for select using (auth.uid() = id);
+drop policy if exists "Voir son profil"   on profiles;
+drop policy if exists "Modifier son profil" on profiles;
+drop policy if exists "Créer son profil"  on profiles;
 
-create policy "Modifier son profil"
-  on profiles for update using (auth.uid() = id);
-
-create policy "Créer son profil"
-  on profiles for insert with check (auth.uid() = id);
+create policy "Voir son profil"    on profiles for select using (auth.uid() = id);
+create policy "Modifier son profil" on profiles for update using (auth.uid() = id);
+create policy "Créer son profil"   on profiles for insert with check (auth.uid() = id);
 
 -- ─── BUSINESSES ──────────────────────────────────────────────
 create table if not exists businesses (
@@ -98,21 +95,25 @@ returns text language sql security definer stable as $$
 $$;
 
 -- Business policies
+drop policy if exists "Membres: voir leur commerce"         on businesses;
+drop policy if exists "Tout le monde: créer un commerce"    on businesses;
+drop policy if exists "Administrateurs: modifier leur commerce" on businesses;
+
 create policy "Membres: voir leur commerce"
   on businesses for select using (is_member(id));
-
 create policy "Tout le monde: créer un commerce"
   on businesses for insert with check (auth.uid() = created_by);
-
 create policy "Administrateurs: modifier leur commerce"
   on businesses for update using (get_role(id) = 'administrateur');
 
 -- Membership policies
+drop policy if exists "Membres: voir leurs adhésions" on memberships;
+drop policy if exists "Adhésion propre uniquement"    on memberships;
+
 create policy "Membres: voir leurs adhésions"
   on memberships for select using (
     user_id = auth.uid() or is_member(business_id)
   );
-
 create policy "Adhésion propre uniquement"
   on memberships for insert with check (user_id = auth.uid());
 
@@ -132,15 +133,16 @@ create table if not exists invite_codes (
 
 alter table invite_codes enable row level security;
 
--- Anyone can read a code (needed for join flow before being a member)
+drop policy if exists "Lecture codes publique"            on invite_codes;
+drop policy if exists "Admins/Managers: créer des codes"  on invite_codes;
+drop policy if exists "Admins/Managers: mettre à jour les codes" on invite_codes;
+
 create policy "Lecture codes publique"
   on invite_codes for select using (true);
-
 create policy "Admins/Managers: créer des codes"
   on invite_codes for insert with check (
     get_role(business_id) in ('administrateur','manager')
   );
-
 create policy "Admins/Managers: mettre à jour les codes"
   on invite_codes for update using (
     get_role(business_id) in ('administrateur','manager')
@@ -166,9 +168,11 @@ create table if not exists products (
 
 alter table products enable row level security;
 
+drop policy if exists "Membres: voir les produits"       on products;
+drop policy if exists "Membres actifs: gérer les produits" on products;
+
 create policy "Membres: voir les produits"
   on products for select using (is_member(business_id));
-
 create policy "Membres actifs: gérer les produits"
   on products for all using (
     get_role(business_id) in ('administrateur','manager','vendeur')
@@ -191,9 +195,11 @@ create table if not exists stock_moves (
 
 alter table stock_moves enable row level security;
 
+drop policy if exists "Membres: voir les mouvements"        on stock_moves;
+drop policy if exists "Membres actifs: créer des mouvements" on stock_moves;
+
 create policy "Membres: voir les mouvements"
   on stock_moves for select using (is_member(business_id));
-
 create policy "Membres actifs: créer des mouvements"
   on stock_moves for insert with check (
     get_role(business_id) in ('administrateur','manager','vendeur')
@@ -215,9 +221,11 @@ create table if not exists suppliers (
 
 alter table suppliers enable row level security;
 
+drop policy if exists "Membres: voir les fournisseurs"      on suppliers;
+drop policy if exists "Admins/Managers: gérer les fournisseurs" on suppliers;
+
 create policy "Membres: voir les fournisseurs"
   on suppliers for select using (is_member(business_id));
-
 create policy "Admins/Managers: gérer les fournisseurs"
   on suppliers for all using (
     get_role(business_id) in ('administrateur','manager')
@@ -240,9 +248,11 @@ create table if not exists purchase_orders (
 
 alter table purchase_orders enable row level security;
 
+drop policy if exists "Membres: voir les achats"       on purchase_orders;
+drop policy if exists "Admins/Managers: gérer les achats" on purchase_orders;
+
 create policy "Membres: voir les achats"
   on purchase_orders for select using (is_member(business_id));
-
 create policy "Admins/Managers: gérer les achats"
   on purchase_orders for all using (
     get_role(business_id) in ('administrateur','manager')
@@ -260,6 +270,9 @@ create table if not exists po_lines (
 
 alter table po_lines enable row level security;
 
+drop policy if exists "Voir les lignes d'achat"              on po_lines;
+drop policy if exists "Admins/Managers: gérer les lignes d'achat" on po_lines;
+
 create policy "Voir les lignes d'achat"
   on po_lines for select using (
     exists (
@@ -267,7 +280,6 @@ create policy "Voir les lignes d'achat"
       where po.id = po_id and is_member(po.business_id)
     )
   );
-
 create policy "Admins/Managers: gérer les lignes d'achat"
   on po_lines for all using (
     exists (
@@ -296,17 +308,19 @@ create table if not exists sale_orders (
 
 alter table sale_orders enable row level security;
 
+drop policy if exists "Membres non-investisseurs: voir les ventes" on sale_orders;
+drop policy if exists "Vendeurs: créer des ventes"                 on sale_orders;
+drop policy if exists "Admins/Managers: modifier les ventes"       on sale_orders;
+
 create policy "Membres non-investisseurs: voir les ventes"
   on sale_orders for select using (
     is_member(business_id) and get_role(business_id) != 'investisseur'
   );
-
 create policy "Vendeurs: créer des ventes"
   on sale_orders for insert with check (
     get_role(business_id) in ('administrateur','manager','vendeur')
     and seller_id = auth.uid()
   );
-
 create policy "Admins/Managers: modifier les ventes"
   on sale_orders for update using (
     get_role(business_id) in ('administrateur','manager')
@@ -323,6 +337,9 @@ create table if not exists so_lines (
 
 alter table so_lines enable row level security;
 
+drop policy if exists "Voir les lignes de vente"             on so_lines;
+drop policy if exists "Membres actifs: gérer les lignes de vente" on so_lines;
+
 create policy "Voir les lignes de vente"
   on so_lines for select using (
     exists (
@@ -332,7 +349,6 @@ create policy "Voir les lignes de vente"
         and get_role(so.business_id) != 'investisseur'
     )
   );
-
 create policy "Membres actifs: gérer les lignes de vente"
   on so_lines for all using (
     exists (
@@ -357,6 +373,9 @@ create table if not exists payments (
 
 alter table payments enable row level security;
 
+drop policy if exists "Voir les paiements"                   on payments;
+drop policy if exists "Membres actifs: enregistrer les paiements" on payments;
+
 create policy "Voir les paiements"
   on payments for select using (
     exists (
@@ -364,7 +383,6 @@ create policy "Voir les paiements"
       where so.id = order_id and is_member(so.business_id)
     )
   );
-
 create policy "Membres actifs: enregistrer les paiements"
   on payments for insert with check (
     exists (
@@ -392,11 +410,13 @@ create table if not exists investors (
 
 alter table investors enable row level security;
 
+drop policy if exists "Investisseurs: voir leurs données"  on investors;
+drop policy if exists "Administrateurs: gérer les investisseurs" on investors;
+
 create policy "Investisseurs: voir leurs données"
   on investors for select using (
     user_id = auth.uid() or get_role(business_id) = 'administrateur'
   );
-
 create policy "Administrateurs: gérer les investisseurs"
   on investors for all using (get_role(business_id) = 'administrateur');
 
@@ -420,14 +440,16 @@ create table if not exists change_proposals (
 
 alter table change_proposals enable row level security;
 
+drop policy if exists "Membres: voir les propositions"          on change_proposals;
+drop policy if exists "Membres actifs: soumettre des propositions" on change_proposals;
+drop policy if exists "Admins/Managers: traiter les propositions"  on change_proposals;
+
 create policy "Membres: voir les propositions"
   on change_proposals for select using (is_member(business_id));
-
 create policy "Membres actifs: soumettre des propositions"
   on change_proposals for insert with check (
     get_role(business_id) in ('administrateur','manager','vendeur')
   );
-
 create policy "Admins/Managers: traiter les propositions"
   on change_proposals for update using (
     get_role(business_id) in ('administrateur','manager')
@@ -448,15 +470,17 @@ create table if not exists audit_log (
 
 alter table audit_log enable row level security;
 
+drop policy if exists "Admins: voir les logs"       on audit_log;
+drop policy if exists "Membres: insérer dans les logs" on audit_log;
+
 create policy "Admins: voir les logs"
   on audit_log for select using (get_role(business_id) = 'administrateur');
-
 create policy "Membres: insérer dans les logs"
   on audit_log for insert with check (
     is_member(business_id) and actor_id = auth.uid()
   );
 
--- ─── UPDATED_AT TRIGGER ──────────────────────────────────────
+-- ─── UPDATED_AT TRIGGERS ─────────────────────────────────────
 create or replace function set_updated_at()
 returns trigger language plpgsql as $$
 begin
@@ -465,26 +489,22 @@ begin
 end;
 $$;
 
+drop trigger if exists trg_profiles_updated_at        on profiles;
+drop trigger if exists trg_businesses_updated_at      on businesses;
+drop trigger if exists trg_products_updated_at        on products;
+drop trigger if exists trg_sale_orders_updated_at     on sale_orders;
+drop trigger if exists trg_purchase_orders_updated_at on purchase_orders;
+drop trigger if exists trg_change_proposals_updated_at on change_proposals;
+
 create trigger trg_profiles_updated_at
-  before update on profiles
-  for each row execute function set_updated_at();
-
+  before update on profiles for each row execute function set_updated_at();
 create trigger trg_businesses_updated_at
-  before update on businesses
-  for each row execute function set_updated_at();
-
+  before update on businesses for each row execute function set_updated_at();
 create trigger trg_products_updated_at
-  before update on products
-  for each row execute function set_updated_at();
-
+  before update on products for each row execute function set_updated_at();
 create trigger trg_sale_orders_updated_at
-  before update on sale_orders
-  for each row execute function set_updated_at();
-
+  before update on sale_orders for each row execute function set_updated_at();
 create trigger trg_purchase_orders_updated_at
-  before update on purchase_orders
-  for each row execute function set_updated_at();
-
+  before update on purchase_orders for each row execute function set_updated_at();
 create trigger trg_change_proposals_updated_at
-  before update on change_proposals
-  for each row execute function set_updated_at();
+  before update on change_proposals for each row execute function set_updated_at();
