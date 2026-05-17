@@ -21,7 +21,7 @@ interface CreateForm {
   type: string;
 }
 
-const CURRENCIES = ['GNF', 'XOF', 'USD', 'EUR'];
+const CURRENCIES = ['GNF', 'XOF'];
 const TYPES = ['Commerce général', 'Restaurant', 'Pharmacie', 'Artisanat', 'Services', 'Autre'];
 
 export default function CreerCommerceScreen() {
