@@ -2,6 +2,13 @@ import { create } from 'zustand';
 import { supabase } from '@/lib/supabase';
 import type { AppSession, Business, Membership, User } from '@/src/types';
 
+function generateId(): string {
+  return 'xxxxxxxx-xxxx-4xxx-yxxx-xxxxxxxxxxxx'.replace(/[xy]/g, c => {
+    const r = Math.random() * 16 | 0;
+    return (c === 'x' ? r : (r & 0x3 | 0x8)).toString(16);
+  });
+}
+
 interface AuthStore {
   session: AppSession | null;
   loading: boolean;
@@ -167,35 +174,43 @@ export const useAuthStore = create<AuthStore>((set, get) => ({
     if (!session) return;
 
     set({ loading: true, error: null });
-    try {
-      const { data: business, error: bizErr } = await supabase
-        .from('businesses')
-        .insert({ name, type: type ?? null, currency, created_by: session.user.id })
-        .select()
-        .single();
-      if (bizErr) throw bizErr;
 
-      const { data: membership, error: memErr } = await supabase
-        .from('memberships')
-        .insert({ user_id: session.user.id, business_id: business.id, role: 'administrateur' })
-        .select('*, business:businesses(*)')
-        .single();
-      if (memErr) throw memErr;
+    // Generate UUID client-side so we can do plain INSERTs without .select().
+    // Chaining .select() after INSERT runs the SELECT policy (is_member) before
+    // the membership exists, which PostgREST rejects as an RLS violation.
+    const businessId = generateId();
 
-      const m = membership as Membership;
-      set({
-        session: {
-          ...session,
-          memberships: [...session.memberships, m],
-          activeBusiness: business as Business,
-          activeMembership: m,
-        },
-        loading: false,
-      });
-    } catch (err) {
-      const msg = err instanceof Error ? err.message : 'Erreur lors de la création';
-      set({ error: msg, loading: false });
+    const { error: bizErr } = await supabase
+      .from('businesses')
+      .insert({ id: businessId, name, type: type ?? null, currency, created_by: session.user.id });
+    if (bizErr) {
+      set({ error: bizErr.message, loading: false });
+      return;
     }
+
+    // Trigger handle_business_created() auto-inserts the membership.
+    // SELECT is now safe — is_member returns true.
+    const { data: membership, error: fetchErr } = await supabase
+      .from('memberships')
+      .select('*, business:businesses(*)')
+      .eq('user_id', session.user.id)
+      .eq('business_id', businessId)
+      .single();
+    if (fetchErr) {
+      set({ error: fetchErr.message, loading: false });
+      return;
+    }
+
+    const m = membership as Membership;
+    set({
+      session: {
+        ...session,
+        memberships: [...session.memberships, m],
+        activeBusiness: m.business as Business,
+        activeMembership: m,
+      },
+      loading: false,
+    });
   },
 
   joinBusiness: async (code) => {

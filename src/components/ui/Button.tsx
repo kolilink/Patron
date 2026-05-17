@@ -3,8 +3,11 @@ import {
   ActivityIndicator,
   Pressable,
   PressableProps,
+  PressableStateCallbackType,
+  StyleProp,
   StyleSheet,
   View,
+  ViewStyle,
 } from 'react-native';
 import { palette, radius, spacing, typography } from '../../theme';
 import { Text } from './Text';
@@ -12,13 +15,14 @@ import { Text } from './Text';
 type Variant = 'primary' | 'secondary' | 'outline' | 'ghost' | 'danger';
 type Size = 'sm' | 'md' | 'lg';
 
-interface ButtonProps extends PressableProps {
+interface ButtonProps extends Omit<PressableProps, 'style'> {
   variant?: Variant;
   size?: Size;
   label: string;
   loading?: boolean;
   icon?: React.ReactNode;
   fullWidth?: boolean;
+  style?: StyleProp<ViewStyle>;
 }
 
 export function Button({
@@ -33,19 +37,22 @@ export function Button({
   ...props
 }: ButtonProps) {
   const isDisabled = disabled || loading;
+  const sizeStyle = size === 'sm' ? styles.size_sm : size === 'lg' ? styles.size_lg : styles.size_md;
+
+  const getStyle = ({ pressed }: PressableStateCallbackType): StyleProp<ViewStyle> => [
+    styles.base,
+    styles[variant],
+    sizeStyle,
+    fullWidth ? styles.fullWidth : null,
+    pressed ? styles.pressed : null,
+    isDisabled ? styles.disabled : null,
+    style,
+  ];
 
   return (
     <Pressable
       disabled={isDisabled}
-      style={({ pressed }) => [
-        styles.base,
-        styles[variant],
-        styles[`size_${size}`],
-        fullWidth && styles.fullWidth,
-        pressed && styles.pressed,
-        isDisabled && styles.disabled,
-        style,
-      ]}
+      style={getStyle}
       {...props}
     >
       {loading ? (

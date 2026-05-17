@@ -1,4 +1,3 @@
-import { useState } from 'react';
 import {
   KeyboardAvoidingView,
   Platform,
@@ -9,6 +8,7 @@ import {
 } from 'react-native';
 import { router } from 'expo-router';
 import { Controller, useForm } from 'react-hook-form';
+import { useState } from 'react';
 import { SafeAreaView } from 'react-native-safe-area-context';
 import { Button } from '@/src/components/ui/Button';
 import { Input } from '@/src/components/ui/Input';
@@ -18,21 +18,18 @@ import { useAuthStore } from '@/stores/auth';
 
 interface CreateForm {
   name: string;
-  type: string;
 }
 
 const CURRENCIES = ['GNF', 'XOF'];
-const TYPES = ['Commerce général', 'Restaurant', 'Pharmacie', 'Artisanat', 'Services', 'Autre'];
 
 export default function CreerCommerceScreen() {
   const { createBusiness, loading, error, clearError } = useAuthStore();
   const { control, handleSubmit } = useForm<CreateForm>();
   const [currency, setCurrency] = useState('GNF');
-  const [businessType, setBusinessType] = useState('');
 
   const onSubmit = async ({ name }: CreateForm) => {
     clearError();
-    await createBusiness({ name: name.trim(), type: businessType || undefined, currency });
+    await createBusiness({ name: name.trim(), currency });
     const { session } = useAuthStore.getState();
     if (session?.activeBusiness) {
       router.replace('/(app)/(tabs)/');
@@ -76,30 +73,11 @@ export default function CreerCommerceScreen() {
                   error={fieldState.error?.message}
                   placeholder="Ex: Boutique Mamadou"
                   autoCapitalize="words"
-                  returnKeyType="next"
+                  returnKeyType="done"
+                  onSubmitEditing={handleSubmit(onSubmit)}
                 />
               )}
             />
-
-            <View style={styles.section}>
-              <Text variant="label" style={styles.sectionLabel}>Type de commerce (optionnel)</Text>
-              <View style={styles.chips}>
-                {TYPES.map(t => (
-                  <Pressable
-                    key={t}
-                    style={[styles.chip, businessType === t && styles.chipActive]}
-                    onPress={() => setBusinessType(prev => prev === t ? '' : t)}
-                  >
-                    <Text
-                      variant="labelSmall"
-                      color={businessType === t ? 'inverse' : 'secondary'}
-                    >
-                      {t}
-                    </Text>
-                  </Pressable>
-                ))}
-              </View>
-            </View>
 
             <View style={styles.section}>
               <Text variant="label" style={styles.sectionLabel}>Devise</Text>
@@ -148,10 +126,10 @@ const styles = StyleSheet.create({
   },
   section: { gap: spacing[2] },
   sectionLabel: { color: palette.textPrimary },
-  chips: { flexDirection: 'row', flexWrap: 'wrap', gap: spacing[2] },
+  chips: { flexDirection: 'row', gap: spacing[2] },
   chip: {
-    paddingHorizontal: spacing[3],
-    paddingVertical: spacing[1.5],
+    paddingHorizontal: spacing[4],
+    paddingVertical: spacing[2],
     borderRadius: radius.full,
     borderWidth: 1.5,
     borderColor: palette.border,

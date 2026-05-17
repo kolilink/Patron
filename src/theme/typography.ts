@@ -47,14 +47,14 @@ export const typography = {
   labelSmall: { fontSize: 11, lineHeight: 16, fontWeight: '600' as const, letterSpacing: 0.2 },
 
   // Special
-  mono: { fontSize: 13, lineHeight: 20, fontWeight: '400' as const, fontVariant: ['tabular-nums'] as const },
+  mono: { fontSize: 13, lineHeight: 20, fontWeight: '400' as const, fontVariant: ['tabular-nums'] as ['tabular-nums'] },
   caption: { fontSize: 12, lineHeight: 18, fontWeight: '400' as const },
   overline: { fontSize: 11, lineHeight: 16, fontWeight: '600' as const, letterSpacing: 0.8, textTransform: 'uppercase' as const },
 
   // Currency/amounts — always tabular
-  amount: { fontSize: 17, lineHeight: 24, fontWeight: '700' as const, fontVariant: ['tabular-nums'] as const },
-  amountLarge: { fontSize: 28, lineHeight: 36, fontWeight: '700' as const, fontVariant: ['tabular-nums'] as const },
-  amountSmall: { fontSize: 14, lineHeight: 20, fontWeight: '600' as const, fontVariant: ['tabular-nums'] as const },
+  amount: { fontSize: 17, lineHeight: 24, fontWeight: '700' as const, fontVariant: ['tabular-nums'] as ['tabular-nums'] },
+  amountLarge: { fontSize: 28, lineHeight: 36, fontWeight: '700' as const, fontVariant: ['tabular-nums'] as ['tabular-nums'] },
+  amountSmall: { fontSize: 14, lineHeight: 20, fontWeight: '600' as const, fontVariant: ['tabular-nums'] as ['tabular-nums'] },
 } as const;
 
 export { fontFamily };

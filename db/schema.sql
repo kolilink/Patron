@@ -94,6 +94,23 @@ returns text language sql security definer stable as $$
   limit 1;
 $$;
 
+-- ─── AUTO-ADD CREATOR AS ADMIN ───────────────────────────────
+-- Runs after INSERT on businesses; creates the membership in the same
+-- transaction so the SELECT policy (is_member) works immediately.
+create or replace function handle_business_created()
+returns trigger language plpgsql security definer set search_path = public as $$
+begin
+  insert into memberships (user_id, business_id, role)
+  values (auth.uid(), new.id, 'administrateur');
+  return new;
+end;
+$$;
+
+drop trigger if exists on_business_created on businesses;
+create trigger on_business_created
+  after insert on businesses
+  for each row execute function handle_business_created();
+
 -- Business policies
 drop policy if exists "Membres: voir leur commerce"         on businesses;
 drop policy if exists "Tout le monde: créer un commerce"    on businesses;

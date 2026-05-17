@@ -2,7 +2,7 @@
 
 export type Role = 'administrateur' | 'manager' | 'vendeur' | 'investisseur';
 
-export type PaymentMethod = 'especes' | 'wave' | 'orange' | 'mtn' | 'moov' | 'credit';
+export type PaymentMethod = 'especes' | 'wave' | 'orange' | 'mtn' | 'moov' | 'credit' | 'digital';
 
 export type StockMoveType = 'entree' | 'sortie' | 'perte' | 'retour';
 
@@ -13,6 +13,8 @@ export type POStatus = 'brouillon' | 'envoye' | 'recu_partiel' | 'recu' | 'annul
 export type ProposalStatus = 'en_attente' | 'approuve' | 'rejete' | 'clarification';
 
 export type SubscriptionTier = 'gratuit' | 'starter' | 'business' | 'pro';
+
+export type ExpenseStatus = 'en_attente' | 'approuve' | 'rejete';
 
 // ─── Base ─────────────────────────────────────────────────────────────────────
 
@@ -77,6 +79,10 @@ export interface Product extends Base {
   reorder_level: number;
   stock_qty: number;
   archived: boolean;
+  supplier_id: string | null;
+  purchase_date: string | null;
+  bulk_price: number | null;
+  bulk_min_qty: number | null;
 }
 
 // ─── Stock Move ───────────────────────────────────────────────────────────────
@@ -130,6 +136,7 @@ export interface SaleOrder extends Base {
   seller_id: string;
   status: OrderStatus;
   paid_at: string | null;
+  sale_date: string | null;
   total_amount: number;
   lines?: SOLine[];
   payments?: Payment[];
@@ -141,6 +148,7 @@ export interface SOLine {
   product_id: string;
   qty: number;
   unit_price: number;
+  is_bulk: boolean;
   product?: Product;
 }
 
@@ -164,6 +172,26 @@ export interface Investor extends Base {
   note: string | null;
   equity_pct: number;
   user?: User;
+}
+
+// ─── Expense ──────────────────────────────────────────────────────────────────
+
+export interface Expense {
+  id: string;
+  business_id: string;
+  amount: number;
+  description: string;
+  category: string | null;
+  date: string;
+  due_date: string | null;
+  note: string | null;
+  status: ExpenseStatus;
+  created_by: string;
+  approved_by: string | null;
+  approved_at: string | null;
+  created_at: string;
+  updated_at: string;
+  creator_name?: string;
 }
 
 // ─── Change Proposal ──────────────────────────────────────────────────────────
