@@ -58,8 +58,16 @@ export default function InscriptionScreen() {
 
           <View style={styles.form}>
             {error ? (
-              <View style={styles.errorBox}>
-                <Text variant="bodySmall" color="danger">{error}</Text>
+              <View style={[
+                styles.msgBox,
+                error.startsWith('Un email') ? styles.msgInfo : styles.msgError,
+              ]}>
+                <Text
+                  variant="bodySmall"
+                  color={error.startsWith('Un email') ? 'success' : 'danger'}
+                >
+                  {error}
+                </Text>
               </View>
             ) : null}
 
@@ -178,11 +186,9 @@ const styles = StyleSheet.create({
   header: { alignItems: 'center', gap: spacing[2] },
   logo: { letterSpacing: -1 },
   form: { gap: spacing[4] },
-  errorBox: {
-    backgroundColor: palette.dangerLight,
-    borderRadius: 8,
-    padding: spacing[3],
-  },
+  msgBox: { borderRadius: 8, padding: spacing[3] },
+  msgError: { backgroundColor: palette.dangerLight },
+  msgInfo: { backgroundColor: palette.successLight },
   footer: {
     flexDirection: 'row',
     justifyContent: 'center',

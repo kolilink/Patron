@@ -94,17 +94,31 @@ export const useAuthStore = create<AuthStore>((set, get) => ({
   register: async (name, email, password) => {
     set({ loading: true, error: null });
     try {
-      const { data, error } = await supabase.auth.signUp({ email, password });
+      const { data, error } = await supabase.auth.signUp({
+        email,
+        password,
+        options: { data: { name } }, // trigger uses this to create profile
+      });
       if (error) throw error;
-      if (!data.user) throw new Error('Inscription échouée, vérifiez votre email');
+      if (!data.user) throw new Error('Inscription échouée');
 
-      const { error: profileError } = await supabase.from('profiles').insert({
+      if (!data.session) {
+        // Email confirmation is enabled — user must confirm before logging in
+        set({
+          loading: false,
+          error: 'Un email de confirmation a été envoyé. Vérifiez votre boîte mail puis connectez-vous.',
+        });
+        return;
+      }
+
+      // Session exists (email confirmation disabled) — create profile via upsert
+      // so it's idempotent if the DB trigger already created it
+      await supabase.from('profiles').upsert({
         id: data.user.id,
         name,
         email,
         language: 'fr',
       });
-      if (profileError) throw profileError;
 
       const user: User = {
         id: data.user.id,
