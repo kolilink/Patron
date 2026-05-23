@@ -1,4 +1,4 @@
-import { useEffect, useMemo, useState } from 'react';
+import { useCallback, useEffect, useMemo, useState } from 'react';
 import { Alert, FlatList, Modal, Pressable, ScrollView, StyleSheet, View } from 'react-native';
 import { SafeAreaView } from 'react-native-safe-area-context';
 import { router } from 'expo-router';
@@ -227,6 +227,10 @@ interface MonthGroupProps {
 function MonthGroup({ label, total, items, currency, isManager, userId, onApprove, onReject, onEdit, defaultOpen }: MonthGroupProps) {
   const [open, setOpen] = useState(defaultOpen);
 
+  useEffect(() => {
+    if (defaultOpen) setOpen(true);
+  }, [defaultOpen, items.length]);
+
   return (
     <View style={styles.monthBlock}>
       <Pressable onPress={() => setOpen(o => !o)} style={styles.monthHeader}>
@@ -311,21 +315,30 @@ export default function DepensesScreen() {
     return `${now.getFullYear()}-${String(now.getMonth() + 1).padStart(2, '0')}`;
   })();
 
-  const handleSave = async (data: CreateExpenseData) => {
+  const handleSave = useCallback(async (data: CreateExpenseData) => {
     let ok: boolean;
     if (editingExpense) {
       ok = await updateExpense(editingExpense.id, businessId, data);
+      if (ok) Alert.alert('Dépense mise à jour');
     } else {
       ok = await createExpense(businessId, userId, data, isManager);
-      if (ok && !isManager) {
-        Alert.alert('Dépense soumise', 'En attente de validation par un manager.');
+      if (ok) {
+        if (isManager) {
+          Alert.alert('Dépense enregistrée');
+        } else {
+          Alert.alert('Dépense soumise', 'En attente de validation par un manager.');
+        }
       }
+    }
+    if (!ok) {
+      const msg = useExpensesStore.getState().error;
+      Alert.alert('Erreur', msg ?? 'Impossible d\'enregistrer la dépense.');
     }
     if (ok) {
       setShowForm(false);
       setEditingExpense(null);
     }
-  };
+  }, [editingExpense, businessId, userId, isManager, updateExpense, createExpense]);
 
   const handleEdit = (expense: Expense) => {
     setEditingExpense(expense);

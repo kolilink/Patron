@@ -518,25 +518,47 @@ interface ProductRowProps {
   currency: string;
   onPress: () => void;
   archived?: boolean;
+  onRestore?: () => void;
 }
 
-function ProductRow({ product, currency, onPress, archived }: ProductRowProps) {
+function ProductRow({ product, currency, onPress, archived, onRestore }: ProductRowProps) {
   const sc = stockColor(product);
   const bg = stockBg(product);
   const margin = product.cost_price > 0
     ? ((product.sale_price - product.cost_price) / product.cost_price * 100).toFixed(0)
     : null;
 
+  if (archived) {
+    return (
+      <View style={styles.productRow}>
+        <View style={styles.productInfo}>
+          <Text variant="label" numberOfLines={1}>{product.name}</Text>
+          <Text variant="caption" color="secondary">
+            {formatPrice(product.sale_price, currency)}
+          </Text>
+        </View>
+        <View style={styles.productRight}>
+          {onRestore && (
+            <Pressable
+              onPress={onRestore}
+              style={({ pressed }) => [styles.restoreBtn, pressed && { opacity: 0.7 }]}
+            >
+              <Text variant="caption" style={{ color: palette.primary, fontWeight: '700' }}>Restaurer</Text>
+            </Pressable>
+          )}
+        </View>
+      </View>
+    );
+  }
+
   return (
-    <Pressable onPress={onPress} style={({ pressed }) => [styles.productRow, archived && styles.productRowArchived, pressed && { opacity: 0.65 }]}>
+    <Pressable onPress={onPress} style={({ pressed }) => [styles.productRow, pressed && { opacity: 0.65 }]}>
       <View style={styles.productInfo}>
         <View style={{ flexDirection: 'row', alignItems: 'center', gap: spacing[2] }}>
-          <Text variant="label" numberOfLines={1} style={archived ? styles.archivedText : undefined}>
-            {product.name}
-          </Text>
-          {product.bulk_price && !archived ? (
+          <Text variant="label" numberOfLines={1}>{product.name}</Text>
+          {product.bulk_price ? (
             <View style={styles.bulkBadge}>
-              <Text variant="caption" style={{ color: colors.warning[700] }}>GROS</Text>
+              <Text variant="caption" style={{ color: colors.warning[700] }}>Disponible en gros</Text>
             </View>
           ) : null}
         </View>
@@ -546,28 +568,21 @@ function ProductRow({ product, currency, onPress, archived }: ProductRowProps) {
               <Text variant="caption" color="secondary">{product.category}</Text>
             </View>
           )}
-          {margin && !archived && (
+          {margin && (
             <Text variant="caption" style={{ color: palette.success }}>+{margin}%</Text>
           )}
         </View>
       </View>
 
       <View style={styles.productRight}>
-        <Text variant="label" style={archived ? styles.archivedText : styles.priceText}>
+        <Text variant="label" style={styles.priceText}>
           {formatPrice(product.sale_price, currency)}
         </Text>
-        {!archived && (
-          <View style={[styles.stockBadge, { backgroundColor: bg }]}>
-            <Text variant="caption" style={{ color: sc, fontWeight: '600' }}>
-              {product.stock_qty} {product.unit}
-            </Text>
-          </View>
-        )}
-        {archived && (
-          <View style={styles.archivedBadge}>
-            <Text variant="caption" style={styles.archivedBadgeText}>Archivé</Text>
-          </View>
-        )}
+        <View style={[styles.stockBadge, { backgroundColor: bg }]}>
+          <Text variant="caption" style={{ color: sc, fontWeight: '600' }}>
+            {product.stock_qty} {product.unit}
+          </Text>
+        </View>
       </View>
     </Pressable>
   );
@@ -822,7 +837,12 @@ export default function CatalogueScreen() {
               product={item}
               currency={currency}
               archived={tab === 'archives'}
-              onPress={() => tab === 'archives' ? openArchivedOptions(item) : openOptions(item)}
+              onPress={() => tab === 'archives' ? undefined : openOptions(item)}
+              onRestore={tab === 'archives' ? () =>
+                Alert.alert('Restaurer ce produit ?', `"${item.name}" sera remis dans le catalogue actif.`, [
+                  { text: 'Annuler', style: 'cancel' },
+                  { text: 'Restaurer', onPress: () => restoreProduct(item.id, businessId, userId) },
+                ]) : undefined}
             />
           )}
           ItemSeparatorComponent={() => <View style={styles.separator} />}
@@ -903,18 +923,15 @@ const styles = StyleSheet.create({
   },
   bulkBadge: {
     backgroundColor: colors.warning[50], borderRadius: radius.sm,
-    paddingHorizontal: spacing[1.5], paddingVertical: 2, borderWidth: 1, borderColor: colors.warning[200],
+    paddingHorizontal: spacing[1.5], paddingVertical: 2, borderWidth: 1, borderColor: colors.warning[100],
   },
   productRight: { alignItems: 'flex-end', gap: 4 },
   priceText: { color: palette.textPrimary },
   stockBadge: { borderRadius: radius.sm, paddingHorizontal: spacing[2], paddingVertical: 2 },
-  productRowArchived: { opacity: 0.55 },
-  archivedText: { color: palette.textSecondary },
-  archivedBadge: {
-    borderRadius: radius.sm, paddingHorizontal: spacing[2], paddingVertical: 2,
-    backgroundColor: palette.primaryLight, borderWidth: 1, borderColor: palette.border,
+  restoreBtn: {
+    borderRadius: radius.sm, paddingHorizontal: spacing[3], paddingVertical: spacing[1.5],
+    borderWidth: 1.5, borderColor: palette.primary, backgroundColor: palette.primaryLight,
   },
-  archivedBadgeText: { color: palette.textSecondary },
   emptyState: { flex: 1, alignItems: 'center', justifyContent: 'center', padding: spacing[8], gap: spacing[3] },
   emptyIcon: { fontSize: 48 },
   emptyDesc: { textAlign: 'center', maxWidth: 260 },

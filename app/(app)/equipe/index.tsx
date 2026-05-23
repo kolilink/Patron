@@ -1,5 +1,6 @@
 import { useEffect, useState } from 'react';
 import { Alert, FlatList, Modal, Pressable, ScrollView, Share, StyleSheet, View } from 'react-native';
+import { Ionicons } from '@expo/vector-icons';
 import { SafeAreaView } from 'react-native-safe-area-context';
 import { router } from 'expo-router';
 import { Button } from '@/src/components/ui/Button';
@@ -91,7 +92,7 @@ export default function EquipeScreen() {
     if (!code) { Alert.alert('Erreur', 'Impossible de générer le code.'); return; }
     setShowNewCode(false);
     Alert.alert(
-      '🎟️  Code créé : ' + code,
+      'Code créé : ' + code,
       'Valable 7 jours, usage unique. Partagez-le avec la personne à inviter.',
       [
         {
@@ -197,18 +198,25 @@ export default function EquipeScreen() {
                   <RoleBadge role={item.role} />
                 </View>
                 <View style={styles.codeMeta}>
-                  <Text variant="caption" color="secondary">
-                    {expired ? '⛔ Expiré' : used ? '⛔ Utilisé' : `✅ Valide · expire ${item.expires_at ? new Date(item.expires_at).toLocaleDateString('fr-FR') : '—'}`}
-                  </Text>
+                  <View style={styles.codeStatus}>
+                    {!expired && !used && <View style={styles.greenDot} />}
+                    <Text variant="caption" color="secondary">
+                      {expired ? 'Expiré' : used ? 'Utilisé' : `Valide · expire ${item.expires_at ? new Date(item.expires_at).toLocaleDateString('fr-FR') : '—'}`}
+                    </Text>
+                  </View>
                   <Pressable onPress={() => Alert.alert('Révoquer ?', '', [{ text: 'Annuler', style: 'cancel' }, { text: 'Révoquer', style: 'destructive', onPress: () => revokeCode(item.id) }])}>
                     <Text variant="caption" color="danger">Révoquer</Text>
                   </Pressable>
                 </View>
                 {!expired && !used && (
-                  <Pressable onPress={() => Share.share({
-                    message: `${session?.activeBusiness?.name ?? 'Un commerce'} vous invite à rejoindre son équipe sur Patron.\n\nVotre code d'accès : ${item.code}\n\nCe code est valable jusqu'au ${item.expires_at ? new Date(item.expires_at).toLocaleDateString('fr-FR') : '—'}.`,
-                  })}>
-                    <Text variant="bodySmall" style={{ color: palette.primary }}>📤 Partager ce code</Text>
+                  <Pressable
+                    onPress={() => Share.share({
+                      message: `${session?.activeBusiness?.name ?? 'Un commerce'} vous invite à rejoindre son équipe sur Patron.\n\nVotre code d'accès : ${item.code}\n\nCe code est valable jusqu'au ${item.expires_at ? new Date(item.expires_at).toLocaleDateString('fr-FR') : '—'}.`,
+                    })}
+                    style={styles.shareRow}
+                  >
+                    <Ionicons name="share-outline" size={14} color={palette.primary} />
+                    <Text variant="bodySmall" style={{ color: palette.primary }}>Partager ce code</Text>
                   </Pressable>
                 )}
               </Card>
@@ -237,6 +245,9 @@ const styles = StyleSheet.create({
   codeCard: { marginHorizontal: spacing[5], marginVertical: spacing[2], gap: spacing[2] },
   codeTop: { flexDirection: 'row', alignItems: 'center', justifyContent: 'space-between' },
   codeMeta: { flexDirection: 'row', alignItems: 'center', justifyContent: 'space-between' },
+  codeStatus: { flexDirection: 'row', alignItems: 'center', gap: spacing[1] },
+  greenDot: { width: 8, height: 8, borderRadius: 4, backgroundColor: colors.success[500] },
+  shareRow: { flexDirection: 'row', alignItems: 'center', gap: spacing[1] },
   empty: { flex: 1, alignItems: 'center', justifyContent: 'center', padding: spacing[10] },
   center: { textAlign: 'center', marginTop: spacing[10] },
   modalSafe: { flex: 1, backgroundColor: palette.background },

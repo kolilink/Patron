@@ -1,10 +1,11 @@
 import { useEffect, useState } from 'react';
-import { Alert, FlatList, Modal, Pressable, ScrollView, StyleSheet, View } from 'react-native';
+import { Alert, FlatList, Modal, Pressable, ScrollView, StyleSheet, TextInput, View } from 'react-native';
 import { SafeAreaView } from 'react-native-safe-area-context';
 import { router } from 'expo-router';
 import { Card } from '@/src/components/ui/Card';
 import { Text } from '@/src/components/ui/Text';
 import { Button } from '@/src/components/ui/Button';
+import { Input } from '@/src/components/ui/Input';
 import { palette, spacing, colors, radius } from '@/src/theme';
 import { useAuthStore } from '@/stores/auth';
 import { useVentesStore, type Vente } from '@/stores/ventes';
@@ -18,28 +19,10 @@ function statusColor(s: string) {
   return s === 'paye' ? palette.success : s === 'credit' ? palette.warning : palette.danger;
 }
 
-function relativeDate(iso: string) {
-  const d = new Date(iso);
-  const now = new Date();
-  const diff = now.getTime() - d.getTime();
-  if (diff < 60000) return 'À l\'instant';
-  if (diff < 3600000) return `Il y a ${Math.floor(diff / 60000)} min`;
-  if (diff < 86400000) return `Il y a ${Math.floor(diff / 3600000)} h`;
-  return d.toLocaleDateString('fr-FR', { day: 'numeric', month: 'short' });
+function saleDate(iso: string) {
+  const d = iso.includes('T') ? new Date(iso) : new Date(iso + 'T00:00:00');
+  return d.toLocaleDateString('fr-FR', { day: 'numeric', month: 'short', year: 'numeric' });
 }
-
-interface DetailModalProps {
-  sale: Vente | null;
-  currency: string;
-  onClose: () => void;
-  onMarkPaid: (method: string) => void;
-  saving: boolean;
-}
-
-const PAY_METHODS = [
-  { key: 'especes', label: 'Espèces' },
-  { key: 'digital', label: 'Numérique' },
-];
 
 function methodLabel(m: string) {
   if (m === 'especes') return 'Espèces';
@@ -52,10 +35,59 @@ function methodLabel(m: string) {
   return m;
 }
 
-function DetailModal({ sale, currency, onClose, onMarkPaid, saving }: DetailModalProps) {
+const PAY_METHODS = [
+  { key: 'especes', label: 'Espèces' },
+  { key: 'digital', label: 'Numérique' },
+];
+
+interface DetailModalProps {
+  sale: Vente | null;
+  currency: string;
+  businessId: string;
+  userId: string;
+  onClose: () => void;
+  onMarkPaid: (method: string) => void;
+  onCancel: (reason: string) => void;
+  onUpdateClient: (name: string) => void;
+  saving: boolean;
+}
+
+function DetailModal({ sale, currency, businessId, userId, onClose, onMarkPaid, onCancel, onUpdateClient, saving }: DetailModalProps) {
   const [method, setMethod] = useState('especes');
+  const [showCancelForm, setShowCancelForm] = useState(false);
+  const [cancelReason, setCancelReason] = useState('');
+  const [showEditClient, setShowEditClient] = useState(false);
+  const [editedClient, setEditedClient] = useState('');
+
+  useEffect(() => {
+    if (sale) {
+      setEditedClient(sale.customer_name ?? '');
+      setShowCancelForm(false);
+      setShowEditClient(false);
+      setCancelReason('');
+    }
+  }, [sale]);
 
   if (!sale) return null;
+
+  const canCancel = sale.status !== 'annule';
+  const canEdit = sale.status !== 'annule';
+
+  const handleCancel = () => {
+    if (!cancelReason.trim()) {
+      Alert.alert('Motif requis', 'Entrez un motif pour annuler cette vente.');
+      return;
+    }
+    Alert.alert(
+      'Annuler cette vente ?',
+      'Le stock sera restauré. Cette action est irréversible.',
+      [
+        { text: 'Retour', style: 'cancel' },
+        { text: 'Annuler la vente', style: 'destructive', onPress: () => onCancel(cancelReason) },
+      ],
+    );
+  };
+
   return (
     <Modal visible animationType="slide" presentationStyle="pageSheet" onRequestClose={onClose}>
       <SafeAreaView style={styles.modalSafe}>
@@ -87,6 +119,12 @@ function DetailModal({ sale, currency, onClose, onMarkPaid, saving }: DetailModa
               <Text variant="caption" color="secondary">Statut</Text>
               <Text variant="label" style={{ color: statusColor(sale.status) }}>{statusLabel(sale.status)}</Text>
             </View>
+            {sale.cancellation_reason ? (
+              <View style={styles.row}>
+                <Text variant="caption" color="secondary">Motif annulation</Text>
+                <Text variant="caption" style={{ flex: 1, textAlign: 'right', color: palette.danger }}>{sale.cancellation_reason}</Text>
+              </View>
+            ) : null}
           </Card>
 
           {/* Lines */}
@@ -122,7 +160,7 @@ function DetailModal({ sale, currency, onClose, onMarkPaid, saving }: DetailModa
             <Text variant="amountLarge" style={{ color: palette.primary }}>{fmt(sale.total_amount, currency)}</Text>
           </Card>
 
-          {/* Mark paid */}
+          {/* Mark paid (credit only) */}
           {sale.status === 'credit' && (
             <Card style={{ gap: spacing[3] }}>
               <Text variant="label">Encaisser ce crédit</Text>
@@ -140,6 +178,64 @@ function DetailModal({ sale, currency, onClose, onMarkPaid, saving }: DetailModa
                 onPress={() => onMarkPaid(method)} loading={saving} />
             </Card>
           )}
+
+          {/* Edit client name */}
+          {canEdit && (
+            <Card style={{ gap: spacing[3] }}>
+              <Pressable onPress={() => setShowEditClient(v => !v)} style={styles.row}>
+                <Text variant="label">Modifier le client</Text>
+                <Text variant="caption" color="secondary">{showEditClient ? '▲' : '▼'}</Text>
+              </Pressable>
+              {showEditClient && (
+                <>
+                  <TextInput
+                    style={styles.textInput}
+                    value={editedClient}
+                    onChangeText={setEditedClient}
+                    placeholder="Nom du client"
+                    placeholderTextColor={palette.textDisabled}
+                  />
+                  <Button
+                    label={saving ? 'Enregistrement…' : 'Enregistrer le nom'}
+                    onPress={() => onUpdateClient(editedClient)}
+                    loading={saving}
+                    variant="outline"
+                  />
+                </>
+              )}
+            </Card>
+          )}
+
+          {/* Cancel sale */}
+          {canCancel && (
+            <Card style={{ gap: spacing[3], borderColor: palette.danger + '40', borderWidth: 1 }}>
+              <Pressable onPress={() => setShowCancelForm(v => !v)} style={styles.row}>
+                <Text variant="label" style={{ color: palette.danger }}>Annuler la vente</Text>
+                <Text variant="caption" color="secondary">{showCancelForm ? '▲' : '▼'}</Text>
+              </Pressable>
+              {showCancelForm && (
+                <>
+                  <Text variant="caption" color="secondary">
+                    Le stock sera restauré. Entrez un motif d'annulation.
+                  </Text>
+                  <TextInput
+                    style={styles.textInput}
+                    value={cancelReason}
+                    onChangeText={setCancelReason}
+                    placeholder="Motif (requis)"
+                    placeholderTextColor={palette.textDisabled}
+                    multiline
+                  />
+                  <Button
+                    label={saving ? 'Annulation…' : 'Confirmer l\'annulation'}
+                    onPress={handleCancel}
+                    loading={saving}
+                    variant="danger"
+                  />
+                </>
+              )}
+            </Card>
+          )}
         </ScrollView>
       </SafeAreaView>
     </Modal>
@@ -149,11 +245,12 @@ function DetailModal({ sale, currency, onClose, onMarkPaid, saving }: DetailModa
 export default function VentesScreen() {
   const session = useAuthStore(s => s.session);
   const businessId = session?.activeBusiness?.id ?? '';
+  const userId = session?.user.id ?? '';
   const currency = session?.activeBusiness?.currency ?? 'GNF';
 
-  const { sales, loading, saving, fetchSales, loadDetail, markPaid } = useVentesStore();
+  const { sales, loading, saving, fetchSales, loadDetail, markPaid, cancelSale, updateSaleClient } = useVentesStore();
   const [selected, setSelected] = useState<Vente | null>(null);
-  const [filter, setFilter] = useState<'all' | 'paye' | 'credit'>('all');
+  const [filter, setFilter] = useState<'all' | 'paye' | 'credit' | 'annule'>('all');
 
   useEffect(() => { if (businessId) fetchSales(businessId); }, [businessId]);
 
@@ -178,28 +275,38 @@ export default function VentesScreen() {
     if (ok) Alert.alert('Payé', 'Crédit marqué comme encaissé.');
   };
 
+  const handleCancel = async (reason: string) => {
+    if (!selected) return;
+    const ok = await cancelSale(selected.id, businessId, userId, reason);
+    if (ok) Alert.alert('Vente annulée', 'Le stock a été restauré.');
+  };
+
+  const handleUpdateClient = async (name: string) => {
+    if (!selected) return;
+    const ok = await updateSaleClient(selected.id, name);
+    if (ok) Alert.alert('', 'Nom client mis à jour.');
+  };
+
   const todayRevenue = sales
     .filter(s => s.status === 'paye' && new Date(s.paid_at ?? s.created_at).toDateString() === new Date().toDateString())
     .reduce((sum, s) => sum + s.total_amount, 0);
 
   return (
     <SafeAreaView style={styles.safe} edges={['top']}>
-      {/* Header */}
       <View style={styles.header}>
         <Pressable onPress={() => router.back()}><Text variant="body" color="secondary">‹ Retour</Text></Pressable>
         <Text variant="h4">Ventes</Text>
         <View style={{ width: 60 }} />
       </View>
 
-      {/* Summary */}
       <View style={styles.summary}>
         <Card style={styles.summaryCard}>
           <Text variant="caption" color="secondary">Aujourd'hui</Text>
           <Text variant="label">{fmt(todayRevenue, currency)}</Text>
         </Card>
         <Card style={styles.summaryCard}>
-          <Text variant="caption" color="secondary">Total ventes</Text>
-          <Text variant="label">{sales.length}</Text>
+          <Text variant="caption" color="secondary">Total</Text>
+          <Text variant="label">{sales.filter(s => s.status !== 'annule').length}</Text>
         </Card>
         <Card style={[styles.summaryCard, { borderColor: palette.warning }]}>
           <Text variant="caption" color="secondary">Crédits</Text>
@@ -209,13 +316,12 @@ export default function VentesScreen() {
         </Card>
       </View>
 
-      {/* Filter tabs */}
       <View style={styles.filterRow}>
-        {(['all', 'paye', 'credit'] as const).map(f => (
+        {(['all', 'paye', 'credit', 'annule'] as const).map(f => (
           <Pressable key={f} onPress={() => setFilter(f)}
             style={[styles.filterTab, filter === f && styles.filterTabActive]}>
             <Text variant="caption" style={{ color: filter === f ? palette.textInverse : palette.textSecondary }}>
-              {f === 'all' ? 'Tout' : f === 'paye' ? 'Payés' : 'Crédits'}
+              {f === 'all' ? 'Tout' : f === 'paye' ? 'Payés' : f === 'credit' ? 'Crédits' : 'Annulés'}
             </Text>
           </Pressable>
         ))}
@@ -245,8 +351,8 @@ export default function VentesScreen() {
                   </Text>
                 </View>
                 <View style={styles.saleMeta}>
-                  <Text variant="caption" color="secondary">👤 {item.seller_name}</Text>
-                  <Text variant="caption" color="secondary">· {relativeDate(item.created_at)}</Text>
+                  <Text variant="caption" color="secondary">{item.seller_name}</Text>
+                  <Text variant="caption" color="secondary">· {saleDate(item.sale_date ?? item.created_at)}</Text>
                   <View style={[styles.statusPill, { backgroundColor: statusColor(item.status) + '20' }]}>
                     <Text variant="caption" style={{ color: statusColor(item.status) }}>
                       {statusLabel(item.status)}
@@ -264,8 +370,12 @@ export default function VentesScreen() {
         <DetailModal
           sale={selected}
           currency={currency}
+          businessId={businessId}
+          userId={userId}
           onClose={() => setSelected(null)}
           onMarkPaid={handleMarkPaid}
+          onCancel={handleCancel}
+          onUpdateClient={handleUpdateClient}
           saving={saving}
         />
       )}
@@ -279,7 +389,7 @@ const styles = StyleSheet.create({
   summary: { flexDirection: 'row', paddingHorizontal: spacing[5], gap: spacing[3], marginBottom: spacing[3] },
   summaryCard: { flex: 1, gap: 2, alignItems: 'center' },
   filterRow: { flexDirection: 'row', paddingHorizontal: spacing[5], gap: spacing[2], marginBottom: spacing[3] },
-  filterTab: { paddingHorizontal: spacing[3], paddingVertical: spacing[1.5], borderRadius: radius.full, backgroundColor: palette.surface, borderWidth: 1, borderColor: palette.border },
+  filterTab: { flex: 1, alignItems: 'center', paddingHorizontal: spacing[2], paddingVertical: spacing[1.5], borderRadius: radius.full, backgroundColor: palette.surface, borderWidth: 1, borderColor: palette.border },
   filterTabActive: { backgroundColor: palette.primary, borderColor: palette.primary },
   list: { paddingHorizontal: spacing[5], paddingBottom: spacing[10] },
   saleRow: { paddingVertical: spacing[3], backgroundColor: palette.surface },
@@ -288,7 +398,7 @@ const styles = StyleSheet.create({
   statusPill: { paddingHorizontal: spacing[1.5], paddingVertical: 1, borderRadius: radius.sm },
   emptyState: { flex: 1, alignItems: 'center', justifyContent: 'center' },
   center: { textAlign: 'center', marginTop: spacing[10] },
-  pad: { padding: spacing[5], gap: spacing[4] },
+  pad: { padding: spacing[5], gap: spacing[4], paddingBottom: spacing[10] },
   modalSafe: { flex: 1, backgroundColor: palette.background },
   modalHeader: { flexDirection: 'row', alignItems: 'center', justifyContent: 'space-between', padding: spacing[5], borderBottomWidth: 1, borderBottomColor: palette.border },
   metaCard: { gap: spacing[3] },
@@ -297,4 +407,9 @@ const styles = StyleSheet.create({
   methodRow: { flexDirection: 'row', flexWrap: 'wrap', gap: spacing[2] },
   chip: { paddingHorizontal: spacing[3], paddingVertical: spacing[1.5], borderRadius: radius.full, borderWidth: 1, borderColor: palette.border, backgroundColor: palette.surface },
   chipActive: { backgroundColor: palette.primary, borderColor: palette.primary },
+  textInput: {
+    paddingHorizontal: spacing[4], paddingVertical: spacing[3],
+    borderRadius: radius.md, borderWidth: 1, borderColor: palette.border,
+    backgroundColor: palette.surface, color: palette.textPrimary, fontSize: 16,
+  },
 });

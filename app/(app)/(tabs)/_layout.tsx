@@ -50,12 +50,16 @@ export default function TabsLayout() {
         }}
       />
       <Tabs.Screen
-        name="caisse"
+        name="vendre"
         options={{
-          title: 'Caisse',
+          title: 'Vendre',
           href: isInvestisseur ? null : undefined,
           tabBarIcon: tabIcon('cart-outline', 'cart'),
         }}
+      />
+      <Tabs.Screen
+        name="caisse"
+        options={{ href: null }}
       />
       <Tabs.Screen
         name="plus"

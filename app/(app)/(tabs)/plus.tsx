@@ -1,11 +1,14 @@
 import { Alert, ScrollView, StyleSheet, View } from 'react-native';
 import { router } from 'expo-router';
 import { SafeAreaView } from 'react-native-safe-area-context';
+import { Ionicons } from '@expo/vector-icons';
 import { Button } from '@/src/components/ui/Button';
 import { Card } from '@/src/components/ui/Card';
 import { Text } from '@/src/components/ui/Text';
 import { colors, palette, spacing } from '@/src/theme';
 import { useAuthStore } from '@/stores/auth';
+
+type IoniconName = React.ComponentProps<typeof Ionicons>['name'];
 
 const ROLE_COLORS: Record<string, string> = {
   administrateur: colors.role.administrateur,
@@ -14,11 +17,19 @@ const ROLE_COLORS: Record<string, string> = {
   investisseur: colors.role.investisseur,
 };
 
-interface MenuRowProps { icon: string; label: string; sub?: string; onPress: () => void }
-function MenuRow({ icon, label, sub, onPress }: MenuRowProps) {
+interface MenuRowProps {
+  iconName: IoniconName;
+  label: string;
+  sub?: string;
+  onPress: () => void;
+}
+
+function MenuRow({ iconName, label, sub, onPress }: MenuRowProps) {
   return (
     <Card onPress={onPress} padded={false} style={styles.menuRow}>
-      <Text style={styles.menuIcon}>{icon}</Text>
+      <View style={styles.menuIconWrap}>
+        <Ionicons name={iconName} size={20} color={palette.textSecondary} />
+      </View>
       <View style={{ flex: 1 }}>
         <Text variant="label">{label}</Text>
         {sub && <Text variant="caption" color="secondary">{sub}</Text>}
@@ -76,13 +87,14 @@ export default function PlusScreen() {
           </View>
         </Card>
 
-        {/* Vendeur section — own sales, clients, expenses */}
+        {/* Vendeur section */}
         {isVendeur && (
           <View style={styles.section}>
             <Text variant="overline" color="secondary">Mes activités</Text>
-            <MenuRow icon="🧾" label="Mes ventes" sub="Historique de mes ventes" onPress={() => router.push('/ventes')} />
-            <MenuRow icon="👥" label="Mes clients" sub="Mes clients et crédits" onPress={() => router.push('/clients')} />
-            <MenuRow icon="💸" label="Dépenses" sub="Soumettre une dépense" onPress={() => router.push('/depenses')} />
+            <MenuRow iconName="receipt-outline" label="Mes ventes" sub="Historique de mes ventes" onPress={() => router.push('/ventes')} />
+            <MenuRow iconName="card-outline" label="Crédits clients" sub="Créances en attente" onPress={() => router.push('/credits')} />
+            <MenuRow iconName="people-outline" label="Mes clients" sub="Mes clients et crédits" onPress={() => router.push('/clients')} />
+            <MenuRow iconName="cash-outline" label="Dépenses" sub="Soumettre une dépense" onPress={() => router.push('/depenses')} />
           </View>
         )}
 
@@ -91,23 +103,24 @@ export default function PlusScreen() {
           <>
             <View style={styles.section}>
               <Text variant="overline" color="secondary">Ventes & Clients</Text>
-              <MenuRow icon="🧾" label="Historique des ventes" sub="Qui a vendu quoi" onPress={() => router.push('/ventes')} />
-              <MenuRow icon="👥" label="Clients & Créances" sub="Dettes clients" onPress={() => router.push('/clients')} />
+              <MenuRow iconName="receipt-outline" label="Historique des ventes" sub="Toutes les ventes" onPress={() => router.push('/ventes')} />
+              <MenuRow iconName="card-outline" label="Crédits clients" sub="Gérer les créances" onPress={() => router.push('/credits')} />
+              <MenuRow iconName="people-outline" label="Clients" sub="Informations clients" onPress={() => router.push('/clients')} />
             </View>
 
             <View style={styles.section}>
               <Text variant="overline" color="secondary">Finances</Text>
-              <MenuRow icon="💸" label="Dépenses" sub="Gérer et approuver les dépenses" onPress={() => router.push('/depenses')} />
+              <MenuRow iconName="cash-outline" label="Dépenses" sub="Gérer et approuver les dépenses" onPress={() => router.push('/depenses')} />
             </View>
 
             <View style={styles.section}>
               <Text variant="overline" color="secondary">Achats</Text>
-              <MenuRow icon="🏭" label="Fournisseurs" sub="Gérer vos fournisseurs" onPress={() => router.push('/fournisseurs')} />
+              <MenuRow iconName="business-outline" label="Fournisseurs" sub="Gérer vos fournisseurs" onPress={() => router.push('/fournisseurs')} />
             </View>
 
             <View style={styles.section}>
               <Text variant="overline" color="secondary">Analyse</Text>
-              <MenuRow icon="📊" label="Rapports" sub="CA, marges, stock" onPress={() => router.push('/rapports')} />
+              <MenuRow iconName="bar-chart-outline" label="Rapports" sub="CA, marges, stock" onPress={() => router.push('/rapports')} />
             </View>
           </>
         )}
@@ -116,8 +129,16 @@ export default function PlusScreen() {
         {isAdmin && (
           <View style={styles.section}>
             <Text variant="overline" color="secondary">Administration</Text>
-            <MenuRow icon="👤" label="Équipe" sub="Membres & invitations" onPress={() => router.push('/equipe')} />
-            <MenuRow icon="⚙️" label="Paramètres" sub="Commerce, devise" onPress={() => router.push('/parametres')} />
+            <MenuRow iconName="people-outline" label="Équipe" sub="Membres & invitations" onPress={() => router.push('/equipe')} />
+            <MenuRow iconName="settings-outline" label="Paramètres" sub="Nom du commerce, devise" onPress={() => router.push('/parametres')} />
+          </View>
+        )}
+
+        {/* Profile — all roles */}
+        {!isAdmin && (
+          <View style={styles.section}>
+            <Text variant="overline" color="secondary">Mon compte</Text>
+            <MenuRow iconName="person-outline" label="Mon profil" sub="Modifier mon nom affiché" onPress={() => router.push('/parametres')} />
           </View>
         )}
 
@@ -154,6 +175,6 @@ const styles = StyleSheet.create({
     flexDirection: 'row', alignItems: 'center',
     paddingHorizontal: spacing[4], paddingVertical: spacing[3], gap: spacing[3],
   },
-  menuIcon: { fontSize: 20, width: 28, textAlign: 'center' },
+  menuIconWrap: { width: 28, alignItems: 'center' },
   switchCard: { gap: 2 },
 });

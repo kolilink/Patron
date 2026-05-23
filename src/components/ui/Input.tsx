@@ -85,6 +85,7 @@ const styles = StyleSheet.create({
     paddingVertical: spacing[2.5],
     ...typography.body,
     color: palette.textPrimary,
+    backgroundColor: 'transparent',
   },
   inputWithLeft: {
     paddingLeft: spacing[1],

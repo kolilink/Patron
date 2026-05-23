@@ -11,6 +11,7 @@ import { supabase } from '@/lib/supabase';
 
 interface KPIs {
   revenue_today: number;
+  revenue_yesterday: number;
   revenue_month: number;
   sales_today: number;
   credit_total: number;
@@ -76,14 +77,23 @@ export default function AccueilScreen() {
     const d = String(now.getDate()).padStart(2, '0');
     const todayStart = `${y}-${m}-${d}T00:00:00.000Z`;
     const monthStart = `${y}-${m}-01T00:00:00.000Z`;
+    const yestD = new Date(now.getFullYear(), now.getMonth(), now.getDate() - 1);
+    const yestStart = `${yestD.getFullYear()}-${String(yestD.getMonth() + 1).padStart(2, '0')}-${String(yestD.getDate()).padStart(2, '0')}T00:00:00.000Z`;
 
-    const [todayRes, monthRes, creditRes, expensesRes] = await Promise.all([
+    const [todayRes, yestRes, monthRes, creditRes, expensesRes] = await Promise.all([
       supabase
         .from('sale_orders')
         .select('total_amount')
         .eq('business_id', businessId)
         .eq('status', 'paye')
         .gte('paid_at', todayStart),
+      supabase
+        .from('sale_orders')
+        .select('total_amount')
+        .eq('business_id', businessId)
+        .eq('status', 'paye')
+        .gte('paid_at', yestStart)
+        .lt('paid_at', todayStart),
       supabase
         .from('sale_orders')
         .select('total_amount')
@@ -112,6 +122,7 @@ export default function AccueilScreen() {
 
     setKpis({
       revenue_today: sum(todayRes.data as { total_amount: number }[] | null),
+      revenue_yesterday: sum(yestRes.data as { total_amount: number }[] | null),
       revenue_month: sum(monthRes.data as { total_amount: number }[] | null),
       sales_today: todayRes.data?.length ?? 0,
       credit_total: sum(creditRes.data as { total_amount: number }[] | null),
@@ -146,7 +157,7 @@ export default function AccueilScreen() {
 
     // Aggregate by product
     const map = new Map<string, BestSeller>();
-    for (const l of lines as Array<{ product_id: string; qty: number; unit_price: number; product: { name: string } | null }>) {
+    for (const l of (lines as unknown) as Array<{ product_id: string; qty: number; unit_price: number; product: { name: string } | null }>) {
       const existing = map.get(l.product_id);
       if (existing) {
         existing.total_qty += l.qty;
@@ -191,13 +202,20 @@ export default function AccueilScreen() {
         ) : (
           <>
             <View style={styles.grid}>
-              <KpiCard
-                label="Ventes aujourd'hui"
-                value={fmt(kpis?.revenue_today ?? 0, currency)}
-                sub={`${kpis?.sales_today ?? 0} transaction${(kpis?.sales_today ?? 0) > 1 ? 's' : ''}`}
-                onPress={() => router.push('/ventes')}
-                accent={palette.success}
-              />
+              <View style={styles.todayRow}>
+                <KpiCard
+                  label="Ventes aujourd'hui"
+                  value={fmt(kpis?.revenue_today ?? 0, currency)}
+                  sub={`${kpis?.sales_today ?? 0} transaction${(kpis?.sales_today ?? 0) > 1 ? 's' : ''}`}
+                  onPress={() => router.push('/ventes')}
+                  accent={palette.success}
+                />
+                <KpiCard
+                  label="Hier"
+                  value={fmt(kpis?.revenue_yesterday ?? 0, currency)}
+                  onPress={() => router.push('/ventes')}
+                />
+              </View>
               <KpiCard
                 label="Ventes ce mois"
                 value={fmt(kpis?.revenue_month ?? 0, currency)}
@@ -235,7 +253,7 @@ export default function AccueilScreen() {
             {bestSellers.length > 0 && (
               <View style={styles.section}>
                 <Text variant="label" color="secondary" style={styles.sectionTitle}>
-                  🏆  Meilleures ventes ce mois
+                  Vos meilleurs produits
                 </Text>
                 {bestSellers.map((bs, i) => (
                   <View key={bs.product_id} style={styles.bsRow}>
@@ -257,7 +275,7 @@ export default function AccueilScreen() {
             {(kpis?.revenue_today === 0 && kpis?.revenue_month === 0) && (
               <Card style={styles.empty}>
                 <Text variant="body" color="secondary" style={{ textAlign: 'center' }}>
-                  Aucune vente enregistrée. Commencez par la Caisse.
+                  Aucune vente enregistrée. Commencez par l'onglet Vendre.
                 </Text>
               </Card>
             )}
@@ -273,7 +291,8 @@ const styles = StyleSheet.create({
   content: { padding: spacing[5], gap: spacing[5], paddingBottom: spacing[10] },
   header: { paddingBottom: spacing[2] },
   grid: { gap: spacing[3] },
-  kpi: { gap: spacing[1] },
+  todayRow: { flexDirection: 'row', gap: spacing[3] },
+  kpi: { gap: spacing[1], flex: 1 },
   empty: { alignItems: 'center', paddingVertical: spacing[8] },
   section: {
     backgroundColor: palette.surface,
