@@ -10,7 +10,9 @@ export default function RootLayout() {
   const initialize = useAuthStore(s => s.initialize);
 
   useEffect(() => {
+    const timeout = setTimeout(() => SplashScreen.hideAsync(), 5000);
     Promise.all([initialize(), openDb()]).finally(() => {
+      clearTimeout(timeout);
       SplashScreen.hideAsync();
     });
   }, []);
