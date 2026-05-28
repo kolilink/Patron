@@ -275,10 +275,10 @@ export default function ClientLedgerScreen() {
   const [showPayModal, setShowPayModal] = useState(false);
   const [showEditModal, setShowEditModal] = useState(false);
 
-  // Load sales + client record on mount
+  // Load sales + client record on mount — always refresh to catch new credit sales
   useEffect(() => {
     if (!businessId) return;
-    if (sales.length === 0) fetchSales(businessId);
+    fetchSales(businessId);
     loadClientRecord();
   }, [businessId]);
 

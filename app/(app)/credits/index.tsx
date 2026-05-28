@@ -1,7 +1,7 @@
-import { useEffect, useMemo } from 'react';
+import { useCallback, useEffect, useMemo } from 'react';
 import { FlatList, Pressable, StyleSheet, View } from 'react-native';
 import { SafeAreaView } from 'react-native-safe-area-context';
-import { router } from 'expo-router';
+import { router, useFocusEffect } from 'expo-router';
 import { Card } from '@/src/components/ui/Card';
 import { Text } from '@/src/components/ui/Text';
 import { palette, spacing, colors, radius } from '@/src/theme';
@@ -34,9 +34,11 @@ export default function CreditsScreen() {
 
   const { sales, loading, fetchSales } = useVentesStore();
 
-  useEffect(() => {
-    if (businessId) fetchSales(businessId, isVendeur ? userId : undefined);
-  }, [businessId]);
+  useFocusEffect(
+    useCallback(() => {
+      if (businessId) fetchSales(businessId, isVendeur ? userId : undefined);
+    }, [businessId, isVendeur, userId]),
+  );
 
   const debtors = useMemo<DebtorClient[]>(() => {
     const map = new Map<string, DebtorClient>();
