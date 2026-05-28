@@ -61,12 +61,13 @@ export const useExpensesStore = create<ExpensesStore>((set, get) => ({
         const pm: Record<string, string> = {};
         for (const p of (profiles ?? [])) pm[(p as { id: string; name: string }).id] = (p as { id: string; name: string }).name;
 
-        set({
-          expenses: expenses.map(e => ({ ...e, creator_name: pm[e.created_by] ?? 'Inconnu' })),
+        const fromCents = (e: Expense) => ({ ...e, amount: e.amount / 100 });
+      set({
+          expenses: expenses.map(e => ({ ...fromCents(e), creator_name: pm[e.created_by] ?? 'Inconnu' })),
           loading: false,
         });
       } else {
-        set({ expenses, loading: false });
+        set({ expenses: expenses.map(e => ({ ...e, amount: e.amount / 100 })), loading: false });
       }
     } catch (err) {
       set({ error: translateError(err, 'Erreur de chargement'), loading: false });
@@ -78,7 +79,7 @@ export const useExpensesStore = create<ExpensesStore>((set, get) => ({
     const payload = {
       id: generateId(),
       business_id: businessId,
-      amount: data.amount,
+      amount: Math.round(data.amount * 100),
       description: data.description.trim(),
       category: data.category?.trim() || null,
       date: data.date,
@@ -110,7 +111,7 @@ export const useExpensesStore = create<ExpensesStore>((set, get) => ({
     set({ saving: true, error: null });
     try {
       const { error } = await supabase.from('expenses').update({
-        amount: data.amount,
+        amount: Math.round(data.amount * 100),
         description: data.description.trim(),
         category: data.category?.trim() || null,
         date: data.date,

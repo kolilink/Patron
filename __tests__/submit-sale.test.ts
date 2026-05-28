@@ -75,7 +75,7 @@ describe('submit_sale — online success', () => {
     expect(supabase.rpc).toHaveBeenCalledWith('submit_sale', expect.objectContaining({
       p_business_id: 'biz-1',
       p_seller_id: 'user-1',
-      p_total_amount: 800,
+      p_total_amount: 80000,
       p_is_credit: false,
     }));
     expect(useSalesStore.getState().cart).toHaveLength(0);
@@ -109,7 +109,7 @@ describe('submit_sale — offline queue', () => {
     expect(result).toBe(true);
     expect(enqueue).toHaveBeenCalledWith('submit_sale', expect.objectContaining({
       p_business_id: 'biz-1',
-      p_total_amount: 800,
+      p_total_amount: 80000,
     }));
     expect(useSalesStore.getState().cart).toHaveLength(0);
     expect(useSalesStore.getState().lastSubmitQueued).toBe(true);

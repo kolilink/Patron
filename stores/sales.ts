@@ -133,7 +133,7 @@ export const useSalesStore = create<SalesStore>((set, get) => ({
       const cartJson = cartSnapshot.map(l => ({
         product_id: l.product.id,
         qty: l.qty,
-        unit_price: l.unit_price,
+        unit_price: Math.round(l.unit_price * 100),
         is_bulk: l.is_bulk,
       }));
 
@@ -142,12 +142,12 @@ export const useSalesStore = create<SalesStore>((set, get) => ({
         p_seller_id:       userId,
         p_customer_name:   customerName?.trim() || null,
         p_sale_date:       saleDate || today,
-        p_total_amount:    totalAmount,
-        p_discount_amount: discount,
+        p_total_amount:    Math.round(totalAmount * 100),
+        p_discount_amount: Math.round(discount * 100),
         p_is_credit:       isCredit,
         p_cart:            cartJson,
         p_pay_method:      payment?.method  ?? null,
-        p_pay_amount:      payment?.amount  ?? null,
+        p_pay_amount:      payment?.amount  != null ? Math.round(payment.amount * 100) : null,
         p_pay_ref:         payment?.ref_external ?? null,
       };
 
@@ -170,17 +170,17 @@ export const useSalesStore = create<SalesStore>((set, get) => ({
           p_seller_id:       userId,
           p_customer_name:   customerName?.trim() || null,
           p_sale_date:       saleDate || today,
-          p_total_amount:    totalAmount,
-          p_discount_amount: discount,
+          p_total_amount:    Math.round(totalAmount * 100),
+          p_discount_amount: Math.round(discount * 100),
           p_is_credit:       isCredit,
           p_cart:            cartSnapshot.map(l => ({
             product_id: l.product.id,
             qty: l.qty,
-            unit_price: l.unit_price,
+            unit_price: Math.round(l.unit_price * 100),
             is_bulk: l.is_bulk,
           })),
           p_pay_method:      payment?.method  ?? null,
-          p_pay_amount:      payment?.amount  ?? null,
+          p_pay_amount:      payment?.amount  != null ? Math.round(payment.amount * 100) : null,
           p_pay_ref:         payment?.ref_external ?? null,
         });
 

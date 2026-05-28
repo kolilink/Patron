@@ -138,7 +138,7 @@ describe('submitSale — total amount calculation', () => {
     await useSalesStore.getState().submitSale('biz-1', 'user-1', { method: 'especes', amount: 2000 });
 
     expect(supabase.rpc).toHaveBeenCalledWith('submit_sale', expect.objectContaining({
-      p_total_amount: 2000,
+      p_total_amount: 200000,
     }));
   });
 });

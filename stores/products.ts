@@ -63,7 +63,13 @@ export const useProductStore = create<ProductStore>((set, get) => ({
         .order('name');
 
       if (error) throw error;
-      set({ products: (data as Product[]) ?? [], loading: false });
+      const products = (data as Product[]).map(p => ({
+        ...p,
+        cost_price: p.cost_price / 100,
+        sale_price: p.sale_price / 100,
+        bulk_price: p.bulk_price != null ? p.bulk_price / 100 : null,
+      }));
+      set({ products, loading: false });
     } catch (err) {
       set({ error: translateError(err, 'Erreur de chargement'), loading: false });
     }
@@ -79,7 +85,13 @@ export const useProductStore = create<ProductStore>((set, get) => ({
         .order('name');
 
       if (error) throw error;
-      set({ archivedProducts: (data as Product[]) ?? [] });
+      const archivedProducts = (data as Product[]).map(p => ({
+        ...p,
+        cost_price: p.cost_price / 100,
+        sale_price: p.sale_price / 100,
+        bulk_price: p.bulk_price != null ? p.bulk_price / 100 : null,
+      }));
+      set({ archivedProducts });
     } catch (err) {
       set({ error: translateError(err, 'Erreur de chargement') });
     }
@@ -96,14 +108,14 @@ export const useProductStore = create<ProductStore>((set, get) => ({
         sku: data.sku?.trim() || null,
         category: data.category?.trim() || null,
         unit: data.unit,
-        cost_price: data.cost_price,
-        sale_price: data.sale_price,
+        cost_price: Math.round(data.cost_price * 100),
+        sale_price: Math.round(data.sale_price * 100),
         reorder_level: data.reorder_level,
         stock_qty: data.initial_stock,
         archived: false,
         supplier_id: data.supplier_id || null,
         purchase_date: data.purchase_date || null,
-        bulk_price: data.bulk_price || null,
+        bulk_price: data.bulk_price ? Math.round(data.bulk_price * 100) : null,
         bulk_min_qty: data.bulk_min_qty || null,
         created_by: userId,
       });
@@ -140,12 +152,12 @@ export const useProductStore = create<ProductStore>((set, get) => ({
       if (data.sku !== undefined) patch.sku = data.sku?.trim() || null;
       if (data.category !== undefined) patch.category = data.category?.trim() || null;
       if (data.unit !== undefined) patch.unit = data.unit;
-      if (data.cost_price !== undefined) patch.cost_price = data.cost_price;
-      if (data.sale_price !== undefined) patch.sale_price = data.sale_price;
+      if (data.cost_price !== undefined) patch.cost_price = Math.round(data.cost_price * 100);
+      if (data.sale_price !== undefined) patch.sale_price = Math.round(data.sale_price * 100);
       if (data.reorder_level !== undefined) patch.reorder_level = data.reorder_level;
       if (data.supplier_id !== undefined) patch.supplier_id = data.supplier_id || null;
       if (data.purchase_date !== undefined) patch.purchase_date = data.purchase_date || null;
-      if (data.bulk_price !== undefined) patch.bulk_price = data.bulk_price || null;
+      if (data.bulk_price !== undefined) patch.bulk_price = data.bulk_price ? Math.round(data.bulk_price * 100) : null;
       if (data.bulk_min_qty !== undefined) patch.bulk_min_qty = data.bulk_min_qty || null;
 
       const { error } = await supabase.from('products').update(patch).eq('id', id);

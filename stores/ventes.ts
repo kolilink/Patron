@@ -101,26 +101,29 @@ export const useVentesStore = create<VentesStore>((set, get) => ({
     const hasCostByOrder: Record<string, boolean> = {};
     for (const l of (linesRes.data ?? [])) {
       const line = l as unknown as { order_id: string; qty: number; unit_price: number; product: { cost_price: number } | null };
-      const costPrice = line.product?.cost_price ?? 0;
+      const costPrice = (line.product?.cost_price ?? 0) / 100;
+      const unitPrice = line.unit_price / 100;
       if (costPrice > 0) hasCostByOrder[line.order_id] = true;
       profitByOrder[line.order_id] = (profitByOrder[line.order_id] ?? 0)
-        + (line.unit_price - costPrice) * line.qty;
+        + (unitPrice - costPrice) * line.qty;
     }
 
     // Sum payments per order to compute amount_paid (used for credit + discounted sales)
     const paidByOrder: Record<string, number> = {};
     for (const p of (paysRes.data ?? []) as { order_id: string; amount: number }[]) {
-      paidByOrder[p.order_id] = (paidByOrder[p.order_id] ?? 0) + p.amount;
+      paidByOrder[p.order_id] = (paidByOrder[p.order_id] ?? 0) + p.amount / 100;
     }
 
     set({
       sales: data.map((s: Record<string, unknown>) => {
-        const discount = (s.discount_amount as number) ?? 0;
+        const discount = ((s.discount_amount as number) ?? 0) / 100;
+        const totalAmount = (s.total_amount as number) / 100;
         // Expose amount_paid for credit sales and for discounted (rabais) sales
         const hasDiscount = discount > 0;
         const isCreditStatus = s.status === 'credit';
         return {
           ...s,
+          total_amount: totalAmount,
           seller_name: pm[s.seller_id as string] ?? 'Inconnu',
           is_credit: (s.is_credit as boolean) ?? false,
           discount_amount: discount,
@@ -150,15 +153,15 @@ export const useVentesStore = create<VentesStore>((set, get) => ({
       product_id: l.product_id as string,
       product_name: (l.product as ProductJoin)?.name ?? '—',
       qty: l.qty as number,
-      unit_price: l.unit_price as number,
+      unit_price: (l.unit_price as number) / 100,
       is_bulk: (l.is_bulk as boolean) ?? false,
-      cost_price: (l.product as ProductJoin)?.cost_price ?? 0,
+      cost_price: ((l.product as ProductJoin)?.cost_price ?? 0) / 100,
     }));
 
     const payments: VentePayment[] = (paysRes.data ?? []).map((p: Record<string, unknown>) => ({
       id: p.id as string,
       method: p.method as string,
-      amount: p.amount as number,
+      amount: (p.amount as number) / 100,
       date: p.date as string,
     }));
 
@@ -185,7 +188,7 @@ export const useVentesStore = create<VentesStore>((set, get) => ({
       customer_name: sale.customer_name,
       business_id: sale.business_id,
       method,
-      amount,
+      amount: Math.round(amount * 100),
       date,
     });
     if (payErr) {
@@ -264,7 +267,7 @@ export const useVentesStore = create<VentesStore>((set, get) => ({
         customer_name: customerName,
         business_id: businessId,
         method,
-        amount: allocated,
+        amount: Math.round(allocated * 100),
         date,
       });
 
