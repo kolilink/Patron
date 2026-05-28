@@ -2,6 +2,7 @@ import { create } from 'zustand';
 import { supabase } from '@/lib/supabase';
 import { generateId } from '@/lib/id';
 import { translateError } from '@/lib/errors';
+import { trackEvent } from '@/lib/analytics';
 
 export interface VenteLigne {
   id: string;
@@ -308,6 +309,9 @@ export const useVentesStore = create<VentesStore>((set, get) => ({
       .filter(s => s.customer_name === customerName && s.business_id === businessId && s.status === 'credit')
       .reduce((sum, s) => sum + (s.total_amount - (s.amount_paid ?? 0)), 0);
 
+    trackEvent('debt_payment_recorded', businessId, null, {
+      fully_settled: stillOwed < 0.01,
+    });
     return { ok: true, fullySettled: stillOwed < 0.01 };
   },
 
