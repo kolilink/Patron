@@ -2,7 +2,7 @@
 
 export type Role = 'administrateur' | 'manager' | 'vendeur' | 'investisseur';
 
-export type PaymentMethod = 'especes' | 'wave' | 'orange' | 'mtn' | 'moov' | 'credit' | 'digital';
+export type PaymentMethod = 'especes' | 'orange' | 'mtn' | 'moov' | 'digital';
 
 export type StockMoveType = 'entree' | 'sortie' | 'perte' | 'retour';
 
@@ -63,6 +63,7 @@ export interface Membership {
   role: Role;
   pin_hash: string | null;
   joined_at: string;
+  milestone_reached: boolean;
   user?: User;
   business?: Business;
 }
@@ -135,9 +136,11 @@ export interface SaleOrder extends Base {
   customer_name: string | null;
   seller_id: string;
   status: OrderStatus;
+  is_credit: boolean;
   paid_at: string | null;
   sale_date: string | null;
   total_amount: number;
+  discount_amount: number;
   lines?: SOLine[];
   payments?: Payment[];
 }
@@ -156,9 +159,12 @@ export interface SOLine {
 
 export interface Payment {
   id: string;
-  order_id: string;
+  order_id: string | null;
+  customer_name: string | null;
+  business_id: string | null;
   method: PaymentMethod;
   amount: number;
+  date: string;
   ref_external: string | null;
   created_at: string;
 }

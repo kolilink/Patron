@@ -349,7 +349,8 @@ create table if not exists so_lines (
   order_id   uuid          not null references sale_orders(id) on delete cascade,
   product_id uuid          not null references products(id),
   qty        numeric(15,2) not null,
-  unit_price numeric(15,2) not null
+  unit_price numeric(15,2) not null,
+  is_bulk    boolean       not null default false
 );
 
 alter table so_lines enable row level security;

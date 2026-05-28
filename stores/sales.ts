@@ -1,13 +1,10 @@
 import { create } from 'zustand';
 import { supabase } from '@/lib/supabase';
+import { translateError } from '@/lib/errors';
+import { enqueue, getQueueCount } from '@/lib/db';
+import { isNetworkError } from '@/lib/sync';
+import { useSyncStore } from '@/stores/sync';
 import type { PaymentMethod, Product } from '@/src/types';
-
-function generateId(): string {
-  return 'xxxxxxxx-xxxx-4xxx-yxxx-xxxxxxxxxxxx'.replace(/[xy]/g, c => {
-    const r = (Math.random() * 16) | 0;
-    return (c === 'x' ? r : (r & 0x3) | 0x8).toString(16);
-  });
-}
 
 export interface CartLine {
   product: Product;
@@ -26,6 +23,7 @@ interface SalesStore {
   cart: CartLine[];
   submitting: boolean;
   error: string | null;
+  lastSubmitQueued: boolean;
 
   addToCart: (product: Product, bulk?: boolean) => void;
   removeFromCart: (productId: string, isBulk?: boolean) => void;
@@ -35,17 +33,20 @@ interface SalesStore {
   submitSale: (
     businessId: string,
     userId: string,
-    payment: SalePayment,
+    payment: SalePayment | null,
     customerName?: string,
     saleDate?: string,
+    discountAmount?: number,
   ) => Promise<boolean>;
   clearError: () => void;
+  reset: () => void;
 }
 
 export const useSalesStore = create<SalesStore>((set, get) => ({
   cart: [],
   submitting: false,
   error: null,
+  lastSubmitQueued: false,
 
   addToCart: (product, bulk = false) => {
     const { cart } = get();
@@ -92,7 +93,6 @@ export const useSalesStore = create<SalesStore>((set, get) => ({
     const unit_price = newBulk && targetLine.product.bulk_price ? targetLine.product.bulk_price : targetLine.product.sale_price;
     const existingTarget = cart.find(l => l.product.id === productId && l.is_bulk === newBulk);
     if (existingTarget) {
-      // Merge into existing line, remove toggled line
       set({
         cart: cart
           .filter(l => !(l.product.id === productId && l.is_bulk === currentIsBulk))
@@ -115,77 +115,87 @@ export const useSalesStore = create<SalesStore>((set, get) => ({
 
   clearCart: () => set({ cart: [] }),
 
-  submitSale: async (businessId, userId, payment, customerName, saleDate) => {
+  submitSale: async (businessId, userId, payment, customerName, saleDate, discountAmount) => {
     const { cart } = get();
     if (cart.length === 0) return false;
 
+    const cartSnapshot = [...cart];
     set({ submitting: true, error: null });
+
     try {
-      const orderId = generateId();
-      const totalAmount = cart.reduce((sum, l) => sum + l.unit_price * l.qty, 0);
-      const isPaid = payment.method !== 'credit';
+      const totalAmount = cartSnapshot.reduce((sum, l) => sum + l.unit_price * l.qty, 0);
+      const isFullCredit = payment === null;
+      const discount = discountAmount ?? 0;
+      const isPartialCredit = !isFullCredit && discount === 0 && payment!.amount < totalAmount - 0.01;
+      const isCredit = isFullCredit || isPartialCredit;
       const today = new Date().toISOString().split('T')[0];
 
-      const { error: orderErr } = await supabase.from('sale_orders').insert({
-        id: orderId,
-        business_id: businessId,
-        customer_name: customerName?.trim() || null,
-        seller_id: userId,
-        status: isPaid ? 'paye' : 'credit',
-        paid_at: isPaid ? new Date().toISOString() : null,
-        sale_date: saleDate || today,
-        total_amount: totalAmount,
-        created_by: userId,
-      });
-      if (orderErr) throw orderErr;
-
-      const soLines = cart.map(l => ({
-        id: generateId(),
-        order_id: orderId,
+      const cartJson = cartSnapshot.map(l => ({
         product_id: l.product.id,
         qty: l.qty,
         unit_price: l.unit_price,
         is_bulk: l.is_bulk,
       }));
-      const { error: linesErr } = await supabase.from('so_lines').insert(soLines);
-      if (linesErr) throw linesErr;
 
-      const { error: payErr } = await supabase.from('payments').insert({
-        id: generateId(),
-        order_id: orderId,
-        method: payment.method,
-        amount: payment.amount,
-        ref_external: payment.ref_external || null,
-      });
-      if (payErr) throw payErr;
+      const rpcPayload = {
+        p_business_id:     businessId,
+        p_seller_id:       userId,
+        p_customer_name:   customerName?.trim() || null,
+        p_sale_date:       saleDate || today,
+        p_total_amount:    totalAmount,
+        p_discount_amount: discount,
+        p_is_credit:       isCredit,
+        p_cart:            cartJson,
+        p_pay_method:      payment?.method  ?? null,
+        p_pay_amount:      payment?.amount  ?? null,
+        p_pay_ref:         payment?.ref_external ?? null,
+      };
 
-      const stockMoves = cart.map(l => ({
-        id: generateId(),
-        business_id: businessId,
-        product_id: l.product.id,
-        type: 'sortie',
-        qty: l.qty,
-        ref_id: orderId,
-        ref_type: 'sale_order',
-        note: null,
-        created_by: userId,
-      }));
-      const { error: movesErr } = await supabase.from('stock_moves').insert(stockMoves);
-      if (movesErr) throw movesErr;
+      const { error: rpcErr } = await supabase.rpc('submit_sale', rpcPayload);
+      if (rpcErr) throw rpcErr;
 
-      for (const l of cart) {
-        const newQty = Math.max(0, l.product.stock_qty - l.qty);
-        await supabase.from('products').update({ stock_qty: newQty }).eq('id', l.product.id);
-      }
-
-      set({ cart: [], submitting: false });
+      set({ cart: [], submitting: false, lastSubmitQueued: false });
       return true;
     } catch (err) {
-      const msg = err instanceof Error ? err.message : 'Erreur lors de la vente';
-      set({ error: msg, submitting: false });
+      if (isNetworkError(err)) {
+        const totalAmount = cartSnapshot.reduce((sum, l) => sum + l.unit_price * l.qty, 0);
+        const isFullCredit = payment === null;
+        const discount = discountAmount ?? 0;
+        const isPartialCredit = !isFullCredit && discount === 0 && payment!.amount < totalAmount - 0.01;
+        const isCredit = isFullCredit || isPartialCredit;
+        const today = new Date().toISOString().split('T')[0];
+
+        await enqueue('submit_sale', {
+          p_business_id:     businessId,
+          p_seller_id:       userId,
+          p_customer_name:   customerName?.trim() || null,
+          p_sale_date:       saleDate || today,
+          p_total_amount:    totalAmount,
+          p_discount_amount: discount,
+          p_is_credit:       isCredit,
+          p_cart:            cartSnapshot.map(l => ({
+            product_id: l.product.id,
+            qty: l.qty,
+            unit_price: l.unit_price,
+            is_bulk: l.is_bulk,
+          })),
+          p_pay_method:      payment?.method  ?? null,
+          p_pay_amount:      payment?.amount  ?? null,
+          p_pay_ref:         payment?.ref_external ?? null,
+        });
+
+        const count = await getQueueCount();
+        useSyncStore.setState({ pendingCount: count });
+
+        set({ cart: [], submitting: false, lastSubmitQueued: true });
+        return true;
+      }
+      const raw = err instanceof Error ? err.message : JSON.stringify(err);
+      set({ error: raw, submitting: false, lastSubmitQueued: false });
       return false;
     }
   },
 
   clearError: () => set({ error: null }),
+  reset: () => set({ cart: [], submitting: false, error: null, lastSubmitQueued: false }),
 }));

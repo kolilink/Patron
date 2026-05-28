@@ -20,10 +20,11 @@ export default function RejoindreScreen() {
   const onSubmit = async ({ code }: JoinForm) => {
     clearError();
     await joinBusiness(code);
-    const { session } = useAuthStore.getState();
-    if (session?.activeBusiness) {
+    const state = useAuthStore.getState();
+    if (!state.error) {
       router.replace('/(app)/(tabs)/');
     }
+    // If there's an error, it shows in the errorBox below
   };
 
   return (
@@ -60,7 +61,7 @@ export default function RejoindreScreen() {
                 onChangeText={v => field.onChange(v.toUpperCase())}
                 onBlur={field.onBlur}
                 error={fieldState.error?.message}
-                placeholder="Ex: SHOP2024"
+                placeholder="Ex: MANGO-47"
                 autoCapitalize="characters"
                 autoCorrect={false}
                 style={styles.codeInput}

@@ -18,21 +18,21 @@ function todayIso() {
   return `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, '0')}-${String(d.getDate()).padStart(2, '0')}`;
 }
 
+function statusLabel(s: string) {
+  if (s === 'approuve') return 'Enregistré';
+  if (s === 'rejete') return 'Rejeté';
+  return 'En attente';
+}
+
 function statusColor(s: string) {
   if (s === 'approuve') return palette.success;
   if (s === 'rejete') return palette.danger;
   return palette.warning;
 }
 
-function statusLabel(s: string) {
-  if (s === 'approuve') return 'Approuvé';
-  if (s === 'rejete') return 'Rejeté';
-  return 'En attente';
-}
+const CATEGORIES = ['Loyer', 'Transport', 'Achats', 'Salaires', 'Pub', 'Factures', 'Autres'];
 
-const CATEGORIES = ['Loyer', 'Transport', 'Fournitures', 'Salaires', 'Marketing', 'Utilitaires', 'Autres'];
-
-// ─── Expense Form (create + edit) ─────────────────────────────────────────────
+// ─── Expense Form ─────────────────────────────────────────────────────────────
 
 interface ExpenseFormProps {
   visible: boolean;
@@ -48,7 +48,6 @@ function ExpenseFormModal({ visible, editing, onClose, onSave, saving, currency 
   const [description, setDescription] = useState('');
   const [category, setCategory] = useState('');
   const [date, setDate] = useState(todayIso());
-  const [dueDate, setDueDate] = useState('');
   const [note, setNote] = useState('');
 
   useEffect(() => {
@@ -57,7 +56,6 @@ function ExpenseFormModal({ visible, editing, onClose, onSave, saving, currency 
       setDescription(editing?.description ?? '');
       setCategory(editing?.category ?? '');
       setDate(editing?.date ?? todayIso());
-      setDueDate(editing?.due_date ?? '');
       setNote(editing?.note ?? '');
     }
   }, [visible, editing]);
@@ -71,7 +69,7 @@ function ExpenseFormModal({ visible, editing, onClose, onSave, saving, currency 
       description,
       category: category || null,
       date,
-      due_date: dueDate || null,
+      due_date: null,
       note: note || null,
     });
   };
@@ -89,7 +87,7 @@ function ExpenseFormModal({ visible, editing, onClose, onSave, saving, currency 
 
         <ScrollView contentContainerStyle={styles.modalContent} keyboardShouldPersistTaps="handled">
           <Input
-            label={`Montant (${currency}) *`}
+            label={`Montant (${currency})`}
             value={amount}
             onChangeText={setAmount}
             keyboardType="decimal-pad"
@@ -97,21 +95,19 @@ function ExpenseFormModal({ visible, editing, onClose, onSave, saving, currency 
           />
 
           <Input
-            label="Description *"
+            label="Description"
             value={description}
             onChangeText={setDescription}
-            placeholder="Ex: Loyer du mois, carburant…"
+            placeholder="Ex: sac de riz, taxi, facture…"
           />
 
           <DatePickerField label="Date de la dépense" value={date} onChange={setDate} maxToday />
-
-          <DatePickerField label="Date d'échéance (optionnel)" value={dueDate} onChange={setDueDate} minDate={date} />
 
           <Input
             label="Note (optionnel)"
             value={note}
             onChangeText={setNote}
-            placeholder="Détails supplémentaires…"
+            placeholder="Notes…"
             multiline
           />
 
@@ -158,7 +154,6 @@ interface ExpenseCardProps {
 
 function ExpenseCard({ expense, currency, isManager, canEdit, onApprove, onReject, onEdit }: ExpenseCardProps) {
   const isPending = expense.status === 'en_attente';
-  const isOverdue = isPending && expense.due_date && expense.due_date < todayIso();
 
   return (
     <Card style={[styles.expRow, isPending && styles.expRowPending]}>
@@ -172,25 +167,20 @@ function ExpenseCard({ expense, currency, isManager, canEdit, onApprove, onRejec
           ) : null}
           <Text variant="caption" color="secondary">
             {new Date(expense.date + 'T00:00:00').toLocaleDateString('fr-FR', { day: 'numeric', month: 'short', year: 'numeric' })}
-            {expense.creator_name ? ` · ${expense.creator_name}` : ''}
           </Text>
-          {expense.due_date ? (
-            <Text variant="caption" style={{ color: isOverdue ? palette.danger : palette.warning }}>
-              Échéance : {new Date(expense.due_date + 'T00:00:00').toLocaleDateString('fr-FR', { day: 'numeric', month: 'short', year: 'numeric' })}
-              {isOverdue ? ' — EN RETARD' : ''}
-            </Text>
-          ) : null}
           {expense.note ? (
             <Text variant="caption" color="secondary" numberOfLines={2}>{expense.note}</Text>
           ) : null}
         </View>
         <View style={{ alignItems: 'flex-end', gap: 4 }}>
           <Text variant="label" style={{ color: palette.danger }}>{fmt(expense.amount, currency)}</Text>
-          <View style={[styles.statusPill, { backgroundColor: statusColor(expense.status) + '20' }]}>
-            <Text variant="caption" style={{ color: statusColor(expense.status), fontWeight: '600' }}>
-              {statusLabel(expense.status)}
-            </Text>
-          </View>
+          {isPending && (
+            <View style={[styles.statusPill, { backgroundColor: statusColor(expense.status) + '20' }]}>
+              <Text variant="caption" style={{ color: statusColor(expense.status), fontWeight: '600' }}>
+                {statusLabel(expense.status)}
+              </Text>
+            </View>
+          )}
           {canEdit ? (
             <Pressable onPress={onEdit} style={styles.editBtn}>
               <Text variant="caption" style={{ color: palette.primary }}>Modifier</Text>
@@ -201,7 +191,7 @@ function ExpenseCard({ expense, currency, isManager, canEdit, onApprove, onRejec
 
       {isManager && isPending && (
         <View style={styles.actionRow}>
-          <Button label="Approuver" size="sm" onPress={onApprove} style={{ flex: 1 }} />
+          <Button label="Valider" size="sm" onPress={onApprove} style={{ flex: 1 }} />
           <Button label="Rejeter" size="sm" variant="danger" onPress={onReject} style={{ flex: 1 }} />
         </View>
       )}
@@ -209,7 +199,7 @@ function ExpenseCard({ expense, currency, isManager, canEdit, onApprove, onRejec
   );
 }
 
-// ─── Month accordion row ───────────────────────────────────────────────────────
+// ─── Month accordion ───────────────────────────────────────────────────────────
 
 interface MonthGroupProps {
   label: string;
@@ -281,13 +271,11 @@ export default function DepensesScreen() {
     if (businessId) fetchExpenses(businessId);
   }, [businessId]);
 
-  // Pending expenses — always shown at top
   const pendingExpenses = useMemo(
     () => expenses.filter(e => e.status === 'en_attente'),
     [expenses],
   );
 
-  // All non-pending grouped by month
   const groupedNonPending = useMemo(() => {
     const nonPending = expenses.filter(e => e.status !== 'en_attente');
     const map = new Map<string, { label: string; total: number; items: Expense[] }>();
@@ -305,10 +293,11 @@ export default function DepensesScreen() {
       .map(([key, g]) => ({ key, ...g }));
   }, [expenses]);
 
-  const totalApproved = useMemo(
-    () => expenses.filter(e => e.status === 'approuve').reduce((s, e) => s + e.amount, 0),
-    [expenses],
-  );
+  const thisMonthApproved = useMemo(() => {
+    const now = new Date();
+    const monthStart = `${now.getFullYear()}-${String(now.getMonth() + 1).padStart(2, '0')}-01`;
+    return expenses.filter(e => e.status === 'approuve' && e.date >= monthStart).reduce((s, e) => s + e.amount, 0);
+  }, [expenses]);
 
   const currentMonthKey = (() => {
     const now = new Date();
@@ -322,17 +311,13 @@ export default function DepensesScreen() {
       if (ok) Alert.alert('Dépense mise à jour');
     } else {
       ok = await createExpense(businessId, userId, data, isManager);
-      if (ok) {
-        if (isManager) {
-          Alert.alert('Dépense enregistrée');
-        } else {
-          Alert.alert('Dépense soumise', 'En attente de validation par un manager.');
-        }
+      if (ok && !isManager) {
+        Alert.alert('Dépense soumise', 'En attente de validation.');
       }
     }
     if (!ok) {
       const msg = useExpensesStore.getState().error;
-      Alert.alert('Erreur', msg ?? 'Impossible d\'enregistrer la dépense.');
+      Alert.alert('Erreur', msg ?? "Impossible d'enregistrer la dépense.");
     }
     if (ok) {
       setShowForm(false);
@@ -340,20 +325,13 @@ export default function DepensesScreen() {
     }
   }, [editingExpense, businessId, userId, isManager, updateExpense, createExpense]);
 
-  const handleEdit = (expense: Expense) => {
-    setEditingExpense(expense);
-    setShowForm(true);
-  };
-
-  const handleAdd = () => {
-    setEditingExpense(null);
-    setShowForm(true);
-  };
+  const handleEdit = (expense: Expense) => { setEditingExpense(expense); setShowForm(true); };
+  const handleAdd = () => { setEditingExpense(null); setShowForm(true); };
 
   const handleApprove = (id: string) => {
-    Alert.alert('Approuver cette dépense ?', '', [
+    Alert.alert('Valider cette dépense ?', '', [
       { text: 'Annuler', style: 'cancel' },
-      { text: 'Approuver', onPress: () => approveExpense(id, userId) },
+      { text: 'Valider', onPress: () => approveExpense(id, userId) },
     ]);
   };
 
@@ -380,39 +358,36 @@ export default function DepensesScreen() {
       {/* Summary bar */}
       <View style={styles.summary}>
         <Card style={styles.summaryCard}>
-          <Text variant="caption" color="secondary">Total approuvé</Text>
-          <Text variant="label" style={{ color: palette.danger }}>{fmt(totalApproved, currency)}</Text>
+          <Text variant="caption" color="secondary">Ce mois</Text>
+          <Text variant="label">{fmt(thisMonthApproved, currency)}</Text>
         </Card>
-        <Card style={[styles.summaryCard, pendingExpenses.length > 0 && { borderColor: palette.warning, borderWidth: 1 }]}>
-          <Text variant="caption" color="secondary">En attente</Text>
-          <Text variant="label" style={{ color: pendingExpenses.length > 0 ? palette.warning : palette.textSecondary }}>
-            {pendingExpenses.length}
-          </Text>
-        </Card>
+        {pendingExpenses.length > 0 && (
+          <Card style={[styles.summaryCard, { borderColor: palette.warning, borderWidth: 1 }]}>
+            <Text variant="caption" color="secondary">En attente</Text>
+            <Text variant="label" style={{ color: palette.warning }}>{pendingExpenses.length}</Text>
+          </Card>
+        )}
       </View>
 
       {loading && isEmpty ? (
         <Text variant="body" color="secondary" style={styles.center}>Chargement…</Text>
       ) : isEmpty ? (
         <View style={styles.empty}>
-          <View style={styles.emptyIcon}>
-            <Text style={{ fontSize: 48, lineHeight: 56 }}>💸</Text>
-          </View>
-          <Text variant="body" color="secondary">Aucune dépense.</Text>
-          <Button label="Ajouter une dépense" onPress={handleAdd} size="sm" />
+          <Text style={{ fontSize: 40, lineHeight: 48 }}>💸</Text>
+          <Text variant="body" color="secondary">Aucune dépense ce mois</Text>
+          <Text variant="caption" color="secondary">Tes dépenses apparaîtront ici</Text>
+          <Button label="+ Ajouter une dépense" onPress={handleAdd} size="sm" style={{ marginTop: spacing[2] }} />
         </View>
       ) : (
         <ScrollView contentContainerStyle={styles.list} showsVerticalScrollIndicator={false}>
 
-          {/* ── Pending section — always on top ── */}
+          {/* Pending section */}
           {pendingExpenses.length > 0 && (
             <View style={styles.pendingSection}>
-              <View style={styles.pendingSectionHeader}>
-                <View style={styles.pendingBadge}>
-                  <Text variant="caption" style={{ color: palette.warning, fontWeight: '700' }}>
-                    EN ATTENTE · {pendingExpenses.length}
-                  </Text>
-                </View>
+              <View style={styles.pendingBadge}>
+                <Text variant="caption" style={{ color: palette.warning, fontWeight: '700' }}>
+                  EN ATTENTE · {pendingExpenses.length}
+                </Text>
               </View>
               {pendingExpenses.map(e => (
                 <ExpenseCard
@@ -429,7 +404,6 @@ export default function DepensesScreen() {
             </View>
           )}
 
-          {/* ── Monthly accordions ── */}
           {groupedNonPending.map(group => (
             <MonthGroup
               key={group.key}
@@ -472,7 +446,6 @@ const styles = StyleSheet.create({
 
   // Pending section
   pendingSection: { gap: spacing[2] },
-  pendingSectionHeader: { paddingHorizontal: spacing[1] },
   pendingBadge: {
     alignSelf: 'flex-start',
     backgroundColor: palette.warning + '20',
@@ -509,8 +482,7 @@ const styles = StyleSheet.create({
   actionRow: { flexDirection: 'row', gap: spacing[2] },
 
   // Empty
-  empty: { flex: 1, alignItems: 'center', justifyContent: 'center', gap: spacing[4] },
-  emptyIcon: { alignItems: 'center' },
+  empty: { flex: 1, alignItems: 'center', justifyContent: 'center', gap: spacing[3] },
   center: { textAlign: 'center', marginTop: spacing[10] },
 
   // Categories

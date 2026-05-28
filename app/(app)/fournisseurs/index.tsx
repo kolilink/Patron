@@ -22,6 +22,8 @@ const STATUS_COLOR: Record<string, string> = {
   brouillon: palette.textSecondary, envoye: palette.primary, recu_partiel: palette.warning, recu: palette.success, annule: palette.danger,
 };
 
+const COUNTRIES = ['Guinée', 'Chine', 'Sénégal', 'Mali', "Côte d'Ivoire", 'Maroc', 'Turquie', 'Émirats', 'France', 'Autre'];
+
 // ─── Fournisseur Form ─────────────────────────────────────────────────────────
 
 interface FournisseurFormProps {
@@ -43,13 +45,11 @@ function FournisseurForm({ visible, editing, products, onClose, onSave, saving }
   useEffect(() => {
     if (visible) {
       setName(editing?.name ?? '');
-      setPhone(editing?.phone ?? '');
+      setPhone(editing?.phone ?? '+224 ');
       setCountry(editing?.country ?? '');
       setNotes(editing?.notes ?? '');
-      // Pre-select products already linked to this supplier
       if (editing) {
-        const preSelected = products.filter(p => p.supplier_id === editing.id).map(p => p.id);
-        setLinkedIds(preSelected);
+        setLinkedIds(products.filter(p => p.supplier_id === editing.id).map(p => p.id));
       } else {
         setLinkedIds([]);
       }
@@ -62,7 +62,7 @@ function FournisseurForm({ visible, editing, products, onClose, onSave, saving }
 
   return (
     <Modal visible={visible} animationType="slide" presentationStyle="pageSheet" onRequestClose={onClose}>
-      <SafeAreaView style={styles.modalSafe}>
+      <SafeAreaView style={styles.modalSafe} edges={['bottom']}>
         <KeyboardAvoidingView behavior={Platform.OS === 'ios' ? 'padding' : undefined} style={{ flex: 1 }}>
           <View style={styles.mhdr}>
             <Pressable onPress={onClose}><Text variant="body" color="secondary">Annuler</Text></Pressable>
@@ -71,9 +71,24 @@ function FournisseurForm({ visible, editing, products, onClose, onSave, saving }
           </View>
 
           <ScrollView contentContainerStyle={styles.mpad} keyboardShouldPersistTaps="handled">
-            <Input label="Nom *" value={name} onChangeText={setName} placeholder="Ex: Diallo Import" />
-            <Input label="Téléphone" value={phone} onChangeText={setPhone} keyboardType="phone-pad" placeholder="+224…" />
-            <Input label="Pays" value={country} onChangeText={setCountry} placeholder="Ex: Guinée" />
+            <Input label="Nom" value={name} onChangeText={setName} placeholder="Ex: Diallo Import" />
+            <Input label="Téléphone" value={phone} onChangeText={setPhone} keyboardType="phone-pad" placeholder="+224 6XX XX XX XX" />
+
+            {/* Country chips */}
+            <View style={{ gap: spacing[2] }}>
+              <Text variant="label">Pays</Text>
+              <View style={styles.countryGrid}>
+                {COUNTRIES.map(c => (
+                  <Pressable key={c} onPress={() => setCountry(country === c ? '' : c)}
+                    style={[styles.countryChip, country === c && styles.countryChipActive]}>
+                    <Text variant="caption" style={{ color: country === c ? palette.textInverse : palette.textPrimary }}>
+                      {c}
+                    </Text>
+                  </Pressable>
+                ))}
+              </View>
+            </View>
+
             <Input label="Notes" value={notes} onChangeText={setNotes} placeholder="Délais, conditions…" multiline />
 
             {/* Product binding */}
@@ -101,7 +116,9 @@ function FournisseurForm({ visible, editing, products, onClose, onSave, saving }
                 </View>
               )}
               {linkedIds.length > 0 && (
-                <Text variant="caption" color="secondary">{linkedIds.length} produit(s) sélectionné(s)</Text>
+                <Text variant="caption" color="secondary">
+                  {linkedIds.length} produit{linkedIds.length > 1 ? 's' : ''} sélectionné{linkedIds.length > 1 ? 's' : ''}
+                </Text>
               )}
             </View>
           </ScrollView>
@@ -145,7 +162,6 @@ function CommandeForm({ visible, fournisseur, currency, onClose, onSave, saving 
 
   const total = lines.reduce((s, l) => s + (parseInt(l.qty) || 0) * (parseFloat(l.unit_cost) || 0), 0);
 
-  // Show products linked to this supplier first
   const sortedProducts = fournisseur
     ? [...products].sort((a, b) => {
         const aLinked = a.supplier_id === fournisseur.id ? -1 : 0;
@@ -156,10 +172,10 @@ function CommandeForm({ visible, fournisseur, currency, onClose, onSave, saving 
 
   return (
     <Modal visible={visible} animationType="slide" presentationStyle="pageSheet" onRequestClose={onClose}>
-      <SafeAreaView style={styles.modalSafe}>
+      <SafeAreaView style={styles.modalSafe} edges={['bottom']}>
         <View style={styles.mhdr}>
           <Pressable onPress={onClose}><Text variant="body" color="secondary">Annuler</Text></Pressable>
-          <Text variant="h4">Bon de commande</Text>
+          <Text variant="h4">Nouvelle commande</Text>
           <View style={{ width: 60 }} />
         </View>
         <ScrollView contentContainerStyle={styles.mpad} keyboardShouldPersistTaps="handled">
@@ -190,12 +206,16 @@ function CommandeForm({ visible, fournisseur, currency, onClose, onSave, saving 
                   </Pressable>
                 </View>
                 <View style={styles.lineInputs}>
-                  <Input label="Qté" value={l.qty}
-                    onChangeText={v => setLines(prev => prev.map((x, j) => j === i ? { ...x, qty: v } : x))}
-                    keyboardType="number-pad" style={{ flex: 1 }} />
-                  <Input label={`Coût (${currency})`} value={l.unit_cost}
-                    onChangeText={v => setLines(prev => prev.map((x, j) => j === i ? { ...x, unit_cost: v } : x))}
-                    keyboardType="decimal-pad" style={{ flex: 1 }} />
+                  <View style={{ flex: 1, minWidth: 80 }}>
+                    <Input label="Qté" value={l.qty}
+                      onChangeText={v => setLines(prev => prev.map((x, j) => j === i ? { ...x, qty: v } : x))}
+                      keyboardType="number-pad" />
+                  </View>
+                  <View style={{ flex: 2 }}>
+                    <Input label={`Coût (${currency})`} value={l.unit_cost}
+                      onChangeText={v => setLines(prev => prev.map((x, j) => j === i ? { ...x, unit_cost: v } : x))}
+                      keyboardType="decimal-pad" />
+                  </View>
                 </View>
               </Card>
             ))
@@ -229,7 +249,7 @@ function CommandeForm({ visible, fournisseur, currency, onClose, onSave, saving 
   );
 }
 
-// ─── Commande Detail Modal ────────────────────────────────────────────────────
+// ─── Commande Detail ──────────────────────────────────────────────────────────
 
 interface CommandeDetailProps {
   commande: CommandeAchat;
@@ -242,7 +262,7 @@ interface CommandeDetailProps {
 function CommandeDetail({ commande, currency, onClose, onRecevoir, saving }: CommandeDetailProps) {
   return (
     <Modal visible animationType="slide" presentationStyle="formSheet" onRequestClose={onClose}>
-      <SafeAreaView style={styles.modalSafe}>
+      <SafeAreaView style={styles.modalSafe} edges={['bottom']}>
         <View style={styles.mhdr}>
           <Pressable onPress={onClose}><Text variant="body" color="secondary">Fermer</Text></Pressable>
           <Text variant="h4">{commande.supplier_name}</Text>
@@ -329,30 +349,23 @@ export default function FournisseursScreen() {
       const result = await createFournisseur(businessId, userId, d);
       ok = result;
       if (ok) {
-        // Get the newly created supplier id
         const latest = useFournisseursStore.getState().fournisseurs.find(f => f.name.trim() === d.name.trim());
         supplierId = latest?.id ?? null;
       }
     }
 
     if (ok && supplierId) {
-      // 1. Clear supplier_id for products previously linked to this supplier but now unselected
       if (d.linkedProductIds.length > 0) {
         await supabase.from('products')
           .update({ supplier_id: null })
           .eq('supplier_id', supplierId)
           .not('id', 'in', `(${d.linkedProductIds.join(',')})`);
       } else {
-        await supabase.from('products')
-          .update({ supplier_id: null })
-          .eq('supplier_id', supplierId);
+        await supabase.from('products').update({ supplier_id: null }).eq('supplier_id', supplierId);
       }
 
-      // 2. Set supplier_id for newly selected products
       if (d.linkedProductIds.length > 0) {
-        await supabase.from('products')
-          .update({ supplier_id: supplierId })
-          .in('id', d.linkedProductIds);
+        await supabase.from('products').update({ supplier_id: supplierId }).in('id', d.linkedProductIds);
       }
 
       await fetchProducts(businessId, userId);
@@ -417,11 +430,11 @@ export default function FournisseursScreen() {
                     </Text>
                     {linkedCount > 0 && (
                       <Text variant="caption" style={{ color: palette.primary }}>
-                        {linkedCount} produit(s) lié(s)
+                        {linkedCount} produit{linkedCount > 1 ? 's' : ''}
                       </Text>
                     )}
                   </View>
-                  <Text variant="caption" color="secondary">Commander ›</Text>
+                  <Text variant="caption" style={{ color: palette.primary }}>Commander ›</Text>
                 </Pressable>
               );
             }}
@@ -509,6 +522,14 @@ const styles = StyleSheet.create({
   mhdr: { flexDirection: 'row', alignItems: 'center', justifyContent: 'space-between', padding: spacing[5], borderBottomWidth: 1, borderBottomColor: palette.border },
   mpad: { padding: spacing[5], gap: spacing[4], paddingBottom: spacing[10] },
   mfooter: { padding: spacing[5], borderTopWidth: 1, borderTopColor: palette.border },
+
+  // Country chips
+  countryGrid: { flexDirection: 'row', flexWrap: 'wrap', gap: spacing[2] },
+  countryChip: {
+    paddingHorizontal: spacing[3], paddingVertical: spacing[1.5],
+    borderRadius: radius.full, borderWidth: 1, borderColor: palette.border, backgroundColor: palette.surface,
+  },
+  countryChipActive: { backgroundColor: palette.primary, borderColor: palette.primary },
 
   // Product binding chips
   productGrid: { flexDirection: 'row', flexWrap: 'wrap', gap: spacing[2] },

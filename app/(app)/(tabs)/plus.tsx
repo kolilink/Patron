@@ -1,4 +1,5 @@
 import { Alert, ScrollView, StyleSheet, View } from 'react-native';
+import { useEffect, useState } from 'react';
 import { router } from 'expo-router';
 import { SafeAreaView } from 'react-native-safe-area-context';
 import { Ionicons } from '@expo/vector-icons';
@@ -7,6 +8,7 @@ import { Card } from '@/src/components/ui/Card';
 import { Text } from '@/src/components/ui/Text';
 import { colors, palette, spacing } from '@/src/theme';
 import { useAuthStore } from '@/stores/auth';
+import { type KnownBusiness, getKnownBusinesses, dismissRemovedBusiness } from '@/lib/knownBusinesses';
 
 type IoniconName = React.ComponentProps<typeof Ionicons>['name'];
 
@@ -43,6 +45,14 @@ export default function PlusScreen() {
   const session = useAuthStore(s => s.session);
   const logout = useAuthStore(s => s.logout);
   const selectBusiness = useAuthStore(s => s.selectBusiness);
+  const [removedBusinesses, setRemovedBusinesses] = useState<KnownBusiness[]>([]);
+
+  useEffect(() => {
+    if (!session?.user.id) return;
+    getKnownBusinesses(session.user.id).then(all => {
+      setRemovedBusinesses(all.filter(b => !b.active));
+    });
+  }, [session?.user.id]);
 
   const user = session?.user;
   const business = session?.activeBusiness;
@@ -51,14 +61,14 @@ export default function PlusScreen() {
   const isAdmin = role === 'administrateur';
   const isManager = role === 'manager' || isAdmin;
   const isVendeur = role === 'vendeur';
-  const others = session?.memberships.filter(m => m.business_id !== business?.id) ?? [];
+  const isInvestisseur = role === 'investisseur';
 
   const handleLogout = () => {
     Alert.alert('Déconnexion', 'Voulez-vous vraiment vous déconnecter ?', [
       { text: 'Annuler', style: 'cancel' },
       {
         text: 'Déconnecter', style: 'destructive',
-        onPress: async () => { await logout(); router.replace('/(auth)/connexion'); },
+        onPress: async () => { await logout(); router.replace('/(welcome)/'); },
       },
     ]);
   };
@@ -82,7 +92,9 @@ export default function PlusScreen() {
           <View style={styles.bizRow}>
             <Text variant="bodySmall">{business?.name}</Text>
             <View style={[styles.badge, { backgroundColor: roleColor + '20' }]}>
-              <Text variant="labelSmall" style={{ color: roleColor, textTransform: 'capitalize' }}>{role}</Text>
+              <Text variant="labelSmall" style={{ color: roleColor }}>
+                {role === 'administrateur' ? 'Gérant' : role.charAt(0).toUpperCase() + role.slice(1)}
+              </Text>
             </View>
           </View>
         </Card>
@@ -92,9 +104,17 @@ export default function PlusScreen() {
           <View style={styles.section}>
             <Text variant="overline" color="secondary">Mes activités</Text>
             <MenuRow iconName="receipt-outline" label="Mes ventes" sub="Historique de mes ventes" onPress={() => router.push('/ventes')} />
-            <MenuRow iconName="card-outline" label="Crédits clients" sub="Créances en attente" onPress={() => router.push('/credits')} />
+            <MenuRow iconName="card-outline" label="Clients qui doivent" sub="Voir qui te doit de l'argent" onPress={() => router.push('/credits')} />
             <MenuRow iconName="people-outline" label="Mes clients" sub="Mes clients et crédits" onPress={() => router.push('/clients')} />
             <MenuRow iconName="cash-outline" label="Dépenses" sub="Soumettre une dépense" onPress={() => router.push('/depenses')} />
+          </View>
+        )}
+
+        {/* Investisseur section */}
+        {isInvestisseur && (
+          <View style={styles.section}>
+            <Text variant="overline" color="secondary">Vue d'ensemble</Text>
+            <MenuRow iconName="bar-chart-outline" label="Rapports" sub="Revenus, stock, créances" onPress={() => router.push('/rapports')} />
           </View>
         )}
 
@@ -104,13 +124,13 @@ export default function PlusScreen() {
             <View style={styles.section}>
               <Text variant="overline" color="secondary">Ventes & Clients</Text>
               <MenuRow iconName="receipt-outline" label="Historique des ventes" sub="Toutes les ventes" onPress={() => router.push('/ventes')} />
-              <MenuRow iconName="card-outline" label="Crédits clients" sub="Gérer les créances" onPress={() => router.push('/credits')} />
+              <MenuRow iconName="card-outline" label="Clients qui doivent" sub="Voir qui te doit de l'argent" onPress={() => router.push('/credits')} />
               <MenuRow iconName="people-outline" label="Clients" sub="Informations clients" onPress={() => router.push('/clients')} />
             </View>
 
             <View style={styles.section}>
               <Text variant="overline" color="secondary">Finances</Text>
-              <MenuRow iconName="cash-outline" label="Dépenses" sub="Gérer et approuver les dépenses" onPress={() => router.push('/depenses')} />
+              <MenuRow iconName="cash-outline" label="Dépenses" sub="Suivre tes dépenses" onPress={() => router.push('/depenses')} />
             </View>
 
             <View style={styles.section}>
@@ -134,7 +154,7 @@ export default function PlusScreen() {
           </View>
         )}
 
-        {/* Profile — all roles */}
+        {/* Profile — all roles except admin */}
         {!isAdmin && (
           <View style={styles.section}>
             <Text variant="overline" color="secondary">Mon compte</Text>
@@ -142,19 +162,59 @@ export default function PlusScreen() {
           </View>
         )}
 
-        {/* Switch business */}
-        {others.length > 0 && (
-          <View style={styles.section}>
-            <Text variant="overline" color="secondary">Autres commerces</Text>
-            {others.map(m => (
-              <Card key={m.id} onPress={() => { selectBusiness(m.business_id); router.replace('/(app)/(tabs)/'); }}
-                style={styles.switchCard}>
+        {/* Switch business + join */}
+        <View style={styles.section}>
+          <Text variant="overline" color="secondary">Mes commerces</Text>
+          {session?.memberships.map(m => (
+            <Card
+              key={m.id}
+              onPress={m.business_id !== business?.id ? () => { selectBusiness(m.business_id); router.replace('/(app)/(tabs)/'); } : undefined}
+              style={[styles.switchCard, m.business_id === business?.id && styles.switchCardActive]}
+            >
+              <View style={{ flex: 1 }}>
                 <Text variant="label">{(m.business as { name?: string })?.name ?? m.business_id}</Text>
                 <Text variant="caption" color="secondary" style={{ textTransform: 'capitalize' }}>{m.role}</Text>
-              </Card>
-            ))}
-          </View>
-        )}
+              </View>
+              {m.business_id === business?.id && (
+                <Text variant="caption" style={{ color: palette.primary }}>Actif</Text>
+              )}
+            </Card>
+          ))}
+          {removedBusinesses.map(b => (
+            <Card
+              key={b.id}
+              onPress={() => {
+                Alert.alert(
+                  b.name,
+                  "Vous n'êtes plus membre de ce commerce.\n\nSi vous pensez que c'est une erreur, contactez le gérant.",
+                  [
+                    {
+                      text: 'Fermer',
+                      onPress: async () => {
+                        await dismissRemovedBusiness(session!.user.id, b.id);
+                        setRemovedBusinesses(prev => prev.filter(x => x.id !== b.id));
+                      },
+                    },
+                  ],
+                );
+              }}
+              style={[styles.switchCard, { opacity: 0.5 }]}
+            >
+              <View style={{ flex: 1 }}>
+                <Text variant="label">{b.name}</Text>
+                <Text variant="caption" color="secondary">Vous n'êtes plus membre</Text>
+              </View>
+            </Card>
+          ))}
+          {(session?.memberships.length ?? 0) < 2 && (
+            <MenuRow
+              iconName="add-circle-outline"
+              label="Rejoindre un commerce"
+              sub="Entrer un code d'invitation"
+              onPress={() => router.push('/(app)/onboarding/rejoindre')}
+            />
+          )}
+        </View>
 
         <Button label="Se déconnecter" variant="danger" onPress={handleLogout} fullWidth />
       </ScrollView>
@@ -177,4 +237,5 @@ const styles = StyleSheet.create({
   },
   menuIconWrap: { width: 28, alignItems: 'center' },
   switchCard: { gap: 2 },
+  switchCardActive: { borderWidth: 1.5, borderColor: palette.primary },
 });

@@ -1,27 +1,63 @@
 import { create } from 'zustand';
 import { supabase } from '@/lib/supabase';
-import type { AppSession, Business, Membership, User } from '@/src/types';
+import { translateError } from '@/lib/errors';
+import { generateId } from '@/lib/id';
+import { syncKnownBusinesses } from '@/lib/knownBusinesses';
+import type { AppSession, Business, Membership, Role, User } from '@/src/types';
+import { useProductStore } from './products';
+import { useVentesStore } from './ventes';
+import { useExpensesStore } from './expenses';
+import { useEquipeStore } from './equipe';
+import { useFournisseursStore } from './fournisseurs';
+import { useSalesStore } from './sales';
 
-function generateId(): string {
-  return 'xxxxxxxx-xxxx-4xxx-yxxx-xxxxxxxxxxxx'.replace(/[xy]/g, c => {
-    const r = Math.random() * 16 | 0;
-    return (c === 'x' ? r : (r & 0x3 | 0x8)).toString(16);
-  });
+function resetAllStores() {
+  useProductStore.getState().reset();
+  useVentesStore.getState().reset();
+  useExpensesStore.getState().reset();
+  useEquipeStore.getState().reset();
+  useFournisseursStore.getState().reset();
+  useSalesStore.getState().reset();
+}
+
+interface PendingPhoneVerification {
+  verificationId: string;
+  token: string;
+  phone: string;
 }
 
 interface AuthStore {
   session: AppSession | null;
   loading: boolean;
   error: string | null;
+  pendingPhoneVerification: PendingPhoneVerification | null;
+  removedBusinessName: string | null;
+  removedBusinessesOnLogin: Array<{ id: string; name: string }> | null;
+  dismissedFromBusiness: { name: string } | null;
 
   initialize: () => Promise<void>;
+  signInAnonymously: () => Promise<void>;
   login: (email: string, password: string) => Promise<void>;
   register: (name: string, email: string, password: string) => Promise<void>;
   logout: () => Promise<void>;
   selectBusiness: (businessId: string) => void;
   createBusiness: (data: { name: string; type?: string; currency: string }) => Promise<void>;
   joinBusiness: (code: string) => Promise<void>;
+  createPhoneVerification: (phone: string) => Promise<{ token: string; verificationId: string } | null>;
+  loginWithPhone: (phone: string) => Promise<{ token: string; verificationId: string } | null>;
+  upgradePhone: (phone: string) => Promise<void>;
+  restorePhoneSession: (phone: string, verificationId: string) => Promise<void>;
   clearError: () => void;
+  handleMembershipRemoved: (businessName: string) => void;
+  handleMembershipRemovedWithFallback: (
+    removedBusinessId: string,
+    removedBusinessName: string,
+    remainingMemberships: Membership[]
+  ) => void;
+  handleRoleChanged: (newRole: import('@/src/types').Role) => void;
+  clearRemovedBusiness: () => void;
+  clearRemovedBusinessesOnLogin: () => void;
+  clearDismissedFromBusiness: () => void;
 }
 
 async function loadSession(userId: string): Promise<AppSession> {
@@ -41,8 +77,8 @@ async function loadSession(userId: string): Promise<AppSession> {
 
   const user: User = {
     id: userId,
-    name: p.name,
-    email: p.email,
+    name: p.name ?? '',
+    email: p.email ?? '',
     phone: p.phone ?? null,
     avatar_url: p.avatar_url ?? null,
     language: p.language ?? 'fr',
@@ -50,8 +86,7 @@ async function loadSession(userId: string): Promise<AppSession> {
     updated_at: p.updated_at,
   };
 
-  // Auto-select the single business if user only has one
-  const activeMembership = memberships.length === 1 ? memberships[0] : null;
+  const activeMembership = memberships.length >= 1 ? memberships[0] : null;
   const activeBusiness = (activeMembership?.business as Business) ?? null;
 
   return { user, memberships, activeBusiness, activeMembership };
@@ -61,6 +96,10 @@ export const useAuthStore = create<AuthStore>((set, get) => ({
   session: null,
   loading: true,
   error: null,
+  pendingPhoneVerification: null,
+  removedBusinessName: null,
+  removedBusinessesOnLogin: null,
+  dismissedFromBusiness: null,
 
   initialize: async () => {
     try {
@@ -68,11 +107,30 @@ export const useAuthStore = create<AuthStore>((set, get) => ({
 
       if (!session) {
         set({ session: null, loading: false });
-        return;
+      } else {
+        const appSession = await loadSession(session.user.id);
+        // Anonymous user with no phone = still in the verification flow.
+        // Don't set session — keep them on the welcome screen.
+        if (session.user.is_anonymous && !appSession.user.phone) {
+          set({ session: null, loading: false });
+        } else {
+          // User is anonymous but has already verified their phone (joined before
+          // upgradePhone gained the RPC call, or session restored from storage).
+          // Lift the anonymous flag now so RLS lets them see their teammates.
+          if (session.user.is_anonymous && appSession.user.phone) {
+            await supabase.rpc('upgrade_anonymous_user');
+            await supabase.auth.refreshSession();
+          }
+          const removed = await syncKnownBusinesses(session.user.id, appSession.memberships);
+          if (removed.length > 0 && appSession.memberships.length === 0) {
+            set({ session: appSession, removedBusinessesOnLogin: removed, loading: false });
+          } else if (removed.length > 0 && appSession.memberships.length > 0) {
+            set({ session: appSession, dismissedFromBusiness: { name: removed[0].name }, loading: false });
+          } else {
+            set({ session: appSession, loading: false });
+          }
+        }
       }
-
-      const appSession = await loadSession(session.user.id);
-      set({ session: appSession, loading: false });
     } catch {
       set({ session: null, loading: false });
     }
@@ -80,8 +138,28 @@ export const useAuthStore = create<AuthStore>((set, get) => ({
     supabase.auth.onAuthStateChange(async (event, session) => {
       if (event === 'SIGNED_OUT' || !session) {
         set({ session: null });
+        resetAllStores();
       }
     });
+  },
+
+  signInAnonymously: async () => {
+    set({ loading: true, error: null });
+    try {
+      const { data, error } = await supabase.auth.signInAnonymously();
+      if (error) throw error;
+      if (!data.user) throw new Error('Connexion anonyme échouée');
+
+      await supabase.from('profiles').upsert(
+        { id: data.user.id, name: '', email: '', language: 'fr' },
+        { onConflict: 'id', ignoreDuplicates: true },
+      );
+
+      const appSession = await loadSession(data.user.id);
+      set({ session: appSession, loading: false });
+    } catch (err) {
+      set({ error: translateError(err, 'Erreur de connexion anonyme'), loading: false });
+    }
   },
 
   login: async (email, password) => {
@@ -91,10 +169,16 @@ export const useAuthStore = create<AuthStore>((set, get) => ({
       if (error) throw error;
 
       const appSession = await loadSession(data.user.id);
-      set({ session: appSession, loading: false });
+      const removed = await syncKnownBusinesses(data.user.id, appSession.memberships);
+      if (removed.length > 0 && appSession.memberships.length === 0) {
+        set({ session: appSession, removedBusinessesOnLogin: removed, loading: false });
+      } else if (removed.length > 0 && appSession.memberships.length > 0) {
+        set({ session: appSession, dismissedFromBusiness: { name: removed[0].name }, loading: false });
+      } else {
+        set({ session: appSession, loading: false });
+      }
     } catch (err) {
-      const msg = err instanceof Error ? err.message : 'Erreur de connexion';
-      set({ error: msg, loading: false });
+      set({ error: translateError(err, 'Erreur de connexion'), loading: false });
     }
   },
 
@@ -104,13 +188,12 @@ export const useAuthStore = create<AuthStore>((set, get) => ({
       const { data, error } = await supabase.auth.signUp({
         email,
         password,
-        options: { data: { name } }, // trigger uses this to create profile
+        options: { data: { name } },
       });
       if (error) throw error;
       if (!data.user) throw new Error('Inscription échouée');
 
       if (!data.session) {
-        // Email confirmation is enabled — user must confirm before logging in
         set({
           loading: false,
           error: 'Un email de confirmation a été envoyé. Vérifiez votre boîte mail puis connectez-vous.',
@@ -118,14 +201,7 @@ export const useAuthStore = create<AuthStore>((set, get) => ({
         return;
       }
 
-      // Session exists (email confirmation disabled) — create profile via upsert
-      // so it's idempotent if the DB trigger already created it
-      await supabase.from('profiles').upsert({
-        id: data.user.id,
-        name,
-        email,
-        language: 'fr',
-      });
+      await supabase.from('profiles').upsert({ id: data.user.id, name, email, language: 'fr' });
 
       const user: User = {
         id: data.user.id,
@@ -143,14 +219,14 @@ export const useAuthStore = create<AuthStore>((set, get) => ({
         loading: false,
       });
     } catch (err) {
-      const msg = err instanceof Error ? err.message : "Erreur d'inscription";
-      set({ error: msg, loading: false });
+      set({ error: translateError(err, "Erreur d'inscription"), loading: false });
     }
   },
 
   logout: async () => {
     await supabase.auth.signOut();
-    set({ session: null, error: null });
+    resetAllStores();
+    set({ session: null, error: null, pendingPhoneVerification: null });
   },
 
   selectBusiness: (businessId) => {
@@ -159,6 +235,8 @@ export const useAuthStore = create<AuthStore>((set, get) => ({
 
     const membership = session.memberships.find(m => m.business_id === businessId);
     if (!membership) return;
+
+    resetAllStores();
 
     set({
       session: {
@@ -175,37 +253,43 @@ export const useAuthStore = create<AuthStore>((set, get) => ({
 
     set({ loading: true, error: null });
 
-    // Generate UUID client-side so we can do plain INSERTs without .select().
-    // Chaining .select() after INSERT runs the SELECT policy (is_member) before
-    // the membership exists, which PostgREST rejects as an RLS violation.
     const businessId = generateId();
 
     const { error: bizErr } = await supabase
       .from('businesses')
       .insert({ id: businessId, name, type: type ?? null, currency, created_by: session.user.id });
     if (bizErr) {
-      set({ error: bizErr.message, loading: false });
+      set({ error: translateError(bizErr, 'Impossible de créer le commerce'), loading: false });
       return;
     }
 
-    // Trigger handle_business_created() auto-inserts the membership.
-    // SELECT is now safe — is_member returns true.
-    const { data: membership, error: fetchErr } = await supabase
-      .from('memberships')
-      .select('*, business:businesses(*)')
-      .eq('user_id', session.user.id)
-      .eq('business_id', businessId)
-      .single();
-    if (fetchErr) {
-      set({ error: fetchErr.message, loading: false });
+    // Retry up to 3x — the DB trigger creating the membership row may lag slightly
+    let membership = null;
+    let fetchErr = null;
+    for (let attempt = 0; attempt < 3; attempt++) {
+      if (attempt > 0) await new Promise<void>(r => setTimeout(r, 300));
+      const res = await supabase
+        .from('memberships')
+        .select('*, business:businesses(*)')
+        .eq('user_id', session.user.id)
+        .eq('business_id', businessId)
+        .single();
+      if (!res.error) { membership = res.data; break; }
+      fetchErr = res.error;
+    }
+    if (!membership) {
+      set({ error: translateError(fetchErr, 'Impossible de charger le commerce'), loading: false });
       return;
     }
 
     const m = membership as Membership;
+    const newMemberships = [...session.memberships, m];
+    // Seed the cache so first-reload removal detection works immediately
+    syncKnownBusinesses(session.user.id, newMemberships).catch(() => {});
     set({
       session: {
         ...session,
-        memberships: [...session.memberships, m],
+        memberships: newMemberships,
         activeBusiness: m.business as Business,
         activeMembership: m,
       },
@@ -219,53 +303,230 @@ export const useAuthStore = create<AuthStore>((set, get) => ({
 
     set({ loading: true, error: null });
     try {
-      const { data: invite, error: invErr } = await supabase
-        .from('invite_codes')
-        .select('*, business:businesses(*)')
-        .eq('code', code.trim().toUpperCase())
-        .single();
+      if (session.memberships.length >= 2) throw new Error('Vous ne pouvez rejoindre que 2 commerces maximum.');
 
-      if (invErr || !invite) throw new Error('Code invalide ou introuvable');
-      if (invite.expires_at && new Date(invite.expires_at) < new Date()) {
-        throw new Error('Ce code a expiré');
-      }
-      if (invite.max_uses != null && invite.uses >= invite.max_uses) {
-        throw new Error("Ce code a atteint sa limite d'utilisation");
-      }
+      // validate_invite_code: SECURITY DEFINER — handles rate limiting (5/10 min),
+      // expiry, max_uses check, and atomically increments the uses counter.
+      const { data: invite, error: rpcErr } = await supabase
+        .rpc('validate_invite_code', { p_code: code.trim().toUpperCase() });
 
-      const { data: membership, error: memErr } = await supabase
+      if (rpcErr) throw rpcErr;
+      if (!invite) throw new Error('Code invalide, expiré, ou déjà utilisé');
+
+      const { business_id, role } = invite as { business_id: string; role: Role };
+
+      const { error: memErr } = await supabase
         .from('memberships')
-        .insert({ user_id: session.user.id, business_id: invite.business_id, role: invite.role })
-        .select('*, business:businesses(*)')
-        .single();
+        .insert({ user_id: session.user.id, business_id, role });
 
       if (memErr) {
-        if (memErr.code === '23505') throw new Error('Vous êtes déjà membre de ce commerce');
+        if (memErr.code === '23505') {
+          // Already a member — reload session so navigation proceeds
+          const appSession = await loadSession(session.user.id);
+          set({ session: appSession, loading: false });
+          return;
+        }
         throw memErr;
       }
 
-      // Increment uses (best-effort, don't fail the join if this fails)
-      supabase
-        .from('invite_codes')
-        .update({ uses: (invite.uses ?? 0) + 1 })
-        .eq('id', invite.id)
-        .then(() => {});
+      // Reload the full session now that the membership exists and RLS can see the business
+      const appSession = await loadSession(session.user.id);
+      syncKnownBusinesses(session.user.id, appSession.memberships).catch(() => {});
+      set({ session: appSession, loading: false });
+    } catch (err) {
+      const fallback = err instanceof Error ? err.message : 'Erreur lors de la jonction';
+      set({ error: translateError(err, fallback), loading: false });
+    }
+  },
 
-      const m = membership as Membership;
+  createPhoneVerification: async (phone) => {
+    set({ loading: true, error: null });
+    try {
+      // Create anonymous session so the Edge Function can link the verification to a user_id
+      const { data, error: anonErr } = await supabase.auth.signInAnonymously();
+      if (anonErr) throw anonErr;
+      if (!data.user) throw new Error('Connexion échouée');
+
+      await supabase.from('profiles').upsert(
+        { id: data.user.id, name: '', email: '', language: 'fr' },
+        { onConflict: 'id', ignoreDuplicates: true },
+      );
+
+      const { data: fnData, error: fnErr } = await supabase.functions.invoke('create-phone-verification', {
+        body: { phone: phone.trim() },
+      });
+      if (fnErr) {
+        // FunctionsHttpError hides the real message in the response body
+        try {
+          const body = await (fnErr as { context?: { json?: () => Promise<{ error?: string }> } }).context?.json?.();
+          if (body?.error) throw new Error(body.error);
+        } catch (extractErr) {
+          if (extractErr !== fnErr) throw extractErr;
+        }
+        throw fnErr;
+      }
+      if (fnData?.error) throw new Error(fnData.error);
+
+      const { token, verificationId } = fnData as { token: string; verificationId: string };
       set({
-        session: {
-          ...session,
-          memberships: [...session.memberships, m],
-          activeBusiness: invite.business as Business,
-          activeMembership: m,
-        },
+        pendingPhoneVerification: { verificationId, token, phone: phone.trim() },
         loading: false,
       });
+      return { token, verificationId };
     } catch (err) {
-      const msg = err instanceof Error ? err.message : 'Erreur lors de la jonction';
-      set({ error: msg, loading: false });
+      const raw = err instanceof Error ? err.message : String(err);
+      set({ error: raw, loading: false });
+      return null;
+    }
+  },
+
+  loginWithPhone: async (phone) => {
+    set({ loading: true, error: null });
+    try {
+      const { data, error: anonErr } = await supabase.auth.signInAnonymously();
+      if (anonErr) throw anonErr;
+      if (!data.user) throw new Error('Connexion échouée');
+
+      await supabase.from('profiles').upsert(
+        { id: data.user.id, name: '', email: '', language: 'fr' },
+        { onConflict: 'id', ignoreDuplicates: true },
+      );
+
+      const { data: fnData, error: fnErr } = await supabase.functions.invoke('create-phone-verification', {
+        body: { phone: phone.trim(), login: true },
+      });
+      if (fnErr) {
+        try {
+          const body = await (fnErr as { context?: { json?: () => Promise<{ error?: string }> } }).context?.json?.();
+          if (body?.error) throw new Error(body.error);
+        } catch (extractErr) {
+          if (extractErr !== fnErr) throw extractErr;
+        }
+        throw fnErr;
+      }
+      if (fnData?.error) throw new Error(fnData.error);
+
+      const { token, verificationId } = fnData as { token: string; verificationId: string };
+      set({ pendingPhoneVerification: { verificationId, token, phone: phone.trim() }, loading: false });
+      return { token, verificationId };
+    } catch (err) {
+      const raw = err instanceof Error ? err.message : String(err);
+      set({ error: raw, loading: false });
+      return null;
+    }
+  },
+
+  upgradePhone: async (phone) => {
+    set({ loading: true, error: null });
+    try {
+      const { data: { user } } = await supabase.auth.getUser();
+      if (!user) throw new Error('Session introuvable');
+
+      await supabase.from('profiles').upsert(
+        { id: user.id, name: '', email: '', phone: phone.trim(), language: 'fr' },
+        { onConflict: 'id', ignoreDuplicates: false },
+      );
+
+      // Lift anonymous flag so RLS policies that block anonymous users allow this user through.
+      await supabase.rpc('upgrade_anonymous_user');
+      // Refresh the JWT so the new is_anonymous=false claim takes effect immediately.
+      await supabase.auth.refreshSession();
+
+      const appSession = await loadSession(user.id);
+      const removed = await syncKnownBusinesses(user.id, appSession.memberships);
+      if (removed.length > 0 && appSession.memberships.length === 0) {
+        set({ session: appSession, removedBusinessesOnLogin: removed, loading: false, pendingPhoneVerification: null });
+      } else if (removed.length > 0 && appSession.memberships.length > 0) {
+        set({ session: appSession, dismissedFromBusiness: { name: removed[0].name }, loading: false, pendingPhoneVerification: null });
+      } else {
+        set({ session: appSession, loading: false, pendingPhoneVerification: null });
+      }
+    } catch (err) {
+      set({ error: translateError(err, 'Vérification échouée'), loading: false });
+    }
+  },
+
+  restorePhoneSession: async (phone, verificationId) => {
+    set({ loading: true, error: null });
+    try {
+      const { data: fnData, error: fnErr } = await supabase.functions.invoke('restore-phone-session', {
+        body: { phone: phone.trim(), verificationId },
+      });
+      if (fnErr) {
+        try {
+          const body = await (fnErr as { context?: { json?: () => Promise<{ error?: string }> } }).context?.json?.();
+          if (body?.error) throw new Error(body.error);
+        } catch (extractErr) {
+          if (extractErr !== fnErr) throw extractErr;
+        }
+        throw fnErr;
+      }
+      if (fnData?.error) throw new Error(fnData.error);
+
+      const { token_hash } = fnData as { token_hash: string };
+
+      const { data: { session }, error: otpErr } = await supabase.auth.verifyOtp({
+        token_hash,
+        type: 'magiclink',
+      });
+      if (otpErr) throw otpErr;
+      if (!session) throw new Error('Session introuvable');
+
+      const appSession = await loadSession(session.user.id);
+      const removed = await syncKnownBusinesses(session.user.id, appSession.memberships);
+      if (removed.length > 0 && appSession.memberships.length === 0) {
+        set({ session: appSession, removedBusinessesOnLogin: removed, loading: false, pendingPhoneVerification: null });
+      } else if (removed.length > 0 && appSession.memberships.length > 0) {
+        set({ session: appSession, dismissedFromBusiness: { name: removed[0].name }, loading: false, pendingPhoneVerification: null });
+      } else {
+        set({ session: appSession, loading: false, pendingPhoneVerification: null });
+      }
+    } catch (err) {
+      set({ error: translateError(err, 'Connexion échouée'), loading: false });
     }
   },
 
   clearError: () => set({ error: null }),
+
+  handleMembershipRemoved: (businessName) => {
+    resetAllStores();
+    set(state => ({
+      removedBusinessName: businessName,
+      session: state.session
+        ? { ...state.session, activeBusiness: null, activeMembership: null }
+        : null,
+    }));
+  },
+
+  handleMembershipRemovedWithFallback: (removedBusinessId, removedBusinessName, remainingMemberships) => {
+    resetAllStores();
+    const first = remainingMemberships[0];
+    set(state => ({
+      dismissedFromBusiness: { name: removedBusinessName },
+      session: state.session
+        ? {
+            ...state.session,
+            memberships: remainingMemberships,
+            activeBusiness: (first.business as Business) ?? null,
+            activeMembership: first,
+          }
+        : null,
+    }));
+  },
+
+  handleRoleChanged: (newRole) => {
+    set(state => {
+      if (!state.session?.activeMembership) return state;
+      return {
+        session: {
+          ...state.session,
+          activeMembership: { ...state.session.activeMembership, role: newRole },
+        },
+      };
+    });
+  },
+
+  clearRemovedBusiness: () => set({ removedBusinessName: null }),
+  clearRemovedBusinessesOnLogin: () => set({ removedBusinessesOnLogin: null }),
+  clearDismissedFromBusiness: () => set({ dismissedFromBusiness: null }),
 }));

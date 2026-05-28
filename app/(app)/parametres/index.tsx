@@ -1,5 +1,5 @@
 import { useState } from 'react';
-import { Alert, KeyboardAvoidingView, Platform, Pressable, ScrollView, StyleSheet, View } from 'react-native';
+import { Alert, KeyboardAvoidingView, Linking, Platform, Pressable, ScrollView, StyleSheet, TextInput, View } from 'react-native';
 import { SafeAreaView } from 'react-native-safe-area-context';
 import { router } from 'expo-router';
 import { Button } from '@/src/components/ui/Button';
@@ -20,12 +20,17 @@ export default function ParametresScreen() {
   const role = session?.activeMembership?.role;
   const isAdmin = role === 'administrateur';
 
+  const logout = useAuthStore(s => s.logout);
   const [bizName, setBizName] = useState(business?.name ?? '');
   const [currency, setCurrency] = useState(business?.currency ?? 'GNF');
   const [saving, setSaving] = useState(false);
 
   const [userName, setUserName] = useState(session?.user.name ?? '');
   const [savingUser, setSavingUser] = useState(false);
+
+  const [showDeleteConfirm, setShowDeleteConfirm] = useState(false);
+  const [deleteInput, setDeleteInput] = useState('');
+  const [deleting, setDeleting] = useState(false);
 
   const saveBusiness = async () => {
     const trimmed = bizName.trim();
@@ -38,7 +43,6 @@ export default function ParametresScreen() {
     setSaving(false);
     if (error) { Alert.alert('Erreur', error.message); return; }
 
-    // Patch the Zustand session so the rest of the app sees the new name/currency immediately.
     useAuthStore.setState(state => {
       if (!state.session?.activeBusiness) return state;
       const updated: Business = { ...state.session.activeBusiness, name: trimmed, currency };
@@ -67,7 +71,6 @@ export default function ParametresScreen() {
     setSavingUser(false);
     if (error) { Alert.alert('Erreur', error.message); return; }
 
-    // Patch the session so the Plus screen header reflects the new name instantly.
     useAuthStore.setState(state => {
       if (!state.session) return state;
       return { session: { ...state.session, user: { ...state.session.user, name: trimmed } } };
@@ -89,12 +92,87 @@ export default function ParametresScreen() {
             if (!memId) return;
             const { error } = await supabase.from('memberships').delete().eq('id', memId);
             if (error) { Alert.alert('Erreur', error.message); return; }
-            router.replace('/(app)/onboarding');
+
+            const remaining = (session?.memberships ?? []).filter(m => m.id !== memId);
+
+            if (remaining.length > 0) {
+              // Switch to the first remaining business and stay in the app
+              const first = remaining[0];
+              useAuthStore.setState(state => {
+                if (!state.session) return state;
+                return {
+                  session: {
+                    ...state.session,
+                    memberships: remaining,
+                    activeBusiness: (first.business as Business) ?? null,
+                    activeMembership: first,
+                  },
+                };
+              });
+              router.replace('/(app)/(tabs)/');
+            } else {
+              // No more businesses — go straight to welcome
+              useAuthStore.setState(state => {
+                if (!state.session) return state;
+                return {
+                  session: {
+                    ...state.session,
+                    memberships: [],
+                    activeBusiness: null,
+                    activeMembership: null,
+                  },
+                };
+              });
+              router.replace('/(welcome)/');
+            }
           },
         },
       ],
     );
   };
+
+  const handleDeleteAccount = async () => {
+    if (deleteInput !== 'SUPPRIMER') return;
+    setDeleting(true);
+
+    // Check: admin of a business with other active members → block
+    const memberships = session?.memberships ?? [];
+    const adminBusinessIds = memberships
+      .filter(m => m.role === 'administrateur')
+      .map(m => m.business_id);
+
+    if (adminBusinessIds.length > 0) {
+      const { data: otherMembers } = await supabase
+        .from('memberships')
+        .select('business_id')
+        .in('business_id', adminBusinessIds)
+        .neq('user_id', userId);
+
+      if (otherMembers && otherMembers.length > 0) {
+        setDeleting(false);
+        setShowDeleteConfirm(false);
+        setDeleteInput('');
+        Alert.alert(
+          'Suppression impossible',
+          "Vous êtes administrateur d'un commerce avec des membres actifs.\n\nRetirez tous les membres ou transférez votre rôle avant de supprimer votre compte.",
+        );
+        return;
+      }
+    }
+
+    const { error } = await supabase.rpc('delete_my_account');
+    if (error) {
+      setDeleting(false);
+      Alert.alert('Erreur', "La suppression a échoué. Contactez le support si le problème persiste.");
+      return;
+    }
+
+    // RPC succeeded — sign out locally (auth session is now invalid)
+    await useAuthStore.getState().logout();
+  };
+
+  const openPrivacy = () => Linking.openURL('https://patron.kolilink.com/privacy.html');
+  const openSupport = () => Linking.openURL('https://wa.me/12672421843');
 
   return (
     <SafeAreaView style={styles.safe} edges={['top']}>
@@ -127,9 +205,12 @@ export default function ParametresScreen() {
                     <Pressable
                       key={c}
                       onPress={() => setCurrency(c)}
-                      style={[styles.chip, currency === c && styles.chipActive]}
+                      style={[styles.chip, currency === c ? styles.chipActive : styles.chipGhost]}
                     >
-                      <Text variant="label" style={{ color: currency === c ? palette.textInverse : palette.textPrimary }}>
+                      <Text
+                        variant="label"
+                        style={{ color: currency === c ? palette.textInverse : palette.textDisabled }}
+                      >
                         {c}
                       </Text>
                     </Pressable>
@@ -164,13 +245,75 @@ export default function ParametresScreen() {
             />
           </Card>
 
-          {/* Danger zone */}
+          {/* Zone rouge */}
           <Card style={[styles.section, styles.dangerCard]}>
-            <Text variant="label" color="danger">Zone de danger</Text>
-            <Text variant="bodySmall" color="secondary">
-              Ces actions sont irréversibles. Procédez avec précaution.
-            </Text>
-            <Button label="Quitter ce commerce" variant="danger" onPress={handleLeave} fullWidth />
+            <Text variant="label" color="secondary">Zone rouge</Text>
+
+            {!isAdmin && (
+              <>
+                <Text variant="bodySmall" color="secondary">
+                  Quitter ce commerce supprime votre accès. Un administrateur peut vous réinviter.
+                </Text>
+                <Pressable onPress={handleLeave} style={styles.dangerBtn}>
+                  <Text variant="label" style={{ color: palette.danger }}>Quitter ce commerce</Text>
+                </Pressable>
+              </>
+            )}
+
+            {!showDeleteConfirm ? (
+              <Pressable onPress={() => { setShowDeleteConfirm(true); setDeleteInput(''); }} style={styles.dangerBtn}>
+                <Text variant="label" style={{ color: palette.danger }}>Supprimer mon compte</Text>
+              </Pressable>
+            ) : (
+              <View style={styles.deleteConfirmBox}>
+                <Text variant="label" style={{ color: palette.danger }}>Supprimer définitivement ?</Text>
+                <Text variant="bodySmall" color="secondary">
+                  {isAdmin
+                    ? "Votre compte et votre commerce (produits, ventes, dépenses) seront définitivement supprimés."
+                    : "Votre compte sera supprimé. Les ventes que vous avez enregistrées restent dans le commerce."}
+                  {'\n\n'}Tapez SUPPRIMER pour confirmer.
+                </Text>
+                <TextInput
+                  style={styles.deleteInput}
+                  value={deleteInput}
+                  onChangeText={setDeleteInput}
+                  placeholder="SUPPRIMER"
+                  placeholderTextColor={palette.textDisabled}
+                  autoCapitalize="characters"
+                />
+                <View style={{ flexDirection: 'row', gap: spacing[3] }}>
+                  <Pressable
+                    onPress={() => { setShowDeleteConfirm(false); setDeleteInput(''); }}
+                    style={[styles.dangerBtn, { flex: 1, alignItems: 'center' }]}
+                  >
+                    <Text variant="label" color="secondary">Annuler</Text>
+                  </Pressable>
+                  <Pressable
+                    onPress={handleDeleteAccount}
+                    disabled={deleteInput !== 'SUPPRIMER' || deleting}
+                    style={[styles.dangerBtn, { flex: 1, alignItems: 'center',
+                      opacity: deleteInput !== 'SUPPRIMER' || deleting ? 0.4 : 1 }]}
+                  >
+                    <Text variant="label" style={{ color: palette.danger }}>
+                      {deleting ? 'Suppression…' : 'Confirmer'}
+                    </Text>
+                  </Pressable>
+                </View>
+              </View>
+            )}
+          </Card>
+
+          {/* À propos */}
+          <Card style={styles.section}>
+            <Text variant="label" color="secondary">À propos</Text>
+            <Pressable onPress={openPrivacy} style={styles.linkRow}>
+              <Text variant="body">Politique de confidentialité</Text>
+              <Text variant="caption" color="secondary">›</Text>
+            </Pressable>
+            <Pressable onPress={openSupport} style={styles.linkRow}>
+              <Text variant="body">Contacter le support (WhatsApp)</Text>
+              <Text variant="caption" color="secondary">›</Text>
+            </Pressable>
           </Card>
 
         </ScrollView>
@@ -193,5 +336,33 @@ const styles = StyleSheet.create({
     borderRadius: radius.full, borderWidth: 1.5, borderColor: palette.border, backgroundColor: palette.surface,
   },
   chipActive: { backgroundColor: palette.primary, borderColor: palette.primary },
+  chipGhost: { borderColor: 'transparent', backgroundColor: 'transparent' },
   dangerCard: { borderColor: palette.danger + '40', borderWidth: 1 },
+  dangerBtn: {
+    alignSelf: 'flex-start',
+    borderWidth: 1.5,
+    borderColor: palette.danger + '50',
+    borderRadius: radius.full,
+    paddingHorizontal: spacing[5],
+    paddingVertical: spacing[2],
+    backgroundColor: palette.danger + '0D',
+  },
+  deleteConfirmBox: { gap: spacing[3] },
+  deleteInput: {
+    borderWidth: 1.5,
+    borderColor: palette.danger + '60',
+    borderRadius: radius.md,
+    paddingHorizontal: spacing[4],
+    paddingVertical: spacing[3],
+    color: palette.danger,
+    fontWeight: '700',
+    fontSize: 16,
+    letterSpacing: 2,
+  },
+  linkRow: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    justifyContent: 'space-between',
+    paddingVertical: spacing[2],
+  },
 });

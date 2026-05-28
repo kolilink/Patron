@@ -3,7 +3,9 @@ import {
   Alert,
   FlatList,
   Keyboard,
+  KeyboardAvoidingView,
   Modal,
+  Platform,
   Pressable,
   ScrollView,
   StyleSheet,
@@ -16,8 +18,9 @@ import { Button } from '@/src/components/ui/Button';
 import { Card } from '@/src/components/ui/Card';
 import { Input } from '@/src/components/ui/Input';
 import { Text } from '@/src/components/ui/Text';
-import { DatePickerField } from '@/src/components/ui/DatePickerField';
 import { colors, palette, radius, spacing } from '@/src/theme';
+import { formatAmount } from '@/src/utils/format';
+import { todayIso } from '@/src/utils/dates';
 import type { Product } from '@/src/types';
 import { useAuthStore } from '@/stores/auth';
 import { useProductStore } from '@/stores/products';
@@ -25,21 +28,13 @@ import type { CartLine, SalePayment } from '@/stores/sales';
 import { useSalesStore } from '@/stores/sales';
 import { supabase } from '@/lib/supabase';
 
-// ─── Helpers ─────────────────────────────────────────────────────────────────
-
-function formatAmount(n: number, currency: string) {
-  return `${n.toLocaleString('fr-FR')} ${currency}`;
-}
-
-function todayIso() {
-  const d = new Date();
-  return `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, '0')}-${String(d.getDate()).padStart(2, '0')}`;
-}
-
-const PAYMENT_METHODS = [
+// Final payment methods: Wave removed.
+// 'mtn' is labeled "Mobile Money" in the UI (consolidates old mtn/moov).
+const PAY_NOW_METHODS = [
   { key: 'especes' as const, label: 'Espèces' },
-  { key: 'digital' as const, label: 'Numérique' },
-  { key: 'credit' as const, label: 'Crédit client' },
+  { key: 'orange' as const, label: 'Orange Money' },
+  { key: 'mtn' as const, label: 'Mobile Money' },
+  { key: 'digital' as const, label: 'Autre' },
 ];
 
 // ─── Cart line row ────────────────────────────────────────────────────────────
@@ -51,10 +46,26 @@ interface CartRowProps {
   onDec: () => void;
   onRemove: () => void;
   onToggleBulk: () => void;
+  onSetQty: (qty: number) => void;
 }
 
-function CartRow({ line, currency, onInc, onDec, onRemove, onToggleBulk }: CartRowProps) {
+function CartRow({ line, currency, onInc, onDec, onRemove, onToggleBulk, onSetQty }: CartRowProps) {
   const hasBulk = !!(line.product.bulk_price && line.product.bulk_min_qty);
+  const [editing, setEditing] = useState(false);
+  const [inputVal, setInputVal] = useState('');
+  const inputRef = useRef<TextInput>(null);
+
+  const startEdit = () => {
+    setInputVal(String(line.qty));
+    setEditing(true);
+    setTimeout(() => inputRef.current?.focus(), 30);
+  };
+
+  const commitEdit = () => {
+    const n = parseInt(inputVal, 10);
+    if (!isNaN(n) && n > 0) onSetQty(n);
+    setEditing(false);
+  };
 
   return (
     <View style={styles.cartRow}>
@@ -77,7 +88,23 @@ function CartRow({ line, currency, onInc, onDec, onRemove, onToggleBulk }: CartR
         <Pressable onPress={onDec} style={styles.qtyBtn}>
           <Text variant="label" style={{ color: line.qty === 1 ? palette.danger : palette.textPrimary }}>−</Text>
         </Pressable>
-        <Text variant="label" style={styles.qtyNum}>{line.qty}</Text>
+        {editing ? (
+          <TextInput
+            ref={inputRef}
+            style={styles.qtyInput}
+            value={inputVal}
+            onChangeText={setInputVal}
+            onBlur={commitEdit}
+            onSubmitEditing={commitEdit}
+            keyboardType="number-pad"
+            selectTextOnFocus
+            returnKeyType="done"
+          />
+        ) : (
+          <Pressable onPress={startEdit} style={styles.qtyNumPress}>
+            <Text variant="label" style={styles.qtyNum}>{line.qty}</Text>
+          </Pressable>
+        )}
         <Pressable onPress={onInc} style={styles.qtyBtn}>
           <Text variant="label" style={{ color: palette.primary }}>+</Text>
         </Pressable>
@@ -89,74 +116,144 @@ function CartRow({ line, currency, onInc, onDec, onRemove, onToggleBulk }: CartR
   );
 }
 
-// ─── Client picker ────────────────────────────────────────────────────────────
+// ─── Inline client picker ─────────────────────────────────────────────────────
 
-interface ClientPickerProps {
+interface InlineClientPickerProps {
   businessId: string;
   sellerId: string;
   isVendeur: boolean;
   value: string;
   onChange: (name: string) => void;
+  required: boolean;
+  expanded: boolean;
+  onExpandChange: (v: boolean) => void;
 }
 
-function ClientPicker({ businessId, sellerId, isVendeur, value, onChange }: ClientPickerProps) {
+function InlineClientPicker({
+  businessId, sellerId, isVendeur,
+  value, onChange, required, expanded, onExpandChange,
+}: InlineClientPickerProps) {
   const [clientNames, setClientNames] = useState<string[]>([]);
   const [showList, setShowList] = useState(false);
+  const [showNewForm, setShowNewForm] = useState(false);
+  const [newName, setNewName] = useState('');
+  const [newPhone, setNewPhone] = useState('');
 
-  useEffect(() => {
-    loadClients();
-  }, [businessId]);
+  useEffect(() => { loadClients(); }, [businessId]);
 
   const loadClients = async () => {
-    let query = supabase
-      .from('sale_orders')
-      .select('customer_name')
-      .eq('business_id', businessId)
-      .not('customer_name', 'is', null);
-
-    if (isVendeur) query = query.eq('seller_id', sellerId);
-
-    const { data } = await query;
-    if (data) {
-      const names = [...new Set(
-        (data as { customer_name: string }[])
-          .map(r => r.customer_name?.trim())
-          .filter(Boolean) as string[],
-      )].sort();
-      setClientNames(names);
-    }
+    const [clientsRes, salesRes] = await Promise.all([
+      supabase.from('clients').select('name').eq('business_id', businessId),
+      supabase
+        .from('sale_orders')
+        .select('customer_name')
+        .eq('business_id', businessId)
+        .not('customer_name', 'is', null),
+    ]);
+    const fromClients = (clientsRes.data ?? []).map((r: { name: string }) => r.name);
+    const fromSales = (salesRes.data ?? [])
+      .map((r: { customer_name: string }) => r.customer_name?.trim())
+      .filter(Boolean) as string[];
+    setClientNames([...new Set([...fromClients, ...fromSales])].sort());
   };
 
   const suggestions = useMemo(() => {
-    if (!value.trim()) return clientNames;
-    const q = value.toLowerCase();
+    const q = value.toLowerCase().trim();
+    if (!q) return clientNames;
     return clientNames.filter(n => n.toLowerCase().includes(q));
   }, [value, clientNames]);
 
+  const handleAddNewClient = async () => {
+    if (!newName.trim()) return;
+    const name = newName.trim();
+    await supabase.from('clients').upsert(
+      { business_id: businessId, name, phone: newPhone.trim() || null },
+      { onConflict: 'business_id,name' },
+    );
+    setClientNames(prev => [...new Set([...prev, name])].sort());
+    onChange(name);
+    setShowNewForm(false);
+    setNewName('');
+    setNewPhone('');
+    onExpandChange(false);
+  };
+
+  // Client already selected — show name + change link
+  if (value && !expanded && !showNewForm) {
+    return (
+      <View style={styles.clientSelectedRow}>
+        <Text variant="body">
+          Client : <Text variant="label">{value}</Text>
+        </Text>
+        <Pressable onPress={() => { onChange(''); onExpandChange(true); }}>
+          <Text variant="caption" style={{ color: palette.primary }}>× changer</Text>
+        </Pressable>
+      </View>
+    );
+  }
+
+  // Not expanded and optional — show link only
+  if (!expanded && !required) {
+    return (
+      <Pressable onPress={() => onExpandChange(true)} style={styles.attachLink}>
+        <Text variant="body" style={{ color: palette.primary }}>+ Attacher un client (optionnel)</Text>
+      </Pressable>
+    );
+  }
+
+  // Expanded or required — show search input + suggestions
   return (
-    <View>
-      <Text variant="label" style={{ marginBottom: spacing[1] }}>Client</Text>
+    <View style={{ zIndex: 50, elevation: 50 }}>
+      {required && !value && (
+        <Text variant="caption" color="secondary" style={{ marginBottom: spacing[2] }}>
+          Qui prend à crédit ?
+        </Text>
+      )}
       <TextInput
         style={styles.clientInput}
         value={value}
         onChangeText={v => { onChange(v); setShowList(true); }}
         onFocus={() => setShowList(true)}
-        placeholder="Nom du client (optionnel)"
+        placeholder="Rechercher un client…"
         placeholderTextColor={palette.textDisabled}
+        autoFocus={expanded && !required}
       />
-      {showList && suggestions.length > 0 && (
+      {showList && !showNewForm && (suggestions.length > 0 || value.trim().length >= 1) && (
         <View style={styles.suggestionList}>
-          <ScrollView keyboardShouldPersistTaps="handled" style={{ maxHeight: 160 }}>
+          <ScrollView keyboardShouldPersistTaps="handled" style={{ maxHeight: 160 }} nestedScrollEnabled>
             {suggestions.map(name => (
               <Pressable
                 key={name}
-                onPress={() => { onChange(name); setShowList(false); Keyboard.dismiss(); }}
+                onPress={() => { onChange(name); setShowList(false); onExpandChange(false); Keyboard.dismiss(); }}
                 style={styles.suggestionRow}
               >
                 <Text variant="body">{name}</Text>
               </Pressable>
             ))}
+            <Pressable
+              onPress={() => { setShowNewForm(true); setShowList(false); }}
+              style={[styles.suggestionRow, { flexDirection: 'row', alignItems: 'center', gap: spacing[2] }]}
+            >
+              <Ionicons name="add-circle-outline" size={16} color={palette.primary} />
+              <Text variant="body" style={{ color: palette.primary }}>Nouveau client</Text>
+            </Pressable>
           </ScrollView>
+        </View>
+      )}
+      {showNewForm && (
+        <View style={styles.newClientForm}>
+          <Input label="Nom" value={newName} onChangeText={setNewName} placeholder="Nom du client" />
+          <Input
+            label="Téléphone (optionnel)"
+            value={newPhone}
+            onChangeText={setNewPhone}
+            keyboardType="phone-pad"
+            placeholder="Ex: 622 00 00 00"
+          />
+          <View style={{ flexDirection: 'row', gap: spacing[2] }}>
+            <Button label="Annuler" onPress={() => setShowNewForm(false)} variant="outline" style={{ flex: 1 }} />
+            <Button label="Ajouter" onPress={handleAddNewClient} style={{ flex: 1 }} disabled={!newName.trim()} />
+          </View>
         </View>
       )}
     </View>
@@ -165,139 +262,212 @@ function ClientPicker({ businessId, sellerId, isVendeur, value, onChange }: Clie
 
 // ─── Payment modal ────────────────────────────────────────────────────────────
 
+type PayStep = 'pay' | 'credit';
+type Disambig = 'rabais' | 'credit' | null;
+
 interface PaymentModalProps {
   visible: boolean;
+  initialStep: PayStep;
   total: number;
   currency: string;
   businessId: string;
   sellerId: string;
   isVendeur: boolean;
   onClose: () => void;
-  onConfirm: (payment: SalePayment, customerName?: string, saleDate?: string) => void;
+  onConfirm: (payment: SalePayment | null, customerName?: string, discountAmount?: number) => void;
   submitting: boolean;
 }
 
 function PaymentModal({
-  visible, total, currency, businessId, sellerId, isVendeur,
+  visible, initialStep, total, currency, businessId, sellerId, isVendeur,
   onClose, onConfirm, submitting,
 }: PaymentModalProps) {
-  const [method, setMethod] = useState<'especes' | 'digital' | 'credit'>('especes');
-  const [customerName, setCustomerName] = useState('');
-  const [amountGiven, setAmountGiven] = useState('');
-  const [saleDate, setSaleDate] = useState(todayIso());
+  const [step, setStep] = useState<PayStep>(initialStep);
+  const [payMethod, setPayMethod] = useState<'especes' | 'orange' | 'mtn' | 'digital'>('especes');
+  const [amountInput, setAmountInput] = useState('');
+  const [disambig, setDisambig] = useState<Disambig>(null);
+  const [clientName, setClientName] = useState('');
+  const [clientExpanded, setClientExpanded] = useState(false);
 
   useEffect(() => {
     if (visible) {
-      setMethod('especes');
-      setCustomerName('');
-      setAmountGiven(String(total));
-      setSaleDate(todayIso());
+      setStep(initialStep);
+      setPayMethod('especes');
+      setAmountInput(String(total));
+      setDisambig(null);
+      setClientName('');
+      setClientExpanded(false);
     }
-  }, [visible, total]);
+  }, [visible, initialStep, total]);
 
-  const change = useMemo(() => {
-    const given = parseFloat(amountGiven) || 0;
-    return given - total;
-  }, [amountGiven, total]);
+  // When step changes to credit, always show client picker expanded
+  useEffect(() => {
+    if (step === 'credit') setClientExpanded(true);
+  }, [step]);
 
-  const handleConfirm = () => {
-    if (method === 'credit' && !customerName.trim()) {
-      Alert.alert('Nom requis', 'Entrez le nom du client pour enregistrer un crédit.');
-      return;
-    }
-    onConfirm({ method, amount: total }, customerName || undefined, saleDate);
+  // When disambig becomes 'credit' and no client yet, expand picker
+  useEffect(() => {
+    if (disambig === 'credit' && !clientName) setClientExpanded(true);
+  }, [disambig]);
+
+  const parsedAmount = parseFloat(amountInput.replace(/\s/g, '').replace(',', '.')) || 0;
+  const shortfall = total - parsedAmount;
+  const isShort = shortfall > 0.5;
+  const isOver = parsedAmount > total + 0.5;
+
+  const handleAmountChange = (val: string) => {
+    setAmountInput(val);
+    setDisambig(null);
+  };
+
+  const requiresClient = disambig === 'credit';
+  const canConfirmPay = !isShort || (disambig !== null && (!requiresClient || clientName.trim().length > 0));
+  const canConfirmCredit = clientName.trim().length > 0;
+
+  const handleConfirmPay = () => {
+    const discountAmount = disambig === 'rabais' ? shortfall : 0;
+    const payment: SalePayment = { method: payMethod, amount: parsedAmount };
+    onConfirm(payment, clientName.trim() || undefined, discountAmount);
+  };
+
+  const handleConfirmCredit = () => {
+    onConfirm(null, clientName.trim());
   };
 
   return (
     <Modal visible={visible} animationType="slide" presentationStyle="formSheet" onRequestClose={onClose}>
-      <SafeAreaView style={styles.modalSafe}>
+      <SafeAreaView style={styles.modalSafe} edges={['bottom']}>
+        {/* Header — always visible at top */}
         <View style={styles.modalHeader}>
           <Pressable onPress={onClose} style={styles.modalCancel}>
             <Text variant="body" color="secondary">Retour</Text>
           </Pressable>
-          <Text variant="h4">Encaisser</Text>
+          <Text variant="h4">{step === 'credit' ? 'Vente à crédit' : 'Paiement'}</Text>
           <View style={{ width: 64 }} />
         </View>
 
-        <ScrollView contentContainerStyle={styles.modalContent} keyboardShouldPersistTaps="handled">
-          <Card style={styles.totalCard}>
-            <Text variant="caption" color="secondary">Total à encaisser</Text>
-            <Text variant="amountLarge" style={styles.totalAmount}>
+        {/* KAV pushes the footer up when keyboard appears; flex:1 fills remaining space */}
+        <KeyboardAvoidingView
+          behavior={Platform.OS === 'ios' ? 'padding' : 'height'}
+          style={{ flex: 1 }}
+          keyboardVerticalOffset={0}
+        >
+          {/* Total — full-width so adjustsFontSizeToFit has room to work */}
+          <View style={styles.totalSection}>
+            <Text variant="caption" color="secondary" style={{ textAlign: 'center' }}>Total</Text>
+            <Text
+              style={[styles.totalBig, { color: step === 'credit' ? palette.warning : palette.primary, textAlign: 'center' }]}
+              adjustsFontSizeToFit
+              numberOfLines={1}
+            >
               {formatAmount(total, currency)}
             </Text>
-          </Card>
-
-          <DatePickerField
-            label="Date de la vente"
-            value={saleDate}
-            onChange={setSaleDate}
-            maxToday
-          />
-
-          <View>
-            <Text variant="label" style={styles.sectionLabel}>Mode de paiement</Text>
-            <View style={styles.methodGrid}>
-              {PAYMENT_METHODS.map(m => (
-                <Pressable key={m.key} onPress={() => setMethod(m.key)}
-                  style={[styles.methodChip, method === m.key && styles.methodChipActive]}>
-                  <Text variant="label"
-                    style={{ color: method === m.key ? palette.textInverse : palette.textPrimary, textAlign: 'center' }}>
-                    {m.label}
-                  </Text>
-                </Pressable>
-              ))}
-            </View>
           </View>
 
-          {method === 'credit' ? (
-            <View>
-              <Text variant="label" style={{ marginBottom: spacing[1] }}>Client * <Text variant="caption" color="danger">(requis)</Text></Text>
-              <ClientPicker
-                businessId={businessId}
-                sellerId={sellerId}
-                isVendeur={isVendeur}
-                value={customerName}
-                onChange={setCustomerName}
-              />
-            </View>
-          ) : (
-            <ClientPicker
+          {/* Scrollable middle: amount input + disambig + methods (pay step) */}
+          {step === 'pay' && (
+            <ScrollView style={{ flex: 1 }} contentContainerStyle={styles.payContent} keyboardShouldPersistTaps="handled">
+              <View style={{ gap: spacing[2] }}>
+                <Text variant="label" style={styles.sectionLabel}>Combien le client a payé ?</Text>
+                <TextInput
+                  style={styles.amountBigInput}
+                  value={amountInput}
+                  onChangeText={handleAmountChange}
+                  keyboardType="decimal-pad"
+                  placeholder={String(total)}
+                  placeholderTextColor={palette.textDisabled}
+                  selectTextOnFocus
+                />
+
+                {isShort && (
+                  <View style={styles.disambigBox}>
+                    <Text variant="label" style={{ color: colors.warning[700] }}>
+                      ⚠️ {formatAmount(shortfall, currency)} de moins que le prix.
+                    </Text>
+                    <Text variant="label" style={{ marginTop: spacing[3] }}>C'est :</Text>
+
+                    <Pressable onPress={() => setDisambig('rabais')} style={styles.radioRow}>
+                      <View style={[styles.radio, disambig === 'rabais' && styles.radioActive]} />
+                      <View style={{ flex: 1 }}>
+                        <Text variant="label">Un rabais</Text>
+                        <Text variant="caption" color="secondary">Le client ne doit plus rien</Text>
+                      </View>
+                    </Pressable>
+
+                    <Pressable onPress={() => setDisambig('credit')} style={styles.radioRow}>
+                      <View style={[styles.radio, disambig === 'credit' && styles.radioActive]} />
+                      <View style={{ flex: 1 }}>
+                        <Text variant="label">Un crédit</Text>
+                        <Text variant="caption" color="secondary">
+                          Le client paiera {formatAmount(shortfall, currency)} plus tard
+                        </Text>
+                      </View>
+                    </Pressable>
+                  </View>
+                )}
+
+                {isOver && (
+                  <View style={styles.warnRow}>
+                    <Text variant="caption" style={{ color: colors.warning[700] }}>
+                      Le montant dépasse le prix de vente. Vérifie.
+                    </Text>
+                  </View>
+                )}
+              </View>
+
+              {/* Payment method grid — inside scroll so all 4 chips are always reachable */}
+              <View style={styles.methodSection}>
+                <Text variant="label" style={[styles.sectionLabel, { marginBottom: spacing[2] }]}>Payé en</Text>
+                <View style={styles.methodGrid}>
+                  {PAY_NOW_METHODS.map(m => (
+                    <Pressable
+                      key={m.key}
+                      onPress={() => setPayMethod(m.key)}
+                      style={[styles.methodChip, payMethod === m.key && styles.methodChipActive]}
+                    >
+                      <Text
+                        variant="label"
+                        style={{
+                          color: payMethod === m.key ? palette.textInverse : palette.textSecondary,
+                          textAlign: 'center', fontSize: 13,
+                          opacity: payMethod === m.key ? 1 : 0.45,
+                        }}
+                      >
+                        {m.label}
+                      </Text>
+                    </Pressable>
+                  ))}
+                </View>
+              </View>
+            </ScrollView>
+          )}
+
+          {/* Client picker — fixed above confirm button, outside scroll so dropdown zIndex works */}
+          <View style={styles.clientSection}>
+            <InlineClientPicker
               businessId={businessId}
               sellerId={sellerId}
               isVendeur={isVendeur}
-              value={customerName}
-              onChange={setCustomerName}
+              value={clientName}
+              onChange={setClientName}
+              required={step === 'credit' || disambig === 'credit'}
+              expanded={clientExpanded}
+              onExpandChange={setClientExpanded}
             />
-          )}
+          </View>
 
-          {method === 'especes' && (
-            <View style={{ gap: spacing[3] }}>
-              <Input label="Montant donné par le client" value={amountGiven}
-                onChangeText={setAmountGiven} keyboardType="decimal-pad"
-                placeholder={String(total)} />
-              {change !== 0 && (
-                <View style={[styles.changeRow, { backgroundColor: change >= 0 ? colors.success[50] : colors.danger[50] }]}>
-                  <Text variant="label" style={{ color: change >= 0 ? palette.success : palette.danger }}>
-                    {change >= 0
-                      ? `Rendu monnaie: ${formatAmount(change, currency)}`
-                      : `Manque: ${formatAmount(Math.abs(change), currency)}`}
-                  </Text>
-                </View>
-              )}
-            </View>
-          )}
-        </ScrollView>
-
-        <View style={styles.modalFooter}>
-          <Button
-            label={submitting ? 'Enregistrement…' : (method === 'credit' ? 'Enregistrer le crédit' : 'Confirmer le paiement')}
-            onPress={handleConfirm}
-            loading={submitting}
-            fullWidth
-            size="lg"
-            variant={method === 'credit' ? 'outline' : 'primary'}
-          />
-        </View>
+          {/* Confirm button — pinned to bottom */}
+          <View style={styles.modalFooter}>
+            <Button
+              label={submitting ? 'Enregistrement…' : (step === 'credit' ? 'Enregistrer le crédit' : 'Confirmer la vente')}
+              onPress={step === 'credit' ? handleConfirmCredit : handleConfirmPay}
+              loading={submitting}
+              fullWidth
+              size="lg"
+              disabled={step === 'credit' ? !canConfirmCredit : !canConfirmPay}
+            />
+          </View>
+        </KeyboardAvoidingView>
       </SafeAreaView>
     </Modal>
   );
@@ -367,11 +537,13 @@ export default function VendreScreen() {
   const isVendeur = role === 'vendeur';
 
   const { products, loading, fetchProducts } = useProductStore();
-  const { cart, submitting, addToCart, removeFromCart, setQty, toggleBulk, clearCart, submitSale } =
+  const { cart, submitting, error: saleError, addToCart, removeFromCart, setQty, toggleBulk, clearCart, submitSale, clearError } =
     useSalesStore();
 
   const [search, setSearch] = useState('');
   const [showPayment, setShowPayment] = useState(false);
+  const [payStep, setPayStep] = useState<PayStep>('pay');
+  const [successMsg, setSuccessMsg] = useState('');
 
   useEffect(() => {
     if (businessId) fetchProducts(businessId, userId);
@@ -400,32 +572,56 @@ export default function VendreScreen() {
     return map;
   }, [cart]);
 
+  const openPay = () => { setPayStep('pay'); setShowPayment(true); };
+  const openCredit = () => { setPayStep('credit'); setShowPayment(true); };
+
   const handleConfirmPayment = useCallback(
-    async (payment: SalePayment, customerName?: string, saleDate?: string) => {
+    async (payment: SalePayment | null, customerName?: string, discountAmount?: number) => {
       const total = cartTotal;
-      const ok = await submitSale(businessId, userId, payment, customerName, saleDate);
+      const isCredit = payment === null;
+      const ok = await submitSale(businessId, userId, payment, customerName, undefined, discountAmount);
       if (ok) {
         setShowPayment(false);
-        fetchProducts(businessId, userId);
-        Alert.alert(
-          'Vente enregistrée',
-          formatAmount(total, currency),
-          [{ text: 'OK', onPress: () => setSearch('') }],
-        );
+        setSearch('');
+        const queued = useSalesStore.getState().lastSubmitQueued;
+        if (!queued) fetchProducts(businessId, userId);
+        const msg = queued
+          ? 'Vente enregistrée hors ligne  ⏳'
+          : isCredit
+          ? 'Crédit enregistré ✓'
+          : `Vente enregistrée ✓  ${formatAmount(total, currency)}`;
+        setSuccessMsg(msg);
+        setTimeout(() => setSuccessMsg(''), queued ? 4000 : 2500);
       }
     },
     [businessId, userId, cartTotal, currency, submitSale, fetchProducts],
   );
 
-  if (products.length === 0 && !loading) {
+  if (loading && products.length === 0) {
+    return (
+      <SafeAreaView style={styles.safe} edges={['top']}>
+        <View style={styles.emptyFull}>
+          <Text variant="body" color="secondary">Chargement…</Text>
+        </View>
+      </SafeAreaView>
+    );
+  }
+
+  if (products.length === 0) {
     return (
       <SafeAreaView style={styles.safe} edges={['top']}>
         <View style={styles.emptyFull}>
           <Ionicons name="receipt-outline" size={48} color={palette.textDisabled} />
           <Text variant="h4">Point de vente</Text>
-          <Text variant="body" color="secondary" style={styles.emptyDesc}>
-            Ajoutez des produits dans votre catalogue pour commencer à enregistrer des ventes.
-          </Text>
+          {isVendeur ? (
+            <Text variant="body" color="secondary" style={styles.emptyDesc}>
+              Aucun produit disponible pour l'instant.{'\n\n'}Vous avez été ajouté comme vendeur. Un administrateur ou manager doit d'abord ajouter des produits avant que vous puissiez vendre.
+            </Text>
+          ) : (
+            <Text variant="body" color="secondary" style={styles.emptyDesc}>
+              Ajoutez des produits dans votre catalogue pour commencer à enregistrer des ventes.
+            </Text>
+          )}
         </View>
       </SafeAreaView>
     );
@@ -433,6 +629,21 @@ export default function VendreScreen() {
 
   return (
     <SafeAreaView style={styles.safe} edges={['top']}>
+      {/* Success banner */}
+      {successMsg ? (
+        <View style={styles.successBanner}>
+          <Text variant="label" style={{ color: '#fff' }}>{successMsg}</Text>
+        </View>
+      ) : null}
+
+      {/* Error banner */}
+      {saleError ? (
+        <Pressable onPress={clearError} style={styles.errorBanner}>
+          <Text variant="label" style={{ color: '#fff' }}>{saleError}</Text>
+          <Text variant="caption" style={{ color: '#ffffff99' }}>Appuyer pour fermer</Text>
+        </Pressable>
+      ) : null}
+
       {/* Header */}
       <View style={styles.header}>
         <Text variant="h3">Vendre</Text>
@@ -499,26 +710,41 @@ export default function VendreScreen() {
                 onDec={() => setQty(line.product.id, line.qty - 1, line.is_bulk)}
                 onRemove={() => removeFromCart(line.product.id, line.is_bulk)}
                 onToggleBulk={() => toggleBulk(line.product.id, line.is_bulk)}
+                onSetQty={(qty) => setQty(line.product.id, qty, line.is_bulk)}
               />
             ))}
           </ScrollView>
           <View style={styles.cartFooter}>
-            <View>
-              <Text variant="caption" color="secondary">{cartCount} article{cartCount > 1 ? 's' : ''}</Text>
-              <Text variant="amountLarge">{formatAmount(cartTotal, currency)}</Text>
+            <View style={{ flexShrink: 1, minWidth: 0 }}>
+              <Text variant="caption" color="secondary">
+                {cartCount} article{cartCount > 1 ? 's' : ''}
+              </Text>
+              <Text
+                variant="amountLarge"
+                adjustsFontSizeToFit
+                numberOfLines={1}
+              >
+                {formatAmount(cartTotal, currency)}
+              </Text>
             </View>
-            <Button
-              label="Encaisser →"
-              onPress={() => setShowPayment(true)}
-              size="lg"
-              style={{ flex: 1, marginLeft: spacing[3] }}
-            />
+            <View style={styles.cartActions}>
+              <Button
+                label="Encaisser maintenant"
+                onPress={openPay}
+                size="lg"
+                fullWidth
+              />
+              <Pressable onPress={openCredit} style={styles.creditLink}>
+                <Text variant="caption" style={{ color: palette.primary }}>ou enregistrer à crédit</Text>
+              </Pressable>
+            </View>
           </View>
         </View>
       )}
 
       <PaymentModal
         visible={showPayment}
+        initialStep={payStep}
         total={cartTotal}
         currency={currency}
         businessId={businessId}
@@ -538,6 +764,14 @@ const TILE_GAP = spacing[3];
 
 const styles = StyleSheet.create({
   safe: { flex: 1, backgroundColor: palette.background },
+  successBanner: {
+    backgroundColor: palette.success, paddingHorizontal: spacing[5], paddingVertical: spacing[3],
+    alignItems: 'center',
+  },
+  errorBanner: {
+    backgroundColor: palette.danger, paddingHorizontal: spacing[5], paddingVertical: spacing[3],
+    alignItems: 'center', gap: 2,
+  },
   header: {
     flexDirection: 'row', alignItems: 'center', justifyContent: 'space-between',
     paddingHorizontal: spacing[5], paddingTop: spacing[4], paddingBottom: spacing[2],
@@ -573,10 +807,10 @@ const styles = StyleSheet.create({
   cartPanel: {
     position: 'absolute', bottom: 0, left: 0, right: 0,
     backgroundColor: palette.surface, borderTopWidth: 1, borderTopColor: palette.border,
-    maxHeight: 280, shadowColor: '#0F172A', shadowOffset: { width: 0, height: -4 },
+    maxHeight: 300, shadowColor: '#0F172A', shadowOffset: { width: 0, height: -4 },
     shadowOpacity: 0.1, shadowRadius: 12, elevation: 10,
   },
-  cartScroll: { maxHeight: 180 },
+  cartScroll: { maxHeight: 160 },
   cartRow: {
     flexDirection: 'row', alignItems: 'center', paddingHorizontal: spacing[4],
     paddingVertical: spacing[2], borderBottomWidth: 1, borderBottomColor: palette.border, gap: spacing[2],
@@ -594,11 +828,19 @@ const styles = StyleSheet.create({
     width: 32, height: 32, alignItems: 'center', justifyContent: 'center',
     backgroundColor: palette.background,
   },
+  qtyNumPress: { minWidth: 28, alignItems: 'center', paddingHorizontal: 2 },
   qtyNum: { width: 28, textAlign: 'center' },
+  qtyInput: {
+    width: 44, textAlign: 'center', fontWeight: '600', fontSize: 15,
+    color: palette.textPrimary, paddingVertical: 2,
+    borderBottomWidth: 1.5, borderBottomColor: palette.primary,
+  },
   cartFooter: {
     flexDirection: 'row', alignItems: 'center', padding: spacing[4],
-    borderTopWidth: 1, borderTopColor: palette.border,
+    borderTopWidth: 1, borderTopColor: palette.border, gap: spacing[3],
   },
+  cartActions: { flex: 1, gap: 0 },
+  creditLink: { alignItems: 'center', paddingTop: spacing[2] },
 
   // Empty states
   emptyFull: { flex: 1, alignItems: 'center', justifyContent: 'center', padding: spacing[8], gap: spacing[3] },
@@ -613,34 +855,103 @@ const styles = StyleSheet.create({
     borderBottomWidth: 1, borderBottomColor: palette.border, backgroundColor: palette.surface,
   },
   modalCancel: { minWidth: 64 },
-  modalContent: { padding: spacing[5], gap: spacing[4] },
   modalFooter: {
     padding: spacing[5], borderTopWidth: 1, borderTopColor: palette.border, backgroundColor: palette.surface,
   },
-  totalCard: { alignItems: 'center', gap: spacing[1] },
-  totalAmount: { color: palette.primary },
+
+  // Total — sits outside scroll so it has full width for adjustsFontSizeToFit
+  totalSection: {
+    paddingHorizontal: spacing[5], paddingTop: spacing[5], paddingBottom: spacing[5],
+    borderBottomWidth: 1, borderBottomColor: palette.border, gap: spacing[1],
+  },
+  totalBig: { fontSize: 36, lineHeight: 50, fontWeight: '700', letterSpacing: -0.5 },
+
+  // Pay step scrollable content
+  payContent: { padding: spacing[5], gap: spacing[4] },
+
+  // Client picker — fixed layer between scroll and method grid
+  clientSection: {
+    paddingHorizontal: spacing[5], paddingVertical: spacing[3],
+    borderTopWidth: 1, borderTopColor: palette.border,
+    zIndex: 50, elevation: 50,
+  },
+
+  // Method grid — outside scroll, always below client section
+  methodSection: {
+    paddingHorizontal: spacing[5], paddingTop: spacing[3], paddingBottom: spacing[4], gap: spacing[2],
+  },
+
   sectionLabel: { marginBottom: spacing[2] },
-  methodGrid: { flexDirection: 'row', gap: spacing[2] },
+  methodGrid: { flexDirection: 'row', flexWrap: 'wrap', gap: spacing[3] },
   methodChip: {
     flex: 1, alignItems: 'center', justifyContent: 'center',
-    paddingVertical: spacing[3], paddingHorizontal: spacing[2],
+    paddingVertical: spacing[4], paddingHorizontal: spacing[2],
     borderRadius: radius.md, borderWidth: 1.5, borderColor: palette.border,
-    backgroundColor: palette.surface,
+    backgroundColor: palette.surface, minWidth: '45%',
   },
   methodChipActive: { backgroundColor: palette.primary, borderColor: palette.primary },
-  changeRow: { borderRadius: radius.md, padding: spacing[3], alignItems: 'center' },
+
+  // Amount input
+  amountBigInput: {
+    fontSize: 28, fontWeight: '700', color: palette.textPrimary,
+    borderBottomWidth: 2, borderBottomColor: palette.primary,
+    paddingVertical: spacing[2], textAlign: 'center',
+  },
+
+  // Shortfall disambiguation
+  disambigBox: {
+    backgroundColor: colors.warning[50], borderRadius: radius.md,
+    borderWidth: 1, borderColor: colors.warning[100],
+    padding: spacing[4], gap: spacing[2],
+  },
+  radioRow: {
+    flexDirection: 'row', alignItems: 'flex-start', gap: spacing[3],
+    paddingVertical: spacing[2],
+  },
+  radio: {
+    width: 20, height: 20, borderRadius: 10, borderWidth: 2,
+    borderColor: palette.border, marginTop: 2,
+  },
+  radioActive: { borderColor: palette.primary, backgroundColor: palette.primary },
+  warnRow: {
+    backgroundColor: colors.warning[50], borderRadius: radius.md,
+    padding: spacing[3], borderWidth: 1, borderColor: colors.warning[100],
+  },
+
   // Client picker
+  clientSelectedRow: {
+    flexDirection: 'row', alignItems: 'center', justifyContent: 'space-between',
+    paddingVertical: spacing[2],
+  },
+  attachLink: {
+    paddingVertical: spacing[3], alignItems: 'center',
+  },
   clientInput: {
     paddingHorizontal: spacing[4], paddingVertical: spacing[3],
     borderRadius: radius.md, borderWidth: 1, borderColor: palette.border,
     backgroundColor: palette.surface, color: palette.textPrimary, fontSize: 16,
   },
   suggestionList: {
+    position: 'absolute',
+    top: 50,
+    left: 0,
+    right: 0,
     backgroundColor: palette.surface, borderWidth: 1, borderColor: palette.border,
-    borderRadius: radius.md, marginTop: spacing[1], overflow: 'hidden',
+    borderRadius: radius.md, overflow: 'hidden',
+    zIndex: 100,
+    elevation: 100,
+    shadowColor: '#0F172A',
+    shadowOffset: { width: 0, height: 4 },
+    shadowOpacity: 0.12,
+    shadowRadius: 8,
   },
   suggestionRow: {
     paddingHorizontal: spacing[4], paddingVertical: spacing[3],
     borderBottomWidth: 1, borderBottomColor: palette.border,
+  },
+  newClientForm: {
+    backgroundColor: palette.surface, borderRadius: radius.md,
+    borderWidth: 1, borderColor: palette.border,
+    padding: spacing[4], gap: spacing[3], marginTop: spacing[2],
   },
 });

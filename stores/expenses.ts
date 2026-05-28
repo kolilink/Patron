@@ -1,13 +1,11 @@
 import { create } from 'zustand';
 import { supabase } from '@/lib/supabase';
+import { translateError } from '@/lib/errors';
+import { generateId } from '@/lib/id';
+import { enqueue, getQueueCount } from '@/lib/db';
+import { isNetworkError } from '@/lib/sync';
+import { useSyncStore } from '@/stores/sync';
 import type { Expense, ExpenseStatus } from '@/src/types';
-
-function generateId(): string {
-  return 'xxxxxxxx-xxxx-4xxx-yxxx-xxxxxxxxxxxx'.replace(/[xy]/g, c => {
-    const r = (Math.random() * 16) | 0;
-    return (c === 'x' ? r : (r & 0x3) | 0x8).toString(16);
-  });
-}
 
 export interface CreateExpenseData {
   amount: number;
@@ -30,6 +28,7 @@ interface ExpensesStore {
   approveExpense: (id: string, userId: string) => Promise<boolean>;
   rejectExpense: (id: string, userId: string) => Promise<boolean>;
   clearError: () => void;
+  reset: () => void;
 }
 
 export const useExpensesStore = create<ExpensesStore>((set, get) => ({
@@ -70,33 +69,39 @@ export const useExpensesStore = create<ExpensesStore>((set, get) => ({
         set({ expenses, loading: false });
       }
     } catch (err) {
-      const msg = err instanceof Error ? err.message : 'Erreur de chargement';
-      set({ error: msg, loading: false });
+      set({ error: translateError(err, 'Erreur de chargement'), loading: false });
     }
   },
 
   createExpense: async (businessId, userId, data, isManager) => {
     set({ saving: true, error: null });
+    const payload = {
+      id: generateId(),
+      business_id: businessId,
+      amount: data.amount,
+      description: data.description.trim(),
+      category: data.category?.trim() || null,
+      date: data.date,
+      due_date: data.due_date || null,
+      note: data.note?.trim() || null,
+      status: isManager ? 'approuve' : 'en_attente',
+      created_by: userId,
+    };
     try {
-      const { error } = await supabase.from('expenses').insert({
-        id: generateId(),
-        business_id: businessId,
-        amount: data.amount,
-        description: data.description.trim(),
-        category: data.category?.trim() || null,
-        date: data.date,
-        due_date: data.due_date || null,
-        note: data.note?.trim() || null,
-        status: isManager ? 'approuve' : 'en_attente',
-        created_by: userId,
-      });
+      const { error } = await supabase.from('expenses').insert(payload);
       if (error) throw error;
       await get().fetchExpenses(businessId);
       set({ saving: false });
       return true;
     } catch (err) {
-      const msg = err instanceof Error ? err.message : 'Erreur';
-      set({ error: msg, saving: false });
+      if (isNetworkError(err)) {
+        await enqueue('create_expense', payload);
+        const count = await getQueueCount();
+        useSyncStore.setState({ pendingCount: count });
+        set({ saving: false });
+        return true;
+      }
+      set({ error: translateError(err, "Impossible d'enregistrer la dépense"), saving: false });
       return false;
     }
   },
@@ -117,8 +122,7 @@ export const useExpensesStore = create<ExpensesStore>((set, get) => ({
       set({ saving: false });
       return true;
     } catch (err) {
-      const msg = err instanceof Error ? err.message : 'Erreur';
-      set({ error: msg, saving: false });
+      set({ error: translateError(err, 'Impossible de mettre à jour la dépense'), saving: false });
       return false;
     }
   },
@@ -138,14 +142,14 @@ export const useExpensesStore = create<ExpensesStore>((set, get) => ({
         saving: false,
       }));
       return true;
-    } catch {
-      set({ saving: false });
+    } catch (err) {
+      set({ saving: false, error: translateError(err, "Impossible d'approuver la dépense") });
       return false;
     }
   },
 
   rejectExpense: async (id, userId) => {
-    set({ saving: true });
+    set({ saving: true, error: null });
     try {
       const { error } = await supabase
         .from('expenses')
@@ -159,11 +163,12 @@ export const useExpensesStore = create<ExpensesStore>((set, get) => ({
         saving: false,
       }));
       return true;
-    } catch {
-      set({ saving: false });
+    } catch (err) {
+      set({ saving: false, error: translateError(err, 'Impossible de rejeter la dépense') });
       return false;
     }
   },
 
   clearError: () => set({ error: null }),
+  reset: () => set({ expenses: [], loading: false, saving: false, error: null }),
 }));

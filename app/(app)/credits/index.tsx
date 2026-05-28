@@ -1,20 +1,28 @@
-import { useEffect, useMemo, useState } from 'react';
-import { Alert, FlatList, Pressable, StyleSheet, View } from 'react-native';
+import { useEffect, useMemo } from 'react';
+import { FlatList, Pressable, StyleSheet, View } from 'react-native';
 import { SafeAreaView } from 'react-native-safe-area-context';
 import { router } from 'expo-router';
 import { Card } from '@/src/components/ui/Card';
 import { Text } from '@/src/components/ui/Text';
-import { Button } from '@/src/components/ui/Button';
-import { palette, spacing, radius, colors } from '@/src/theme';
+import { palette, spacing, colors, radius } from '@/src/theme';
 import { useAuthStore } from '@/stores/auth';
 import { useVentesStore } from '@/stores/ventes';
 
-function fmt(n: number, cur: string) { return `${n.toLocaleString('fr-FR')} ${cur}`; }
+function fmt(n: number, cur: string) { return `${Math.round(n).toLocaleString('fr-FR')} ${cur}`; }
 
-const PAY_METHODS = [
-  { key: 'especes', label: 'Espèces' },
-  { key: 'digital', label: 'Numérique' },
-];
+function getDaysAgo(dateStr: string): number {
+  const d = dateStr.includes('T') ? new Date(dateStr) : new Date(dateStr + 'T00:00:00');
+  return Math.floor((Date.now() - d.getTime()) / (1000 * 60 * 60 * 24));
+}
+
+interface DebtorClient {
+  name: string;
+  totalOwed: number;
+  nbSales: number;
+  oldestDate: string;
+  daysOldest: number;
+  sellers: string[];
+}
 
 export default function CreditsScreen() {
   const session = useAuthStore(s => s.session);
@@ -24,128 +32,121 @@ export default function CreditsScreen() {
   const role = session?.activeMembership?.role;
   const isVendeur = role === 'vendeur';
 
-  const { sales, loading, saving, fetchSales, markPaid } = useVentesStore();
-  const [selectedMethod, setSelectedMethod] = useState<Record<string, string>>({});
+  const { sales, loading, fetchSales } = useVentesStore();
 
   useEffect(() => {
     if (businessId) fetchSales(businessId, isVendeur ? userId : undefined);
   }, [businessId]);
 
-  const credits = useMemo(() =>
-    sales
-      .filter(s => s.status === 'credit')
-      .sort((a, b) => new Date(b.created_at).getTime() - new Date(a.created_at).getTime()),
-    [sales],
-  );
+  const debtors = useMemo<DebtorClient[]>(() => {
+    const map = new Map<string, DebtorClient>();
 
-  const totalOutstanding = useMemo(() =>
-    credits.reduce((sum, s) => sum + s.total_amount, 0),
-    [credits],
-  );
+    for (const s of sales) {
+      if (s.status !== 'credit') continue;
+      const name = s.customer_name?.trim() || 'Client inconnu';
+      const remaining = s.total_amount - (s.amount_paid ?? 0);
+      if (remaining < 0.01) continue;
 
-  const getMethod = (id: string) => selectedMethod[id] ?? 'especes';
-  const setMethod = (id: string, m: string) =>
-    setSelectedMethod(prev => ({ ...prev, [id]: m }));
+      const saleDate = s.sale_date ?? s.created_at.split('T')[0];
+      const existing = map.get(name);
+      if (existing) {
+        existing.totalOwed += remaining;
+        existing.nbSales += 1;
+        if (saleDate < existing.oldestDate) {
+          existing.oldestDate = saleDate;
+          existing.daysOldest = getDaysAgo(saleDate);
+        }
+        if (s.seller_name && !existing.sellers.includes(s.seller_name)) {
+          existing.sellers.push(s.seller_name);
+        }
+      } else {
+        map.set(name, {
+          name,
+          totalOwed: remaining,
+          nbSales: 1,
+          oldestDate: saleDate,
+          daysOldest: getDaysAgo(saleDate),
+          sellers: s.seller_name ? [s.seller_name] : [],
+        });
+      }
+    }
 
-  const handleMarkPaid = async (saleId: string) => {
-    const method = getMethod(saleId);
-    Alert.alert(
-      'Marquer comme payé ?',
-      `Mode de paiement: ${PAY_METHODS.find(m => m.key === method)?.label ?? method}`,
-      [
-        { text: 'Annuler', style: 'cancel' },
-        {
-          text: 'Confirmer',
-          onPress: async () => {
-            const ok = await markPaid(saleId, method);
-            if (ok) Alert.alert('Crédit encaissé', 'Le paiement a été enregistré.');
-          },
-        },
-      ],
-    );
-  };
+    // Sort: oldest debt first (most urgent)
+    return Array.from(map.values()).sort((a, b) => b.daysOldest - a.daysOldest);
+  }, [sales]);
+
+  const totalOutstanding = debtors.reduce((s, c) => s + c.totalOwed, 0);
+
+  const navToLedger = (name: string) =>
+    router.push(`/clients/${encodeURIComponent(name)}`);
 
   return (
     <SafeAreaView style={styles.safe} edges={['top']}>
       <View style={styles.header}>
         <Pressable onPress={() => router.back()}><Text variant="body" color="secondary">‹ Retour</Text></Pressable>
-        <Text variant="h4">Crédits clients</Text>
+        <Text variant="h4">Clients qui doivent</Text>
         <View style={{ width: 60 }} />
       </View>
 
       {/* Total outstanding */}
       <Card style={styles.totalCard}>
-        <Text variant="caption" color="secondary">Total des créances</Text>
-        <Text variant="amountLarge" style={{ color: credits.length > 0 ? palette.warning : palette.textPrimary }}>
+        <Text variant="caption" color="secondary">Total dû</Text>
+        <Text variant="amountLarge" style={{ color: debtors.length > 0 ? palette.warning : palette.textPrimary }}>
           {fmt(totalOutstanding, currency)}
         </Text>
         <Text variant="caption" color="secondary">
-          {credits.length} crédit{credits.length !== 1 ? 's' : ''} en attente
+          {debtors.length} client{debtors.length !== 1 ? 's' : ''} en attente
         </Text>
       </Card>
 
-      {loading && credits.length === 0 ? (
+      {loading && debtors.length === 0 ? (
         <Text variant="body" color="secondary" style={styles.center}>Chargement…</Text>
-      ) : credits.length === 0 ? (
+      ) : debtors.length === 0 ? (
         <View style={styles.empty}>
-          <Text variant="body" color="secondary" style={{ textAlign: 'center' }}>
-            Aucun crédit en attente.{'\n'}Tous les paiements sont à jour.
+          <Text variant="label" style={{ color: palette.success }}>✓ Aucun crédit en attente</Text>
+          <Text variant="body" color="secondary" style={{ textAlign: 'center', marginTop: spacing[2] }}>
+            Tous les paiements sont à jour.
           </Text>
         </View>
       ) : (
         <FlatList
-          data={credits}
-          keyExtractor={s => s.id}
+          data={debtors}
+          keyExtractor={c => c.name}
           contentContainerStyle={styles.list}
-          renderItem={({ item }) => (
-            <Card style={styles.creditCard}>
-              {/* Client + amount */}
-              <View style={styles.cardTop}>
-                <View style={[styles.avatar, { backgroundColor: colors.warning[50] }]}>
-                  <Text variant="label" style={{ color: palette.warning }}>
-                    {(item.customer_name || '?')[0]?.toUpperCase()}
+          renderItem={({ item }) => {
+            const urgent = item.daysOldest >= 7;
+            return (
+              <Pressable onPress={() => navToLedger(item.name)}
+                style={({ pressed }) => [styles.row, pressed && { opacity: 0.75 }]}>
+                <View style={[styles.avatar, { backgroundColor: urgent ? colors.danger[50] : colors.warning[50] }]}>
+                  <Text variant="label" style={{ color: urgent ? palette.danger : palette.warning }}>
+                    {item.name[0]?.toUpperCase()}
                   </Text>
                 </View>
-                <View style={{ flex: 1 }}>
-                  <Text variant="label">{item.customer_name || 'Client inconnu'}</Text>
+                <View style={{ flex: 1, gap: 2 }}>
+                  <View style={{ flexDirection: 'row', alignItems: 'center', gap: spacing[1] }}>
+                    {urgent && <Text variant="caption" style={{ color: palette.danger }}>⚠️</Text>}
+                    <Text variant="label" numberOfLines={1}>{item.name}</Text>
+                  </View>
                   <Text variant="caption" color="secondary">
-                    {item.sale_date
-                      ? new Date(item.sale_date).toLocaleDateString('fr-FR', { day: 'numeric', month: 'long' })
-                      : new Date(item.created_at).toLocaleDateString('fr-FR', { day: 'numeric', month: 'long' })}
+                    {item.nbSales} vente{item.nbSales > 1 ? 's' : ''} en attente
+                    {' · '}
+                    {item.daysOldest === 0 ? "aujourd'hui" : `il y a ${item.daysOldest} j`}
                   </Text>
-                  <Text variant="caption" color="secondary">Vendeur: {item.seller_name}</Text>
-                </View>
-                <Text variant="label" style={{ color: palette.warning }}>
-                  {fmt(item.total_amount, currency)}
-                </Text>
-              </View>
-
-              {/* Payment method picker */}
-              <View style={styles.methodRow}>
-                {PAY_METHODS.map(m => (
-                  <Pressable
-                    key={m.key}
-                    onPress={() => setMethod(item.id, m.key)}
-                    style={[styles.chip, getMethod(item.id) === m.key && styles.chipActive]}
-                  >
-                    <Text variant="caption" style={{
-                      color: getMethod(item.id) === m.key ? palette.textInverse : palette.textPrimary,
-                    }}>
-                      {m.label}
+                  {!isVendeur && item.sellers.length > 0 && (
+                    <Text variant="caption" color="secondary">
+                      Vendeur: {item.sellers.join(', ')}
                     </Text>
-                  </Pressable>
-                ))}
-              </View>
-
-              <Button
-                label={saving ? 'Enregistrement…' : `Marquer payé — ${fmt(item.total_amount, currency)}`}
-                onPress={() => handleMarkPaid(item.id)}
-                loading={saving}
-                size="sm"
-              />
-            </Card>
-          )}
-          ItemSeparatorComponent={() => <View style={{ height: spacing[3] }} />}
+                  )}
+                </View>
+                <View style={{ alignItems: 'flex-end', gap: 2 }}>
+                  <Text variant="label" style={{ color: palette.warning }}>{fmt(item.totalOwed, currency)}</Text>
+                  <Text variant="caption" color="secondary">›</Text>
+                </View>
+              </Pressable>
+            );
+          }}
+          ItemSeparatorComponent={() => <View style={{ height: 1, backgroundColor: palette.border }} />}
         />
       )}
     </SafeAreaView>
@@ -164,16 +165,13 @@ const styles = StyleSheet.create({
     alignItems: 'center', gap: spacing[1],
     borderColor: palette.warning + '40', borderWidth: 1,
   },
-  list: { paddingHorizontal: spacing[5], paddingBottom: spacing[10] },
-  creditCard: { gap: spacing[3] },
-  cardTop: { flexDirection: 'row', alignItems: 'flex-start', gap: spacing[3] },
-  avatar: { width: 40, height: 40, borderRadius: 20, alignItems: 'center', justifyContent: 'center' },
-  methodRow: { flexDirection: 'row', gap: spacing[2] },
-  chip: {
-    paddingHorizontal: spacing[3], paddingVertical: spacing[1.5],
-    borderRadius: radius.full, borderWidth: 1, borderColor: palette.border, backgroundColor: palette.surface,
+  list: { paddingBottom: spacing[10] },
+  row: {
+    flexDirection: 'row', alignItems: 'center', gap: spacing[3],
+    paddingHorizontal: spacing[5], paddingVertical: spacing[3],
+    backgroundColor: palette.surface,
   },
-  chipActive: { backgroundColor: palette.primary, borderColor: palette.primary },
+  avatar: { width: 40, height: 40, borderRadius: 20, alignItems: 'center', justifyContent: 'center' },
   empty: { flex: 1, alignItems: 'center', justifyContent: 'center', padding: spacing[8] },
   center: { textAlign: 'center', marginTop: spacing[10] },
 });

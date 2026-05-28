@@ -1,4 +1,6 @@
-import { Redirect, Tabs } from 'expo-router';
+import { useEffect } from 'react';
+import { Tabs } from 'expo-router';
+import { router } from 'expo-router';
 import { Ionicons } from '@expo/vector-icons';
 import { useAuthStore } from '@/stores/auth';
 import { palette } from '@/src/theme';
@@ -13,16 +15,26 @@ function tabIcon(name: IoniconName, activeName: IoniconName) {
 
 export default function TabsLayout() {
   const session = useAuthStore(s => s.session);
+  const loading = useAuthStore(s => s.loading);
+  const removedBusinessName = useAuthStore(s => s.removedBusinessName);
 
-  if (!session?.activeBusiness) {
-    return <Redirect href="/(app)/onboarding" />;
-  }
+  useEffect(() => {
+    // If membership was removed, the (app)/_layout.tsx handles the redirect.
+    // Don't race it by also redirecting to welcome.
+    if (!loading && !session?.activeBusiness && !removedBusinessName) {
+      router.replace('/(welcome)/');
+    }
+  }, [loading, session?.activeBusiness, removedBusinessName]);
+
+  if (!session?.activeBusiness) return null;
 
   const role = session.activeMembership?.role;
   const isInvestisseur = role === 'investisseur';
+  const isVendeur = role === 'vendeur';
 
   return (
     <Tabs
+      initialRouteName={isVendeur ? 'vendre' : 'index'}
       screenOptions={{
         headerShown: false,
         tabBarActiveTintColor: palette.tabBarActive,
@@ -44,8 +56,8 @@ export default function TabsLayout() {
       <Tabs.Screen
         name="catalogue"
         options={{
-          title: 'Catalogue',
-          href: isInvestisseur ? null : undefined,
+          title: 'Produits',
+          href: isInvestisseur || isVendeur ? null : undefined,
           tabBarIcon: tabIcon('grid-outline', 'grid'),
         }}
       />

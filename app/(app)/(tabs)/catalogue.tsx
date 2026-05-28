@@ -1,4 +1,5 @@
 import React, { useCallback, useEffect, useMemo, useRef, useState } from 'react';
+import { useFocusEffect } from 'expo-router';
 import {
   Alert,
   FlatList,
@@ -16,7 +17,6 @@ import { Button } from '@/src/components/ui/Button';
 import { Card } from '@/src/components/ui/Card';
 import { Input } from '@/src/components/ui/Input';
 import { Text } from '@/src/components/ui/Text';
-import { DatePickerField } from '@/src/components/ui/DatePickerField';
 import { colors, palette, radius, spacing } from '@/src/theme';
 import type { Product } from '@/src/types';
 import { useAuthStore } from '@/stores/auth';
@@ -41,206 +41,146 @@ function stockBg(product: Product): string {
   return colors.success[50];
 }
 
-const UNITS = ['pcs', 'kg', 'g', 'L', 'mL', 'boîte', 'sac', 'carton', 'paire', 'lot'];
-
-function todayIso() {
-  return new Date().toISOString().split('T')[0];
-}
-
 // ─── Form State ───────────────────────────────────────────────────────────────
 
 interface FormState {
   name: string;
-  sku: string;
-  category: string;
-  unit: string;
-  cost_price: string;
+  purchase_price: string;
+  shipping_cost: string;
+  other_costs: string;
   sale_price: string;
-  reorder_level: string;
   initial_stock: string;
+  reorder_level: string;
   supplier_id: string;
-  purchase_date: string;
-  has_bulk: boolean;
-  bulk_price: string;
-  bulk_min_qty: string;
 }
 
 const EMPTY_FORM: FormState = {
   name: '',
-  sku: '',
-  category: '',
-  unit: 'pcs',
-  cost_price: '0',
-  sale_price: '0',
-  reorder_level: '0',
+  purchase_price: '',
+  shipping_cost: '',
+  other_costs: '',
+  sale_price: '',
   initial_stock: '0',
+  reorder_level: '0',
   supplier_id: '',
-  purchase_date: todayIso(),
-  has_bulk: false,
-  bulk_price: '0',
-  bulk_min_qty: '2',
 };
 
 function productToForm(p: Product): FormState {
   return {
     name: p.name,
-    sku: p.sku ?? '',
-    category: p.category ?? '',
-    unit: p.unit,
-    cost_price: String(p.cost_price),
+    purchase_price: p.cost_price > 0 ? String(p.cost_price) : '',
+    shipping_cost: '',
+    other_costs: '',
     sale_price: String(p.sale_price),
-    reorder_level: String(p.reorder_level),
     initial_stock: '0',
+    reorder_level: String(p.reorder_level),
     supplier_id: p.supplier_id ?? '',
-    purchase_date: p.purchase_date ?? todayIso(),
-    has_bulk: !!p.bulk_price,
-    bulk_price: p.bulk_price ? String(p.bulk_price) : '0',
-    bulk_min_qty: p.bulk_min_qty ? String(p.bulk_min_qty) : '2',
   };
+}
+
+function totalCost(f: FormState): number {
+  return (parseFloat(f.purchase_price) || 0)
+    + (parseFloat(f.shipping_cost) || 0)
+    + (parseFloat(f.other_costs) || 0);
 }
 
 function validateForm(f: FormState): string | null {
   if (!f.name.trim()) return 'Le nom du produit est requis.';
   const sp = parseFloat(f.sale_price);
   if (isNaN(sp) || sp < 0) return 'Prix de vente invalide.';
-  const cp = parseFloat(f.cost_price);
-  if (isNaN(cp) || cp < 0) return "Prix d'achat invalide.";
-  if (f.has_bulk) {
-    const bp = parseFloat(f.bulk_price);
-    if (isNaN(bp) || bp <= 0) return 'Prix en gros invalide.';
-    const bq = parseInt(f.bulk_min_qty);
-    if (isNaN(bq) || bq < 2) return 'Quantité min. en gros doit être ≥ 2.';
-  }
   return null;
 }
 
 function formToData(f: FormState): CreateProductData {
   return {
     name: f.name,
-    sku: f.sku || null,
-    category: f.category || null,
-    unit: f.unit,
-    cost_price: parseFloat(f.cost_price) || 0,
+    unit: 'pcs',
+    cost_price: totalCost(f),
     sale_price: parseFloat(f.sale_price) || 0,
     reorder_level: parseInt(f.reorder_level) || 0,
     initial_stock: parseInt(f.initial_stock) || 0,
     supplier_id: f.supplier_id || null,
-    purchase_date: f.purchase_date || null,
-    bulk_price: f.has_bulk ? (parseFloat(f.bulk_price) || null) : null,
-    bulk_min_qty: f.has_bulk ? (parseInt(f.bulk_min_qty) || null) : null,
   };
 }
 
-// ─── Quick Supplier Create Modal ──────────────────────────────────────────────
-
-interface QuickSupplierModalProps {
-  visible: boolean;
-  onClose: () => void;
-  onCreated: (id: string, name: string) => void;
-  businessId: string;
-  userId: string;
-}
-
-function QuickSupplierModal({ visible, onClose, onCreated, businessId, userId }: QuickSupplierModalProps) {
-  const { saving, createFournisseur } = useFournisseursStore();
-  const [name, setName] = useState('');
-  const [phone, setPhone] = useState('');
-
-  useEffect(() => {
-    if (visible) { setName(''); setPhone(''); }
-  }, [visible]);
-
-  const handleCreate = async () => {
-    if (!name.trim()) { Alert.alert('Nom requis'); return; }
-    const ok = await createFournisseur(businessId, userId, { name, phone });
-    if (ok) {
-      const { fournisseurs } = useFournisseursStore.getState();
-      const created = fournisseurs.find(f => f.name.trim() === name.trim());
-      if (created) onCreated(created.id, created.name);
-      onClose();
-    }
-  };
-
-  return (
-    <Modal visible={visible} animationType="slide" presentationStyle="formSheet" onRequestClose={onClose}>
-      <SafeAreaView style={styles.modalSafe}>
-        <View style={styles.modalHeader}>
-          <Pressable onPress={onClose}><Text variant="body" color="secondary">Annuler</Text></Pressable>
-          <Text variant="h4">Nouveau fournisseur</Text>
-          <View style={{ width: 64 }} />
-        </View>
-        <ScrollView contentContainerStyle={styles.modalContent} keyboardShouldPersistTaps="handled">
-          <Input label="Nom *" value={name} onChangeText={setName} placeholder="Ex: Marché Central" />
-          <Input label="Téléphone" value={phone} onChangeText={setPhone} placeholder="Optionnel" keyboardType="phone-pad" />
-        </ScrollView>
-        <View style={styles.modalFooter}>
-          <Button label={saving ? 'Création…' : 'Créer le fournisseur'} onPress={handleCreate} loading={saving} fullWidth size="lg" />
-        </View>
-      </SafeAreaView>
-    </Modal>
-  );
-}
-
-// ─── Supplier Picker ──────────────────────────────────────────────────────────
+// ─── Supplier Picker (inline dropdown + inline create — no nested Modal) ────────
 
 interface SupplierPickerProps {
   fournisseurs: Fournisseur[];
   selectedId: string;
   onSelect: (id: string) => void;
-  onCreateNew: () => void;
+  businessId: string;
+  userId: string;
 }
 
-function SupplierPicker({ fournisseurs, selectedId, onSelect, onCreateNew }: SupplierPickerProps) {
+function SupplierPicker({ fournisseurs, selectedId, onSelect, businessId, userId }: SupplierPickerProps) {
+  const { createFournisseur, saving: fSaving } = useFournisseursStore();
   const selected = fournisseurs.find(f => f.id === selectedId);
   const [open, setOpen] = useState(false);
+  const [showNewForm, setShowNewForm] = useState(false);
+  const [newName, setNewName] = useState('');
+  const [newPhone, setNewPhone] = useState('');
+
+  const handleCreate = async () => {
+    if (!newName.trim()) { Alert.alert('Nom requis'); return; }
+    const ok = await createFournisseur(businessId, userId, { name: newName, phone: newPhone });
+    if (ok) {
+      const latest = useFournisseursStore.getState().fournisseurs.find(f => f.name.trim() === newName.trim());
+      if (latest) onSelect(latest.id);
+      setShowNewForm(false);
+      setNewName('');
+      setNewPhone('');
+    }
+  };
 
   return (
     <View>
-      <Text variant="label" style={{ marginBottom: spacing[1] }}>Fournisseur</Text>
-      <Pressable
-        onPress={() => setOpen(true)}
-        style={[styles.pickerField, { borderColor: palette.border }]}
-      >
-        <Text variant="body" style={{ color: selected ? palette.textPrimary : palette.textDisabled }}>
-          {selected ? selected.name : 'Sélectionner un fournisseur…'}
-        </Text>
-        <Text variant="caption" color="secondary">›</Text>
+      <Pressable onPress={() => setOpen(v => !v)} style={styles.fieldBlock}>
+        <Text style={styles.fieldLabel}>Fournisseur</Text>
+        <View style={{ flexDirection: 'row', alignItems: 'center' }}>
+          <Text style={[styles.fieldInput, { flex: 1, fontSize: 17, fontWeight: '500' as const }]} numberOfLines={1}>
+            {selected ? selected.name : 'Aucun'}
+          </Text>
+          <Text style={{ color: palette.textSecondary, fontSize: 13 }}>{open ? '▲' : '▼'}</Text>
+        </View>
       </Pressable>
-
-      <Modal visible={open} animationType="slide" presentationStyle="formSheet" onRequestClose={() => setOpen(false)}>
-        <SafeAreaView style={styles.modalSafe}>
-          <View style={styles.modalHeader}>
-            <Pressable onPress={() => setOpen(false)}><Text variant="body" color="secondary">Annuler</Text></Pressable>
-            <Text variant="h4">Fournisseur</Text>
-            <View style={{ width: 64 }} />
-          </View>
-          <ScrollView contentContainerStyle={{ paddingVertical: spacing[2] }}>
+      {open && (
+        <View style={styles.supplierDropdown}>
+          <Pressable
+            onPress={() => { onSelect(''); setOpen(false); }}
+            style={[styles.supplierRow, !selectedId && styles.supplierRowActive]}
+          >
+            <Text variant="body" style={{ color: !selectedId ? palette.primary : palette.textSecondary }}>
+              Aucun fournisseur
+            </Text>
+          </Pressable>
+          {fournisseurs.map(f => (
             <Pressable
-              onPress={() => { onSelect(''); setOpen(false); }}
-              style={[styles.supplierRow, !selectedId && styles.supplierRowActive]}
+              key={f.id}
+              onPress={() => { onSelect(f.id); setOpen(false); }}
+              style={[styles.supplierRow, selectedId === f.id && styles.supplierRowActive]}
             >
-              <Text variant="body" style={{ color: !selectedId ? palette.primary : palette.textSecondary }}>
-                Aucun fournisseur
+              <Text variant="body" style={{ color: selectedId === f.id ? palette.primary : palette.textPrimary }}>
+                {f.name}
               </Text>
+              {f.phone ? <Text variant="caption" color="secondary">{f.phone}</Text> : null}
             </Pressable>
-            {fournisseurs.map(f => (
-              <Pressable
-                key={f.id}
-                onPress={() => { onSelect(f.id); setOpen(false); }}
-                style={[styles.supplierRow, selectedId === f.id && styles.supplierRowActive]}
-              >
-                <Text variant="body" style={{ color: selectedId === f.id ? palette.primary : palette.textPrimary }}>
-                  {f.name}
-                </Text>
-                {f.phone ? <Text variant="caption" color="secondary">{f.phone}</Text> : null}
-              </Pressable>
-            ))}
-            <Pressable onPress={() => { setOpen(false); onCreateNew(); }} style={styles.supplierRow}>
-              <Text variant="label" style={{ color: palette.primary }}>+ Créer un nouveau fournisseur</Text>
-            </Pressable>
-          </ScrollView>
-        </SafeAreaView>
-      </Modal>
+          ))}
+          <Pressable onPress={() => { setOpen(false); setShowNewForm(true); }} style={styles.supplierRow}>
+            <Text variant="label" style={{ color: palette.primary }}>+ Créer un nouveau fournisseur</Text>
+          </Pressable>
+        </View>
+      )}
+      {showNewForm && (
+        <View style={styles.newSupplierForm}>
+          <Input label="Nom *" value={newName} onChangeText={setNewName} placeholder="Ex: Marché Central" />
+          <Input label="Téléphone (optionnel)" value={newPhone} onChangeText={setNewPhone} keyboardType="phone-pad" placeholder="Ex: 622 00 00 00" />
+          <View style={{ flexDirection: 'row', gap: spacing[2] }}>
+            <Button label="Annuler" onPress={() => { setShowNewForm(false); setNewName(''); setNewPhone(''); }} variant="outline" style={{ flex: 1 }} />
+            <Button label={fSaving ? '…' : 'Créer'} onPress={handleCreate} loading={fSaving} style={{ flex: 1 }} disabled={!newName.trim()} />
+          </View>
+        </View>
+      )}
     </View>
   );
 }
@@ -262,18 +202,20 @@ interface ProductFormProps {
 function ProductFormModal({ visible, editing, onClose, onSave, saving, currency, fournisseurs, businessId, userId }: ProductFormProps) {
   const [form, setForm] = useState<FormState>(EMPTY_FORM);
   const [formError, setFormError] = useState<string | null>(null);
-  const [showQuickSupplier, setShowQuickSupplier] = useState(false);
+  const [showDetails, setShowDetails] = useState(false);
   const nameRef = useRef<TextInput>(null);
+  const scrollRef = useRef<ScrollView>(null);
 
   useEffect(() => {
     if (visible) {
       setForm(editing ? productToForm(editing) : EMPTY_FORM);
       setFormError(null);
+      setShowDetails(false);
       setTimeout(() => nameRef.current?.focus(), 200);
     }
   }, [visible, editing]);
 
-  const set = (key: keyof FormState) => (val: string | boolean) =>
+  const set = (key: keyof FormState) => (val: string) =>
     setForm(prev => ({ ...prev, [key]: val }));
 
   const handleSave = async () => {
@@ -283,154 +225,179 @@ function ProductFormModal({ visible, editing, onClose, onSave, saving, currency,
     await onSave(formToData(form));
   };
 
+  const toggleDetails = () => {
+    const next = !showDetails;
+    setShowDetails(next);
+    if (next) {
+      setTimeout(() => scrollRef.current?.scrollToEnd({ animated: true }), 150);
+    }
+  };
+
+  const qty = parseFloat(form.initial_stock) || 0;
+  const pp = parseFloat(form.purchase_price) || 0;
+  const sp = parseFloat(form.sale_price) || 0;
+  const liveInvested = qty * pp;
+  const showLiveCalc = !editing && liveInvested > 0;
+  const showProfitHint = editing && pp > 0 && sp > 0;
+
   return (
     <Modal visible={visible} animationType="slide" presentationStyle="pageSheet" onRequestClose={onClose}>
-      <SafeAreaView style={styles.modalSafe}>
-        <KeyboardAvoidingView behavior={Platform.OS === 'ios' ? 'padding' : undefined} style={{ flex: 1 }}>
-          <View style={styles.modalHeader}>
-            <Pressable onPress={onClose} style={styles.modalCancel}>
-              <Text variant="body" color="secondary">Annuler</Text>
-            </Pressable>
-            <Text variant="h4">{editing ? 'Modifier le produit' : 'Nouveau produit'}</Text>
-            <View style={{ width: 64 }} />
-          </View>
-
-          <ScrollView contentContainerStyle={styles.modalContent} keyboardShouldPersistTaps="handled">
-            {formError && (
-              <View style={styles.formError}>
-                <Text variant="bodySmall" color="danger">{formError}</Text>
-              </View>
-            )}
-
-            <Input label="Nom du produit *" value={form.name} onChangeText={set('name')}
-              placeholder="Ex: Riz local 25kg" ref={nameRef} returnKeyType="next" />
-
-            <View style={styles.row}>
-              <View style={{ flex: 1 }}>
-                <Input label="SKU / Référence" value={form.sku} onChangeText={set('sku')}
-                  placeholder="Optionnel" autoCapitalize="characters" />
-              </View>
-              <View style={{ flex: 1 }}>
-                <Input label="Catégorie" value={form.category} onChangeText={set('category')}
-                  placeholder="Ex: Alimentation" />
-              </View>
+        <SafeAreaView style={styles.modalSafe} edges={['bottom']}>
+          <KeyboardAvoidingView behavior={Platform.OS === 'ios' ? 'padding' : 'height'} style={{ flex: 1 }}>
+            <View style={styles.modalHeader}>
+              <Pressable onPress={onClose} style={styles.modalCancel}>
+                <Text variant="body" color="secondary">Annuler</Text>
+              </Pressable>
+              <Text variant="h4">{editing ? 'Modifier le produit' : 'Nouveau produit'}</Text>
+              <View style={{ width: 64 }} />
             </View>
 
-            {/* Supplier */}
-            <SupplierPicker
-              fournisseurs={fournisseurs}
-              selectedId={form.supplier_id}
-              onSelect={id => setForm(p => ({ ...p, supplier_id: id }))}
-              onCreateNew={() => setShowQuickSupplier(true)}
-            />
-
-            {/* Purchase date */}
-            <DatePickerField
-              label="Date d'achat"
-              value={form.purchase_date}
-              onChange={d => setForm(p => ({ ...p, purchase_date: d }))}
-              maxToday
-            />
-
-            {/* Unit */}
-            <View>
-              <Text variant="label" style={styles.unitLabel}>Unité</Text>
-              <ScrollView horizontal showsHorizontalScrollIndicator={false} style={styles.unitScroll}>
-                {UNITS.map(u => (
-                  <Pressable key={u} onPress={() => setForm(p => ({ ...p, unit: u }))}
-                    style={[styles.unitChip, form.unit === u && styles.unitChipActive]}>
-                    <Text variant="bodySmall"
-                      style={{ color: form.unit === u ? palette.textInverse : palette.textPrimary }}>
-                      {u}
-                    </Text>
-                  </Pressable>
-                ))}
-              </ScrollView>
-            </View>
-
-            <View style={styles.row}>
-              <View style={{ flex: 1 }}>
-                <Input label={`Prix d'achat (${currency})`} value={form.cost_price}
-                  onChangeText={set('cost_price')} keyboardType="decimal-pad" placeholder="0" />
-              </View>
-              <View style={{ flex: 1 }}>
-                <Input label={`Prix de vente (${currency}) *`} value={form.sale_price}
-                  onChangeText={set('sale_price')} keyboardType="decimal-pad" placeholder="0" />
-              </View>
-            </View>
-
-            <View style={styles.row}>
-              <View style={{ flex: 1 }}>
-                <Input label="Seuil d'alerte stock" value={form.reorder_level}
-                  onChangeText={set('reorder_level')} keyboardType="number-pad"
-                  placeholder="0" hint="Alerte si stock ≤ ce seuil" />
-              </View>
-              {!editing && (
-                <View style={{ flex: 1 }}>
-                  <Input label="Stock initial" value={form.initial_stock}
-                    onChangeText={set('initial_stock')} keyboardType="number-pad"
-                    placeholder="0" hint="Quantité en stock aujourd'hui" />
+            <ScrollView ref={scrollRef} style={{ flex: 1 }} contentContainerStyle={styles.formStack} keyboardShouldPersistTaps="handled">
+              {formError && (
+                <View style={styles.formError}>
+                  <Text variant="bodySmall" color="danger">{formError}</Text>
                 </View>
               )}
+
+              {/* 1 — Nom du produit */}
+              <View style={styles.fieldBlock}>
+                <Text style={styles.fieldLabel}>Nom du produit</Text>
+                <TextInput
+                  ref={nameRef}
+                  style={styles.fieldInput}
+                  value={form.name}
+                  onChangeText={set('name')}
+                  placeholder="Ex: Sac de riz 25kg"
+                  placeholderTextColor={palette.textDisabled}
+                />
+              </View>
+
+              {/* 2 — Quantité achetée (new product only) */}
+              {!editing && (
+                <View style={styles.fieldBlock}>
+                  <Text style={styles.fieldLabel}>Quantité achetée</Text>
+                  <View style={styles.fieldRow}>
+                    <TextInput
+                      style={[styles.fieldInput, { flex: 1 }]}
+                      value={form.initial_stock}
+                      onChangeText={set('initial_stock')}
+                      keyboardType="number-pad"
+                      placeholder="0"
+                      placeholderTextColor={palette.textDisabled}
+                    />
+                    <Text style={styles.unitTag}>pcs</Text>
+                  </View>
+                </View>
+              )}
+
+              {/* 3 — Prix d'achat */}
+              <View style={styles.fieldBlock}>
+                <Text style={styles.fieldLabel}>Prix d'achat unitaire ({currency})</Text>
+                <TextInput
+                  style={styles.fieldInput}
+                  value={form.purchase_price}
+                  onChangeText={set('purchase_price')}
+                  keyboardType="decimal-pad"
+                  placeholder="0"
+                  placeholderTextColor={palette.textDisabled}
+                />
+              </View>
+
+              {/* 4 — Prix de vente */}
+              <View style={styles.fieldBlock}>
+                <Text style={styles.fieldLabel}>Prix de vente unitaire ({currency})</Text>
+                <TextInput
+                  style={styles.fieldInput}
+                  value={form.sale_price}
+                  onChangeText={set('sale_price')}
+                  keyboardType="decimal-pad"
+                  placeholder="0"
+                  placeholderTextColor={palette.textDisabled}
+                />
+              </View>
+
+              {/* Live math */}
+              {showLiveCalc && (
+                <View style={styles.liveCalcBlock}>
+                  <Text style={styles.liveCalcText}>
+                    Total investi : {liveInvested.toLocaleString('fr-FR')} {currency}
+                  </Text>
+                </View>
+              )}
+              {showProfitHint && (
+                <View style={styles.liveCalcBlock}>
+                  <Text style={[styles.liveCalcText, { color: sp > pp ? palette.success : palette.danger }]}>
+                    Marge : {(sp - pp).toLocaleString('fr-FR')} {currency} par unité
+                  </Text>
+                </View>
+              )}
+
+              {/* More details toggle — inline accordion, no separate Modal */}
+              <Pressable onPress={toggleDetails} style={styles.detailsBtn}>
+                <Text variant="body" style={{ color: palette.primary }}>
+                  {showDetails ? '▲ Masquer les détails' : '▼ Plus de détails (Stock, Fournisseur…)'}
+                </Text>
+              </Pressable>
+
+              {/* Inline details accordion */}
+              {showDetails && (
+                <>
+                  <SupplierPicker
+                    fournisseurs={fournisseurs}
+                    selectedId={form.supplier_id}
+                    onSelect={id => setForm(p => ({ ...p, supplier_id: id }))}
+                    businessId={businessId}
+                    userId={userId}
+                  />
+
+                  <View style={styles.fieldBlock}>
+                    <Text style={styles.fieldLabel}>Frais de livraison ({currency})</Text>
+                    <TextInput
+                      style={styles.fieldInput}
+                      value={form.shipping_cost}
+                      onChangeText={set('shipping_cost')}
+                      keyboardType="decimal-pad"
+                      placeholder="0 — optionnel"
+                      placeholderTextColor={palette.textDisabled}
+                    />
+                  </View>
+
+                  <View style={styles.fieldBlock}>
+                    <Text style={styles.fieldLabel}>Autres frais ({currency})</Text>
+                    <TextInput
+                      style={styles.fieldInput}
+                      value={form.other_costs}
+                      onChangeText={set('other_costs')}
+                      keyboardType="decimal-pad"
+                      placeholder="0 — optionnel"
+                      placeholderTextColor={palette.textDisabled}
+                    />
+                    <Text variant="caption" color="secondary">Douanes, manutention, etc.</Text>
+                  </View>
+
+                  <View style={styles.fieldBlock}>
+                    <Text style={styles.fieldLabel}>Seuil d'alerte stock</Text>
+                    <TextInput
+                      style={styles.fieldInput}
+                      value={form.reorder_level}
+                      onChangeText={set('reorder_level')}
+                      keyboardType="number-pad"
+                      placeholder="0"
+                      placeholderTextColor={palette.textDisabled}
+                    />
+                    <Text variant="caption" color="secondary">Alerte quand le stock atteint ce niveau</Text>
+                  </View>
+                </>
+              )}
+            </ScrollView>
+
+            <View style={styles.modalFooter}>
+              <Button label={saving ? 'Enregistrement…' : 'Enregistrer'} onPress={handleSave}
+                loading={saving} fullWidth size="lg" />
             </View>
-
-            {/* Bulk toggle */}
-            <Pressable
-              onPress={() => setForm(p => ({ ...p, has_bulk: !p.has_bulk }))}
-              style={[styles.toggleRow, form.has_bulk && styles.toggleRowActive]}
-            >
-              <View style={{ flex: 1 }}>
-                <Text variant="label">Vente en gros disponible</Text>
-                <Text variant="caption" color="secondary">Prix spécial pour les achats en quantité</Text>
-              </View>
-              <View style={[styles.toggle, form.has_bulk && styles.toggleOn]}>
-                <Text variant="caption" style={{ color: form.has_bulk ? palette.textInverse : palette.textSecondary }}>
-                  {form.has_bulk ? 'OUI' : 'NON'}
-                </Text>
-              </View>
-            </Pressable>
-
-            {form.has_bulk && (
-              <View style={styles.row}>
-                <View style={{ flex: 1 }}>
-                  <Input label={`Prix en gros (${currency})`} value={form.bulk_price}
-                    onChangeText={set('bulk_price')} keyboardType="decimal-pad"
-                    placeholder="0" hint="Prix par unité en gros" />
-                </View>
-                <View style={{ flex: 1 }}>
-                  <Input label="Qté min. en gros" value={form.bulk_min_qty}
-                    onChangeText={set('bulk_min_qty')} keyboardType="number-pad"
-                    placeholder="2" hint="À partir de combien d'unités" />
-                </View>
-              </View>
-            )}
-
-            {form.cost_price && form.sale_price && parseFloat(form.cost_price) > 0 && (
-              <View style={styles.marginPreview}>
-                <Text variant="caption" color="secondary">Marge brute estimée</Text>
-                <Text variant="label" style={{ color: palette.success }}>
-                  {(((parseFloat(form.sale_price) - parseFloat(form.cost_price)) / parseFloat(form.cost_price)) * 100).toFixed(1)}%
-                  {' '}(+{(parseFloat(form.sale_price) - parseFloat(form.cost_price)).toLocaleString('fr-FR')} {currency})
-                </Text>
-              </View>
-            )}
-          </ScrollView>
-
-          <View style={styles.modalFooter}>
-            <Button label={saving ? 'Enregistrement…' : 'Enregistrer'} onPress={handleSave}
-              loading={saving} fullWidth size="lg" />
-          </View>
-        </KeyboardAvoidingView>
-      </SafeAreaView>
-
-      <QuickSupplierModal
-        visible={showQuickSupplier}
-        onClose={() => setShowQuickSupplier(false)}
-        onCreated={(id) => setForm(p => ({ ...p, supplier_id: id }))}
-        businessId={businessId}
-        userId={userId}
-      />
-    </Modal>
+          </KeyboardAvoidingView>
+        </SafeAreaView>
+      </Modal>
   );
 }
 
@@ -458,7 +425,7 @@ function StockAdjustModal({ visible, product, onClose, onConfirm, saving, curren
 
   return (
     <Modal visible={visible} animationType="slide" presentationStyle="formSheet" onRequestClose={onClose}>
-      <SafeAreaView style={styles.modalSafe}>
+      <SafeAreaView style={styles.modalSafe} edges={['bottom']}>
         <View style={styles.modalHeader}>
           <Pressable onPress={onClose} style={styles.modalCancel}>
             <Text variant="body" color="secondary">Annuler</Text>
@@ -562,16 +529,9 @@ function ProductRow({ product, currency, onPress, archived, onRestore }: Product
             </View>
           ) : null}
         </View>
-        <View style={styles.productMeta}>
-          {product.category && (
-            <View style={styles.categoryBadge}>
-              <Text variant="caption" color="secondary">{product.category}</Text>
-            </View>
-          )}
-          {margin && (
-            <Text variant="caption" style={{ color: palette.success }}>+{margin}%</Text>
-          )}
-        </View>
+        {margin && (
+          <Text variant="caption" style={{ color: palette.success }}>+{margin}%</Text>
+        )}
       </View>
 
       <View style={styles.productRight}>
@@ -609,6 +569,12 @@ export default function CatalogueScreen() {
   const [showAdjust, setShowAdjust] = useState(false);
   const [adjustTarget, setAdjustTarget] = useState<Product | null>(null);
   const [tab, setTab] = useState<'actifs' | 'archives'>('actifs');
+  const [successMsg, setSuccessMsg] = useState('');
+
+  const showSuccess = useCallback((msg: string) => {
+    setSuccessMsg(msg);
+    setTimeout(() => setSuccessMsg(''), 2500);
+  }, []);
 
   useEffect(() => {
     if (businessId) {
@@ -616,6 +582,12 @@ export default function CatalogueScreen() {
       fetchFournisseurs(businessId);
     }
   }, [businessId]);
+
+  useFocusEffect(
+    useCallback(() => {
+      if (businessId) fetchProducts(businessId, userId);
+    }, [businessId, userId]),
+  );
 
   useEffect(() => {
     if (businessId && tab === 'archives') {
@@ -626,12 +598,7 @@ export default function CatalogueScreen() {
   const activeFiltered = useMemo(() => {
     const q = search.toLowerCase().trim();
     if (!q) return products;
-    return products.filter(
-      p =>
-        p.name.toLowerCase().includes(q) ||
-        (p.category?.toLowerCase().includes(q) ?? false) ||
-        (p.sku?.toLowerCase().includes(q) ?? false),
-    );
+    return products.filter(p => p.name.toLowerCase().includes(q));
   }, [products, search]);
 
   const archivedFiltered = useMemo(() => {
@@ -639,11 +606,6 @@ export default function CatalogueScreen() {
     if (!q) return archivedProducts;
     return archivedProducts.filter(p => p.name.toLowerCase().includes(q));
   }, [archivedProducts, search]);
-
-  const categories = useMemo(() => {
-    const cats = new Set(products.map(p => p.category).filter(Boolean) as string[]);
-    return Array.from(cats).sort();
-  }, [products]);
 
   const openOptions = useCallback(
     (product: Product) => {
@@ -669,7 +631,7 @@ export default function CatalogueScreen() {
               `"${product.name}" sera retiré du catalogue actif. Vous pourrez le réactiver depuis l'onglet Archivés.`,
               [
                 { text: 'Annuler', style: 'cancel' },
-                { text: 'Archiver', style: 'destructive', onPress: () => archiveProduct(product.id) },
+                { text: 'Archiver', style: 'destructive', onPress: () => archiveProduct(product.id, businessId) },
               ],
             ),
         });
@@ -710,9 +672,13 @@ export default function CatalogueScreen() {
       } else {
         ok = await createProduct(businessId, userId, data);
       }
-      if (ok) { setShowForm(false); setEditingProduct(null); }
+      if (ok) {
+        setShowForm(false);
+        setEditingProduct(null);
+        showSuccess(editingProduct ? 'Produit mis à jour ✓' : 'Produit ajouté ✓');
+      }
     },
-    [editingProduct, businessId, userId, createProduct, updateProduct],
+    [editingProduct, businessId, userId, createProduct, updateProduct, showSuccess],
   );
 
   const handleAdjust = useCallback(
@@ -721,8 +687,9 @@ export default function CatalogueScreen() {
       await adjustStock(adjustTarget.id, businessId, userId, qty, type, note);
       setShowAdjust(false);
       setAdjustTarget(null);
+      showSuccess('Stock ajusté ✓');
     },
-    [adjustTarget, businessId, userId, adjustStock],
+    [adjustTarget, businessId, userId, adjustStock, showSuccess],
   );
 
   const lowStockCount = products.filter(p => p.stock_qty <= p.reorder_level && p.reorder_level > 0).length;
@@ -730,10 +697,17 @@ export default function CatalogueScreen() {
 
   return (
     <SafeAreaView style={styles.safe} edges={['top']}>
+      {/* Success banner */}
+      {successMsg ? (
+        <View style={styles.successBanner}>
+          <Text variant="label" style={{ color: '#fff' }}>{successMsg}</Text>
+        </View>
+      ) : null}
+
       {/* Header */}
       <View style={styles.header}>
         <View>
-          <Text variant="h3">Catalogue</Text>
+          <Text variant="h3">Produits</Text>
           <Text variant="caption" color="secondary">
             {tab === 'actifs'
               ? `${products.length} produit${products.length !== 1 ? 's' : ''}`
@@ -786,12 +760,6 @@ export default function CatalogueScreen() {
               {products.filter(p => p.stock_qty === 0).length}
             </Text>
           </View>
-          {categories.length > 0 && (
-            <View style={styles.statChip}>
-              <Text variant="caption" color="secondary">Catégories</Text>
-              <Text variant="label">{categories.length}</Text>
-            </View>
-          )}
         </ScrollView>
       )}
 
@@ -848,6 +816,7 @@ export default function CatalogueScreen() {
           ItemSeparatorComponent={() => <View style={styles.separator} />}
           contentContainerStyle={styles.list}
           showsVerticalScrollIndicator={false}
+          keyboardShouldPersistTaps="handled"
         />
       )}
 
@@ -881,6 +850,10 @@ export default function CatalogueScreen() {
 
 const styles = StyleSheet.create({
   safe: { flex: 1, backgroundColor: palette.background },
+  successBanner: {
+    backgroundColor: palette.success, paddingHorizontal: spacing[5], paddingVertical: spacing[3],
+    alignItems: 'center',
+  },
   header: {
     flexDirection: 'row', alignItems: 'center', justifyContent: 'space-between',
     paddingHorizontal: spacing[5], paddingTop: spacing[4], paddingBottom: spacing[3],
@@ -949,28 +922,33 @@ const styles = StyleSheet.create({
     padding: spacing[5], borderTopWidth: 1, borderTopColor: palette.border, backgroundColor: palette.surface,
   },
   formError: { backgroundColor: palette.dangerLight, borderRadius: radius.md, padding: spacing[3] },
-  row: { flexDirection: 'row', gap: spacing[3] },
-  unitLabel: { marginBottom: spacing[2], color: palette.textPrimary },
-  unitScroll: { flexGrow: 0, marginBottom: spacing[1] },
-  unitChip: {
-    paddingHorizontal: spacing[3], paddingVertical: spacing[1.5], borderRadius: radius.full,
-    borderWidth: 1, borderColor: palette.border, marginRight: spacing[2], backgroundColor: palette.surface,
-  },
-  unitChipActive: { backgroundColor: palette.primary, borderColor: palette.primary },
-  marginPreview: { backgroundColor: colors.success[50], borderRadius: radius.md, padding: spacing[3], gap: 4 },
 
-  // Bulk toggle
-  toggleRow: {
-    flexDirection: 'row', alignItems: 'center', gap: spacing[3],
-    padding: spacing[4], borderRadius: radius.md, borderWidth: 1.5, borderColor: palette.border,
-    backgroundColor: palette.surface,
+  // 4-field primary form — compact, zero-scroll layout
+  formStack: {},
+  fieldBlock: {
+    paddingHorizontal: spacing[5], paddingTop: spacing[2.5], paddingBottom: spacing[2.5],
+    borderBottomWidth: 1, borderBottomColor: palette.border, gap: spacing[1.5],
   },
-  toggleRowActive: { borderColor: palette.primary, backgroundColor: palette.primaryLight },
-  toggle: {
-    paddingHorizontal: spacing[3], paddingVertical: spacing[1.5],
-    borderRadius: radius.full, borderWidth: 1, borderColor: palette.border, backgroundColor: palette.surface,
+  fieldLabel: {
+    fontSize: 11, fontWeight: '600' as const, color: palette.textSecondary,
+    letterSpacing: 0.6, textTransform: 'uppercase' as const,
   },
-  toggleOn: { backgroundColor: palette.primary, borderColor: palette.primary },
+  fieldInput: {
+    fontSize: 22, fontWeight: '600' as const, color: palette.textPrimary,
+    paddingVertical: 0, minHeight: 36,
+  },
+  fieldRow: { flexDirection: 'row', alignItems: 'center', gap: spacing[3] },
+  unitTag: { fontSize: 15, fontWeight: '500' as const, color: palette.textSecondary },
+  liveCalcBlock: {
+    paddingHorizontal: spacing[5], paddingVertical: spacing[2.5],
+    borderBottomWidth: 1, borderBottomColor: palette.border,
+  },
+  liveCalcText: { fontSize: 14, color: palette.textSecondary, fontWeight: '500' as const },
+  detailsBtn: {
+    paddingHorizontal: spacing[5], paddingVertical: spacing[3],
+    alignItems: 'center' as const,
+    borderBottomWidth: 1, borderBottomColor: palette.border,
+  },
 
   // Supplier picker
   pickerField: {
@@ -978,11 +956,21 @@ const styles = StyleSheet.create({
     paddingHorizontal: spacing[4], paddingVertical: spacing[3],
     borderRadius: radius.md, borderWidth: 1, backgroundColor: palette.surface,
   },
+  supplierDropdown: {
+    borderTopWidth: 1, borderTopColor: palette.border,
+    backgroundColor: palette.surface,
+  },
   supplierRow: {
     paddingHorizontal: spacing[5], paddingVertical: spacing[3],
     borderBottomWidth: 1, borderBottomColor: palette.border, gap: 2,
   },
   supplierRowActive: { backgroundColor: palette.primaryLight },
+  newSupplierForm: {
+    paddingHorizontal: spacing[5], paddingVertical: spacing[4],
+    gap: spacing[3],
+    borderTopWidth: 1, borderTopColor: palette.border,
+    backgroundColor: palette.surface,
+  },
 
   // Stock adjust
   stockPreview: { alignItems: 'center', gap: spacing[1] },

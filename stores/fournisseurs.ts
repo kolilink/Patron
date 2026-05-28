@@ -1,12 +1,7 @@
 import { create } from 'zustand';
 import { supabase } from '@/lib/supabase';
-
-function generateId(): string {
-  return 'xxxxxxxx-xxxx-4xxx-yxxx-xxxxxxxxxxxx'.replace(/[xy]/g, c => {
-    const r = (Math.random() * 16) | 0;
-    return (c === 'x' ? r : (r & 0x3) | 0x8).toString(16);
-  });
-}
+import { translateError } from '@/lib/errors';
+import { generateId } from '@/lib/id';
 
 export interface Fournisseur {
   id: string;
@@ -65,6 +60,7 @@ interface FournisseursStore {
   recevoirCommande: (commandeId: string, businessId: string, userId: string) => Promise<boolean>;
 
   clearError: () => void;
+  reset: () => void;
 }
 
 export const useFournisseursStore = create<FournisseursStore>((set, get) => ({
@@ -95,7 +91,7 @@ export const useFournisseursStore = create<FournisseursStore>((set, get) => ({
       notes: d.notes?.trim() || null,
       created_by: userId,
     });
-    if (error) { set({ error: error.message, saving: false }); return false; }
+    if (error) { set({ error: translateError(error, 'Impossible de créer le fournisseur'), saving: false }); return false; }
     await get().fetchFournisseurs(businessId);
     set({ saving: false });
     return true;
@@ -109,7 +105,7 @@ export const useFournisseursStore = create<FournisseursStore>((set, get) => ({
       country: d.country?.trim() || null,
       notes: d.notes?.trim() || null,
     }).eq('id', id);
-    if (error) { set({ error: error.message, saving: false }); return false; }
+    if (error) { set({ error: translateError(error, 'Impossible de modifier le fournisseur'), saving: false }); return false; }
     set(state => ({
       fournisseurs: state.fournisseurs.map(f =>
         f.id === id ? { ...f, ...d, name: d.name.trim() } : f,
@@ -161,7 +157,7 @@ export const useFournisseursStore = create<FournisseursStore>((set, get) => ({
       total_cost: total,
       created_by: userId,
     });
-    if (poErr) { set({ error: poErr.message, saving: false }); return false; }
+    if (poErr) { set({ error: translateError(poErr, 'Impossible de créer la commande'), saving: false }); return false; }
 
     const lines = input.lines.map(l => ({
       id: generateId(),
@@ -172,7 +168,7 @@ export const useFournisseursStore = create<FournisseursStore>((set, get) => ({
       unit_cost: l.unit_cost,
     }));
     const { error: lErr } = await supabase.from('po_lines').insert(lines);
-    if (lErr) { set({ error: lErr.message, saving: false }); return false; }
+    if (lErr) { set({ error: translateError(lErr, "Impossible d'enregistrer les lignes de commande"), saving: false }); return false; }
 
     await get().fetchCommandes(businessId);
     set({ saving: false });
@@ -248,4 +244,5 @@ export const useFournisseursStore = create<FournisseursStore>((set, get) => ({
   },
 
   clearError: () => set({ error: null }),
+  reset: () => set({ fournisseurs: [], commandes: [], loading: false, saving: false, error: null }),
 }));

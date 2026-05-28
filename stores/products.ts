@@ -1,13 +1,8 @@
 import { create } from 'zustand';
 import { supabase } from '@/lib/supabase';
+import { translateError } from '@/lib/errors';
+import { generateId } from '@/lib/id';
 import type { Product } from '@/src/types';
-
-function generateId(): string {
-  return 'xxxxxxxx-xxxx-4xxx-yxxx-xxxxxxxxxxxx'.replace(/[xy]/g, c => {
-    const r = (Math.random() * 16) | 0;
-    return (c === 'x' ? r : (r & 0x3) | 0x8).toString(16);
-  });
-}
 
 export interface CreateProductData {
   name: string;
@@ -35,7 +30,7 @@ interface ProductStore {
   fetchArchivedProducts: (businessId: string) => Promise<void>;
   createProduct: (businessId: string, userId: string, data: CreateProductData) => Promise<boolean>;
   updateProduct: (businessId: string, userId: string, id: string, data: Partial<CreateProductData>) => Promise<boolean>;
-  archiveProduct: (id: string) => Promise<void>;
+  archiveProduct: (id: string, businessId: string) => Promise<void>;
   restoreProduct: (id: string, businessId: string, userId: string) => Promise<void>;
   adjustStock: (
     productId: string,
@@ -46,7 +41,9 @@ interface ProductStore {
     note?: string,
   ) => Promise<void>;
   clearError: () => void;
+  reset: () => void;
 }
+
 
 export const useProductStore = create<ProductStore>((set, get) => ({
   products: [],
@@ -68,8 +65,7 @@ export const useProductStore = create<ProductStore>((set, get) => ({
       if (error) throw error;
       set({ products: (data as Product[]) ?? [], loading: false });
     } catch (err) {
-      const msg = err instanceof Error ? err.message : 'Erreur de chargement';
-      set({ error: msg, loading: false });
+      set({ error: translateError(err, 'Erreur de chargement'), loading: false });
     }
   },
 
@@ -85,8 +81,7 @@ export const useProductStore = create<ProductStore>((set, get) => ({
       if (error) throw error;
       set({ archivedProducts: (data as Product[]) ?? [] });
     } catch (err) {
-      const msg = err instanceof Error ? err.message : 'Erreur';
-      set({ error: msg });
+      set({ error: translateError(err, 'Erreur de chargement') });
     }
   },
 
@@ -132,8 +127,7 @@ export const useProductStore = create<ProductStore>((set, get) => ({
       set({ saving: false });
       return true;
     } catch (err) {
-      const msg = err instanceof Error ? err.message : 'Erreur de création';
-      set({ error: msg, saving: false });
+      set({ error: translateError(err, 'Erreur de création'), saving: false });
       return false;
     }
   },
@@ -160,20 +154,18 @@ export const useProductStore = create<ProductStore>((set, get) => ({
       set({ saving: false });
       return true;
     } catch (err) {
-      const msg = err instanceof Error ? err.message : 'Erreur de mise à jour';
-      set({ error: msg, saving: false });
+      set({ error: translateError(err, 'Erreur de mise à jour'), saving: false });
       return false;
     }
   },
 
-  archiveProduct: async (id) => {
+  archiveProduct: async (id, businessId) => {
     try {
       const { error } = await supabase.from('products').update({ archived: true }).eq('id', id);
       if (error) throw error;
       set(state => ({ products: state.products.filter(p => p.id !== id) }));
     } catch (err) {
-      const msg = err instanceof Error ? err.message : 'Erreur';
-      set({ error: msg });
+      set({ error: translateError(err, "Impossible d'archiver le produit") });
     }
   },
 
@@ -184,8 +176,7 @@ export const useProductStore = create<ProductStore>((set, get) => ({
       set(state => ({ archivedProducts: state.archivedProducts.filter(p => p.id !== id) }));
       await get().fetchProducts(businessId, userId);
     } catch (err) {
-      const msg = err instanceof Error ? err.message : 'Erreur de restauration';
-      set({ error: msg });
+      set({ error: translateError(err, 'Erreur de restauration') });
     }
   },
 
@@ -219,10 +210,10 @@ export const useProductStore = create<ProductStore>((set, get) => ({
         set({ saving: false });
       }
     } catch (err) {
-      const msg = err instanceof Error ? err.message : 'Erreur d\'ajustement';
-      set({ error: msg, saving: false });
+      set({ error: translateError(err, "Erreur d'ajustement"), saving: false });
     }
   },
 
   clearError: () => set({ error: null }),
+  reset: () => set({ products: [], archivedProducts: [], loading: false, error: null }),
 }));
