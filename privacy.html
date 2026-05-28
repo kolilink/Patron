@@ -5,269 +5,316 @@
   <meta name="viewport" content="width=device-width, initial-scale=1.0">
   <title>Patron — Politique de confidentialité</title>
   <style>
-    * { margin: 0; padding: 0; box-sizing: border-box; }
-    body { font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', sans-serif; background: #f5f5f7; color: #1d1d1f; }
+    :root {
+      --indigo: #6366F1;
+      --indigo-dark: #4F46E5;
+      --indigo-light: #EEF2FF;
+      --text: #111827;
+      --muted: #6B7280;
+      --border: #E5E7EB;
+      --bg: #F9FAFB;
+      --white: #ffffff;
+    }
 
+    * { margin: 0; padding: 0; box-sizing: border-box; }
+
+    body {
+      font-family: -apple-system, BlinkMacSystemFont, 'Inter', 'Segoe UI', sans-serif;
+      background: var(--bg);
+      color: var(--text);
+      -webkit-font-smoothing: antialiased;
+    }
+
+    /* ── Header ── */
+    header {
+      background: var(--white);
+      border-bottom: 1px solid var(--border);
+      padding: 20px 32px;
+      display: flex;
+      align-items: center;
+      justify-content: space-between;
+    }
+    .logo {
+      font-size: 20px;
+      font-weight: 800;
+      color: var(--indigo);
+      letter-spacing: -0.5px;
+    }
+    header span {
+      font-size: 13px;
+      color: var(--muted);
+    }
+
+    /* ── Hero ── */
     .hero {
-      background: linear-gradient(135deg, #6366F1 0%, #4F46E5 100%);
-      color: white;
-      padding: 72px 20px 48px;
+      background: linear-gradient(160deg, var(--indigo) 0%, var(--indigo-dark) 100%);
+      padding: 80px 32px 64px;
       text-align: center;
     }
-    .hero .badge {
-      display: inline-block;
-      background: rgba(255,255,255,0.15);
-      border: 1px solid rgba(255,255,255,0.25);
-      border-radius: 100px;
-      padding: 6px 18px;
-      font-size: 13px;
-      font-weight: 600;
-      letter-spacing: 0.5px;
-      margin-bottom: 20px;
+    .hero h1 {
+      font-size: 40px;
+      font-weight: 800;
+      color: #fff;
+      letter-spacing: -1px;
+      margin-bottom: 12px;
     }
-    .hero h1 { font-size: 36px; font-weight: 700; margin-bottom: 10px; letter-spacing: -0.5px; }
-    .hero p { font-size: 15px; opacity: 0.75; }
+    .hero p {
+      font-size: 15px;
+      color: rgba(255,255,255,0.6);
+      font-weight: 400;
+    }
 
-    .container { max-width: 660px; margin: 0 auto; padding: 48px 20px 80px; }
+    /* ── Layout ── */
+    .wrapper {
+      max-width: 720px;
+      margin: 0 auto;
+      padding: 64px 24px 96px;
+    }
 
-    .card {
-      background: white;
-      border-radius: 20px;
-      padding: 32px;
+    /* ── Section ── */
+    .section {
+      margin-bottom: 48px;
+    }
+    .section-label {
+      font-size: 11px;
+      font-weight: 700;
+      letter-spacing: 1.5px;
+      text-transform: uppercase;
+      color: var(--indigo);
+      margin-bottom: 10px;
+    }
+    .section h2 {
+      font-size: 22px;
+      font-weight: 700;
+      color: var(--text);
+      letter-spacing: -0.3px;
       margin-bottom: 16px;
-      box-shadow: 0 1px 4px rgba(0,0,0,0.06), 0 4px 16px rgba(0,0,0,0.04);
     }
+    .section p {
+      font-size: 16px;
+      line-height: 1.75;
+      color: var(--muted);
+      margin-bottom: 12px;
+    }
+    .section p:last-child { margin-bottom: 0; }
 
-    .card-header {
+    /* ── List ── */
+    .list {
+      list-style: none;
+      margin: 16px 0;
       display: flex;
-      align-items: center;
-      gap: 12px;
-      margin-bottom: 16px;
+      flex-direction: column;
+      gap: 10px;
     }
-    .icon {
-      width: 40px; height: 40px;
-      background: #EEF2FF;
-      border-radius: 12px;
-      display: flex; align-items: center; justify-content: center;
-      font-size: 20px;
+    .list li {
+      font-size: 15px;
+      line-height: 1.65;
+      color: var(--muted);
+      display: flex;
+      gap: 12px;
+      align-items: flex-start;
+    }
+    .list li::before {
+      content: '';
+      display: block;
+      width: 6px;
+      height: 6px;
+      border-radius: 50%;
+      background: var(--indigo);
+      margin-top: 8px;
       flex-shrink: 0;
     }
-    h2 { font-size: 18px; font-weight: 700; color: #1d1d1f; }
-    p { font-size: 15px; line-height: 1.7; color: #555; margin-bottom: 10px; }
-    p:last-child { margin-bottom: 0; }
 
-    ul { list-style: none; padding: 0; margin: 0; }
-    ul li {
+    /* ── Callout ── */
+    .callout {
+      background: var(--indigo-light);
+      border-radius: 12px;
+      padding: 20px 24px;
+      margin: 20px 0;
+    }
+    .callout p {
       font-size: 15px;
-      line-height: 1.6;
-      color: #555;
-      padding: 6px 0;
-      padding-left: 20px;
-      position: relative;
+      line-height: 1.65;
+      color: #3730A3;
+      font-weight: 500;
+      margin: 0;
     }
-    ul li::before {
-      content: '·';
-      position: absolute;
-      left: 6px;
-      color: #6366F1;
+
+    /* ── Divider ── */
+    hr {
+      border: none;
+      border-top: 1px solid var(--border);
+      margin: 48px 0;
+    }
+
+    /* ── Contact ── */
+    .contact-grid {
+      display: grid;
+      grid-template-columns: 1fr 1fr;
+      gap: 16px;
+      margin-top: 20px;
+    }
+    @media (max-width: 520px) {
+      .contact-grid { grid-template-columns: 1fr; }
+    }
+    .contact-card {
+      background: var(--white);
+      border: 1px solid var(--border);
+      border-radius: 12px;
+      padding: 20px 24px;
+    }
+    .contact-card .type {
+      font-size: 11px;
       font-weight: 700;
+      letter-spacing: 1px;
+      text-transform: uppercase;
+      color: var(--muted);
+      margin-bottom: 6px;
     }
-
-    .highlight {
-      background: #EEF2FF;
-      border-left: 3px solid #6366F1;
-      border-radius: 0 10px 10px 0;
-      padding: 14px 18px;
-      margin-top: 14px;
-    }
-    .highlight p { color: #4338CA; font-weight: 500; margin: 0; }
-
-    .tag {
-      display: inline-block;
-      background: #F0FDF4;
-      color: #166534;
-      border: 1px solid #BBF7D0;
-      border-radius: 100px;
-      padding: 3px 12px;
-      font-size: 12px;
+    .contact-card a {
+      font-size: 15px;
       font-weight: 600;
-      margin-right: 6px;
-      margin-top: 4px;
+      color: var(--indigo);
+      text-decoration: none;
     }
-    .tag.red { background: #FFF1F2; color: #9F1239; border-color: #FECDD3; }
+    .contact-card a:hover { text-decoration: underline; }
 
-    a { color: #6366F1; text-decoration: none; font-weight: 600; }
-    a:hover { text-decoration: underline; }
-
-    .contact-row {
-      display: flex;
-      align-items: center;
-      gap: 14px;
-      padding: 14px 0;
-      border-bottom: 1px solid #f0f0f0;
+    /* ── Footer ── */
+    footer {
+      border-top: 1px solid var(--border);
+      padding: 32px 24px;
+      text-align: center;
     }
-    .contact-row:last-child { border-bottom: none; padding-bottom: 0; }
-    .contact-icon { font-size: 22px; }
-    .contact-label { font-size: 13px; color: #999; font-weight: 500; margin-bottom: 2px; }
-    .contact-value { font-size: 15px; font-weight: 600; color: #1d1d1f; }
-
-    .footer { text-align: center; padding: 32px 20px 48px; color: #aaa; font-size: 13px; }
+    footer p {
+      font-size: 13px;
+      color: var(--muted);
+      line-height: 1.8;
+    }
   </style>
 </head>
 <body>
 
+  <header>
+    <span class="logo">patron</span>
+    <span>Mise à jour : 28 mai 2026</span>
+  </header>
+
   <div class="hero">
-    <div class="badge">patron</div>
     <h1>Politique de confidentialité</h1>
-    <p>Dernière mise à jour : 28 mai 2026</p>
+    <p>Simple, honnête, et en français.</p>
   </div>
 
-  <div class="container">
+  <div class="wrapper">
 
-    <!-- Intro -->
-    <div class="card">
-      <div class="card-header">
-        <div class="icon">🛡️</div>
-        <h2>Notre engagement</h2>
-      </div>
-      <p>Patron est une application de gestion commerciale pour les petits commerces. Vos données vous appartiennent. Nous ne les vendons pas. Nous ne les partageons jamais avec des tiers à des fins publicitaires.</p>
-      <p>Cette politique explique exactement ce que nous collectons, pourquoi, et comment vous pouvez tout supprimer à tout moment.</p>
+    <div class="section">
+      <div class="section-label">Notre position</div>
+      <h2>Vos données vous appartiennent.</h2>
+      <p>Patron est fait pour les commerçants. Vous nous confiez les données de votre commerce — nous les protégeons et ne les utilisons que pour faire fonctionner votre application. Pas de publicité, pas de revente, pas de surprise.</p>
     </div>
 
-    <!-- What we collect -->
-    <div class="card">
-      <div class="card-header">
-        <div class="icon">📋</div>
-        <h2>Ce que nous collectons</h2>
-      </div>
-      <p><strong>Pour créer votre compte :</strong></p>
-      <ul>
-        <li>Votre numéro de téléphone WhatsApp — utilisé uniquement pour vous envoyer un code de vérification</li>
-        <li>Votre nom affiché (vous le choisissez librement)</li>
+    <hr>
+
+    <div class="section">
+      <div class="section-label">Collecte</div>
+      <h2>Ce que nous stockons</h2>
+      <p>Pour créer votre compte, nous demandons uniquement :</p>
+      <ul class="list">
+        <li>Votre numéro de téléphone WhatsApp — pour envoyer le code de connexion, rien d'autre</li>
+        <li>Un nom affiché — celui que vous choisissez</li>
       </ul>
-      <p style="margin-top: 14px;"><strong>Dans l'application :</strong></p>
-      <ul>
-        <li>Nom et données de votre commerce (produits, prix, stock)</li>
-        <li>Ventes, dépenses, créances enregistrées</li>
-        <li>Noms de vos clients et fournisseurs</li>
-        <li>Membres de votre équipe (numéro de téléphone + rôle)</li>
-      </ul>
-      <div class="highlight">
-        <p>Nous ne collectons pas votre email, votre mot de passe, votre localisation, ni aucune donnée biométrique. Face ID et Touch ID fonctionnent uniquement sur votre appareil — aucune donnée biométrique ne nous est envoyée.</p>
+      <p>Dans l'application, vous créez des données : produits, ventes, dépenses, clients, fournisseurs, équipe. Ces données nous sont confiées pour les synchroniser entre vos appareils.</p>
+      <div class="callout">
+        <p>Nous ne demandons ni email, ni mot de passe, ni localisation. Face ID et Touch ID fonctionnent exclusivement sur votre appareil — aucune donnée biométrique ne quitte jamais votre téléphone.</p>
       </div>
     </div>
 
-    <!-- How we use -->
-    <div class="card">
-      <div class="card-header">
-        <div class="icon">⚙️</div>
-        <h2>Comment nous utilisons vos données</h2>
-      </div>
-      <ul>
+    <hr>
+
+    <div class="section">
+      <div class="section-label">Utilisation</div>
+      <h2>Pourquoi ces données</h2>
+      <ul class="list">
         <li>Faire fonctionner votre compte et synchroniser vos données entre vos appareils</li>
-        <li>Envoyer le code de vérification WhatsApp lors de la connexion (via Twilio)</li>
-        <li>Permettre à vos collaborateurs de voir les données de votre commerce selon leur rôle</li>
+        <li>Envoyer le code de vérification via WhatsApp à chaque connexion</li>
+        <li>Permettre à vos collaborateurs de voir les données selon leur rôle dans le commerce</li>
       </ul>
-      <p style="margin-top: 14px;">Nous n'utilisons pas vos données à des fins de publicité, de profilage ou d'analyse marketing.</p>
+      <p>Nous n'utilisons pas vos données pour de la publicité, du profilage ou du marketing.</p>
     </div>
 
-    <!-- Offline -->
-    <div class="card">
-      <div class="card-header">
-        <div class="icon">📱</div>
-        <h2>Stockage local et mode hors-ligne</h2>
-      </div>
-      <p>Patron fonctionne sans connexion internet. Lorsque vous êtes hors-ligne, vos ventes et dépenses sont sauvegardées localement sur votre appareil dans une base de données chiffrée (SQLite).</p>
-      <p>Dès que la connexion est rétablie, ces données sont automatiquement synchronisées avec nos serveurs sécurisés.</p>
+    <hr>
+
+    <div class="section">
+      <div class="section-label">Mode hors-ligne</div>
+      <h2>Quand vous n'avez pas internet</h2>
+      <p>Patron fonctionne sans connexion. Vos ventes et dépenses sont sauvegardées localement sur votre appareil, puis synchronisées automatiquement dès que vous vous reconnectez.</p>
     </div>
 
-    <!-- Third parties -->
-    <div class="card">
-      <div class="card-header">
-        <div class="icon">🔗</div>
-        <h2>Services tiers</h2>
-      </div>
-      <p>Patron utilise des services tiers fiables pour faire fonctionner l'infrastructure :</p>
-      <ul>
-        <li><strong>Supabase</strong> — hébergement sécurisé de vos données (serveurs en Europe)</li>
-        <li><strong>Twilio</strong> — envoi du message WhatsApp de vérification (votre numéro n'est pas utilisé à d'autres fins)</li>
+    <hr>
+
+    <div class="section">
+      <div class="section-label">Partenaires</div>
+      <h2>Services utilisés</h2>
+      <p>Nous faisons appel à deux services tiers :</p>
+      <ul class="list">
+        <li><strong>Supabase</strong> — hébergement et base de données sécurisée</li>
+        <li><strong>Twilio</strong> — envoi du message WhatsApp de vérification</li>
       </ul>
-      <p style="margin-top: 14px;">Aucun autre tiers n'a accès à vos données.</p>
+      <p>Aucun autre service n'a accès à vos données.</p>
     </div>
 
-    <!-- Security -->
-    <div class="card">
-      <div class="card-header">
-        <div class="icon">🔒</div>
-        <h2>Sécurité</h2>
-      </div>
-      <ul>
-        <li>Toutes les communications entre l'application et nos serveurs sont chiffrées (HTTPS / TLS)</li>
-        <li>Votre session est stockée de façon sécurisée sur votre appareil (Secure Enclave sur iOS)</li>
-        <li>Le verrouillage biométrique (Face ID / Touch ID) protège l'accès à l'application après inactivité</li>
-        <li>Les accès aux données sont contrôlés par rôle — un vendeur ne voit que ce qui lui est autorisé</li>
+    <hr>
+
+    <div class="section">
+      <div class="section-label">Sécurité</div>
+      <h2>Comment nous protégeons vos données</h2>
+      <ul class="list">
+        <li>Toutes les communications sont chiffrées (HTTPS / TLS)</li>
+        <li>Votre session est stockée dans la zone sécurisée de votre iPhone (Secure Enclave)</li>
+        <li>Face ID et Touch ID verrouillent l'accès après quelques minutes d'inactivité</li>
+        <li>Chaque membre de votre équipe ne voit que ce que son rôle lui permet</li>
       </ul>
     </div>
 
-    <!-- Your rights -->
-    <div class="card">
-      <div class="card-header">
-        <div class="icon">✅</div>
-        <h2>Vos droits</h2>
-      </div>
-      <p>Vous avez le contrôle total sur vos données :</p>
-      <ul>
-        <li><strong>Accès</strong> — toutes vos données sont visibles directement dans l'application</li>
-        <li><strong>Modification</strong> — vous pouvez modifier votre nom et les données de votre commerce à tout moment</li>
-        <li><strong>Suppression</strong> — vous pouvez supprimer votre compte directement depuis l'application</li>
+    <hr>
+
+    <div class="section">
+      <div class="section-label">Vos droits</div>
+      <h2>Vous contrôlez tout</h2>
+      <ul class="list">
+        <li>Voir vos données — tout est visible directement dans l'application</li>
+        <li>Modifier — votre nom, votre commerce, à tout moment</li>
+        <li>Supprimer — votre compte depuis l'application, immédiatement</li>
       </ul>
-      <div class="highlight">
-        <p>La suppression du compte se fait dans l'application : Paramètres → Supprimer mon compte. Toutes vos données sont supprimées immédiatement et définitivement.</p>
+      <div class="callout">
+        <p>Suppression dans l'application : Plus → Paramètres → Supprimer mon compte. Toutes vos données sont effacées immédiatement et définitivement de nos serveurs.</p>
       </div>
-      <p style="margin-top: 14px;">Si vous êtes administrateur d'un commerce avec des membres actifs, vous devrez d'abord retirer les membres ou transférer votre rôle avant de supprimer votre compte.</p>
+      <p>Si vous êtes administrateur d'un commerce avec des membres actifs, retirez-les d'abord — ou transférez votre rôle à quelqu'un d'autre.</p>
     </div>
 
-    <!-- Data retention -->
-    <div class="card">
-      <div class="card-header">
-        <div class="icon">🗓️</div>
-        <h2>Conservation des données</h2>
-      </div>
-      <p>Vos données sont conservées tant que votre compte est actif. Dès que vous supprimez votre compte, toutes vos données personnelles sont effacées immédiatement de nos serveurs.</p>
-      <p>Les données commerciales d'un commerce (ventes, produits, dépenses) appartiennent au commerce, pas à l'utilisateur individuel. Elles restent accessibles aux autres membres du commerce après votre départ si vous n'êtes pas l'administrateur sole.</p>
-    </div>
+    <hr>
 
-    <!-- Contact -->
-    <div class="card">
-      <div class="card-header">
-        <div class="icon">💬</div>
-        <h2>Contact</h2>
-      </div>
-      <p>Pour toute question sur vos données ou pour obtenir de l'aide :</p>
-      <div style="margin-top: 16px;">
-        <div class="contact-row">
-          <div class="contact-icon">📱</div>
-          <div>
-            <div class="contact-label">WhatsApp (réponse rapide)</div>
-            <div class="contact-value"><a href="https://wa.me/12672421843">+1 267 242 1843</a></div>
-          </div>
+    <div class="section">
+      <div class="section-label">Contact</div>
+      <h2>Une question ? On répond.</h2>
+      <p>Pour tout ce qui concerne vos données ou votre compte :</p>
+      <div class="contact-grid">
+        <div class="contact-card">
+          <div class="type">WhatsApp</div>
+          <a href="https://wa.me/12672421843">+1 267 242 1843</a>
         </div>
-        <div class="contact-row">
-          <div class="contact-icon">✉️</div>
-          <div>
-            <div class="contact-label">Email</div>
-            <div class="contact-value"><a href="mailto:mdousebastiao@gmail.com">mdousebastiao@gmail.com</a></div>
-          </div>
+        <div class="contact-card">
+          <div class="type">Email</div>
+          <a href="mailto:mdousebastiao@gmail.com">mdousebastiao@gmail.com</a>
         </div>
       </div>
     </div>
 
   </div>
 
-  <div class="footer">
+  <footer>
     <p>© 2026 — Patron</p>
-    <p style="margin-top: 6px;">Tous droits réservés</p>
-  </div>
+    <p>Conakry, Guinée · Tous droits réservés</p>
+  </footer>
 
 </body>
 </html>
