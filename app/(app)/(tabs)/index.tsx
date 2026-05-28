@@ -101,14 +101,14 @@ export default function AccueilScreen() {
       const { data } = await supabase.rpc('get_business_kpis', { p_business_id: businessId });
       if (data) {
         setKpis({
-          revenue_today: data.revenue_today ?? 0,
-          revenue_yesterday: data.revenue_yesterday ?? 0,
-          revenue_month: data.revenue_month ?? 0,
-          sales_today: data.sales_today ?? 0,
-          credit_total: data.credit_total ?? 0,
-          credit_count: data.credit_count ?? 0,
+          revenue_today:    (data.revenue_today    ?? 0) / 100,
+          revenue_yesterday:(data.revenue_yesterday?? 0) / 100,
+          revenue_month:    (data.revenue_month    ?? 0) / 100,
+          sales_today:       data.sales_today      ?? 0,
+          credit_total:     (data.credit_total     ?? 0) / 100,
+          credit_count:      data.credit_count     ?? 0,
           low_stock: 0,
-          expenses_month: data.expenses_month ?? 0,
+          expenses_month:   (data.expenses_month   ?? 0) / 100,
         });
       }
       return;
@@ -165,7 +165,7 @@ export default function AccueilScreen() {
     ]);
 
     const sum = (rows: { total_amount?: number; amount?: number }[] | null, key: 'total_amount' | 'amount' = 'total_amount') =>
-      (rows ?? []).reduce((s, r) => s + (r[key] ?? 0), 0);
+      (rows ?? []).reduce((s, r) => s + (r[key] ?? 0), 0) / 100;
 
     type CreditOrder = { id: string; total_amount: number; customer_name: string | null };
     const creditOrders = (creditRes.data ?? []) as CreditOrder[];
@@ -188,7 +188,7 @@ export default function AccueilScreen() {
       const clientsOwing = new Set<string>();
       let anonCount = 0;
       for (const order of creditOrders) {
-        const remaining = order.total_amount - (paidByOrder[order.id] ?? 0);
+        const remaining = (order.total_amount - (paidByOrder[order.id] ?? 0)) / 100;
         if (remaining > 0.01) {
           creditTotal += remaining;
           if (order.customer_name) clientsOwing.add(order.customer_name);
@@ -225,7 +225,7 @@ export default function AccueilScreen() {
         product_id:    r.product_id,
         product_name:  r.product_name,
         total_qty:     Number(r.total_qty),
-        total_revenue: Number(r.total_revenue),
+        total_revenue: Number(r.total_revenue) / 100,
       })),
     );
   };
