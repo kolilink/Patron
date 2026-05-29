@@ -5,6 +5,7 @@ import { enqueue, getQueueCount } from '@/lib/db';
 import { isNetworkError } from '@/lib/sync';
 import { useSyncStore } from '@/stores/sync';
 import { trackEvent } from '@/lib/analytics';
+import { haptics } from '@/lib/haptics';
 import type { PaymentMethod, Product } from '@/src/types';
 
 export interface CartLine {
@@ -156,6 +157,7 @@ export const useSalesStore = create<SalesStore>((set, get) => ({
       if (rpcErr) throw rpcErr;
 
       set({ cart: [], submitting: false, lastSubmitQueued: false });
+      haptics.success();
       trackEvent('sale_submitted', businessId, userId, {
         is_credit: isCredit,
         items_count: cartSnapshot.length,
@@ -193,12 +195,14 @@ export const useSalesStore = create<SalesStore>((set, get) => ({
         useSyncStore.setState({ pendingCount: count });
 
         set({ cart: [], submitting: false, lastSubmitQueued: true });
+        haptics.success();
         trackEvent('sale_offline_queued', businessId, userId, {
           items_count: cartSnapshot.length,
         });
         return true;
       }
       const raw = err instanceof Error ? err.message : JSON.stringify(err);
+      haptics.error();
       set({ error: raw, submitting: false, lastSubmitQueued: false });
       return false;
     }

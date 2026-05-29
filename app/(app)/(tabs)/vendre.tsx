@@ -27,6 +27,7 @@ import { useProductStore } from '@/stores/products';
 import type { CartLine, SalePayment } from '@/stores/sales';
 import { useSalesStore } from '@/stores/sales';
 import { supabase } from '@/lib/supabase';
+import { haptics } from '@/lib/haptics';
 
 // Final payment methods: Wave removed.
 // 'mtn' is labeled "Mobile Money" in the UI (consolidates old mtn/moov).
@@ -85,7 +86,7 @@ function CartRow({ line, currency, onInc, onDec, onRemove, onToggleBulk, onSetQt
         </View>
       </View>
       <View style={styles.qtyControl}>
-        <Pressable onPress={onDec} style={styles.qtyBtn}>
+        <Pressable onPress={() => { haptics.tap(); onDec(); }} style={styles.qtyBtn}>
           <Text variant="label" style={{ color: line.qty === 1 ? palette.danger : palette.textPrimary }}>−</Text>
         </Pressable>
         {editing ? (
@@ -105,7 +106,7 @@ function CartRow({ line, currency, onInc, onDec, onRemove, onToggleBulk, onSetQt
             <Text variant="label" style={styles.qtyNum}>{line.qty}</Text>
           </Pressable>
         )}
-        <Pressable onPress={onInc} style={styles.qtyBtn}>
+        <Pressable onPress={() => { haptics.tap(); onInc(); }} style={styles.qtyBtn}>
           <Text variant="label" style={{ color: palette.primary }}>+</Text>
         </Pressable>
       </View>
@@ -686,8 +687,8 @@ export default function VendreScreen() {
             currency={currency}
             cartQty={cartQtyMap[item.id]?.unit ?? 0}
             cartBulkQty={cartQtyMap[item.id]?.bulk ?? 0}
-            onAdd={() => { Keyboard.dismiss(); addToCart(item, false); }}
-            onAddBulk={() => { Keyboard.dismiss(); addToCart(item, true); }}
+            onAdd={() => { haptics.tap(); Keyboard.dismiss(); addToCart(item, false); }}
+            onAddBulk={() => { haptics.tap(); Keyboard.dismiss(); addToCart(item, true); }}
           />
         )}
         ListEmptyComponent={

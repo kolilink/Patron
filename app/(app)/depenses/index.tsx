@@ -11,6 +11,7 @@ import { palette, spacing, radius } from '@/src/theme';
 import { useAuthStore } from '@/stores/auth';
 import { useExpensesStore, type CreateExpenseData } from '@/stores/expenses';
 import type { Expense } from '@/src/types';
+import { haptics } from '@/lib/haptics';
 
 function fmt(n: number, cur: string) { return `${n.toLocaleString('fr-FR')} ${cur}`; }
 function todayIso() {
@@ -331,14 +332,20 @@ export default function DepensesScreen() {
   const handleApprove = (id: string) => {
     Alert.alert('Valider cette dépense ?', '', [
       { text: 'Annuler', style: 'cancel' },
-      { text: 'Valider', onPress: () => approveExpense(id, userId) },
+      { text: 'Valider', onPress: async () => {
+        const ok = await approveExpense(id, userId);
+        if (ok) haptics.success(); else haptics.error();
+      }},
     ]);
   };
 
   const handleReject = (id: string) => {
     Alert.alert('Rejeter cette dépense ?', '', [
       { text: 'Annuler', style: 'cancel' },
-      { text: 'Rejeter', style: 'destructive', onPress: () => rejectExpense(id, userId) },
+      { text: 'Rejeter', style: 'destructive', onPress: async () => {
+        const ok = await rejectExpense(id, userId);
+        if (ok) haptics.error();
+      }},
     ]);
   };
 
