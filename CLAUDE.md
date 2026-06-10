@@ -44,14 +44,16 @@ app/
     ventes/             — Sales history + detail
     depenses/           — Expense management
     equipe/             — Team management
-    fournisseurs/       — Supplier management
-    clients/            — Customer list
+    fournisseurs/       — Supplier list + detail ([id].tsx)
+    clients/            — Customer list + ledger ([name].tsx)
     credits/            — Credit tracking
     rapports/           — Reports
     parametres/         — Settings, leave business, delete account, privacy links
+    discussions.tsx     — Boutique private chat room
+    marche/             — Le Marché community forum (index + [id].tsx post detail)
 ```
 
-`investisseur` role sees only the Accueil and Plus tabs — Catalogue and Vendre use `href: null` to hide them.
+`investisseur` role sees only the Accueil and Plus tabs — Catalogue and Vendre use `href: null` to hide them. Investisseurs have **read-only** access to sale_orders, expenses, and products (added v38).
 
 ### Auth flow
 
@@ -61,11 +63,11 @@ Authentication is **WhatsApp OTP only** — no email/password. Flow: anonymous S
 
 Creating a business generates the UUID client-side first, then inserts — this avoids an RLS race where `SELECT` after `INSERT ... RETURNING` fires before the `handle_business_created` trigger creates the membership row.
 
-Joining a business uses invite codes (`equipe` store generates/revokes them). Invite code generation uses `Math.random()` — **do not use `crypto.getRandomValues()`**, it is not available in Hermes (React Native's JS engine).
+Joining a business uses invite codes (`equipe` store generates/revokes them) via the `join_business()` SECURITY DEFINER RPC — this is the **only** way to insert a membership row (the open INSERT policy was dropped in v43). Invite code generation uses `Math.random()` — **do not use `crypto.getRandomValues()`**, it is not available in Hermes (React Native's JS engine).
 
 ### App Store review demo account
 
-`supabase/functions/create-phone-verification/index.ts` checks for a `DEMO_PHONE` environment variable (set in Supabase Edge Function secrets). If the phone matches, the verification row is inserted already-verified with a fixed token `PATRON-000000` — no WhatsApp message is sent. This lets Apple reviewers log in without WhatsApp access. The `DEMO_PHONE` value is `+10000000000`.
+`supabase/functions/create-phone-verification/index.ts` checks for a `DEMO_PHONE` environment variable (set in Supabase Edge Function secrets). If the phone matches, the verification row is inserted already-verified with a fixed token `PATRON-000000` — no WhatsApp message is sent. This lets Apple reviewers log in without WhatsApp access. The `DEMO_PHONE` value is `+15555555555`.
 
 ### App lock overlay (`src/components/AppLockOverlay.tsx`)
 
@@ -76,13 +78,21 @@ Wraps the entire `(app)` navigator. Manages a `LockState: 'clear' | 'blurred' | 
 - `triggerBiometric` fails open (grants access) if device has no biometric enrolled
 - Auto-triggers biometric when entering `auth` state and on every foreground return while locked
 
+### Monetary amounts — BIGINT cents (×100)
+
+**All monetary columns in the DB are stored as BIGINT integer cents (×100).** 1500 GNF is stored as 150000. This was applied in v24 to eliminate floating-point precision errors.
+
+- Always multiply by 100 before writing to DB; divide by 100 before display.
+- Use `formatAmount(n, currency)` from `src/utils/format.ts` to display — it handles whole-unit currencies (GNF, XOF) vs decimal currencies automatically.
+- This applies to: `products.sale_price`, `products.cost_price`, `products.bulk_price`, `sale_orders.total_amount`, `sale_orders.discount_amount`, `so_lines.unit_price`, `payments.amount`, `expenses.amount`, `supplier_debts.amount`.
+
 ### Two sales stores — important distinction
 
 There are **two separate stores** for sales:
 
 | Store | File | Purpose |
 |---|---|---|
-| `useSalesStore` | `stores/sales.ts` | Point-of-sale cart: add/remove items, set quantities, bulk pricing toggle, submit checkout (creates `sale_order` + `so_lines` + `payment` + `stock_moves`) |
+| `useSalesStore` | `stores/sales.ts` | Point-of-sale cart: add/remove items, set quantities, bulk pricing toggle, submit checkout (calls `submit_sale` RPC) |
 | `useVentesStore` | `stores/ventes.ts` | Sales history: fetch list, detail modal, cancel sale (restores stock), mark credit as paid, update customer name |
 
 Do not conflate them. The POS flow lives entirely in `sales.ts`; post-sale mutations live in `ventes.ts`.
@@ -91,11 +101,35 @@ Do not conflate them. The POS flow lives entirely in `sales.ts`; post-sale mutat
 
 All domain stores use Zustand with direct Supabase calls — no local write-through cache. Stores hold arrays of fetched records and expose `loading`/`saving` flags. Call each store's `reset()` on logout (handled in `useAuthStore.logout()`).
 
-Stores: `auth`, `clients`, `equipe`, `expenses`, `fournisseurs`, `products`, `sales` (POS), `sync`, `ventes` (history).
+Stores: `auth`, `chat`, `clients`, `equipe`, `expenses`, `fournisseurs`, `market`, `products`, `sales` (POS), `sync`, `ventes` (history).
+
+### Chat system (`stores/chat.ts`)
+
+Dual-mode chat with two room types:
+
+| Room | Key | Notes |
+|---|---|---|
+| Boutique | `boutiqueRoom` | Private per-business room; members only |
+| Le Marché | `globalRoom` | Global room (`GLOBAL_ROOM_ID` constant), all users |
+
+`load(businessId, currentUserId)` fetches both rooms and recent messages, then computes `boutiqueUnread` and `marcheUnread`. The boutique last-read timestamp is stored in the `chat_room_reads` DB table (REPLICA IDENTITY FULL for real-time); the marché last-read is stored locally via `getKV(MARCHE_KEY)`.
+
+**Business-switching bug (known):** The guard in `(app)/_layout.tsx` is `if (!bId || !uId || boutiqueRoom !== null) return;`. When the user switches businesses without logging out, `boutiqueRoom` still holds the old value and `loadChat` is never called for the new business — the unread count stays stale. Only a full logout+login resets it cleanly.
+
+`appendMessage` is called from the real-time subscription to push new messages without a full re-fetch.
+
+### Le Marché community forum (`stores/market.ts`)
+
+`market_posts`, `market_comments`, `post_likes`, `comment_likes` tables (v37–v40). Posts and comments are gated by `community_level`:
+- `community_level` is auto-computed from `profiles.points` via a DB trigger
+- Posting requires `community_level >= 2`; admins bypass this
+- `administrateur` members always bypass the level gate
+- Like velocity cap: max 3 likes/day per unique (liker, post/comment) pair (v40)
+- `author_name` is derived server-side from `profiles` — the `create_market_post` and `create_market_comment` RPCs ignore any caller-supplied name (v44)
 
 ### Error handling (`lib/errors.ts`)
 
-Always wrap Supabase errors with `translateError(error)` before displaying to users. It maps Supabase/Postgres error codes and messages to French strings. Never show raw Supabase error messages in the UI.
+Always wrap Supabase errors with `translateError(error)` before displaying to users. It maps Supabase/Postgres error codes and messages to French strings. Never show raw Supabase error messages in the UI. Postgres exceptions raised in RPCs with French messages pass through untranslated (used for `join_business` rate-limit, manager-limit, and expired-code messages).
 
 ### Forms
 
@@ -118,12 +152,24 @@ Operations queued: `submit_sale` (RPC) and `create_expense` (table insert).
 
 **Web stub:** `lib/db.web.ts` exports no-op stubs for all queue helpers so the app bundles on web without crashing.
 
+### SQLite cache encryption (`lib/encryption.ts`)
+
+AES-256-GCM application-layer encryption for any sensitive SQLite data. Key is generated once per install and stored in `expo-secure-store` (hardware-backed). Uses `globalThis.crypto.subtle` (Hermes built-in WebCrypto, available in RN 0.76+ / Expo SDK 54+) — not `expo-crypto`, which does not expose `subtle`. The sync queue itself is intentionally left unencrypted (it's transient).
+
+### Receipt sharing (`src/components/ui/SaleReceiptView.tsx`)
+
+A pure presentation component that renders a branded PNG receipt. Captured via `react-native-view-shot` (`captureRef`) and shared via `expo-sharing` (`Sharing.shareAsync`).
+
+**Critical rendering constraint:** `captureRef` requires the target view to be within the GPU compositor bounds. Off-screen placement (`top: -9999`, `top: 5000`) returns a blank image. The pattern used: receipt at `top: 0, left: 0` inside a Modal → solid white `StyleSheet.absoluteFill` cover hides it from the user → dark overlay Pressable on top. `captureRef` captures the receipt's own pixels, unaffected by overlapping views.
+
+**Share timing:** Call `Sharing.shareAsync` only after the modal close animation completes — use `await new Promise(r => setTimeout(r, 350))` between `setShowConfirmSheet(false)` and the share call. On Android, keeping the modal open during sharing causes both to dismiss if the user backgrounds the app.
+
 ### Parametres screen (`app/(app)/parametres/index.tsx`)
 
 Contains three critical flows:
 - **Leave business** — checks remaining memberships after deletion. If others exist, auto-switches to the first one and stays in the app. If none remain, redirects to `/(welcome)/` directly (not via onboarding).
 - **Delete account** — calls `delete_my_account()` RPC. Blocked if user is admin of a business with other active members. User must type `SUPPRIMER` to confirm.
-- **Privacy + support links** — "Politique de confidentialité" opens `https://patron.kolilink.com/privacy.html`; "Contacter le support" opens `https://wa.me/12672421843`.
+- **Privacy + support links** — "Politique de confidentialité" opens `https://patron.kolilink.com/privacy.html`; "Contacter le support" opens `https://wa.me/16094454809`.
 
 ### Theme (`src/theme/`)
 
@@ -133,7 +179,7 @@ Import from `@/src/theme` — `palette` for semantic tokens, `colors` for the fu
 
 ### UI components (`src/components/ui/`)
 
-Use the shared components before building ad-hoc ones: `Button`, `Card`, `Text`, `Input`, `DatePickerField`. Import via `@/src/components/ui`. The `Text` component accepts semantic variants (h1–h4, body, label, caption, amount) that map to `typography` tokens.
+Use the shared components before building ad-hoc ones: `Button`, `Card`, `Text`, `Input`, `DatePickerField`, `PhoneInput`, `SaleReceiptView`, `SaleSuccessOverlay`. Import via `@/src/components/ui`. The `Text` component accepts semantic variants (h1–h4, body, label, caption, amount) that map to `typography` tokens.
 
 ### Types (`src/types/index.ts`)
 
@@ -158,9 +204,32 @@ Run Supabase migrations in order in the SQL Editor. Never skip versions.
 | `db/migration_v8.sql` – `v18.sql` | Incremental feature additions |
 | `db/migration_v19.sql` | RLS: split sale_orders + expenses SELECT into vendeur-only vs admin/manager policies |
 | `db/migration_v20.sql` | Fix: drops the old catch-all "Membres: voir les ventes" policy missed by v19 |
-| `db/migration_v21.sql` | `invite_attempts` rate-limit table; `validate_invite_code()` SECURITY DEFINER RPC (5 attempts/10 min); admin/manager-only UPDATE on memberships; pg_cron cleanup job (manually enable) |
+| `db/migration_v21.sql` | `invite_attempts` rate-limit table; `validate_invite_code()` SECURITY DEFINER RPC (5 attempts/10 min); admin/manager-only UPDATE on memberships |
 | `db/migration_v22.sql` | `get_best_sellers()` RPC; `submit_sale()` + `cancel_sale()` SECURITY DEFINER RPCs; removes vendeur INSERT access on `stock_moves` |
-| `db/migration_v23.sql` | `delete_my_account()` SECURITY DEFINER RPC — blocks if admin has active members, otherwise deletes businesses (sole-admin), memberships, profile, and auth user |
+| `db/migration_v23.sql` | `delete_my_account()` SECURITY DEFINER RPC |
+| `db/migration_v24.sql` | **All monetary columns → BIGINT cents (×100)** across products, sale_orders, so_lines, payments |
+| `db/migration_v25.sql` | `analytics_events` table — founder analytics (INSERT only for merchants; read via service role) |
+| `db/migration_v26.sql` | `sale_orders.idempotency_key` UUID column + partial unique index |
+| `db/migration_v27.sql` | `phone_verification_attempts` rate-limit table (used by Edge Function) |
+| `db/migration_v28.sql` | Fix: restrict product writes to admin/manager only (removes vendeur DB-level access) |
+| `db/migration_v29.sql` | Enforce 1 business created per user via RLS policy |
+| `db/migration_v30.sql` | Fix: vendeur expenses INSERT locked to `status='en_attente'` only |
+| `db/migration_v31.sql` | Enforce max 1 manager per business via memberships INSERT policy |
+| `db/migration_v32.sql` | Fix: infinite RLS recursion in memberships INSERT — extracted to `count_joined_businesses()` + `has_manager()` SECURITY DEFINER helpers |
+| `db/migration_v33.sql` | `chat_rooms` + `chat_messages` tables; boutique private rooms + global Le Marché room |
+| `db/migration_v34.sql` | `chat_room_reads` table — per-user read cursors for unread count |
+| `db/migration_v35.sql` | `REPLICA IDENTITY FULL` on `chat_room_reads` so real-time UPDATE events carry payload |
+| `db/migration_v36.sql` | `receive_purchase_order()` RPC — atomic stock update on PO receipt |
+| `db/migration_v37.sql` | Le Marché: `market_posts`, `market_comments`, `post_likes`; `profiles.points`; `create_market_post` + `create_market_comment` + `toggle_post_like` RPCs |
+| `db/migration_v38.sql` | RLS: investisseurs get SELECT on sale_orders, expenses, products |
+| `db/migration_v39.sql` | `comment_likes` table; `toggle_comment_like` RPC; posting open to all authenticated members |
+| `db/migration_v40.sql` | `profiles.community_level`; 9-tier level ladder; `create_market_post` gated on `community_level >= 2`; 3-likes/day velocity cap |
+| `db/migration_v41.sql` | `supplier_debts` table — tracks what business owes each supplier (BIGINT cents) |
+| `db/migration_v42.sql` | `sale_orders.client_id` FK to clients; backfill by name match; `submit_sale` updated to accept `p_client_id` |
+| `db/migration_v43.sql` | `join_business()` SECURITY DEFINER RPC — now the only way to insert a membership (drops the open INSERT policy) |
+| `db/migration_v44.sql` | Fix: `author_name` in `create_market_post` / `create_market_comment` derived from DB, not caller-supplied |
+| `db/migration_v45.sql` | Fix: `receive_purchase_order` adds admin/manager role gate; uses `auth.uid()` instead of caller-supplied `p_user_id` |
+| `db/migration_v46.sql` | Fix: `join_business` returns specific error messages for expired vs used vs invalid codes (instead of generic NULL) |
 
 `discount_amount` convention: `total_amount` always stores catalog total; `discount_amount + amount_paid = total_amount` for a closed discounted sale.
 
@@ -171,11 +240,15 @@ Run Supabase migrations in order in the SQL Editor. Never skip versions.
 Four roles: `administrateur`, `manager`, `vendeur`, `investisseur`.
 
 **RLS is the primary gate.** All writes that vendeurs can trigger go through SECURITY DEFINER RPCs (never direct table INSERT):
-- `submit_sale(...)` — creates sale_order + so_lines + payment + stock_moves atomically. Enforces that a vendeur can only submit sales in their own name.
+- `submit_sale(...)` — creates sale_order + so_lines + payment + stock_moves atomically. Enforces that a vendeur can only submit sales in their own name. Accepts optional `p_client_id` and `p_idempotency_key`.
 - `cancel_sale(p_sale_id, p_business_id, p_reason)` — marks annulé, restores stock. Vendeurs can only cancel their own sales.
-- `validate_invite_code(p_code)` — rate-limited (5 attempts/10 min), atomically increments `uses` and returns `{business_id, role}`.
-- `get_best_sellers(p_business_id, p_month_start, p_limit)` — server-side aggregation, returns top N products by revenue.
+- `join_business(p_code)` — validates invite code, enforces rate limit (5/10 min), expiry, max_uses, manager limit, join limit (3 non-admin memberships), then inserts membership atomically. Raises specific French exceptions for each failure mode.
+- `get_best_sellers(p_business_id, p_month_start, p_limit)` — server-side aggregation.
 - `delete_my_account()` — safe self-deletion with admin guard.
+- `receive_purchase_order(p_po_id, p_business_id)` — admin/manager only; uses `auth.uid()` for audit trail.
+- `create_market_post(p_title, p_content, p_category)` — derives author_name from profiles server-side.
+- `create_market_comment(p_post_id, p_parent_id, p_content)` — same.
+- `toggle_post_like` / `toggle_comment_like` — enforce 3-likes/day velocity cap.
 
 **Frontend is defense-in-depth** (not the primary control):
 - Catalogue + Vendre tabs hidden for investisseur (`href: null` in tabs layout).
@@ -186,11 +259,13 @@ Four roles: `administrateur`, `manager`, `vendeur`, `investisseur`.
 
 Uses `expo-secure-store` for session storage with custom 2 KB chunking (SecureStore has a per-key size limit, so tokens are split across multiple keys). The `@/` alias maps to the project root (configured in `tsconfig.json`).
 
+`lib/supabase.web.ts` is a stub for the web bundle (no-op — the app has no real web target).
+
 ### Edge Functions (`supabase/functions/`)
 
 | Function | Purpose |
 |---|---|
-| `create-phone-verification` | Creates OTP row, sends WhatsApp via Twilio. Bypasses for `DEMO_PHONE` env var (App Store review). |
+| `create-phone-verification` | Creates OTP row, sends WhatsApp via Twilio. Bypasses for `DEMO_PHONE` env var (App Store review). Rate-limited via `phone_verification_attempts`. |
 | `whatsapp-inbound-webhook` | Marks verification row as `verifie` when user sends token back via WhatsApp |
 | `restore-phone-session` | Generates magic link for verified phone, returns `token_hash` for `verifyOtp` |
 | `send-whatsapp-otp` | Twilio WhatsApp message dispatch |

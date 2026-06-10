@@ -10,8 +10,8 @@ import {
 import { router } from 'expo-router';
 import { SafeAreaView } from 'react-native-safe-area-context';
 import { Button } from '@/src/components/ui/Button';
-import { Input } from '@/src/components/ui/Input';
 import { Text } from '@/src/components/ui/Text';
+import { PhoneInput } from '@/src/components/ui/PhoneInput';
 import { colors, palette, radius, spacing } from '@/src/theme';
 import { useAuthStore } from '@/stores/auth';
 import { supabase } from '@/lib/supabase';
@@ -23,6 +23,8 @@ export default function MilestonePhoneScreen() {
   const { createPhoneVerification, upgradePhone, loading, error, clearError } = useAuthStore();
   const [step, setStep] = useState<'phone' | 'attente'>('phone');
   const [phone, setPhone] = useState('');
+  const [phoneComplete, setPhoneComplete] = useState(false);
+  const [resetKey, setResetKey] = useState(0);
   const [token, setToken] = useState('');
   const [verificationId, setVerificationId] = useState('');
   const channelRef = useRef<ReturnType<typeof supabase.channel> | null>(null);
@@ -90,7 +92,7 @@ export default function MilestonePhoneScreen() {
             <Text variant="body" color="secondary" style={styles.sub}>
               {step === 'phone'
                 ? 'Vérifiez votre numéro pour sécuriser votre commerce. Aucun SMS payant — tout se fait via WhatsApp.'
-                : `Appuyez sur le bouton ci-dessous. WhatsApp s'ouvrira avec le code déjà rempli. Envoyez simplement le message.`}
+                : 'Ouvrez WhatsApp et envoyez le code. On détecte automatiquement.'}
             </Text>
           </View>
 
@@ -116,15 +118,11 @@ export default function MilestonePhoneScreen() {
 
           {step === 'phone' ? (
             <View style={styles.form}>
-              <Input
+              <PhoneInput
                 label="Votre numéro WhatsApp"
-                value={phone}
-                onChangeText={setPhone}
-                placeholder="+224 XXX XXX XXX"
-                keyboardType="phone-pad"
-                returnKeyType="done"
-                onSubmitEditing={handleContinuer}
+                onChange={(e164, complete) => { setPhone(e164); setPhoneComplete(complete); }}
                 autoFocus
+                resetKey={resetKey}
               />
               <Button
                 label="Continuer"
@@ -132,6 +130,7 @@ export default function MilestonePhoneScreen() {
                 onPress={handleContinuer}
                 fullWidth
                 size="lg"
+                disabled={!phoneComplete}
               />
             </View>
           ) : (
@@ -144,8 +143,8 @@ export default function MilestonePhoneScreen() {
               </View>
 
               <Button
-                label="Confirmer via WhatsApp"
-                onPress={handleOpenWhatsApp}
+                label="Ouvrir WhatsApp"
+                onPress={() => Linking.openURL(`https://wa.me/${TWILIO_WHATSAPP_NUMBER}?text=${encodeURIComponent(token)}`)}
                 fullWidth
                 size="lg"
               />
@@ -162,6 +161,7 @@ export default function MilestonePhoneScreen() {
                   clearError();
                   setStep('phone');
                   setToken('');
+                  setResetKey(k => k + 1);
                   setVerificationId('');
                   if (channelRef.current) {
                     supabase.removeChannel(channelRef.current);

@@ -1,5 +1,5 @@
-import { useEffect, useState } from 'react';
-import { Alert, FlatList, Linking, Modal, Pressable, ScrollView, Share, StyleSheet, View } from 'react-native';
+import { useEffect, useRef, useState } from 'react';
+import { Alert, Animated, Easing, FlatList, Linking, Modal, Pressable, ScrollView, Share, StyleSheet, View } from 'react-native';
 import { Ionicons } from '@expo/vector-icons';
 import { SafeAreaView } from 'react-native-safe-area-context';
 import { router } from 'expo-router';
@@ -8,6 +8,7 @@ import { Card } from '@/src/components/ui/Card';
 import { Text } from '@/src/components/ui/Text';
 import { colors, palette, spacing, radius } from '@/src/theme';
 import { useAuthStore } from '@/stores/auth';
+import { generateFallbackName } from '@/lib/id';
 import { useEquipeStore, type Membre } from '@/stores/equipe';
 import type { Role } from '@/src/types';
 
@@ -22,9 +23,9 @@ const ROLE_BADGE_LABELS: Record<Role, string> = {
 };
 
 const ROLE_DESCRIPTIONS: Record<string, string> = {
-  manager: 'Peut tout faire sauf supprimer le commerce',
-  vendeur: 'Peut seulement enregistrer des ventes',
-  investisseur: 'Peut seulement regarder (rapports, chiffres)',
+  manager: 'Gère le commerce sans pouvoir le supprimer',
+  vendeur: 'Enregistre les ventes uniquement',
+  investisseur: 'Voit les chiffres, ne touche à rien',
 };
 
 const ROLE_COLORS: Record<string, string> = {
@@ -45,13 +46,55 @@ function RoleBadge({ role }: { role: string }) {
   );
 }
 
+
 interface NewCodeModalProps {
   visible: boolean; onClose: () => void;
   onGenerate: (role: Role) => Promise<void>; saving: boolean;
+  hasManager: boolean;
 }
 
-function NewCodeModal({ visible, onClose, onGenerate, saving }: NewCodeModalProps) {
+function NewCodeModal({ visible, onClose, onGenerate, saving, hasManager }: NewCodeModalProps) {
   const [role, setRole] = useState<Role>('vendeur');
+  const [hasInteracted, setHasInteracted] = useState(false);
+  const pulseAnim = useRef(new Animated.Value(1)).current;
+  const pulseRef = useRef<Animated.CompositeAnimation | null>(null);
+
+  const managerLocked = role === 'manager' && hasManager;
+  const orderedRoles = hasManager ? (['vendeur', 'investisseur', 'manager'] as Role[]) : ROLES;
+
+  useEffect(() => {
+    if (visible) {
+      setHasInteracted(false);
+      setRole('vendeur');
+      pulseAnim.setValue(1);
+    } else {
+      pulseRef.current?.stop();
+    }
+  }, [visible]);
+
+  useEffect(() => {
+    if (hasInteracted && !saving) {
+      pulseRef.current?.stop();
+      pulseRef.current = Animated.loop(
+        Animated.sequence([
+          Animated.timing(pulseAnim, { toValue: 1.04, duration: 1800, useNativeDriver: true, easing: Easing.inOut(Easing.sin) }),
+          Animated.timing(pulseAnim, { toValue: 1,    duration: 2400, useNativeDriver: true, easing: Easing.inOut(Easing.sin) }),
+        ]),
+      );
+      pulseRef.current.start();
+    } else {
+      pulseRef.current?.stop();
+      pulseRef.current = null;
+      pulseAnim.setValue(1);
+    }
+    return () => { pulseRef.current?.stop(); };
+  }, [hasInteracted, saving]);
+
+  const handleSelectRole = (r: Role) => {
+    setRole(r);
+    if (!hasInteracted) setHasInteracted(true);
+  };
+
   return (
     <Modal visible={visible} animationType="slide" presentationStyle="formSheet" onRequestClose={onClose}>
       <SafeAreaView style={styles.modalSafe}>
@@ -62,27 +105,62 @@ function NewCodeModal({ visible, onClose, onGenerate, saving }: NewCodeModalProp
         </View>
         <ScrollView contentContainerStyle={styles.mpad}>
           <Text variant="body" color="secondary">
-            Choisis le rôle. Un code valable 24 heures sera créé.
+            Votre équipe s'agrandit — c'est une belle étape !
+          </Text>
+          <Text variant="body" color="secondary">
+            Choisissez le rôle ci-dessous et un code valable de 24h sera créé pour votre nouveau membre :)
           </Text>
           <Text variant="label">Rôle</Text>
           <View style={styles.roleGrid}>
-            {ROLES.map(r => (
-              <Pressable key={r} onPress={() => setRole(r)}
-                style={[styles.roleChip, role === r && { backgroundColor: ROLE_COLORS[r], borderColor: ROLE_COLORS[r] }]}>
-                <Text variant="label" style={{ color: role === r ? palette.textInverse : palette.textPrimary }}>
-                  {ROLE_LABELS[r]}
-                </Text>
-                <Text variant="caption" style={{ color: role === r ? palette.textInverse : palette.textSecondary }}>
-                  {ROLE_DESCRIPTIONS[r]}
-                </Text>
-              </Pressable>
-            ))}
+            {orderedRoles.map(r => {
+              const isManagerFull = r === 'manager' && hasManager;
+              const isSelected = role === r;
+              return (
+                <Pressable key={r} onPress={() => handleSelectRole(r)}
+                  style={[
+                    styles.roleChip,
+                    isSelected && { backgroundColor: ROLE_COLORS[r], borderColor: ROLE_COLORS[r] },
+                    isManagerFull && !isSelected && { opacity: 0.5 },
+                  ]}>
+                  <View style={{ flexDirection: 'row', alignItems: 'center', justifyContent: 'space-between' }}>
+                    <Text variant="label" style={{ color: isSelected ? palette.textInverse : palette.textPrimary }}>
+                      {ROLE_LABELS[r]}
+                    </Text>
+                    {isManagerFull && (
+                      <View style={styles.fullBadge}>
+                        <Text variant="labelSmall" style={{ color: palette.textSecondary }}>1/1</Text>
+                      </View>
+                    )}
+                  </View>
+                  <Text variant="caption" style={{ color: isSelected ? palette.textInverse : palette.textSecondary }}>
+                    {ROLE_DESCRIPTIONS[r]}
+                  </Text>
+                </Pressable>
+              );
+            })}
           </View>
+          {managerLocked && (
+            <View style={styles.lockedNote}>
+              <Ionicons name="time-outline" size={18} color={palette.warning} />
+              <Text variant="bodySmall" style={{ flex: 1, color: palette.warning, fontWeight: '600', lineHeight: 20 }}>
+                La gestion de plusieurs gérants arrive bientôt — restez à l'écoute 🙂
+              </Text>
+            </View>
+          )}
         </ScrollView>
-        <View style={styles.mfooter}>
-          <Button label={saving ? 'Génération…' : 'Générer le code'} loading={saving} fullWidth size="lg"
-            onPress={() => onGenerate(role)} />
-        </View>
+        {!managerLocked && hasInteracted && (
+          <View style={styles.mfooter}>
+            <Animated.View style={{ transform: [{ scale: pulseAnim }] }}>
+              <Button
+                label={saving ? 'Génération…' : 'Générer le code'}
+                loading={saving}
+                fullWidth
+                size="lg"
+                onPress={() => onGenerate(role)}
+              />
+            </Animated.View>
+          </View>
+        )}
       </SafeAreaView>
     </Modal>
   );
@@ -153,11 +231,18 @@ export default function EquipeScreen() {
   const businessId = session?.activeBusiness?.id ?? '';
   const userId = session?.user.id ?? '';
   const myMembershipId = session?.activeMembership?.id ?? '';
+  const role = session?.activeMembership?.role;
 
-  const { membres, codes, loading, saving, fetchMembres, fetchCodes, createCode, revokeCode, removeMembre, changeRole } = useEquipeStore();
+  useEffect(() => {
+    if (role && role !== 'administrateur') router.back();
+  }, [role]);
+
+  const { membres, codes, loading, saving, error, fetchMembres, fetchCodes, createCode, revokeCode, removeMembre, changeRole } = useEquipeStore();
   const [tab, setTab] = useState<'membres' | 'codes'>('membres');
   const [showNewCode, setShowNewCode] = useState(false);
   const [revealData, setRevealData] = useState<{ code: string; role: Role } | null>(null);
+
+  const hasManager = membres.some(m => m.role === 'manager');
 
   useEffect(() => {
     if (!businessId) return;
@@ -165,22 +250,37 @@ export default function EquipeScreen() {
     fetchCodes(businessId);
   }, [businessId]);
 
+  if (role && role !== 'administrateur') return null;
+
   const handleGenerateCode = async (role: Role) => {
+    if (role === 'manager' && hasManager) {
+      Alert.alert('Un seul gérant pour l\'instant', 'Bientôt, vous pourrez avoir plusieurs gérants dans votre commerce.');
+      return;
+    }
     const code = await createCode(businessId, userId, role);
-    if (!code) { Alert.alert('Erreur', 'Impossible de générer le code.'); return; }
+    if (!code) { Alert.alert('Le code n\'est pas passé. On réessaie :)'); return; }
     setShowNewCode(false);
     setRevealData({ code, role });
   };
 
   const handleMemberOptions = (m: Membre) => {
     if (m.id === myMembershipId) return;
-    Alert.alert(m.user_name, m.user_email, [
+    Alert.alert(m.user_name || generateFallbackName(m.user_id), m.user_email, [
       {
         text: 'Changer le rôle',
         onPress: () => {
           const otherRoles = ROLES.filter(r => r !== m.role);
           Alert.alert('Nouveau rôle', '', [
-            ...otherRoles.map(r => ({ text: ROLE_LABELS[r], onPress: () => changeRole(m.id, r) })),
+            ...otherRoles.map(r => ({
+              text: ROLE_LABELS[r],
+              onPress: () => {
+                if (r === 'manager' && hasManager) {
+                  Alert.alert('Un seul gérant pour l\'instant', 'Bientôt, vous pourrez avoir plusieurs gérants dans votre commerce.');
+                  return;
+                }
+                changeRole(m.id, r);
+              },
+            })),
             { text: 'Annuler', style: 'cancel' },
           ]);
         },
@@ -188,7 +288,7 @@ export default function EquipeScreen() {
       {
         text: 'Retirer du commerce',
         style: 'destructive',
-        onPress: () => Alert.alert('Retirer ' + m.user_name + ' ?', '', [
+        onPress: () => Alert.alert('Retirer ' + (m.user_name || generateFallbackName(m.user_id)) + ' ?', '', [
           { text: 'Annuler', style: 'cancel' },
           { text: 'Retirer', style: 'destructive', onPress: () => removeMembre(m.id) },
         ]),
@@ -220,6 +320,8 @@ export default function EquipeScreen() {
       {tab === 'membres' ? (
         loading && membres.length === 0 ? (
           <Text variant="body" color="secondary" style={styles.center}>Chargement…</Text>
+        ) : !loading && membres.length === 0 && error ? (
+          <Text variant="body" color="secondary" style={styles.center}>Données non disponibles hors ligne</Text>
         ) : (
           <FlatList
             data={membres}
@@ -229,7 +331,7 @@ export default function EquipeScreen() {
               <View style={styles.empty}>
                 <Text variant="body" color="secondary">Personne d'autre n'utilise ce commerce</Text>
                 <Text variant="caption" color="secondary" style={{ textAlign: 'center', marginTop: spacing[1] }}>
-                  Invite un vendeur ou un gérant pour partager le travail
+                  Invitez un vendeur ou un gérant pour partager le travail
                 </Text>
                 <Button label="+ Inviter quelqu'un" size="sm" onPress={() => setShowNewCode(true)} style={{ marginTop: spacing[3] }} />
               </View>
@@ -239,12 +341,12 @@ export default function EquipeScreen() {
                 style={({ pressed }) => [styles.memberRow, pressed && { opacity: 0.75 }]}>
                 <View style={[styles.avatar, { backgroundColor: ROLE_COLORS[item.role] + '20' }]}>
                   <Text variant="label" style={{ color: ROLE_COLORS[item.role] }}>
-                    {item.user_name[0]?.toUpperCase()}
+                    {(item.user_name || generateFallbackName(item.user_id))[0]?.toUpperCase()}
                   </Text>
                 </View>
                 <View style={{ flex: 1, gap: 2 }}>
                   <View style={styles.nameRow}>
-                    <Text variant="label">{item.user_name}</Text>
+                    <Text variant="label">{item.user_name || generateFallbackName(item.user_id)}</Text>
                     {item.id === myMembershipId && <Text variant="caption" color="secondary">(vous)</Text>}
                   </View>
                   {item.user_phone
@@ -258,6 +360,8 @@ export default function EquipeScreen() {
             ItemSeparatorComponent={() => <View style={{ height: 1, backgroundColor: palette.border }} />}
           />
         )
+      ) : !loading && codes.length === 0 && error ? (
+        <Text variant="body" color="secondary" style={styles.center}>Données non disponibles hors ligne</Text>
       ) : (
         <FlatList
           data={codes}
@@ -266,7 +370,6 @@ export default function EquipeScreen() {
           ListEmptyComponent={<View style={styles.empty}><Text variant="body" color="secondary">Aucun code actif.</Text></View>}
           renderItem={({ item }) => {
             const expired = item.expires_at ? new Date(item.expires_at) < new Date() : false;
-            const used = (item.max_uses != null && item.uses >= item.max_uses);
             return (
               <Card style={styles.codeCard}>
                 <View style={styles.codeTop}>
@@ -274,7 +377,7 @@ export default function EquipeScreen() {
                     variant="h3"
                     numberOfLines={1}
                     adjustsFontSizeToFit
-                    style={{ flex: 1, color: (expired || used) ? palette.textDisabled : palette.primary }}
+                    style={{ flex: 1, color: expired ? palette.textDisabled : palette.primary }}
                   >
                     {item.code}
                   </Text>
@@ -282,16 +385,18 @@ export default function EquipeScreen() {
                 </View>
                 <View style={styles.codeMeta}>
                   <View style={styles.codeStatus}>
-                    {!expired && !used && <View style={styles.greenDot} />}
+                    {!expired && <View style={styles.greenDot} />}
                     <Text variant="caption" color="secondary">
-                      {expired ? 'Expiré' : used ? 'Utilisé' : `Valide · expire ${item.expires_at ? new Date(item.expires_at).toLocaleDateString('fr-FR') : '—'}`}
+                      {expired
+                        ? 'Expiré'
+                        : `Valide · expire ${item.expires_at ? new Date(item.expires_at).toLocaleDateString('fr-FR') : '—'}`}
                     </Text>
                   </View>
-                  <Pressable onPress={() => Alert.alert('Révoquer ?', '', [{ text: 'Annuler', style: 'cancel' }, { text: 'Révoquer', style: 'destructive', onPress: () => revokeCode(item.id) }])}>
-                    <Text variant="caption" color="danger">Révoquer</Text>
+                  <Pressable onPress={() => Alert.alert('Annuler ce code ?', '', [{ text: 'Non', style: 'cancel' }, { text: 'Oui, annuler', style: 'destructive', onPress: () => revokeCode(item.id) }])}>
+                    <Text variant="caption" color="danger">Supprimer</Text>
                   </Pressable>
                 </View>
-                {!expired && !used && (
+                {!expired && (
                   <Pressable
                     onPress={() => {
                       const businessName = session?.activeBusiness?.name ?? 'Un commerce';
@@ -312,7 +417,7 @@ export default function EquipeScreen() {
       )}
 
       <NewCodeModal visible={showNewCode} onClose={() => setShowNewCode(false)}
-        onGenerate={handleGenerateCode} saving={saving} />
+        onGenerate={handleGenerateCode} saving={saving} hasManager={hasManager} />
 
       {revealData && (
         <CodeRevealModal
@@ -356,4 +461,6 @@ const styles = StyleSheet.create({
   revealActions: { width: '100%', gap: spacing[3] },
   roleGrid: { gap: spacing[2] },
   roleChip: { padding: spacing[4], borderRadius: radius.lg, borderWidth: 1.5, borderColor: palette.border, gap: 4 },
+  lockedNote: { flexDirection: 'row', alignItems: 'center', gap: spacing[3], backgroundColor: palette.warningLight, borderRadius: radius.md, borderWidth: 1.5, borderColor: palette.warning, padding: spacing[4] },
+  fullBadge: { backgroundColor: palette.border, borderRadius: radius.full, paddingHorizontal: spacing[2], paddingVertical: 2 },
 });

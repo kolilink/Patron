@@ -1,5 +1,5 @@
 import { useCallback, useEffect, useRef, useState } from 'react';
-import { AppState, Pressable, StyleSheet, View } from 'react-native';
+import { AppState, PanResponder, Pressable, StyleSheet, View } from 'react-native';
 import { BlurView } from 'expo-blur';
 import * as LocalAuthentication from 'expo-local-authentication';
 import { Button } from '@/src/components/ui/Button';
@@ -8,8 +8,8 @@ import { palette, spacing } from '@/src/theme';
 
 type LockState = 'clear' | 'blurred' | 'auth';
 
-const INACTIVITY_MS  = 30_000;       // 30 s no touch → blur
-const BACKGROUND_MS  = 2 * 60_000;   // 2 min backgrounded → auth
+const INACTIVITY_MS  = 60_000;        // 1 min no touch → blur
+const BACKGROUND_MS  = 3 * 60_000;   // 3 min backgrounded → auth
 
 export function AppLockOverlay({ children }: { children: React.ReactNode }) {
   // Use a ref so AppState callbacks always read the current value (no stale closure)
@@ -70,9 +70,8 @@ export function AppLockOverlay({ children }: { children: React.ReactNode }) {
       }
       // On failure or cancel: stay in auth — overlay stays visible with retry button
     } catch {
-      // Unexpected error (old API, permissions, etc.) — fail open
-      setLock('clear');
-      resetInactivityTimer();
+      // Unexpected error (crashed API, permissions, etc.) — stay locked.
+      // User taps "Déverrouiller" to retry. Never fail open on exceptions.
     }
   }, [setLock, resetInactivityTimer]);
 
@@ -110,16 +109,31 @@ export function AppLockOverlay({ children }: { children: React.ReactNode }) {
     return () => sub.remove();
   }, [triggerBiometric, resetInactivityTimer, setLock]);
 
-  // ─── Touch handler (inactivity reset + blur-clear) ────────────────────────────
+  // ─── Touch handler (inactivity reset) ───────────────────────────────────────
+  // PanResponder with capture=false observes every touch even when a child
+  // ScrollView / Pressable captures it — onTouchStart on a plain View would miss
+  // those and let the timer expire while the user is actively interacting.
 
-  const handleTouch = useCallback(() => {
-    if (lockRef.current !== 'auth') resetInactivityTimer();
-  }, [resetInactivityTimer]);
+  const resetRef = useRef(resetInactivityTimer);
+  useEffect(() => { resetRef.current = resetInactivityTimer; }, [resetInactivityTimer]);
+
+  const panResponder = useRef(
+    PanResponder.create({
+      onStartShouldSetPanResponderCapture: () => {
+        if (lockRef.current !== 'auth') resetRef.current();
+        return false; // never steal the touch — just observe it
+      },
+      onMoveShouldSetPanResponderCapture: () => {
+        if (lockRef.current !== 'auth') resetRef.current();
+        return false;
+      },
+    })
+  ).current;
 
   // ─── Render ───────────────────────────────────────────────────────────────────
 
   return (
-    <View style={styles.root} onTouchStart={handleTouch}>
+    <View style={styles.root} {...panResponder.panHandlers}>
       {children}
 
       {lockState !== 'clear' && (

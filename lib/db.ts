@@ -1,4 +1,6 @@
 import * as SQLite from 'expo-sqlite';
+import type { Product } from '@/src/types';
+import { encrypt, decrypt } from '@/lib/encryption';
 
 // Cache the Promise so concurrent callers all await the same migration run.
 let _dbPromise: Promise<SQLite.SQLiteDatabase> | null = null;
@@ -196,6 +198,130 @@ async function migrate(db: SQLite.SQLiteDatabase): Promise<void> {
     );
     await db.execAsync('INSERT OR IGNORE INTO _migrations (version) VALUES (7)');
   }
+
+  if (current < 8) {
+    await db.execAsync(
+      `CREATE TABLE IF NOT EXISTS product_cache (
+        business_id TEXT PRIMARY KEY,
+        data        TEXT NOT NULL,
+        cached_at   INTEGER NOT NULL
+      )`,
+    );
+    await db.execAsync('INSERT OR IGNORE INTO _migrations (version) VALUES (8)');
+  }
+
+  if (current < 9) {
+    await db.execAsync(
+      `CREATE TABLE IF NOT EXISTS ventes_cache (
+        cache_key TEXT PRIMARY KEY,
+        data      TEXT NOT NULL,
+        cached_at INTEGER NOT NULL
+      )`,
+    );
+    await db.execAsync(
+      `CREATE TABLE IF NOT EXISTS fournisseur_cache (
+        business_id TEXT PRIMARY KEY,
+        data        TEXT NOT NULL,
+        cached_at   INTEGER NOT NULL
+      )`,
+    );
+    await db.execAsync(
+      `CREATE TABLE IF NOT EXISTS commande_cache (
+        business_id TEXT PRIMARY KEY,
+        data        TEXT NOT NULL,
+        cached_at   INTEGER NOT NULL
+      )`,
+    );
+    await db.execAsync(
+      `CREATE TABLE IF NOT EXISTS expense_cache (
+        business_id TEXT PRIMARY KEY,
+        data        TEXT NOT NULL,
+        cached_at   INTEGER NOT NULL
+      )`,
+    );
+    await db.execAsync('INSERT OR IGNORE INTO _migrations (version) VALUES (9)');
+  }
+
+  if (current < 10) {
+    await db.execAsync(
+      `CREATE TABLE IF NOT EXISTS dashboard_kpi_cache (
+        business_id TEXT PRIMARY KEY,
+        data        TEXT NOT NULL,
+        cached_at   INTEGER NOT NULL
+      )`,
+    );
+    await db.execAsync('INSERT OR IGNORE INTO _migrations (version) VALUES (10)');
+  }
+
+  if (current < 11) {
+    // Wipe all cache tables — they contain plaintext data.
+    // They will be re-populated with AES-256-GCM encrypted data on next online fetch.
+    await db.execAsync('DELETE FROM product_cache');
+    await db.execAsync('DELETE FROM ventes_cache');
+    await db.execAsync('DELETE FROM fournisseur_cache');
+    await db.execAsync('DELETE FROM commande_cache');
+    await db.execAsync('DELETE FROM expense_cache');
+    await db.execAsync('DELETE FROM dashboard_kpi_cache');
+    await db.execAsync('INSERT OR IGNORE INTO _migrations (version) VALUES (11)');
+  }
+
+  if (current < 12) {
+    await db.execAsync(
+      `CREATE TABLE IF NOT EXISTS kv_store (
+        key   TEXT PRIMARY KEY,
+        value TEXT NOT NULL
+      )`,
+    );
+    await db.execAsync('INSERT OR IGNORE INTO _migrations (version) VALUES (12)');
+  }
+
+  if (current < 13) {
+    // Clear plaintext sync_queue rows — going forward all payloads are AES-256-GCM encrypted.
+    // Any items that were pending will be lost, but the next online session re-fetches from Supabase.
+    await db.execAsync('DELETE FROM sync_queue');
+    await db.execAsync('INSERT OR IGNORE INTO _migrations (version) VALUES (13)');
+  }
+
+  if (current < 14) {
+    // dead_ops: permanent graveyard for sync_queue items that exhausted MAX_SYNC_ATTEMPTS
+    await db.execAsync(
+      `CREATE TABLE IF NOT EXISTS dead_ops (
+        id         INTEGER PRIMARY KEY AUTOINCREMENT,
+        operation  TEXT NOT NULL,
+        payload    TEXT NOT NULL,
+        died_at    TEXT DEFAULT (datetime('now')),
+        last_error TEXT
+      )`,
+    );
+    // chat_cache: rooms + messages snapshot per business
+    await db.execAsync(
+      `CREATE TABLE IF NOT EXISTS chat_cache (
+        business_id TEXT PRIMARY KEY,
+        data        TEXT NOT NULL,
+        cached_at   INTEGER NOT NULL
+      )`,
+    );
+    // market_cache: market posts snapshot (global, no business key needed)
+    await db.execAsync(
+      `CREATE TABLE IF NOT EXISTS market_cache (
+        id        INTEGER PRIMARY KEY CHECK (id = 1),
+        data      TEXT NOT NULL,
+        cached_at INTEGER NOT NULL
+      )`,
+    );
+    await db.execAsync('INSERT OR IGNORE INTO _migrations (version) VALUES (14)');
+  }
+}
+
+export async function getKV(key: string): Promise<string | null> {
+  const db = await openDb();
+  const row = await db.getFirstAsync<{ value: string }>('SELECT value FROM kv_store WHERE key = ?', [key]);
+  return row?.value ?? null;
+}
+
+export async function setKV(key: string, value: string): Promise<void> {
+  const db = await openDb();
+  await db.runAsync('INSERT OR REPLACE INTO kv_store (key, value) VALUES (?, ?)', [key, value]);
 }
 
 export async function getLocalSaleCount(): Promise<number> {
@@ -218,22 +344,43 @@ export interface SyncQueueItem {
   last_error: string | null;
 }
 
-const MAX_SYNC_ATTEMPTS = 5;
+const MAX_SYNC_ATTEMPTS = 20;
 
 export async function enqueue(operation: string, payload: object): Promise<void> {
   const db = await openDb();
+  let stored: string;
+  try {
+    stored = await encrypt(JSON.stringify(payload));
+  } catch {
+    // SubtleCrypto unavailable (very old device or dev env) — store with PLAIN: prefix.
+    // base64 output of encrypt() can never start with 'PLAIN:' (colon is not valid base64),
+    // so this prefix is an unambiguous marker.
+    stored = 'PLAIN:' + JSON.stringify(payload);
+  }
   await db.runAsync(
     'INSERT INTO sync_queue (operation, payload) VALUES (?, ?)',
-    [operation, JSON.stringify(payload)],
+    [operation, stored],
   );
 }
 
 export async function getPendingOps(): Promise<SyncQueueItem[]> {
   const db = await openDb();
-  return db.getAllAsync<SyncQueueItem>(
+  const rows = await db.getAllAsync<SyncQueueItem>(
     'SELECT * FROM sync_queue WHERE attempts < ? ORDER BY id ASC',
     [MAX_SYNC_ATTEMPTS],
   );
+  const result: SyncQueueItem[] = [];
+  for (const row of rows) {
+    try {
+      const payload = row.payload.startsWith('PLAIN:')
+        ? row.payload.slice(6)
+        : await decrypt(row.payload);
+      result.push({ ...row, payload });
+    } catch {
+      // Decryption failed — exclude from this drain pass; item retried next foreground
+    }
+  }
+  return result;
 }
 
 export async function deleteQueueItem(id: number): Promise<void> {
@@ -256,4 +403,297 @@ export async function getQueueCount(): Promise<number> {
     [MAX_SYNC_ATTEMPTS],
   );
   return row?.count ?? 0;
+}
+
+export async function getDeadCount(): Promise<number> {
+  const db = await openDb();
+  const row = await db.getFirstAsync<{ count: number }>(
+    'SELECT COUNT(*) as count FROM sync_queue WHERE attempts >= ?',
+    [MAX_SYNC_ATTEMPTS],
+  );
+  return row?.count ?? 0;
+}
+
+export async function clearDeadOps(): Promise<void> {
+  const db = await openDb();
+  await db.runAsync('DELETE FROM sync_queue WHERE attempts >= ?', [MAX_SYNC_ATTEMPTS]);
+}
+
+export interface DeadOpItem {
+  id: number;
+  operation: string;
+  last_error: string | null;
+}
+
+export async function getDeadOps(): Promise<DeadOpItem[]> {
+  const db = await openDb();
+  return db.getAllAsync<DeadOpItem>(
+    'SELECT id, operation, last_error FROM sync_queue WHERE attempts >= ?',
+    [MAX_SYNC_ATTEMPTS],
+  );
+}
+
+// Move dead items to the graveyard table, then purge from sync_queue.
+export async function archiveDeadOps(): Promise<void> {
+  const db = await openDb();
+  await db.runAsync(
+    `INSERT INTO dead_ops (operation, payload, last_error)
+     SELECT operation, payload, last_error FROM sync_queue WHERE attempts >= ?`,
+    [MAX_SYNC_ATTEMPTS],
+  );
+  await db.runAsync('DELETE FROM sync_queue WHERE attempts >= ?', [MAX_SYNC_ATTEMPTS]);
+}
+
+// ─── Dashboard KPI cache ──────────────────────────────────────────────────────
+
+export async function saveDashboardKpiCache(businessId: string, kpis: unknown): Promise<void> {
+  try {
+    const db = await openDb();
+    const encrypted = await encrypt(JSON.stringify(kpis));
+    await db.runAsync(
+      'INSERT OR REPLACE INTO dashboard_kpi_cache (business_id, data, cached_at) VALUES (?, ?, ?)',
+      [businessId, encrypted, Date.now()],
+    );
+  } catch {}
+}
+
+export async function getDashboardKpiCache(businessId: string): Promise<unknown | null> {
+  try {
+    const db = await openDb();
+    const row = await db.getFirstAsync<{ data: string }>(
+      'SELECT data FROM dashboard_kpi_cache WHERE business_id = ?',
+      [businessId],
+    );
+    if (!row) return null;
+    const decrypted = await decrypt(row.data);
+    return JSON.parse(decrypted);
+  } catch {
+    return null;
+  }
+}
+
+// ─── Product read cache ────────────────────────────────────────────────────────
+
+export async function saveProductCache(businessId: string, products: Product[]): Promise<void> {
+  try {
+    const db = await openDb();
+    const encrypted = await encrypt(JSON.stringify(products));
+    await db.runAsync(
+      'INSERT OR REPLACE INTO product_cache (business_id, data, cached_at) VALUES (?, ?, ?)',
+      [businessId, encrypted, Date.now()],
+    );
+  } catch {}
+}
+
+export async function getProductCache(businessId: string): Promise<Product[] | null> {
+  try {
+    const db = await openDb();
+    const row = await db.getFirstAsync<{ data: string }>(
+      'SELECT data FROM product_cache WHERE business_id = ?',
+      [businessId],
+    );
+    if (!row) return null;
+    const decrypted = await decrypt(row.data);
+    return JSON.parse(decrypted) as Product[];
+  } catch {
+    return null;
+  }
+}
+
+// ─── Ventes read cache ─────────────────────────────────────────────────────────
+// key = `${businessId}:${sellerId ?? 'all'}`
+
+export async function saveVentesCache(cacheKey: string, data: unknown[]): Promise<void> {
+  try {
+    const db = await openDb();
+    const encrypted = await encrypt(JSON.stringify(data));
+    await db.runAsync(
+      'INSERT OR REPLACE INTO ventes_cache (cache_key, data, cached_at) VALUES (?, ?, ?)',
+      [cacheKey, encrypted, Date.now()],
+    );
+  } catch {}
+}
+
+export async function getVentesCache(cacheKey: string): Promise<unknown[] | null> {
+  try {
+    const db = await openDb();
+    const row = await db.getFirstAsync<{ data: string }>(
+      'SELECT data FROM ventes_cache WHERE cache_key = ?',
+      [cacheKey],
+    );
+    if (!row) return null;
+    const decrypted = await decrypt(row.data);
+    return JSON.parse(decrypted) as unknown[];
+  } catch {
+    return null;
+  }
+}
+
+// ─── Fournisseur read cache ────────────────────────────────────────────────────
+
+export async function saveFournisseurCache(businessId: string, data: unknown[]): Promise<void> {
+  try {
+    const db = await openDb();
+    const encrypted = await encrypt(JSON.stringify(data));
+    await db.runAsync(
+      'INSERT OR REPLACE INTO fournisseur_cache (business_id, data, cached_at) VALUES (?, ?, ?)',
+      [businessId, encrypted, Date.now()],
+    );
+  } catch {}
+}
+
+export async function getFournisseurCache(businessId: string): Promise<unknown[] | null> {
+  try {
+    const db = await openDb();
+    const row = await db.getFirstAsync<{ data: string }>(
+      'SELECT data FROM fournisseur_cache WHERE business_id = ?',
+      [businessId],
+    );
+    if (!row) return null;
+    const decrypted = await decrypt(row.data);
+    return JSON.parse(decrypted) as unknown[];
+  } catch {
+    return null;
+  }
+}
+
+// ─── Commande read cache ───────────────────────────────────────────────────────
+
+export async function saveCommandeCache(businessId: string, data: unknown[]): Promise<void> {
+  try {
+    const db = await openDb();
+    const encrypted = await encrypt(JSON.stringify(data));
+    await db.runAsync(
+      'INSERT OR REPLACE INTO commande_cache (business_id, data, cached_at) VALUES (?, ?, ?)',
+      [businessId, encrypted, Date.now()],
+    );
+  } catch {}
+}
+
+export async function getCommandeCache(businessId: string): Promise<unknown[] | null> {
+  try {
+    const db = await openDb();
+    const row = await db.getFirstAsync<{ data: string }>(
+      'SELECT data FROM commande_cache WHERE business_id = ?',
+      [businessId],
+    );
+    if (!row) return null;
+    const decrypted = await decrypt(row.data);
+    return JSON.parse(decrypted) as unknown[];
+  } catch {
+    return null;
+  }
+}
+
+// ─── Expense read cache ────────────────────────────────────────────────────────
+
+export async function saveExpenseCache(businessId: string, data: unknown[]): Promise<void> {
+  try {
+    const db = await openDb();
+    const encrypted = await encrypt(JSON.stringify(data));
+    await db.runAsync(
+      'INSERT OR REPLACE INTO expense_cache (business_id, data, cached_at) VALUES (?, ?, ?)',
+      [businessId, encrypted, Date.now()],
+    );
+  } catch {}
+}
+
+export async function getExpenseCache(businessId: string): Promise<unknown[] | null> {
+  try {
+    const db = await openDb();
+    const row = await db.getFirstAsync<{ data: string }>(
+      'SELECT data FROM expense_cache WHERE business_id = ?',
+      [businessId],
+    );
+    if (!row) return null;
+    const decrypted = await decrypt(row.data);
+    return JSON.parse(decrypted) as unknown[];
+  } catch {
+    return null;
+  }
+}
+
+// ─── Chat read cache ────────────────────────────────────────────────────────────
+
+export async function saveChatCache(businessId: string, data: unknown): Promise<void> {
+  try {
+    const db = await openDb();
+    const encrypted = await encrypt(JSON.stringify(data));
+    await db.runAsync(
+      'INSERT OR REPLACE INTO chat_cache (business_id, data, cached_at) VALUES (?, ?, ?)',
+      [businessId, encrypted, Date.now()],
+    );
+  } catch {}
+}
+
+export async function getChatCache(businessId: string): Promise<unknown | null> {
+  try {
+    const db = await openDb();
+    const row = await db.getFirstAsync<{ data: string }>(
+      'SELECT data FROM chat_cache WHERE business_id = ?',
+      [businessId],
+    );
+    if (!row) return null;
+    const decrypted = await decrypt(row.data);
+    return JSON.parse(decrypted);
+  } catch {
+    return null;
+  }
+}
+
+// ─── Market read cache ──────────────────────────────────────────────────────────
+
+export async function saveMarketCache(data: unknown[]): Promise<void> {
+  try {
+    const db = await openDb();
+    const encrypted = await encrypt(JSON.stringify(data));
+    await db.runAsync(
+      'INSERT OR REPLACE INTO market_cache (id, data, cached_at) VALUES (1, ?, ?)',
+      [encrypted, Date.now()],
+    );
+  } catch {}
+}
+
+export async function getMarketCache(): Promise<unknown[] | null> {
+  try {
+    const db = await openDb();
+    const row = await db.getFirstAsync<{ data: string }>('SELECT data FROM market_cache WHERE id = 1');
+    if (!row) return null;
+    const decrypted = await decrypt(row.data);
+    return JSON.parse(decrypted) as unknown[];
+  } catch {
+    return null;
+  }
+}
+
+// ─── Cache timestamp helper ─────────────────────────────────────────────────────
+// Returns the epoch-ms timestamp when a cache table was last written for a given key.
+// Used by stores to expose staleness info to the UI.
+
+type CacheTable =
+  | 'product_cache'
+  | 'ventes_cache'
+  | 'expense_cache'
+  | 'fournisseur_cache'
+  | 'commande_cache'
+  | 'dashboard_kpi_cache'
+  | 'chat_cache'
+  | 'market_cache';
+
+export async function getCacheTimestamp(table: CacheTable, key?: string): Promise<number | null> {
+  try {
+    const db = await openDb();
+    if (table === 'market_cache') {
+      const row = await db.getFirstAsync<{ cached_at: number }>('SELECT cached_at FROM market_cache WHERE id = 1');
+      return row?.cached_at ?? null;
+    }
+    const keyCol = table === 'ventes_cache' ? 'cache_key' : 'business_id';
+    const row = await db.getFirstAsync<{ cached_at: number }>(
+      `SELECT cached_at FROM ${table} WHERE ${keyCol} = ?`,
+      [key ?? ''],
+    );
+    return row?.cached_at ?? null;
+  } catch {
+    return null;
+  }
 }

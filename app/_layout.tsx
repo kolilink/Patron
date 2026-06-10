@@ -1,4 +1,4 @@
-import { useEffect } from 'react';
+import { useEffect, useRef } from 'react';
 import { Stack } from 'expo-router';
 import * as SplashScreen from 'expo-splash-screen';
 import { useFonts } from 'expo-font';
@@ -8,9 +8,13 @@ import { openDb } from '@/lib/db';
 
 SplashScreen.preventAutoHideAsync();
 
+// Stable reference — Ionicons.font is a getter that creates a new object on every
+// access, which breaks React 18's useSyncExternalStore snapshot check in useFonts.
+const IONICONS_FONT = Ionicons.font;
+
 export default function RootLayout() {
   const initialize = useAuthStore(s => s.initialize);
-  const [fontsLoaded] = useFonts(Ionicons.font);
+  const [fontsLoaded] = useFonts(IONICONS_FONT);
 
   useEffect(() => {
     if (!fontsLoaded) return;

@@ -11,8 +11,8 @@ import {
 import { router } from 'expo-router';
 import { SafeAreaView } from 'react-native-safe-area-context';
 import { Button } from '@/src/components/ui/Button';
-import { Input } from '@/src/components/ui/Input';
 import { Text } from '@/src/components/ui/Text';
+import { PhoneInput } from '@/src/components/ui/PhoneInput';
 import { colors, palette, radius, spacing } from '@/src/theme';
 import { useAuthStore } from '@/stores/auth';
 import { supabase } from '@/lib/supabase';
@@ -23,9 +23,11 @@ export default function ConnexionScreen() {
   const { loginWithPhone, restorePhoneSession, session, loading, error, clearError } = useAuthStore();
   const [step, setStep] = useState<'phone' | 'attente'>('phone');
   const [phone, setPhone] = useState('');
+  const [phoneComplete, setPhoneComplete] = useState(false);
+  const [resetKey, setResetKey] = useState(0);
   const [token, setToken] = useState('');
   const [checking, setChecking] = useState(false);
-  const [notYet, setNotYet] = useState(false);
+  const [showRetryHint, setShowRetryHint] = useState(false);
   const channelRef = useRef<ReturnType<typeof supabase.channel> | null>(null);
   const verificationIdRef = useRef('');
   const normalizedPhoneRef = useRef('');
@@ -71,7 +73,14 @@ export default function ConnexionScreen() {
     };
   }, [step]);
 
-  // AppState: fires when user comes back from WhatsApp
+  // Show retry hint after 90 s if still waiting
+  useEffect(() => {
+    if (step !== 'attente') { setShowRetryHint(false); return; }
+    const t = setTimeout(() => setShowRetryHint(true), 90_000);
+    return () => clearTimeout(t);
+  }, [step]);
+
+  // AppState: auto-check when user comes back from WhatsApp
   useEffect(() => {
     if (step !== 'attente') return;
     const sub = AppState.addEventListener('change', (nextState) => {
@@ -84,7 +93,6 @@ export default function ConnexionScreen() {
     const id = verificationIdRef.current;
     if (!id) return;
     setChecking(true);
-    setNotYet(false);
     const { data } = await supabase
       .from('phone_verifications')
       .select('status')
@@ -93,8 +101,6 @@ export default function ConnexionScreen() {
     setChecking(false);
     if (data?.status === 'verifie') {
       restorePhoneSession(normalizedPhoneRef.current, id);
-    } else {
-      setNotYet(true);
     }
   };
 
@@ -108,6 +114,9 @@ export default function ConnexionScreen() {
       setToken(result.token);
       verificationIdRef.current = result.verificationId;
       setStep('attente');
+      // Immediate check — catches demo account (already verifie on insert).
+      // Realtime only fires on UPDATE; the demo row is inserted pre-verified.
+      checkVerificationStatus();
     }
   };
 
@@ -139,7 +148,7 @@ export default function ConnexionScreen() {
             <Text variant="body" color="secondary" style={styles.sub}>
               {step === 'phone'
                 ? 'Entrez votre numéro WhatsApp pour accéder à votre compte.'
-                : "Appuyez sur le bouton. WhatsApp s'ouvrira avec le code déjà rempli. Envoyez simplement le message."}
+                : 'Ouvrez WhatsApp et envoyez le code. On détecte automatiquement.'}
             </Text>
           </View>
 
@@ -151,15 +160,11 @@ export default function ConnexionScreen() {
 
           {step === 'phone' ? (
             <View style={styles.form}>
-              <Input
+              <PhoneInput
                 label="Votre numéro WhatsApp"
-                value={phone}
-                onChangeText={setPhone}
-                placeholder="+224, +33, +1..."
-                keyboardType="phone-pad"
-                returnKeyType="done"
-                onSubmitEditing={handleContinuer}
+                onChange={(e164, complete) => { setPhone(e164); setPhoneComplete(complete); }}
                 autoFocus
+                resetKey={resetKey}
               />
               <Button
                 label="Continuer"
@@ -167,6 +172,7 @@ export default function ConnexionScreen() {
                 onPress={handleContinuer}
                 fullWidth
                 size="lg"
+                disabled={!phoneComplete}
               />
             </View>
           ) : (
@@ -180,31 +186,23 @@ export default function ConnexionScreen() {
 
               <Button
                 label="Ouvrir WhatsApp"
-                onPress={() =>
-                  Linking.openURL(`https://wa.me/${TWILIO_WHATSAPP_NUMBER}?text=${encodeURIComponent(token)}`)
-                }
+                onPress={() => Linking.openURL(`https://wa.me/${TWILIO_WHATSAPP_NUMBER}?text=${encodeURIComponent(token)}`)}
                 fullWidth
                 size="lg"
               />
 
-              <Button
-                label="J'ai envoyé le message →"
-                variant="secondary"
-                onPress={checkVerificationStatus}
-                loading={checking || loading}
-                fullWidth
-              />
-
-              {notYet ? (
-                <Text variant="bodySmall" color="secondary" style={{ textAlign: 'center' }}>
-                  Message pas encore reçu — patientez quelques secondes puis réessayez.
-                </Text>
-              ) : null}
-
               <View style={styles.waitingRow}>
                 <ActivityIndicator size="small" color={palette.primary} />
-                <Text variant="body" color="secondary">En attente de confirmation…</Text>
+                <Text variant="body" color="secondary">
+                  {checking ? 'Vérification en cours…' : 'En attente de confirmation…'}
+                </Text>
               </View>
+
+              {showRetryHint && (
+                <Text variant="caption" color="secondary" style={{ textAlign: 'center' }}>
+                  Vous n'avez pas reçu le message ? Vérifiez que ce numéro est actif sur WhatsApp, puis changez de numéro ci-dessous.
+                </Text>
+              )}
 
               <Button
                 label="Changer de numéro"
@@ -213,7 +211,7 @@ export default function ConnexionScreen() {
                   clearError();
                   setStep('phone');
                   setToken('');
-                  setNotYet(false);
+                  setResetKey(k => k + 1);
                   verificationIdRef.current = '';
                   normalizedPhoneRef.current = '';
                   if (channelRef.current) {
@@ -225,7 +223,7 @@ export default function ConnexionScreen() {
               <Button
                 label="Besoin d'aide ? Contactez le support"
                 variant="ghost"
-                onPress={() => Linking.openURL('https://wa.me/12672421843')}
+                onPress={() => Linking.openURL('https://wa.me/16094454809')}
               />
             </View>
           )}

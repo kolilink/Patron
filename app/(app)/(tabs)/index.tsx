@@ -1,14 +1,19 @@
-import { useCallback, useState } from 'react';
-import { Alert, Pressable, ScrollView, StyleSheet, View } from 'react-native';
+import { useCallback, useEffect, useRef, useState } from 'react';
+import { Animated, Easing, Pressable, ScrollView, StyleSheet, View } from 'react-native';
 import { SafeAreaView } from 'react-native-safe-area-context';
 import { router, useFocusEffect } from 'expo-router';
+import { Ionicons } from '@expo/vector-icons';
 import { Button } from '@/src/components/ui/Button';
 import { Card } from '@/src/components/ui/Card';
 import { Text } from '@/src/components/ui/Text';
-import { palette, spacing } from '@/src/theme';
+import { palette, radius, spacing } from '@/src/theme';
 import { useAuthStore } from '@/stores/auth';
 import { useProductStore } from '@/stores/products';
+import { useVentesStore } from '@/stores/ventes';
+import { useChatStore } from '@/stores/chat';
 import { supabase } from '@/lib/supabase';
+import { isNetworkError } from '@/lib/sync';
+import { saveDashboardKpiCache, getDashboardKpiCache, getKV, setKV } from '@/lib/db';
 
 
 interface KPIs {
@@ -45,9 +50,34 @@ function KpiCard({ label, value, sub, onPress, accent }: {
   );
 }
 
+function OnboardingStep({ number, label, done, active }: {
+  number: number; label: string; done: boolean; active: boolean;
+}) {
+  return (
+    <View style={styles.onboardingStep}>
+      <View style={[
+        styles.onboardingBubble,
+        done   && styles.onboardingBubbleDone,
+        active && styles.onboardingBubbleActive,
+      ]}>
+        <Text variant="label" style={{ color: done || active ? palette.textInverse : palette.textDisabled }}>
+          {done ? '✓' : String(number)}
+        </Text>
+      </View>
+      <Text variant="body" style={{
+        flex: 1,
+        color: done ? palette.textSecondary : active ? palette.textPrimary : palette.textDisabled,
+        textDecorationLine: done ? 'line-through' : 'none',
+      }}>
+        {label}
+      </Text>
+    </View>
+  );
+}
+
 export default function AccueilScreen() {
   const session = useAuthStore(s => s.session);
-  const selectBusiness = useAuthStore(s => s.selectBusiness);
+  const openBusinessPicker = useAuthStore(s => s.openBusinessDrawer);
   const business = session?.activeBusiness;
   const role = session?.activeMembership?.role;
   const isInvestisseur = role === 'investisseur';
@@ -56,37 +86,87 @@ export default function AccueilScreen() {
   const userId = session?.user.id ?? '';
   const currency = business?.currency ?? 'GNF';
   const memberships = session?.memberships ?? [];
-
-  const openBusinessPicker = useCallback(() => {
-    const others = memberships.filter(m => m.business_id !== businessId);
-    const buttons: { text: string; onPress?: () => void; style?: 'cancel' | 'destructive' }[] = [];
-    others.forEach(m => {
-      buttons.push({
-        text: (m.business as { name?: string })?.name ?? m.business_id,
-        onPress: () => { selectBusiness(m.business_id); router.replace('/(app)/(tabs)/'); },
-      });
-    });
-    if (memberships.length < 2) {
-      buttons.push({ text: '+ Rejoindre un commerce', onPress: () => router.push('/(app)/onboarding/rejoindre') });
-    }
-    buttons.push({ text: 'Annuler', style: 'cancel' });
-    Alert.alert(business?.name ?? '', 'Changer de commerce', buttons);
-  }, [memberships, businessId, business, selectBusiness]);
+  const totalUnread = useChatStore(s => s.boutiqueUnread + s.marcheUnread);
 
   const { products, fetchProducts } = useProductStore();
   const [kpis, setKpis] = useState<KPIs | null>(null);
   const [bestSellers, setBestSellers] = useState<BestSeller[]>([]);
   const [loading, setLoading] = useState(true);
+  const [isOffline, setIsOffline] = useState(false);
+
+  const welcomeBtnScale = useRef(new Animated.Value(1)).current;
+  const welcomeBtnOpacity = useRef(new Animated.Value(1)).current;
+
+  const isOwner = !isInvestisseur && !isVendeur;
+
+  // null = not yet checked, true = dismissed, false = active
+  const [onboardingDismissed, setOnboardingDismissed] = useState<boolean | null>(null);
+
+  useEffect(() => {
+    if (!userId || !businessId || !isOwner) { setOnboardingDismissed(true); return; }
+    const key = `onboarding_done_${userId}_${businessId}`;
+    getKV(key).then(val => {
+      if (val !== null) { setOnboardingDismissed(true); return; }
+      // Auto-dismiss for businesses older than 7 days — they predate this onboarding flow
+      const ageMs = business?.created_at ? Date.now() - new Date(business.created_at).getTime() : Infinity;
+      if (ageMs > 7 * 24 * 60 * 60 * 1000) {
+        setKV(key, '1').catch(() => {});
+        setOnboardingDismissed(true);
+      } else {
+        setOnboardingDismissed(false);
+      }
+    }).catch(() => setOnboardingDismissed(true));
+  }, [userId, businessId, isOwner, business?.created_at]);
+
+  const step2Done = products.length > 0;
+  const step3Done = (kpis?.revenue_month ?? 0) > 0;
+  const showOnboarding = isOwner && onboardingDismissed === false;
+
+  // Permanently write flag once all steps complete
+  useEffect(() => {
+    if (!showOnboarding || loading || !step2Done || !step3Done) return;
+    setKV(`onboarding_done_${userId}_${businessId}`, '1').catch(() => {});
+    setOnboardingDismissed(true);
+  }, [showOnboarding, loading, step2Done, step3Done, userId, businessId]);
+
+  useEffect(() => {
+    if (showOnboarding && !loading) {
+      const easing = Easing.inOut(Easing.sin);
+      const loop = Animated.loop(
+        Animated.sequence([
+          Animated.parallel([
+            Animated.timing(welcomeBtnScale,   { toValue: 1.06, duration: 2000, easing, useNativeDriver: true }),
+            Animated.timing(welcomeBtnOpacity, { toValue: 0.85, duration: 2000, easing, useNativeDriver: true }),
+          ]),
+          Animated.parallel([
+            Animated.timing(welcomeBtnScale,   { toValue: 1,    duration: 2000, easing, useNativeDriver: true }),
+            Animated.timing(welcomeBtnOpacity, { toValue: 1,    duration: 2000, easing, useNativeDriver: true }),
+          ]),
+        ])
+      );
+      loop.start();
+      return () => loop.stop();
+    } else {
+      welcomeBtnScale.setValue(1);
+      welcomeBtnOpacity.setValue(1);
+    }
+  }, [showOnboarding, loading]);
 
   const loadAll = useCallback(async () => {
     if (!businessId) return;
+    setIsOffline(false);
     setLoading(true);
-    if (isInvestisseur) {
-      await loadKpis();
-    } else {
-      await Promise.all([fetchProducts(businessId, userId), loadKpis(), loadBestSellers()]);
+    try {
+      if (isInvestisseur) {
+        await Promise.all([loadKpis(), loadBestSellers()]);
+      } else {
+        await Promise.all([fetchProducts(businessId, userId), loadKpis(), loadBestSellers()]);
+      }
+    } catch (err) {
+      if (isNetworkError(err)) setIsOffline(true);
+    } finally {
+      setLoading(false);
     }
-    setLoading(false);
   }, [businessId, userId, isInvestisseur]);
 
   // Reload every time this tab gains focus (catches sales made in caisse)
@@ -98,7 +178,8 @@ export default function AccueilScreen() {
 
   const loadKpis = async () => {
     if (isInvestisseur) {
-      const { data } = await supabase.rpc('get_business_kpis', { p_business_id: businessId });
+      const { data, error: kpiErr } = await supabase.rpc('get_business_kpis', { p_business_id: businessId });
+      if (kpiErr) throw kpiErr;
       if (data) {
         setKpis({
           revenue_today:    (data.revenue_today    ?? 0) / 100,
@@ -163,6 +244,35 @@ export default function AccueilScreen() {
         .eq('status', 'approuve')
         .gte('date', monthStart),
     ]);
+    const firstErr = [todayRes, yestRes, monthRes, creditRes, expensesRes].find(r => r.error);
+    if (firstErr?.error) {
+      if (isNetworkError(firstErr.error)) {
+        // Load snapshot from SQLite for historical numbers (yesterday, month, expenses)
+        const cached = await getDashboardKpiCache(businessId) as KPIs | null;
+
+        // Derive today's live numbers from ventes store (includes offline queued sales)
+        const sales = useVentesStore.getState().sales;
+        const todaySales = sales.filter(s => (s.sale_date ?? s.created_at.split('T')[0]) === today && s.status !== 'annule');
+        const revenueToday = todaySales.filter(s => !s.is_credit).reduce((sum, s) => sum + s.total_amount, 0);
+        const creditSales = sales.filter(s => s.status === 'credit');
+        const creditTotalOffline = creditSales.reduce((sum, s) => sum + (s.total_amount - (s.amount_paid ?? 0)), 0);
+        const creditCountOffline = new Set(creditSales.map(s => s.customer_name).filter(Boolean)).size
+          + creditSales.filter(s => !s.customer_name).length;
+
+        setKpis({
+          revenue_today: revenueToday,
+          revenue_yesterday: cached?.revenue_yesterday ?? 0,
+          revenue_month: cached?.revenue_month ?? 0,
+          sales_today: todaySales.length,
+          credit_total: creditTotalOffline,
+          credit_count: creditCountOffline,
+          low_stock: lowStock,
+          expenses_month: cached?.expenses_month ?? 0,
+        });
+        return;
+      }
+      throw firstErr.error;
+    }
 
     const sum = (rows: { total_amount?: number; amount?: number }[] | null, key: 'total_amount' | 'amount' = 'total_amount') =>
       (rows ?? []).reduce((s, r) => s + (r[key] ?? 0), 0) / 100;
@@ -198,7 +308,7 @@ export default function AccueilScreen() {
       creditCount = clientsOwing.size + anonCount;
     }
 
-    setKpis({
+    const freshKpis: KPIs = {
       revenue_today: sum(todayRes.data as { total_amount: number }[] | null),
       revenue_yesterday: sum(yestRes.data as { total_amount: number }[] | null),
       revenue_month: sum(monthRes.data as { total_amount: number }[] | null),
@@ -207,18 +317,21 @@ export default function AccueilScreen() {
       credit_count: creditCount,
       low_stock: lowStock,
       expenses_month: sum(expensesRes.data as { amount: number }[] | null, 'amount'),
-    });
+    };
+    setKpis(freshKpis);
+    void saveDashboardKpiCache(businessId, freshKpis);
   };
 
   const loadBestSellers = async () => {
     const now = new Date();
     const monthStart = `${now.getFullYear()}-${String(now.getMonth() + 1).padStart(2, '0')}-01`;
 
-    const { data } = await supabase.rpc('get_best_sellers', {
+    const { data, error: bsErr } = await supabase.rpc('get_best_sellers', {
       p_business_id: businessId,
       p_month_start: monthStart,
       p_limit:       5,
     });
+    if (bsErr) throw bsErr;
 
     setBestSellers(
       (data ?? []).map((r: BestSeller) => ({
@@ -242,15 +355,34 @@ export default function AccueilScreen() {
 
   return (
     <SafeAreaView style={styles.safe} edges={['top']}>
+      {isOffline && (
+        <View style={styles.offlineBanner}>
+          <Text variant="caption" color="secondary">Pas de réseau · Informations non actualisées</Text>
+        </View>
+      )}
+
       <ScrollView contentContainerStyle={styles.content} showsVerticalScrollIndicator={false}>
 
         {/* Header */}
         <View style={styles.header}>
-          <Pressable onPress={openBusinessPicker} style={({ pressed }) => [{ opacity: pressed ? 0.6 : 1 }]}>
-            <View style={{ flexDirection: 'row', alignItems: 'center', gap: 6 }}>
-              <Text variant="h3">{business?.name}</Text>
-              <Text variant="caption" color="secondary">⌄</Text>
-            </View>
+          <View style={{ flexDirection: 'row', alignItems: 'center' }}>
+            <Pressable onPress={openBusinessPicker} hitSlop={10} style={({ pressed }) => [{ opacity: pressed ? 0.5 : 1 }]}>
+              <Ionicons name="menu" size={24} color="#111827" />
+            </Pressable>
+            <Text style={{ marginLeft: 12, fontSize: 18, fontWeight: '600', color: '#111827' }} numberOfLines={1}>
+              {business?.name}
+            </Text>
+          </View>
+          <Pressable
+            onPress={() => router.push('/(app)/discussions')}
+            style={({ pressed }) => [styles.chatBtn, { opacity: pressed ? 0.7 : 1 }]}
+          >
+            <Ionicons name="chatbubbles-outline" size={24} color={palette.textSecondary} />
+            {totalUnread > 0 && (
+              <View style={styles.chatBadge}>
+                <Text style={styles.chatBadgeText}>{totalUnread > 99 ? '99+' : String(totalUnread)}</Text>
+              </View>
+            )}
           </Pressable>
         </View>
 
@@ -258,21 +390,23 @@ export default function AccueilScreen() {
           <Text variant="body" color="secondary" style={{ textAlign: 'center', marginTop: spacing[6] }}>
             Chargement…
           </Text>
-        ) : !isInvestisseur && !isVendeur && products.length === 0 ? (
-          /* ── Welcome state: no products yet (admin/manager) ── */
-          <Card style={styles.welcome}>
-            <Text style={styles.welcomeEmoji}>🎉</Text>
-            <Text variant="h4" style={{ textAlign: 'center' }}>Félicitations !</Text>
-            <Text variant="body" color="secondary" style={{ textAlign: 'center' }}>
-              Votre commerce <Text variant="label">{business?.name}</Text> est prêt.{'\n'}
-              Commencez par ajouter vos premiers produits.
-            </Text>
-            <Button
-              label="Ajouter un produit"
-              onPress={() => router.push('/(app)/(tabs)/catalogue')}
-              fullWidth
-              style={{ marginTop: spacing[2] }}
-            />
+        ) : showOnboarding ? (
+          /* ── Onboarding tracker: persisted flag, never re-shows once dismissed ── */
+          <Card style={styles.onboarding}>
+            <OnboardingStep number={1} label="Votre commerce a été créé" done                      active={false} />
+            <OnboardingStep number={2} label="Ajouter un produit"        done={step2Done}            active={!step2Done} />
+            <OnboardingStep number={3} label="Faire une vente"           done={step3Done}            active={step2Done && !step3Done} />
+            <Animated.View style={{ width: '100%', marginTop: spacing[4], opacity: welcomeBtnOpacity, transform: [{ scale: welcomeBtnScale }] }}>
+              <Button
+                label={!step2Done ? 'Ajouter un produit' : 'Faire une vente'}
+                onPress={() => !step2Done
+                  ? router.push({ pathname: '/(app)/(tabs)/catalogue', params: { openForm: '1' } })
+                  : router.push('/(app)/(tabs)/vendre')
+                }
+                fullWidth
+                size="lg"
+              />
+            </Animated.View>
           </Card>
         ) : isVendeur && products.length === 0 ? (
           /* ── Empty state for vendeur: no products configured yet ── */
@@ -305,10 +439,7 @@ export default function AccueilScreen() {
               </View>
               <View style={styles.heroComparison}>
                 <Text variant="caption" color="secondary">
-                  Hier: {fmt(kpis?.revenue_yesterday ?? 0, currency)}
-                </Text>
-                <Text variant="caption" style={{ color: deltaColor, marginLeft: spacing[1] }}>
-                  {deltaArrow}
+                  Hier vous avez fait {fmt(kpis?.revenue_yesterday ?? 0, currency)}
                 </Text>
               </View>
             </Card>
@@ -374,7 +505,16 @@ export default function AccueilScreen() {
 const styles = StyleSheet.create({
   safe: { flex: 1, backgroundColor: palette.background },
   content: { padding: spacing[5], gap: spacing[4], paddingBottom: spacing[10] },
-  header: { paddingBottom: spacing[2] },
+  header: { paddingBottom: spacing[2], flexDirection: 'row', alignItems: 'center', justifyContent: 'space-between' },
+  chatBtn: { padding: spacing[1] },
+  chatBadge: {
+    position: 'absolute', top: -2, right: -2,
+    minWidth: 16, height: 16, borderRadius: radius.full,
+    backgroundColor: palette.danger,
+    alignItems: 'center', justifyContent: 'center',
+    paddingHorizontal: 3,
+  },
+  chatBadgeText: { fontSize: 9, fontWeight: '700' as const, color: palette.textInverse, lineHeight: 12 },
 
   // Zone 1
   heroCard: {},
@@ -401,9 +541,22 @@ const styles = StyleSheet.create({
   // Zone 3
   monthLine: { textAlign: 'center', paddingVertical: spacing[2] },
 
+  // Offline banner — slim ambient strip, Jony Ive: barely there, no action needed
+  offlineBanner: {
+    alignItems: 'center', justifyContent: 'center',
+    paddingVertical: spacing[1],
+    borderBottomWidth: StyleSheet.hairlineWidth,
+    borderBottomColor: palette.border,
+  },
+
   // Welcome state
   welcome: { alignItems: 'center', gap: spacing[4], paddingVertical: spacing[8], paddingHorizontal: spacing[6] },
-  welcomeEmoji: { fontSize: 52 },
+  welcomeEmoji: { fontSize: 52, lineHeight: 72 },
+  onboarding: { gap: spacing[2], paddingVertical: spacing[6], paddingHorizontal: spacing[5] },
+  onboardingStep: { flexDirection: 'row', alignItems: 'center', gap: spacing[3], paddingVertical: spacing[2] },
+  onboardingBubble: { width: 32, height: 32, borderRadius: radius.full, borderWidth: 1.5, borderColor: palette.border, alignItems: 'center', justifyContent: 'center' },
+  onboardingBubbleDone: { backgroundColor: palette.success, borderColor: palette.success },
+  onboardingBubbleActive: { backgroundColor: palette.primary, borderColor: palette.primary },
 
   // Best sellers
   section: {

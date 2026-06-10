@@ -1,88 +1,142 @@
-import { useState } from 'react';
-import { Alert, KeyboardAvoidingView, Linking, Platform, Pressable, ScrollView, StyleSheet, TextInput, View } from 'react-native';
+import { useEffect, useRef, useState } from 'react';
+import { Alert, Animated, KeyboardAvoidingView, Linking, Platform, Pressable, ScrollView, StyleSheet, TextInput, View } from 'react-native';
 import { SafeAreaView } from 'react-native-safe-area-context';
 import { router } from 'expo-router';
-import { Button } from '@/src/components/ui/Button';
+import { Ionicons } from '@expo/vector-icons';
 import { Card } from '@/src/components/ui/Card';
 import { Input } from '@/src/components/ui/Input';
 import { Text } from '@/src/components/ui/Text';
 import { palette, spacing, radius } from '@/src/theme';
 import { useAuthStore } from '@/stores/auth';
+import { generateFallbackName } from '@/lib/id';
 import { supabase } from '@/lib/supabase';
 import type { Business } from '@/src/types';
 
-const CURRENCIES = ['GNF', 'XOF', 'USD', 'EUR'];
+// Must match the list in creer.tsx — all currencies we support
+const CURRENCIES = ['GNF', 'XOF', 'XAF', 'NGN', 'GHS', 'MAD', 'DZD', 'TND', 'EGP', 'KES', 'ZAR', 'ETB', 'AED', 'SAR', 'USD', 'EUR', 'GBP', 'CNY', 'CAD', 'CHF', 'INR'];
+
+const CURRENCY_NAMES: Record<string, string> = {
+  GNF: 'Franc Guinéen',
+  XOF: 'Franc CFA (UEMOA)',
+  XAF: 'Franc CFA (CEMAC)',
+  NGN: 'Naira',
+  GHS: 'Cedi',
+  MAD: 'Dirham marocain',
+  USD: 'Dollar américain',
+  EUR: 'Euro',
+};
 
 export default function ParametresScreen() {
-  const session = useAuthStore(s => s.session);
+  const session  = useAuthStore(s => s.session);
   const business = session?.activeBusiness;
-  const userId = session?.user.id ?? '';
-  const role = session?.activeMembership?.role;
-  const isAdmin = role === 'administrateur';
+  const userId   = session?.user.id ?? '';
+  const role     = session?.activeMembership?.role;
+  const isAdmin  = role === 'administrateur';
 
-  const logout = useAuthStore(s => s.logout);
-  const [bizName, setBizName] = useState(business?.name ?? '');
+  const [bizName,  setBizName]  = useState(business?.name ?? '');
   const [currency, setCurrency] = useState(business?.currency ?? 'GNF');
-  const [saving, setSaving] = useState(false);
-
   const [userName, setUserName] = useState(session?.user.name ?? '');
-  const [savingUser, setSavingUser] = useState(false);
+  const [saving,   setSaving]   = useState(false);
+  const [hasSales, setHasSales] = useState<boolean | null>(null);
+
+  // Check if any sales exist — currency locks once this is true
+  useEffect(() => {
+    if (!business?.id) return;
+    supabase
+      .from('sale_orders')
+      .select('id', { count: 'exact', head: true })
+      .eq('business_id', business.id)
+      .then(({ count }) => setHasSales((count ?? 0) > 0));
+  }, [business?.id]);
+
+  const isDirty = (isAdmin
+    ? (bizName.trim() !== (business?.name ?? '') || (hasSales === false && currency !== (business?.currency ?? 'GNF')))
+    : false
+  ) || userName.trim() !== (session?.user.name ?? '');
+
+  const breathAnim = useRef(new Animated.Value(1)).current;
+  const loopRef    = useRef<Animated.CompositeAnimation | null>(null);
+
+  useEffect(() => {
+    if (isDirty) {
+      loopRef.current = Animated.loop(
+        Animated.sequence([
+          Animated.timing(breathAnim, { toValue: 0.35, duration: 850, useNativeDriver: true }),
+          Animated.timing(breathAnim, { toValue: 1,    duration: 850, useNativeDriver: true }),
+        ]),
+      );
+      loopRef.current.start();
+    } else {
+      loopRef.current?.stop();
+      loopRef.current = null;
+      Animated.timing(breathAnim, { toValue: 1, duration: 150, useNativeDriver: true }).start();
+    }
+    return () => { loopRef.current?.stop(); };
+  }, [isDirty]);
 
   const [showDeleteConfirm, setShowDeleteConfirm] = useState(false);
-  const [deleteInput, setDeleteInput] = useState('');
-  const [deleting, setDeleting] = useState(false);
+  const [deleteInput,       setDeleteInput]       = useState('');
+  const [deleting,          setDeleting]          = useState(false);
 
-  const saveBusiness = async () => {
-    const trimmed = bizName.trim();
-    if (!trimmed) { Alert.alert('Nom requis'); return; }
+  const saveAll = async () => {
+    const trimmedBiz  = bizName.trim();
+    const trimmedUser = userName.trim();
+    if (isAdmin && !trimmedBiz) { Alert.alert('Donnez un nom au commerce :)'); return; }
+    if (!trimmedUser) { Alert.alert('Entrez votre nom :)'); return; }
+
     setSaving(true);
-    const { error } = await supabase
-      .from('businesses')
-      .update({ name: trimmed, currency })
-      .eq('id', business?.id ?? '');
+
+    const saveBiz = async () => {
+      // Never change currency after first sale — UI + API guard
+      const patch = hasSales ? { name: trimmedBiz } : { name: trimmedBiz, currency };
+      const { error } = await supabase.from('businesses')
+        .update(patch)
+        .eq('id', business?.id ?? '');
+      if (!error) {
+        useAuthStore.setState(state => {
+          if (!state.session?.activeBusiness) return state;
+          const updated: Business = { ...state.session.activeBusiness, name: trimmedBiz, ...(hasSales ? {} : { currency }) };
+          return {
+            session: {
+              ...state.session,
+              activeBusiness: updated,
+              memberships: state.session.memberships.map(m =>
+                m.business_id === business?.id ? { ...m, business: updated } : m,
+              ),
+            },
+          };
+        });
+      }
+      return error;
+    };
+
+    const saveProfile = async () => {
+      const { error } = await supabase.from('profiles')
+        .update({ name: trimmedUser })
+        .eq('id', userId);
+      if (!error) {
+        useAuthStore.setState(state => {
+          if (!state.session) return state;
+          return { session: { ...state.session, user: { ...state.session.user, name: trimmedUser } } };
+        });
+      }
+      return error;
+    };
+
+    const errors = await Promise.all(isAdmin ? [saveBiz(), saveProfile()] : [saveProfile()]);
     setSaving(false);
-    if (error) { Alert.alert('Erreur', error.message); return; }
 
-    useAuthStore.setState(state => {
-      if (!state.session?.activeBusiness) return state;
-      const updated: Business = { ...state.session.activeBusiness, name: trimmed, currency };
-      return {
-        session: {
-          ...state.session,
-          activeBusiness: updated,
-          memberships: state.session.memberships.map(m =>
-            m.business_id === business?.id ? { ...m, business: updated } : m,
-          ),
-        },
-      };
-    });
-
-    Alert.alert('Commerce mis à jour', `"${trimmed}" est maintenant actif.`);
-  };
-
-  const saveUser = async () => {
-    const trimmed = userName.trim();
-    if (!trimmed) { Alert.alert('Nom requis'); return; }
-    setSavingUser(true);
-    const { error } = await supabase
-      .from('profiles')
-      .update({ name: trimmed })
-      .eq('id', userId);
-    setSavingUser(false);
-    if (error) { Alert.alert('Erreur', error.message); return; }
-
-    useAuthStore.setState(state => {
-      if (!state.session) return state;
-      return { session: { ...state.session, user: { ...state.session.user, name: trimmed } } };
-    });
-
-    Alert.alert('Profil mis à jour', `Votre nom est maintenant "${trimmed}".`);
+    if (errors.some(Boolean)) {
+      Alert.alert('Pas tout enregistré. On reprend :)');
+    } else {
+      Alert.alert('Modifications enregistrées');
+    }
   };
 
   const handleLeave = () => {
     Alert.alert(
       `Quitter ${business?.name ?? 'ce commerce'} ?`,
-      "Vous perdrez l'accès à ce commerce. Un administrateur peut vous réinviter.",
+      "Vous perdrez l'accès à ce commerce. Un gérant peut vous réinviter.",
       [
         { text: 'Annuler', style: 'cancel' },
         {
@@ -94,9 +148,7 @@ export default function ParametresScreen() {
             if (error) { Alert.alert('Erreur', error.message); return; }
 
             const remaining = (session?.memberships ?? []).filter(m => m.id !== memId);
-
             if (remaining.length > 0) {
-              // Switch to the first remaining business and stay in the app
               const first = remaining[0];
               useAuthStore.setState(state => {
                 if (!state.session) return state;
@@ -111,17 +163,9 @@ export default function ParametresScreen() {
               });
               router.replace('/(app)/(tabs)/');
             } else {
-              // No more businesses — go straight to welcome
               useAuthStore.setState(state => {
                 if (!state.session) return state;
-                return {
-                  session: {
-                    ...state.session,
-                    memberships: [],
-                    activeBusiness: null,
-                    activeMembership: null,
-                  },
-                };
+                return { session: { ...state.session, memberships: [], activeBusiness: null, activeMembership: null } };
               });
               router.replace('/(welcome)/');
             }
@@ -135,26 +179,21 @@ export default function ParametresScreen() {
     if (deleteInput !== 'SUPPRIMER') return;
     setDeleting(true);
 
-    // Check: admin of a business with other active members → block
-    const memberships = session?.memberships ?? [];
-    const adminBusinessIds = memberships
-      .filter(m => m.role === 'administrateur')
-      .map(m => m.business_id);
+    const memberships    = session?.memberships ?? [];
+    const adminBizIds    = memberships.filter(m => m.role === 'administrateur').map(m => m.business_id);
 
-    if (adminBusinessIds.length > 0) {
-      const { data: otherMembers } = await supabase
-        .from('memberships')
-        .select('business_id')
-        .in('business_id', adminBusinessIds)
-        .neq('user_id', userId);
+    if (adminBizIds.length > 0) {
+      const { data: others } = await supabase
+        .from('memberships').select('business_id')
+        .in('business_id', adminBizIds).neq('user_id', userId);
 
-      if (otherMembers && otherMembers.length > 0) {
+      if (others && others.length > 0) {
         setDeleting(false);
         setShowDeleteConfirm(false);
         setDeleteInput('');
         Alert.alert(
           'Suppression impossible',
-          "Vous êtes administrateur d'un commerce avec des membres actifs.\n\nRetirez tous les membres ou transférez votre rôle avant de supprimer votre compte.",
+          "Vous êtes gérant d'un commerce avec des membres actifs.\n\nRetirez tous les membres avant de supprimer votre compte.",
         );
         return;
       }
@@ -163,31 +202,34 @@ export default function ParametresScreen() {
     const { error } = await supabase.rpc('delete_my_account');
     if (error) {
       setDeleting(false);
-      Alert.alert('Erreur', "La suppression a échoué. Contactez le support si le problème persiste.");
+      Alert.alert('Ça n\'a pas fonctionné. Écrivez-nous si ça continue :)');
       return;
     }
-
-    // RPC succeeded — sign out locally (auth session is now invalid)
     await useAuthStore.getState().logout();
   };
 
-  const openPrivacy = () => Linking.openURL('https://patron.kolilink.com/privacy.html');
-  const openSupport = () => Linking.openURL('https://wa.me/12672421843');
-
   return (
     <SafeAreaView style={styles.safe} edges={['top']}>
+
+      {/* Header */}
       <View style={styles.hdr}>
         <Pressable onPress={() => router.back()}>
           <Text variant="body" color="secondary">‹ Retour</Text>
         </Pressable>
         <Text variant="h4">Paramètres</Text>
-        <View style={{ width: 60 }} />
+        <Animated.View style={{ opacity: breathAnim }}>
+          <Pressable onPress={saveAll} disabled={saving || !isDirty}>
+            <Text variant="label" style={{ color: isDirty ? palette.primary : palette.textDisabled }}>
+              {saving ? 'Enreg…' : 'Enregistrer'}
+            </Text>
+          </Pressable>
+        </Animated.View>
       </View>
 
       <KeyboardAvoidingView behavior={Platform.OS === 'ios' ? 'padding' : undefined} style={{ flex: 1 }}>
         <ScrollView contentContainerStyle={styles.content} keyboardShouldPersistTaps="handled">
 
-          {/* Business settings — admin only */}
+          {/* Commerce — admin only */}
           {isAdmin && (
             <Card style={styles.section}>
               <Text variant="label" color="secondary">Commerce</Text>
@@ -198,71 +240,76 @@ export default function ParametresScreen() {
                 placeholder="Nom de votre commerce…"
                 returnKeyType="done"
               />
-              <View style={{ gap: spacing[2] }}>
-                <Text variant="label">Devise</Text>
-                <View style={styles.chipRow}>
-                  {CURRENCIES.map(c => (
-                    <Pressable
-                      key={c}
-                      onPress={() => setCurrency(c)}
-                      style={[styles.chip, currency === c ? styles.chipActive : styles.chipGhost]}
-                    >
-                      <Text
-                        variant="label"
-                        style={{ color: currency === c ? palette.textInverse : palette.textDisabled }}
-                      >
-                        {c}
-                      </Text>
-                    </Pressable>
-                  ))}
+              {hasSales !== null && (
+                <View style={{ gap: spacing[2] }}>
+                  <Text variant="label">Monnaie</Text>
+                  {hasSales ? (
+                    // Locked: currency cannot change after first sale
+                    <View style={styles.currencyLocked}>
+                      <View style={{ flex: 1 }}>
+                        <Text variant="label">{currency} — {CURRENCY_NAMES[currency] ?? currency}</Text>
+                        <Text variant="caption" color="secondary">
+                          Ceci est votre monnaie officielle
+                        </Text>
+                      </View>
+                      <Ionicons name="lock-closed-outline" size={16} color={palette.textDisabled} />
+                    </View>
+                  ) : (
+                    <View style={styles.chipRow}>
+                      {CURRENCIES.map(c => (
+                        <Pressable
+                          key={c}
+                          onPress={() => setCurrency(c)}
+                          style={[styles.chip, currency === c ? styles.chipActive : styles.chipGhost]}
+                        >
+                          <Text variant="label" style={{ color: currency === c ? palette.textInverse : palette.textDisabled }}>
+                            {c}
+                          </Text>
+                        </Pressable>
+                      ))}
+                    </View>
+                  )}
                 </View>
-              </View>
-              <Button
-                label={saving ? 'Enregistrement…' : 'Sauvegarder le commerce'}
-                loading={saving}
-                onPress={saveBusiness}
-                fullWidth
-              />
+              )}
             </Card>
           )}
 
-          {/* User profile — all roles */}
+          {/* Mon profil — all roles */}
           <Card style={styles.section}>
             <Text variant="label" color="secondary">Mon profil</Text>
             <Input
               label="Nom affiché"
               value={userName}
               onChangeText={setUserName}
-              placeholder="Votre nom…"
+              placeholder={generateFallbackName(userId)}
               returnKeyType="done"
-            />
-            <Button
-              label={savingUser ? 'Enregistrement…' : 'Sauvegarder le profil'}
-              loading={savingUser}
-              onPress={saveUser}
-              variant="outline"
-              fullWidth
             />
           </Card>
 
-          {/* Zone rouge */}
-          <Card style={[styles.section, styles.dangerCard]}>
-            <Text variant="label" color="secondary">Zone rouge</Text>
+          {/* À propos */}
+          <Card style={styles.section}>
+            <Text variant="label" color="secondary">À propos</Text>
+            <Pressable onPress={() => Linking.openURL('https://patron.kolilink.com/privacy.html')} style={styles.linkRow}>
+              <Text variant="body">Politique de confidentialité</Text>
+              <Text variant="caption" color="secondary">›</Text>
+            </Pressable>
+            <Pressable onPress={() => Linking.openURL('https://wa.me/16094454809')} style={styles.linkRow}>
+              <Text variant="body">Contacter le support</Text>
+              <Text variant="caption" color="secondary">›</Text>
+            </Pressable>
+          </Card>
 
+          {/* Danger — plain section, no loud box, at the very bottom */}
+          <Card style={styles.section}>
             {!isAdmin && (
-              <>
-                <Text variant="bodySmall" color="secondary">
-                  Quitter ce commerce supprime votre accès. Un administrateur peut vous réinviter.
-                </Text>
-                <Pressable onPress={handleLeave} style={styles.dangerBtn}>
-                  <Text variant="label" style={{ color: palette.danger }}>Quitter ce commerce</Text>
-                </Pressable>
-              </>
+              <Pressable onPress={handleLeave} style={styles.dangerRow}>
+                <Text style={styles.dangerText}>Quitter ce commerce</Text>
+              </Pressable>
             )}
 
             {!showDeleteConfirm ? (
-              <Pressable onPress={() => { setShowDeleteConfirm(true); setDeleteInput(''); }} style={styles.dangerBtn}>
-                <Text variant="label" style={{ color: palette.danger }}>Supprimer mon compte</Text>
+              <Pressable onPress={() => { setShowDeleteConfirm(true); setDeleteInput(''); }} style={styles.dangerRow}>
+                <Text style={styles.dangerText}>Supprimer mon compte</Text>
               </Pressable>
             ) : (
               <View style={styles.deleteConfirmBox}>
@@ -284,15 +331,15 @@ export default function ParametresScreen() {
                 <View style={{ flexDirection: 'row', gap: spacing[3] }}>
                   <Pressable
                     onPress={() => { setShowDeleteConfirm(false); setDeleteInput(''); }}
-                    style={[styles.dangerBtn, { flex: 1, alignItems: 'center' }]}
+                    style={{ flex: 1, alignItems: 'center', paddingVertical: spacing[2] }}
                   >
                     <Text variant="label" color="secondary">Annuler</Text>
                   </Pressable>
                   <Pressable
                     onPress={handleDeleteAccount}
                     disabled={deleteInput !== 'SUPPRIMER' || deleting}
-                    style={[styles.dangerBtn, { flex: 1, alignItems: 'center',
-                      opacity: deleteInput !== 'SUPPRIMER' || deleting ? 0.4 : 1 }]}
+                    style={{ flex: 1, alignItems: 'center', paddingVertical: spacing[2],
+                      opacity: deleteInput !== 'SUPPRIMER' || deleting ? 0.4 : 1 }}
                   >
                     <Text variant="label" style={{ color: palette.danger }}>
                       {deleting ? 'Suppression…' : 'Confirmer'}
@@ -303,19 +350,6 @@ export default function ParametresScreen() {
             )}
           </Card>
 
-          {/* À propos */}
-          <Card style={styles.section}>
-            <Text variant="label" color="secondary">À propos</Text>
-            <Pressable onPress={openPrivacy} style={styles.linkRow}>
-              <Text variant="body">Politique de confidentialité</Text>
-              <Text variant="caption" color="secondary">›</Text>
-            </Pressable>
-            <Pressable onPress={openSupport} style={styles.linkRow}>
-              <Text variant="body">Contacter le support (WhatsApp)</Text>
-              <Text variant="caption" color="secondary">›</Text>
-            </Pressable>
-          </Card>
-
         </ScrollView>
       </KeyboardAvoidingView>
     </SafeAreaView>
@@ -323,46 +357,38 @@ export default function ParametresScreen() {
 }
 
 const styles = StyleSheet.create({
-  safe: { flex: 1, backgroundColor: palette.background },
-  hdr: {
+  safe:    { flex: 1, backgroundColor: palette.background },
+  hdr:     {
     flexDirection: 'row', alignItems: 'center', justifyContent: 'space-between',
-    padding: spacing[5], borderBottomWidth: 1, borderBottomColor: palette.border,
+    paddingHorizontal: spacing[5], paddingVertical: spacing[4],
+    borderBottomWidth: 1, borderBottomColor: palette.border,
   },
   content: { padding: spacing[5], gap: spacing[4], paddingBottom: spacing[10] },
   section: { gap: spacing[4] },
-  chipRow: { flexDirection: 'row', gap: spacing[2], flexWrap: 'wrap' },
-  chip: {
-    paddingHorizontal: spacing[4], paddingVertical: spacing[2],
-    borderRadius: radius.full, borderWidth: 1.5, borderColor: palette.border, backgroundColor: palette.surface,
-  },
-  chipActive: { backgroundColor: palette.primary, borderColor: palette.primary },
+
+  chipRow:   { flexDirection: 'row', gap: spacing[2], flexWrap: 'wrap' },
+  chip:      { paddingHorizontal: spacing[4], paddingVertical: spacing[2], borderRadius: radius.full, borderWidth: 1.5, borderColor: palette.border, backgroundColor: palette.surface },
+  chipActive:{ backgroundColor: palette.primary, borderColor: palette.primary },
   chipGhost: { borderColor: 'transparent', backgroundColor: 'transparent' },
-  dangerCard: { borderColor: palette.danger + '40', borderWidth: 1 },
-  dangerBtn: {
-    alignSelf: 'flex-start',
-    borderWidth: 1.5,
-    borderColor: palette.danger + '50',
-    borderRadius: radius.full,
-    paddingHorizontal: spacing[5],
-    paddingVertical: spacing[2],
-    backgroundColor: palette.danger + '0D',
+
+  // Locked currency display
+  currencyLocked: {
+    flexDirection: 'row', alignItems: 'center', gap: spacing[3],
+    paddingHorizontal: spacing[3], paddingVertical: spacing[3],
+    backgroundColor: palette.surface, borderRadius: radius.md,
+    borderWidth: 1, borderColor: palette.border,
   },
+
+  linkRow: { flexDirection: 'row', alignItems: 'center', justifyContent: 'space-between', paddingVertical: spacing[2] },
+
+  // Danger — plain text rows, no border, no background tint
+  dangerRow: { paddingVertical: spacing[2] },
+  dangerText:{ fontSize: 15, color: palette.danger },
+
   deleteConfirmBox: { gap: spacing[3] },
   deleteInput: {
-    borderWidth: 1.5,
-    borderColor: palette.danger + '60',
-    borderRadius: radius.md,
-    paddingHorizontal: spacing[4],
-    paddingVertical: spacing[3],
-    color: palette.danger,
-    fontWeight: '700',
-    fontSize: 16,
-    letterSpacing: 2,
-  },
-  linkRow: {
-    flexDirection: 'row',
-    alignItems: 'center',
-    justifyContent: 'space-between',
-    paddingVertical: spacing[2],
+    borderWidth: 1.5, borderColor: palette.danger + '60', borderRadius: radius.md,
+    paddingHorizontal: spacing[4], paddingVertical: spacing[3],
+    color: palette.danger, fontWeight: '700' as const, fontSize: 16, letterSpacing: 2,
   },
 });

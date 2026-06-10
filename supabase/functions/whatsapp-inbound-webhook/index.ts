@@ -2,37 +2,38 @@ import { serve } from 'https://deno.land/std@0.177.0/http/server.ts';
 import { createClient } from 'https://esm.sh/@supabase/supabase-js@2';
 
 // Called by Twilio Studio when a WhatsApp message arrives.
-// Twilio sends: { from: "whatsapp:+224...", body: "Patron-AB12CD" }
-// Studio must include the header: x-patron-secret: <WHATSAPP_WEBHOOK_SECRET>
+// Twilio sends: { from: "whatsapp:+224...", body: "Patron-AB12CD", secret: "<WHATSAPP_WEBHOOK_SECRET>" }
+// Secret is in the JSON body (not URL — query params appear in server logs).
 
 serve(async (req) => {
   try {
-    // Validate that the request is from our Twilio Studio flow.
-    // Twilio Studio passes this as a URL query parameter (?secret=...).
-    const url = new URL(req.url);
-    const secret = url.searchParams.get('secret');
+    // Twilio Studio sends JSON; Twilio direct webhook sends form-encoded — try JSON first
+    let payload: Record<string, string>;
+    const bodyText = await req.text();
+    try {
+      payload = JSON.parse(bodyText) as Record<string, string>;
+    } catch {
+      const params = new URLSearchParams(bodyText);
+      payload = Object.fromEntries(params.entries()) as Record<string, string>;
+    }
+
+    // Secret must be in the JSON body — never in URL query params (they appear in logs)
+    const secret = payload.secret ?? '';
     if (!secret || secret !== Deno.env.get('WHATSAPP_WEBHOOK_SECRET')) {
       return new Response('Unauthorized', { status: 401 });
     }
 
-    const payload = await req.json() as Record<string, string>;
-    console.log('PAYLOAD KEYS:', Object.keys(payload));
-    console.log('PAYLOAD:', JSON.stringify(payload));
-
-    // Twilio Studio sends capitalized keys (From, Body); accept both cases
+    // Twilio sends capitalized keys (From, Body); accept both cases
     const rawFrom = payload.From ?? payload.from ?? '';
     const rawBody = payload.Body ?? payload.body ?? '';
-    console.log('rawFrom:', rawFrom, '| rawBody:', rawBody);
 
     if (!rawFrom || !rawBody) {
-      console.log('MISSING from or body — returning 400');
       return new Response('Bad Request', { status: 400 });
     }
 
     // Twilio sends the sender as "whatsapp:+224622112233" — strip prefix
     const phone = rawFrom.replace(/^whatsapp:/i, '').trim();
     const token = rawBody.trim().toUpperCase();
-    console.log('phone:', phone, '| token:', token);
 
     // Ignore messages that are not verification tokens
     if (!token.startsWith('PATRON-')) {
@@ -61,7 +62,6 @@ serve(async (req) => {
       .maybeSingle();
 
     if (fetchErr || !row) {
-      console.log('NO MATCH — fetchErr:', fetchErr?.message ?? 'none', '| row:', row);
       return new Response(JSON.stringify({ verified: false }), {
         status: 200,
         headers: { 'Content-Type': 'application/json' },

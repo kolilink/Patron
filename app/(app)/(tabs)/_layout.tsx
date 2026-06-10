@@ -3,6 +3,7 @@ import { Tabs } from 'expo-router';
 import { router } from 'expo-router';
 import { Ionicons } from '@expo/vector-icons';
 import { useAuthStore } from '@/stores/auth';
+import { useChatStore } from '@/stores/chat';
 import { palette } from '@/src/theme';
 
 type IoniconName = React.ComponentProps<typeof Ionicons>['name'];
@@ -32,17 +33,33 @@ export default function TabsLayout() {
   const isInvestisseur = role === 'investisseur';
   const isVendeur = role === 'vendeur';
 
+  const { boutiqueRoom, load: loadChat } = useChatStore();
+
+  useEffect(() => {
+    const bId = session.activeBusiness?.id;
+    const uId = session.user.id;
+    if (!bId || !uId || boutiqueRoom !== null) return;
+    loadChat(bId, uId);
+  }, [session.activeBusiness?.id, session.user.id]);
+
   return (
     <Tabs
       initialRouteName={isVendeur ? 'vendre' : 'index'}
       screenOptions={{
         headerShown: false,
-        tabBarActiveTintColor: palette.tabBarActive,
-        tabBarInactiveTintColor: palette.tabBarInactive,
+        tabBarActiveTintColor: palette.primary,
+        tabBarInactiveTintColor: '#8E8E93',
+        tabBarLabelStyle: {
+          fontSize: 11,
+          fontWeight: '500',
+          marginTop: 4,
+        },
         tabBarStyle: {
-          backgroundColor: palette.tabBar,
-          borderTopColor: palette.tabBarBorder,
+          backgroundColor: palette.surface,
+          borderTopColor: palette.border,
           borderTopWidth: 1,
+          height: 60,
+          paddingBottom: 8,
         },
       }}
     >

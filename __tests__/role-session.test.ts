@@ -20,6 +20,8 @@ jest.mock('@/lib/db', () => ({
   enqueue: jest.fn(),
   getQueueCount: jest.fn().mockResolvedValue(0),
   openDb: jest.fn(),
+  setKV: jest.fn().mockResolvedValue(undefined),
+  getKV: jest.fn().mockResolvedValue(null),
 }));
 
 import { useAuthStore } from '@/stores/auth';
@@ -29,6 +31,8 @@ function makeBusiness(id: string, name: string): Business {
   return {
     id, name, type: null, currency: 'GNF', logo_url: null,
     status: 'actif', subscription_tier: 'gratuit',
+    subscription_status: 'trialing', trial_ends_at: null,
+    stripe_customer_id: null, subscription_expires_at: null,
     created_at: '2026-01-01T00:00:00Z', updated_at: '2026-01-01T00:00:00Z', created_by: 'user-1',
   };
 }

@@ -41,6 +41,13 @@ const LargeSecureStore = {
   },
 };
 
+const fetchWithTimeout: typeof fetch = (input, init) => {
+  const controller = new AbortController();
+  const timer = setTimeout(() => controller.abort(), 15_000);
+  return fetch(input as RequestInfo, { ...init, signal: controller.signal })
+    .finally(() => clearTimeout(timer));
+};
+
 export const supabase = createClient(SUPABASE_URL, SUPABASE_ANON_KEY, {
   auth: {
     storage: LargeSecureStore,
@@ -48,4 +55,5 @@ export const supabase = createClient(SUPABASE_URL, SUPABASE_ANON_KEY, {
     persistSession: true,
     detectSessionInUrl: false,
   },
+  global: { fetch: fetchWithTimeout },
 });

@@ -8,6 +8,7 @@ interface SyncStore {
   lastResult: SyncResult | null;
   refreshCount: () => Promise<void>;
   sync: () => Promise<SyncResult>;
+  reset: () => void;
 }
 
 export const useSyncStore = create<SyncStore>((set) => ({
@@ -27,4 +28,6 @@ export const useSyncStore = create<SyncStore>((set) => ({
     set({ syncing: false, lastResult: result, pendingCount: count });
     return result;
   },
+
+  reset: () => set({ pendingCount: 0, syncing: false, lastResult: null }),
 }));

@@ -1,8 +1,10 @@
 import { create } from 'zustand';
+import * as SecureStore from 'expo-secure-store';
 import { supabase } from '@/lib/supabase';
 import { translateError } from '@/lib/errors';
 import { generateId } from '@/lib/id';
 import { syncKnownBusinesses } from '@/lib/knownBusinesses';
+import { getKV, setKV } from '@/lib/db';
 import type { AppSession, Business, Membership, Role, User } from '@/src/types';
 import { useProductStore } from './products';
 import { useVentesStore } from './ventes';
@@ -10,6 +12,61 @@ import { useExpensesStore } from './expenses';
 import { useEquipeStore } from './equipe';
 import { useFournisseursStore } from './fournisseurs';
 import { useSalesStore } from './sales';
+import { useSyncStore } from './sync';
+import { useChatStore } from './chat';
+import { useMarketStore } from './market';
+
+// ─── Session cache (offline restart resilience) ───────────────────────────────
+
+const SESSION_CACHE_KEY = 'patron_session_cache_v1';
+const CHUNK_SIZE = 1800;
+
+async function persistSessionCache(session: AppSession): Promise<void> {
+  try {
+    const json = JSON.stringify(session);
+    const chunks = Math.ceil(json.length / CHUNK_SIZE);
+    await SecureStore.setItemAsync(`${SESSION_CACHE_KEY}_count`, String(chunks));
+    for (let i = 0; i < chunks; i++) {
+      await SecureStore.setItemAsync(`${SESSION_CACHE_KEY}_${i}`, json.slice(i * CHUNK_SIZE, (i + 1) * CHUNK_SIZE));
+    }
+  } catch {}
+}
+
+async function restoreSessionCache(): Promise<AppSession | null> {
+  try {
+    const countStr = await SecureStore.getItemAsync(`${SESSION_CACHE_KEY}_count`);
+    if (!countStr) return null;
+    const count = parseInt(countStr, 10);
+    let json = '';
+    for (let i = 0; i < count; i++) {
+      const chunk = await SecureStore.getItemAsync(`${SESSION_CACHE_KEY}_${i}`);
+      if (!chunk) return null;
+      json += chunk;
+    }
+    return JSON.parse(json) as AppSession;
+  } catch {
+    return null;
+  }
+}
+
+async function clearSessionCache(): Promise<void> {
+  try {
+    const countStr = await SecureStore.getItemAsync(`${SESSION_CACHE_KEY}_count`);
+    if (!countStr) return;
+    const count = parseInt(countStr, 10);
+    for (let i = 0; i < count; i++) {
+      await SecureStore.deleteItemAsync(`${SESSION_CACHE_KEY}_${i}`);
+    }
+    await SecureStore.deleteItemAsync(`${SESSION_CACHE_KEY}_count`);
+  } catch {}
+}
+
+// ─────────────────────────────────────────────────────────────────────────────
+
+// Set to true only during an explicit logout() call so the onAuthStateChange
+// handler can distinguish a deliberate sign-out from a failed JWT refresh
+// triggered while the device is offline.
+let _explicitLogout = false;
 
 function resetAllStores() {
   useProductStore.getState().reset();
@@ -18,6 +75,9 @@ function resetAllStores() {
   useEquipeStore.getState().reset();
   useFournisseursStore.getState().reset();
   useSalesStore.getState().reset();
+  useSyncStore.getState().reset();
+  useChatStore.getState().reset();
+  useMarketStore.getState().reset();
 }
 
 interface PendingPhoneVerification {
@@ -34,6 +94,7 @@ interface AuthStore {
   removedBusinessName: string | null;
   removedBusinessesOnLogin: Array<{ id: string; name: string }> | null;
   dismissedFromBusiness: { name: string } | null;
+  showTrialWelcome: boolean;
 
   initialize: () => Promise<void>;
   signInAnonymously: () => Promise<void>;
@@ -47,6 +108,12 @@ interface AuthStore {
   loginWithPhone: (phone: string) => Promise<{ token: string; verificationId: string } | null>;
   upgradePhone: (phone: string) => Promise<void>;
   restorePhoneSession: (phone: string, verificationId: string) => Promise<void>;
+  businessDrawerOpen: boolean;
+  openBusinessDrawer: () => void;
+  closeBusinessDrawer: () => void;
+
+  clearTrialWelcome: () => void;
+  refreshActiveBusiness: () => Promise<void>;
   clearError: () => void;
   handleMembershipRemoved: (businessName: string) => void;
   handleMembershipRemovedWithFallback: (
@@ -86,10 +153,14 @@ async function loadSession(userId: string): Promise<AppSession> {
     updated_at: p.updated_at,
   };
 
-  const activeMembership = memberships.length >= 1 ? memberships[0] : null;
+  const lastBusinessId = await getKV(`last_business_${userId}`).catch(() => null);
+  const preferred = lastBusinessId ? memberships.find(m => m.business_id === lastBusinessId) : null;
+  const activeMembership = preferred ?? (memberships.length >= 1 ? memberships[0] : null);
   const activeBusiness = (activeMembership?.business as Business) ?? null;
 
-  return { user, memberships, activeBusiness, activeMembership };
+  const session: AppSession = { user, memberships, activeBusiness, activeMembership };
+  void persistSessionCache(session);
+  return session;
 }
 
 export const useAuthStore = create<AuthStore>((set, get) => ({
@@ -100,6 +171,8 @@ export const useAuthStore = create<AuthStore>((set, get) => ({
   removedBusinessName: null,
   removedBusinessesOnLogin: null,
   dismissedFromBusiness: null,
+  showTrialWelcome: false,
+  businessDrawerOpen: false,
 
   initialize: async () => {
     try {
@@ -132,13 +205,19 @@ export const useAuthStore = create<AuthStore>((set, get) => ({
         }
       }
     } catch {
-      set({ session: null, loading: false });
+      const cached = await restoreSessionCache();
+      set({ session: cached, loading: false });
     }
 
     supabase.auth.onAuthStateChange(async (event, session) => {
       if (event === 'SIGNED_OUT' || !session) {
-        set({ session: null });
-        resetAllStores();
+        if (_explicitLogout) {
+          // Deliberate logout — clear everything.
+          set({ session: null });
+          resetAllStores();
+        }
+        // If not explicit: token refresh failed (device is offline). Keep the
+        // current session so the user can still access cached data.
       }
     });
   },
@@ -224,7 +303,13 @@ export const useAuthStore = create<AuthStore>((set, get) => ({
   },
 
   logout: async () => {
-    await supabase.auth.signOut();
+    _explicitLogout = true;
+    try {
+      await supabase.auth.signOut();
+    } finally {
+      _explicitLogout = false;
+    }
+    void clearSessionCache();
     resetAllStores();
     set({ session: null, error: null, pendingPhoneVerification: null });
   },
@@ -236,6 +321,7 @@ export const useAuthStore = create<AuthStore>((set, get) => ({
     const membership = session.memberships.find(m => m.business_id === businessId);
     if (!membership) return;
 
+    setKV(`last_business_${session.user.id}`, businessId).catch(() => {});
     resetAllStores();
 
     set({
@@ -250,6 +336,12 @@ export const useAuthStore = create<AuthStore>((set, get) => ({
   createBusiness: async ({ name, type, currency }) => {
     const { session } = get();
     if (!session) return;
+
+    const alreadyOwns = session.memberships.some(m => m.role === 'administrateur');
+    if (alreadyOwns) {
+      set({ error: 'Vous avez déjà un commerce actif. Bientôt, vous pourrez en gérer plusieurs.', loading: false });
+      return;
+    }
 
     set({ loading: true, error: null });
 
@@ -266,8 +358,8 @@ export const useAuthStore = create<AuthStore>((set, get) => ({
     // Retry up to 3x — the DB trigger creating the membership row may lag slightly
     let membership = null;
     let fetchErr = null;
-    for (let attempt = 0; attempt < 3; attempt++) {
-      if (attempt > 0) await new Promise<void>(r => setTimeout(r, 300));
+    for (let attempt = 0; attempt < 5; attempt++) {
+      if (attempt > 0) await new Promise<void>(r => setTimeout(r, 600));
       const res = await supabase
         .from('memberships')
         .select('*, business:businesses(*)')
@@ -284,6 +376,8 @@ export const useAuthStore = create<AuthStore>((set, get) => ({
 
     const m = membership as Membership;
     const newMemberships = [...session.memberships, m];
+    // Persist so next cold start lands on the newly created business
+    setKV(`last_business_${session.user.id}`, businessId).catch(() => {});
     // Seed the cache so first-reload removal detection works immediately
     syncKnownBusinesses(session.user.id, newMemberships).catch(() => {});
     set({
@@ -293,6 +387,7 @@ export const useAuthStore = create<AuthStore>((set, get) => ({
         activeBusiness: m.business as Business,
         activeMembership: m,
       },
+      showTrialWelcome: true,
       loading: false,
     });
   },
@@ -303,39 +398,37 @@ export const useAuthStore = create<AuthStore>((set, get) => ({
 
     set({ loading: true, error: null });
     try {
-      if (session.memberships.length >= 2) throw new Error('Vous ne pouvez rejoindre que 2 commerces maximum.');
+      const joinedCount = session.memberships.filter(m => m.role !== 'administrateur').length;
+      if (joinedCount >= 3) throw new Error('Vous avez atteint la limite de 3 commerces rejoints. Bientôt, vous pourrez en rejoindre davantage.');
 
-      // validate_invite_code: SECURITY DEFINER — handles rate limiting (5/10 min),
-      // expiry, max_uses check, and atomically increments the uses counter.
+      // join_business: SECURITY DEFINER — validates invite code, enforces rate
+      // limiting (5/10 min), expiry, max_uses, and inserts membership atomically.
+      // Direct memberships INSERT is no longer allowed (policy dropped in v43).
       const { data: invite, error: rpcErr } = await supabase
-        .rpc('validate_invite_code', { p_code: code.trim().toUpperCase() });
+        .rpc('join_business', { p_code: code.trim().toUpperCase() });
 
-      if (rpcErr) throw rpcErr;
-      if (!invite) throw new Error('Code invalide, expiré, ou déjà utilisé');
-
-      const { business_id, role } = invite as { business_id: string; role: Role };
-
-      const { error: memErr } = await supabase
-        .from('memberships')
-        .insert({ user_id: session.user.id, business_id, role });
-
-      if (memErr) {
-        if (memErr.code === '23505') {
+      if (rpcErr) {
+        if (rpcErr.code === '23505') {
           // Already a member — reload session so navigation proceeds
           const appSession = await loadSession(session.user.id);
           set({ session: appSession, loading: false });
           return;
         }
-        throw memErr;
+        throw rpcErr;
       }
+      if (!invite) throw new Error('Code invalide. Vérifiez le code et réessayez.');
 
+      const { business_id } = invite as { business_id: string };
+
+      // Persist the joined business so next cold start (and loadSession below) lands on it
+      setKV(`last_business_${session.user.id}`, business_id).catch(() => {});
       // Reload the full session now that the membership exists and RLS can see the business
       const appSession = await loadSession(session.user.id);
       syncKnownBusinesses(session.user.id, appSession.memberships).catch(() => {});
       set({ session: appSession, loading: false });
     } catch (err) {
-      const fallback = err instanceof Error ? err.message : 'Erreur lors de la jonction';
-      set({ error: translateError(err, fallback), loading: false });
+      const raw = err instanceof Error ? err.message : (err as Record<string, unknown>)?.message as string | undefined;
+      set({ error: translateError(err, raw ?? 'Erreur lors de la jonction'), loading: false });
     }
   },
 
@@ -486,6 +579,32 @@ export const useAuthStore = create<AuthStore>((set, get) => ({
     }
   },
 
+  refreshActiveBusiness: async () => {
+    const { session } = get();
+    if (!session?.activeBusiness) return;
+
+    const { data } = await supabase
+      .from('businesses')
+      .select('subscription_status, trial_ends_at, subscription_expires_at, updated_at')
+      .eq('id', session.activeBusiness.id)
+      .single();
+
+    if (!data) return;
+
+    set({
+      session: {
+        ...session,
+        activeBusiness: { ...session.activeBusiness, ...data },
+        memberships: session.memberships.map(m =>
+          m.business_id === session.activeBusiness!.id
+            ? { ...m, business: { ...(m.business as Business), ...data } }
+            : m,
+        ),
+      },
+    });
+  },
+
+  clearTrialWelcome: () => set({ showTrialWelcome: false }),
   clearError: () => set({ error: null }),
 
   handleMembershipRemoved: (businessName) => {
@@ -529,4 +648,7 @@ export const useAuthStore = create<AuthStore>((set, get) => ({
   clearRemovedBusiness: () => set({ removedBusinessName: null }),
   clearRemovedBusinessesOnLogin: () => set({ removedBusinessesOnLogin: null }),
   clearDismissedFromBusiness: () => set({ dismissedFromBusiness: null }),
+
+  openBusinessDrawer: () => set({ businessDrawerOpen: true }),
+  closeBusinessDrawer: () => set({ businessDrawerOpen: false }),
 }));

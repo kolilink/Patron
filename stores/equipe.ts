@@ -66,8 +66,8 @@ export const useEquipeStore = create<EquipeStore>((set, get) => ({
       .order('joined_at');
 
     if (mErr) {
-      console.error('[fetchMembres memberships]', mErr instanceof Error ? mErr.message : String(mErr));
-      set({ loading: false });
+      console.error('[fetchMembres memberships]', mErr instanceof Error ? mErr.message : (mErr as { message?: string })?.message ?? JSON.stringify(mErr));
+      set({ loading: false, error: translateError(mErr, 'Erreur de chargement') });
       return;
     }
 
@@ -80,7 +80,7 @@ export const useEquipeStore = create<EquipeStore>((set, get) => ({
         .from('profiles')
         .select('id, name, email, phone')
         .in('id', userIds);
-      if (pErr) console.error('[fetchMembres profiles]', pErr instanceof Error ? pErr.message : String(pErr));
+      if (pErr) console.error('[fetchMembres profiles]', pErr instanceof Error ? pErr.message : (pErr as { message?: string })?.message ?? JSON.stringify(pErr));
       for (const p of pData ?? []) {
         profilesMap[p.id] = { name: p.name ?? '—', email: p.email ?? '—', phone: p.phone ?? null };
       }
@@ -103,16 +103,34 @@ export const useEquipeStore = create<EquipeStore>((set, get) => ({
 
   fetchCodes: async (businessId) => {
     set({ loading: true });
-    try {
-      const { data } = await supabase
-        .from('invite_codes')
-        .select('*')
-        .eq('business_id', businessId)
-        .order('created_at', { ascending: false });
-      set({ codes: (data ?? []) as CodeInvitation[], loading: false });
-    } catch {
-      set({ loading: false });
+    const { data, error } = await supabase
+      .from('invite_codes')
+      .select('*')
+      .eq('business_id', businessId)
+      .order('created_at', { ascending: false });
+    if (error) { set({ loading: false, error: translateError(error, 'Erreur de chargement') }); return; }
+
+    const all = (data ?? []) as CodeInvitation[];
+    const now = new Date();
+
+    // Delete consumed and expired codes — they can't be used and shouldn't show
+    const staleIds = all
+      .filter(c =>
+        (c.max_uses != null && c.uses >= c.max_uses) ||
+        (c.expires_at != null && new Date(c.expires_at) <= now)
+      )
+      .map(c => c.id);
+    if (staleIds.length > 0) {
+      await supabase.from('invite_codes').delete().in('id', staleIds);
     }
+
+    set({
+      codes: all.filter(c =>
+        (c.max_uses == null || c.uses < c.max_uses) &&
+        (c.expires_at == null || new Date(c.expires_at) > now)
+      ),
+      loading: false,
+    });
   },
 
   createCode: async (businessId, userId, role, expiresInHours = 24) => {

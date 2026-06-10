@@ -2,6 +2,8 @@ import { create } from 'zustand';
 import { supabase } from '@/lib/supabase';
 import { translateError } from '@/lib/errors';
 import { generateId } from '@/lib/id';
+import { saveFournisseurCache, getFournisseurCache, saveCommandeCache, getCommandeCache } from '@/lib/db';
+import { isNetworkError } from '@/lib/sync';
 
 export interface Fournisseur {
   id: string;
@@ -40,24 +42,42 @@ export interface CommandeAchat {
 export interface CreateCommandeInput {
   supplierId: string;
   lines: { product_id: string; product_name: string; qty: number; unit_cost: number }[];
+  amountPaid?: number; // display units; undefined or >= total means fully paid
+}
+
+export interface SupplierDebt {
+  id: string;
+  business_id: string;
+  supplier_id: string;
+  amount: number;       // display unit (already ÷100)
+  amount_paid: number;  // display unit (already ÷100)
+  description: string | null;
+  date: string;
+  created_at: string;
 }
 
 interface FournisseursStore {
   fournisseurs: Fournisseur[];
   commandes: CommandeAchat[];
+  debts: SupplierDebt[];
   loading: boolean;
   saving: boolean;
   error: string | null;
+  offline: boolean;
 
   fetchFournisseurs: (businessId: string) => Promise<void>;
-  createFournisseur: (businessId: string, userId: string, d: { name: string; phone?: string; country?: string; notes?: string }) => Promise<boolean>;
-  updateFournisseur: (id: string, d: { name: string; phone?: string; country?: string; notes?: string }) => Promise<boolean>;
-  deleteFournisseur: (id: string, businessId: string) => Promise<void>;
+  createFournisseur: (businessId: string, userId: string, d: { name: string; phone?: string; country?: string; notes?: string; lead_days?: number | null }) => Promise<boolean>;
+  updateFournisseur: (id: string, d: { name: string; phone?: string; country?: string; notes?: string; lead_days?: number | null }) => Promise<boolean>;
+  deleteFournisseur: (id: string, businessId: string) => Promise<boolean>;
+  payDebt: (businessId: string, supplierId: string, paymentAmount: number) => Promise<boolean>;
 
   fetchCommandes: (businessId: string) => Promise<void>;
   createCommande: (businessId: string, userId: string, input: CreateCommandeInput) => Promise<boolean>;
   loadCommandeLines: (commandeId: string) => Promise<void>;
   recevoirCommande: (commandeId: string, businessId: string, userId: string) => Promise<boolean>;
+
+  fetchDebts: (businessId: string) => Promise<void>;
+  createDebt: (businessId: string, userId: string, d: { supplierId: string; amount: number; description?: string | null; date: string }) => Promise<boolean>;
 
   clearError: () => void;
   reset: () => void;
@@ -66,18 +86,30 @@ interface FournisseursStore {
 export const useFournisseursStore = create<FournisseursStore>((set, get) => ({
   fournisseurs: [],
   commandes: [],
+  debts: [],
   loading: false,
   saving: false,
   error: null,
+  offline: false,
 
   fetchFournisseurs: async (businessId) => {
     set({ loading: true });
-    const { data } = await supabase
+    const { data, error } = await supabase
       .from('suppliers')
       .select('*')
       .eq('business_id', businessId)
       .order('name');
-    set({ fournisseurs: (data ?? []) as Fournisseur[], loading: false });
+    if (error) {
+      if (isNetworkError(error)) {
+        const cached = await getFournisseurCache(businessId) as Fournisseur[] | null;
+        if (cached) { set({ fournisseurs: cached, loading: false, offline: true, error: null }); return; }
+      }
+      set({ loading: false, error: translateError(error, 'Erreur de chargement') });
+      return;
+    }
+    const fournisseurs = (data ?? []) as Fournisseur[];
+    void saveFournisseurCache(businessId, fournisseurs as unknown[]);
+    set({ fournisseurs, loading: false, offline: false });
   },
 
   createFournisseur: async (businessId, userId, d) => {
@@ -89,6 +121,7 @@ export const useFournisseursStore = create<FournisseursStore>((set, get) => ({
       phone: d.phone?.trim() || null,
       country: d.country?.trim() || null,
       notes: d.notes?.trim() || null,
+      lead_days: d.lead_days ?? null,
       created_by: userId,
     });
     if (error) { set({ error: translateError(error, 'Impossible de créer le fournisseur'), saving: false }); return false; }
@@ -104,6 +137,7 @@ export const useFournisseursStore = create<FournisseursStore>((set, get) => ({
       phone: d.phone?.trim() || null,
       country: d.country?.trim() || null,
       notes: d.notes?.trim() || null,
+      lead_days: d.lead_days ?? null,
     }).eq('id', id);
     if (error) { set({ error: translateError(error, 'Impossible de modifier le fournisseur'), saving: false }); return false; }
     set(state => ({
@@ -116,31 +150,69 @@ export const useFournisseursStore = create<FournisseursStore>((set, get) => ({
   },
 
   deleteFournisseur: async (id, businessId) => {
-    await supabase.from('suppliers').delete().eq('id', id);
+    // Unlink products so their FK doesn't block deletion
+    await supabase.from('products').update({ supplier_id: null }).eq('supplier_id', id);
+    const { error } = await supabase.from('suppliers').delete().eq('id', id).eq('business_id', businessId);
+    if (error) { set({ error: translateError(error, 'Impossible de supprimer le fournisseur') }); return false; }
     set(state => ({ fournisseurs: state.fournisseurs.filter(f => f.id !== id) }));
+    return true;
+  },
+
+  payDebt: async (businessId, supplierId, paymentAmount) => {
+    set({ saving: true, error: null });
+    // Apply payment to oldest unpaid debts first (FIFO)
+    const unpaid = get().debts
+      .filter(d => d.supplier_id === supplierId && d.amount > d.amount_paid)
+      .sort((a, b) => new Date(a.created_at).getTime() - new Date(b.created_at).getTime());
+
+    let remaining = paymentAmount;
+    for (const debt of unpaid) {
+      if (remaining <= 0) break;
+      const outstanding = debt.amount - debt.amount_paid;
+      const paying = Math.min(outstanding, remaining);
+      const { error } = await supabase
+        .from('supplier_debts')
+        .update({ amount_paid: Math.round((debt.amount_paid + paying) * 100) })
+        .eq('id', debt.id);
+      if (error) {
+        set({ saving: false, error: translateError(error, 'Erreur lors du paiement') });
+        return false;
+      }
+      remaining -= paying;
+    }
+
+    await get().fetchDebts(businessId);
+    set({ saving: false });
+    return true;
   },
 
   fetchCommandes: async (businessId) => {
     set({ loading: true });
-    const { data } = await supabase
+    const { data, error } = await supabase
       .from('purchase_orders')
       .select('*')
       .eq('business_id', businessId)
       .order('ordered_at', { ascending: false });
 
-    if (!data) { set({ loading: false }); return; }
+    if (error) {
+      if (isNetworkError(error)) {
+        const cached = await getCommandeCache(businessId) as CommandeAchat[] | null;
+        if (cached) { set({ commandes: cached, loading: false, offline: true, error: null }); return; }
+      }
+      set({ loading: false, error: translateError(error, 'Erreur de chargement') });
+      return;
+    }
 
     const { fournisseurs } = get();
     const fm: Record<string, string> = {};
     for (const f of fournisseurs) fm[f.id] = f.name;
 
-    set({
-      commandes: data.map((c: Record<string, unknown>) => ({
-        ...c,
-        supplier_name: fm[c.supplier_id as string] ?? '—',
-      } as CommandeAchat)),
-      loading: false,
-    });
+    const commandes = (data ?? []).map((c: Record<string, unknown>) => ({
+      ...c,
+      supplier_name: fm[c.supplier_id as string] ?? '—',
+    } as CommandeAchat));
+    void saveCommandeCache(businessId, commandes as unknown[]);
+    set({ commandes, loading: false, offline: false });
   },
 
   createCommande: async (businessId, userId, input) => {
@@ -168,7 +240,27 @@ export const useFournisseursStore = create<FournisseursStore>((set, get) => ({
       unit_cost: l.unit_cost,
     }));
     const { error: lErr } = await supabase.from('po_lines').insert(lines);
-    if (lErr) { set({ error: translateError(lErr, "Impossible d'enregistrer les lignes de commande"), saving: false }); return false; }
+    if (lErr) {
+      await supabase.from('purchase_orders').delete().eq('id', poId);
+      set({ error: translateError(lErr, "Impossible d'enregistrer les lignes de commande"), saving: false });
+      return false;
+    }
+
+    // Auto-create a supplier debt for any unpaid balance
+    const amountPaid = input.amountPaid ?? total;
+    if (amountPaid < total - 0.01) {
+      const owed = total - amountPaid;
+      await supabase.from('supplier_debts').insert({
+        business_id: businessId,
+        supplier_id: input.supplierId,
+        amount: Math.round(owed * 100),
+        amount_paid: 0,
+        description: null,
+        date: new Date().toISOString().split('T')[0],
+        created_by: userId,
+      });
+      await get().fetchDebts(businessId);
+    }
 
     await get().fetchCommandes(businessId);
     set({ saving: false });
@@ -176,10 +268,11 @@ export const useFournisseursStore = create<FournisseursStore>((set, get) => ({
   },
 
   loadCommandeLines: async (commandeId) => {
-    const { data } = await supabase
+    const { data, error } = await supabase
       .from('po_lines')
       .select('*, product:products(name)')
       .eq('po_id', commandeId);
+    if (error) return;
 
     const lines: CommandeLigne[] = (data ?? []).map((l: Record<string, unknown>) => ({
       id: l.id as string,
@@ -197,41 +290,16 @@ export const useFournisseursStore = create<FournisseursStore>((set, get) => ({
   },
 
   recevoirCommande: async (commandeId, businessId, userId) => {
-    set({ saving: true });
-    const commande = get().commandes.find(c => c.id === commandeId);
-    if (!commande?.lines) { set({ saving: false }); return false; }
+    set({ saving: true, error: null });
 
-    const { error: poErr } = await supabase
-      .from('purchase_orders')
-      .update({ status: 'recu', received_at: new Date().toISOString() })
-      .eq('id', commandeId);
-    if (poErr) { set({ saving: false }); return false; }
+    const { error } = await supabase.rpc('receive_purchase_order', {
+      p_po_id: commandeId,
+      p_business_id: businessId,
+    });
 
-    // Insert stock moves and update product quantities
-    const moves = commande.lines.map(l => ({
-      id: generateId(),
-      business_id: businessId,
-      product_id: l.product_id,
-      type: 'entree',
-      qty: l.qty_ordered,
-      ref_id: commandeId,
-      ref_type: 'purchase_order',
-      note: `Commande reçue`,
-      created_by: userId,
-    }));
-    await supabase.from('stock_moves').insert(moves);
-
-    for (const l of commande.lines) {
-      const { data } = await supabase.from('products').select('stock_qty').eq('id', l.product_id).single();
-      if (data) {
-        await supabase.from('products')
-          .update({ stock_qty: (data as { stock_qty: number }).stock_qty + l.qty_ordered })
-          .eq('id', l.product_id);
-      }
-    }
-
-    for (const l of commande.lines) {
-      await supabase.from('po_lines').update({ qty_received: l.qty_ordered }).eq('id', l.id);
+    if (error) {
+      set({ saving: false, error: translateError(error, 'Impossible de recevoir la commande') });
+      return false;
     }
 
     set(state => ({
@@ -243,6 +311,43 @@ export const useFournisseursStore = create<FournisseursStore>((set, get) => ({
     return true;
   },
 
+  fetchDebts: async (businessId) => {
+    const { data, error } = await supabase
+      .from('supplier_debts')
+      .select('*')
+      .eq('business_id', businessId)
+      .order('date', { ascending: false });
+    if (error) return;
+    const debts: SupplierDebt[] = (data ?? []).map((d: Record<string, unknown>) => ({
+      id: d.id as string,
+      business_id: d.business_id as string,
+      supplier_id: d.supplier_id as string,
+      amount: (d.amount as number) / 100,
+      amount_paid: (d.amount_paid as number) / 100,
+      description: (d.description as string | null) ?? null,
+      date: d.date as string,
+      created_at: d.created_at as string,
+    }));
+    set({ debts });
+  },
+
+  createDebt: async (businessId, userId, d) => {
+    set({ saving: true, error: null });
+    const { error } = await supabase.from('supplier_debts').insert({
+      business_id: businessId,
+      supplier_id: d.supplierId,
+      amount: Math.round(d.amount * 100),
+      description: d.description?.trim() || null,
+      date: d.date,
+      amount_paid: 0,
+      created_by: userId,
+    });
+    if (error) { set({ saving: false, error: translateError(error, 'Impossible d\'enregistrer la dette') }); return false; }
+    await get().fetchDebts(businessId);
+    set({ saving: false });
+    return true;
+  },
+
   clearError: () => set({ error: null }),
-  reset: () => set({ fournisseurs: [], commandes: [], loading: false, saving: false, error: null }),
+  reset: () => set({ fournisseurs: [], commandes: [], debts: [], loading: false, saving: false, error: null, offline: false }),
 }));

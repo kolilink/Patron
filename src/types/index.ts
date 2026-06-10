@@ -14,6 +14,8 @@ export type ProposalStatus = 'en_attente' | 'approuve' | 'rejete' | 'clarificati
 
 export type SubscriptionTier = 'gratuit' | 'starter' | 'business' | 'pro';
 
+export type SubscriptionStatus = 'trialing' | 'active' | 'cancelled' | 'expired';
+
 export type ExpenseStatus = 'en_attente' | 'approuve' | 'rejete';
 
 // ─── Base ─────────────────────────────────────────────────────────────────────
@@ -49,6 +51,10 @@ export interface Business {
   logo_url: string | null;
   status: 'actif' | 'suspendu' | 'archive';
   subscription_tier: SubscriptionTier;
+  subscription_status: SubscriptionStatus;
+  trial_ends_at: string | null;
+  stripe_customer_id: string | null;
+  subscription_expires_at: string | null;
   created_at: string;
   updated_at: string;
   created_by: string;
@@ -240,6 +246,54 @@ export interface DashboardKPIs {
   low_stock_count: number;
   pending_proposals: number;
   pending_receivables: number;
+}
+
+// ─── Chat ─────────────────────────────────────────────────────────────────────
+
+export interface ChatRoom {
+  id: string;
+  name: string;
+  business_id: string | null;
+  is_global: boolean;
+  created_at: string;
+}
+
+export interface ChatMessage {
+  id: string;
+  room_id: string;
+  sender_id: string;
+  sender_name: string;
+  content: string;
+  created_at: string;
+}
+
+// ─── Forum (Le Marché) ────────────────────────────────────────────────────────
+
+export type MarketCategory = 'suggestion' | 'entraide' | 'general';
+
+export interface MarketPost {
+  id: string;
+  author_id: string;
+  author_name: string;
+  title: string;
+  content: string;
+  category: MarketCategory;
+  likes_count: number;
+  comments_count: number;
+  created_at: string;
+  updated_at: string;
+}
+
+export interface MarketComment {
+  id: string;
+  post_id: string;
+  parent_id: string | null;
+  author_id: string;
+  author_name: string;
+  content: string;
+  likes_count: number;
+  created_at: string;
+  author_level?: number;
 }
 
 // ─── Auth Session ─────────────────────────────────────────────────────────────

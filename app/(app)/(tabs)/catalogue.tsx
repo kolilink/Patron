@@ -1,7 +1,9 @@
 import React, { useCallback, useEffect, useMemo, useRef, useState } from 'react';
-import { useFocusEffect } from 'expo-router';
+import { router, useFocusEffect, useLocalSearchParams } from 'expo-router';
 import {
   Alert,
+  Animated,
+  Easing,
   FlatList,
   KeyboardAvoidingView,
   Modal,
@@ -12,16 +14,19 @@ import {
   TextInput,
   View,
 } from 'react-native';
-import { SafeAreaView } from 'react-native-safe-area-context';
+import { SafeAreaView, useSafeAreaInsets } from 'react-native-safe-area-context';
 import { Button } from '@/src/components/ui/Button';
 import { Card } from '@/src/components/ui/Card';
 import { Input } from '@/src/components/ui/Input';
 import { Text } from '@/src/components/ui/Text';
+import { PhoneInput } from '@/src/components/ui/PhoneInput';
+import { Ionicons } from '@expo/vector-icons';
 import { colors, palette, radius, spacing } from '@/src/theme';
 import type { Product } from '@/src/types';
 import { useAuthStore } from '@/stores/auth';
 import { type CreateProductData, useProductStore } from '@/stores/products';
 import { useFournisseursStore, type Fournisseur } from '@/stores/fournisseurs';
+import { OfflineNotice } from '@/src/components/ui/OfflineNotice';
 
 // ─── Helpers ─────────────────────────────────────────────────────────────────
 
@@ -85,9 +90,9 @@ function totalCost(f: FormState): number {
 }
 
 function validateForm(f: FormState): string | null {
-  if (!f.name.trim()) return 'Le nom du produit est requis.';
+  if (!f.name.trim()) return 'Indiquez le nom :)';
   const sp = parseFloat(f.sale_price);
-  if (isNaN(sp) || sp < 0) return 'Prix de vente invalide.';
+  if (isNaN(sp) || sp < 0) return 'Indiquer le prix de vente';
   return null;
 }
 
@@ -122,7 +127,7 @@ function SupplierPicker({ fournisseurs, selectedId, onSelect, businessId, userId
   const [newPhone, setNewPhone] = useState('');
 
   const handleCreate = async () => {
-    if (!newName.trim()) { Alert.alert('Nom requis'); return; }
+    if (!newName.trim()) { Alert.alert('Ajoutez un nom :)'); return; }
     const ok = await createFournisseur(businessId, userId, { name: newName, phone: newPhone });
     if (ok) {
       const latest = useFournisseursStore.getState().fournisseurs.find(f => f.name.trim() === newName.trim());
@@ -174,7 +179,7 @@ function SupplierPicker({ fournisseurs, selectedId, onSelect, businessId, userId
       {showNewForm && (
         <View style={styles.newSupplierForm}>
           <Input label="Nom *" value={newName} onChangeText={setNewName} placeholder="Ex: Marché Central" />
-          <Input label="Téléphone (optionnel)" value={newPhone} onChangeText={setNewPhone} keyboardType="phone-pad" placeholder="Ex: 622 00 00 00" />
+          <PhoneInput label="Téléphone (optionnel)" onChange={(e164) => setNewPhone(e164)} strict={false} />
           <View style={{ flexDirection: 'row', gap: spacing[2] }}>
             <Button label="Annuler" onPress={() => { setShowNewForm(false); setNewName(''); setNewPhone(''); }} variant="outline" style={{ flex: 1 }} />
             <Button label={fSaving ? '…' : 'Créer'} onPress={handleCreate} loading={fSaving} style={{ flex: 1 }} disabled={!newName.trim()} />
@@ -205,6 +210,7 @@ function ProductFormModal({ visible, editing, onClose, onSave, saving, currency,
   const [showDetails, setShowDetails] = useState(false);
   const nameRef = useRef<TextInput>(null);
   const scrollRef = useRef<ScrollView>(null);
+  const insets = useSafeAreaInsets();
 
   useEffect(() => {
     if (visible) {
@@ -242,8 +248,12 @@ function ProductFormModal({ visible, editing, onClose, onSave, saving, currency,
 
   return (
     <Modal visible={visible} animationType="slide" presentationStyle="pageSheet" onRequestClose={onClose}>
-        <SafeAreaView style={styles.modalSafe} edges={['bottom']}>
-          <KeyboardAvoidingView behavior={Platform.OS === 'ios' ? 'padding' : 'height'} style={{ flex: 1 }}>
+        <KeyboardAvoidingView
+          behavior={Platform.OS === 'ios' ? 'padding' : undefined}
+          keyboardVerticalOffset={Platform.OS === 'ios' ? 46 : 0}
+          style={{ flex: 1 }}
+        >
+          <SafeAreaView style={styles.modalSafe} edges={['bottom']}>
             <View style={styles.modalHeader}>
               <Pressable onPress={onClose} style={styles.modalCancel}>
                 <Text variant="body" color="secondary">Annuler</Text>
@@ -252,7 +262,12 @@ function ProductFormModal({ visible, editing, onClose, onSave, saving, currency,
               <View style={{ width: 64 }} />
             </View>
 
-            <ScrollView ref={scrollRef} style={{ flex: 1 }} contentContainerStyle={styles.formStack} keyboardShouldPersistTaps="handled">
+            <ScrollView
+              ref={scrollRef}
+              style={{ flexGrow: 1 }}
+              contentContainerStyle={[styles.formStack, { paddingBottom: 16 }]}
+              keyboardShouldPersistTaps="handled"
+            >
               {formError && (
                 <View style={styles.formError}>
                   <Text variant="bodySmall" color="danger">{formError}</Text>
@@ -327,7 +342,7 @@ function ProductFormModal({ visible, editing, onClose, onSave, saving, currency,
               {showProfitHint && (
                 <View style={styles.liveCalcBlock}>
                   <Text style={[styles.liveCalcText, { color: sp > pp ? palette.success : palette.danger }]}>
-                    Marge : {(sp - pp).toLocaleString('fr-FR')} {currency} par unité
+                    Gain : {(sp - pp).toLocaleString('fr-FR')} {currency} par unité
                   </Text>
                 </View>
               )}
@@ -390,13 +405,14 @@ function ProductFormModal({ visible, editing, onClose, onSave, saving, currency,
                 </>
               )}
             </ScrollView>
+          </SafeAreaView>
 
-            <View style={styles.modalFooter}>
-              <Button label={saving ? 'Enregistrement…' : 'Enregistrer'} onPress={handleSave}
-                loading={saving} fullWidth size="lg" />
-            </View>
-          </KeyboardAvoidingView>
-        </SafeAreaView>
+          {/* Footer outside ScrollView+SafeAreaView so KAV lifts it cleanly above the keyboard */}
+          <View style={[styles.modalFooter, { paddingBottom: Math.max(insets.bottom, spacing[5]) }]}>
+            <Button label={saving ? (editing ? 'Enregistrement…' : 'Ajout…') : (editing ? 'Enregistrer' : 'Ajouter')} onPress={handleSave}
+              loading={saving} fullWidth size="lg" />
+          </View>
+        </KeyboardAvoidingView>
       </Modal>
   );
 }
@@ -466,7 +482,7 @@ function StockAdjustModal({ visible, product, onClose, onConfirm, saving, curren
             label={saving ? 'Enregistrement…' : 'Confirmer'}
             onPress={async () => {
               const n = parseInt(qty);
-              if (isNaN(n) || n <= 0) { Alert.alert('Quantité invalide'); return; }
+              if (isNaN(n) || n <= 0) { Alert.alert('Entrez une quantité :)'); return; }
               await onConfirm(n, type, note);
             }}
             loading={saving} fullWidth size="lg"
@@ -488,21 +504,52 @@ interface ProductRowProps {
   onRestore?: () => void;
 }
 
+function StockStatus({ product }: { product: Product }) {
+  const isOut = product.stock_qty === 0;
+  const isLow = !isOut && product.reorder_level > 0 && product.stock_qty <= product.reorder_level;
+
+  if (isOut) {
+    return (
+      <View style={styles.stockOutRow}>
+        <Text style={styles.stockOutText}>Ce produit est fini</Text>
+      </View>
+    );
+  }
+  if (isLow) {
+    return (
+      <View style={styles.stockLowRow}>
+        <Ionicons name="leaf-outline" size={11} color="#B45309" />
+        <Text style={styles.stockLowText}>
+          Bientôt fini · Il reste {product.stock_qty} {product.unit}
+        </Text>
+      </View>
+    );
+  }
+  return (
+    <Text style={styles.productStockText}>{product.stock_qty} {product.unit}</Text>
+  );
+}
+
+const PRODUCT_BADGE_COLORS = ['#D1FAE5', '#EDE9FE', '#DBEAFE', '#FEF3C7', '#FFE4E6', '#CCFBF1'];
+
+function productBadgeColor(name: string) {
+  const sum = name.split('').reduce((acc, ch) => acc + ch.charCodeAt(0), 0);
+  return PRODUCT_BADGE_COLORS[sum % PRODUCT_BADGE_COLORS.length];
+}
+
 function ProductRow({ product, currency, onPress, archived, onRestore }: ProductRowProps) {
-  const sc = stockColor(product);
-  const bg = stockBg(product);
-  const margin = product.cost_price > 0
-    ? ((product.sale_price - product.cost_price) / product.cost_price * 100).toFixed(0)
-    : null;
+  const badgeBg = productBadgeColor(product.name);
+  const initial = product.name.charAt(0).toUpperCase();
 
   if (archived) {
     return (
       <View style={styles.productRow}>
-        <View style={styles.productInfo}>
-          <Text variant="label" numberOfLines={1}>{product.name}</Text>
-          <Text variant="caption" color="secondary">
-            {formatPrice(product.sale_price, currency)}
-          </Text>
+        <View style={[styles.productBadge, { backgroundColor: badgeBg, opacity: 0.5 }]}>
+          <Text style={styles.productBadgeText}>{initial}</Text>
+        </View>
+        <View style={styles.productCenter}>
+          <Text style={[styles.productName, { color: '#9CA3AF' }]} numberOfLines={1}>{product.name}</Text>
+          <Text style={styles.productStockText}>{product.stock_qty} {product.unit}</Text>
         </View>
         <View style={styles.productRight}>
           {onRestore && (
@@ -520,29 +567,22 @@ function ProductRow({ product, currency, onPress, archived, onRestore }: Product
 
   return (
     <Pressable onPress={onPress} style={({ pressed }) => [styles.productRow, pressed && { opacity: 0.65 }]}>
-      <View style={styles.productInfo}>
+      <View style={[styles.productBadge, { backgroundColor: badgeBg }]}>
+        <Text style={styles.productBadgeText}>{initial}</Text>
+      </View>
+      <View style={styles.productCenter}>
         <View style={{ flexDirection: 'row', alignItems: 'center', gap: spacing[2] }}>
-          <Text variant="label" numberOfLines={1}>{product.name}</Text>
+          <Text style={styles.productName} numberOfLines={1}>{product.name}</Text>
           {product.bulk_price ? (
             <View style={styles.bulkBadge}>
-              <Text variant="caption" style={{ color: colors.warning[700] }}>Disponible en gros</Text>
+              <Text variant="caption" style={{ color: colors.warning[700] }}>Gros</Text>
             </View>
           ) : null}
         </View>
-        {margin && (
-          <Text variant="caption" style={{ color: palette.success }}>+{margin}%</Text>
-        )}
+        <StockStatus product={product} />
       </View>
-
       <View style={styles.productRight}>
-        <Text variant="label" style={styles.priceText}>
-          {formatPrice(product.sale_price, currency)}
-        </Text>
-        <View style={[styles.stockBadge, { backgroundColor: bg }]}>
-          <Text variant="caption" style={{ color: sc, fontWeight: '600' }}>
-            {product.stock_qty} {product.unit}
-          </Text>
-        </View>
+        <Text style={styles.priceText}>{formatPrice(product.sale_price, currency)}</Text>
       </View>
     </Pressable>
   );
@@ -559,17 +599,47 @@ export default function CatalogueScreen() {
   const role = session?.activeMembership?.role;
   const canEdit = role === 'administrateur' || role === 'manager';
 
-  const { products, archivedProducts, loading, saving, fetchProducts, fetchArchivedProducts, createProduct, updateProduct, archiveProduct, restoreProduct, adjustStock } =
+  const { products, archivedProducts, loading, saving, offline, offlineSince, fetchProducts, fetchArchivedProducts, createProduct, updateProduct, archiveProduct, restoreProduct, adjustStock } =
     useProductStore();
   const { fournisseurs, fetchFournisseurs } = useFournisseursStore();
 
   const [search, setSearch] = useState('');
   const [showForm, setShowForm] = useState(false);
   const [editingProduct, setEditingProduct] = useState<Product | null>(null);
+
+  const { openForm } = useLocalSearchParams<{ openForm?: string }>();
+  useEffect(() => {
+    if (openForm === '1') {
+      setEditingProduct(null);
+      setShowForm(true);
+      router.setParams({ openForm: undefined });
+    }
+  }, [openForm]);
   const [showAdjust, setShowAdjust] = useState(false);
   const [adjustTarget, setAdjustTarget] = useState<Product | null>(null);
   const [tab, setTab] = useState<'actifs' | 'archives'>('actifs');
   const [successMsg, setSuccessMsg] = useState('');
+
+  const fabScale   = useRef(new Animated.Value(1)).current;
+  const fabOpacity = useRef(new Animated.Value(1)).current;
+
+  useEffect(() => {
+    const easing = Easing.inOut(Easing.sin);
+    const loop = Animated.loop(
+      Animated.sequence([
+        Animated.parallel([
+          Animated.timing(fabScale,   { toValue: 1.06, duration: 2000, easing, useNativeDriver: true }),
+          Animated.timing(fabOpacity, { toValue: 0.85, duration: 2000, easing, useNativeDriver: true }),
+        ]),
+        Animated.parallel([
+          Animated.timing(fabScale,   { toValue: 1,    duration: 2000, easing, useNativeDriver: true }),
+          Animated.timing(fabOpacity, { toValue: 1,    duration: 2000, easing, useNativeDriver: true }),
+        ]),
+      ])
+    );
+    loop.start();
+    return () => loop.stop();
+  }, []);
 
   const showSuccess = useCallback((msg: string) => {
     setSuccessMsg(msg);
@@ -597,8 +667,8 @@ export default function CatalogueScreen() {
 
   const activeFiltered = useMemo(() => {
     const q = search.toLowerCase().trim();
-    if (!q) return products;
-    return products.filter(p => p.name.toLowerCase().includes(q));
+    const base = q ? products.filter(p => p.name.toLowerCase().includes(q)) : products;
+    return [...base].sort((a, b) => (a.stock_qty === 0 ? 1 : 0) - (b.stock_qty === 0 ? 1 : 0));
   }, [products, search]);
 
   const archivedFiltered = useMemo(() => {
@@ -616,11 +686,11 @@ export default function CatalogueScreen() {
           text: 'Modifier',
           onPress: () => { setEditingProduct(product); setShowForm(true); },
         });
+        options.push({
+          text: 'Ajuster le stock',
+          onPress: () => { setAdjustTarget(product); setShowAdjust(true); },
+        });
       }
-      options.push({
-        text: 'Ajuster le stock',
-        onPress: () => { setAdjustTarget(product); setShowAdjust(true); },
-      });
       if (canEdit) {
         options.push({
           text: 'Archiver',
@@ -692,7 +762,6 @@ export default function CatalogueScreen() {
     [adjustTarget, businessId, userId, adjustStock, showSuccess],
   );
 
-  const lowStockCount = products.filter(p => p.stock_qty <= p.reorder_level && p.reorder_level > 0).length;
   const displayList = tab === 'actifs' ? activeFiltered : archivedFiltered;
 
   return (
@@ -704,6 +773,8 @@ export default function CatalogueScreen() {
         </View>
       ) : null}
 
+      {offline && <OfflineNotice offlineSince={offlineSince} />}
+
       {/* Header */}
       <View style={styles.header}>
         <View>
@@ -714,9 +785,6 @@ export default function CatalogueScreen() {
               : `${archivedProducts.length} archivé${archivedProducts.length !== 1 ? 's' : ''}`}
           </Text>
         </View>
-        {canEdit && tab === 'actifs' && (
-          <Button label="+ Ajouter" onPress={() => { setEditingProduct(null); setShowForm(true); }} size="sm" />
-        )}
       </View>
 
       {/* Tabs */}
@@ -730,15 +798,6 @@ export default function CatalogueScreen() {
         ))}
       </View>
 
-      {/* Alerts banner */}
-      {lowStockCount > 0 && tab === 'actifs' && (
-        <Pressable style={styles.alertBanner}>
-          <Text variant="bodySmall" style={{ color: colors.warning[700] }}>
-            ⚠️  {lowStockCount} produit{lowStockCount > 1 ? 's' : ''} en stock faible
-          </Text>
-        </Pressable>
-      )}
-
       {/* Search */}
       <View style={styles.searchRow}>
         <Input placeholder="Rechercher un produit…" value={search} onChangeText={setSearch} style={{ flex: 1 }} />
@@ -749,7 +808,7 @@ export default function CatalogueScreen() {
         <ScrollView horizontal showsHorizontalScrollIndicator={false} style={styles.statsScroll}
           contentContainerStyle={styles.statsContent}>
           <View style={styles.statChip}>
-            <Text variant="caption" color="secondary">Valeur stock</Text>
+            <Text variant="caption" color="secondary">Valeur du stock</Text>
             <Text variant="label">
               {formatPrice(products.reduce((s, p) => s + p.cost_price * p.stock_qty, 0), currency)}
             </Text>
@@ -772,26 +831,22 @@ export default function CatalogueScreen() {
         <View style={styles.emptyState}>
           {tab === 'archives' ? (
             <>
-              <Text style={styles.emptyIcon}>📦</Text>
+              <Ionicons name="cube-outline" size={48} color={palette.textDisabled} />
               <Text variant="body" color="secondary">Aucun produit archivé.</Text>
             </>
           ) : products.length === 0 ? (
             <>
-              <Text style={styles.emptyIcon}>📦</Text>
-              <Text variant="h4">Aucun produit</Text>
+              <Ionicons name="cube-outline" size={72} color={palette.textDisabled} />
+              <Text variant="h4">Catalogue vide</Text>
               <Text variant="body" color="secondary" style={styles.emptyDesc}>
-                {canEdit
-                  ? 'Ajoutez votre premier produit pour commencer à gérer votre stock.'
-                  : 'Aucun produit dans ce commerce pour l\'instant.'}
+                {!canEdit
+                  ? 'Votre responsable ajoutera les produits bientôt.'
+                  : 'Ajoutez votre premier produit pour démarrer.'}
               </Text>
-              {canEdit && (
-                <Button label="Ajouter un produit" onPress={() => { setEditingProduct(null); setShowForm(true); }}
-                  style={{ marginTop: spacing[4] }} />
-              )}
             </>
           ) : (
             <>
-              <Text style={styles.emptyIcon}>🔍</Text>
+              <Ionicons name="search-outline" size={48} color={palette.textDisabled} />
               <Text variant="body" color="secondary">Aucun résultat pour "{search}"</Text>
             </>
           )}
@@ -842,6 +897,19 @@ export default function CatalogueScreen() {
         saving={saving}
         currency={currency}
       />
+
+      {canEdit && tab === 'actifs' && (
+        <Animated.View style={[styles.fabContainer, { opacity: fabOpacity, transform: [{ scale: fabScale }] }]}>
+          <Pressable
+            onPress={() => { setEditingProduct(null); setShowForm(true); }}
+            style={({ pressed }) => [styles.fab, pressed && { opacity: 0.82 }]}
+            accessibilityLabel="Ajouter un produit"
+            accessibilityRole="button"
+          >
+            <Text style={styles.fabIcon}>+</Text>
+          </Pressable>
+        </Animated.View>
+      )}
     </SafeAreaView>
   );
 }
@@ -883,12 +951,38 @@ const styles = StyleSheet.create({
     gap: 2, alignItems: 'center', minWidth: 100,
   },
   list: { paddingHorizontal: spacing[5], paddingBottom: spacing[10] },
-  separator: { height: 1, backgroundColor: palette.border },
+  separator: { height: 0 },
   productRow: {
-    flexDirection: 'row', alignItems: 'center', paddingVertical: spacing[3],
-    backgroundColor: palette.surface, gap: spacing[3],
+    flexDirection: 'row', alignItems: 'center',
+    paddingVertical: 14,
+    borderBottomWidth: 1, borderBottomColor: '#F3F4F6',
+    backgroundColor: palette.surface,
   },
-  productInfo: { flex: 1, gap: 4 },
+  productBadge: {
+    width: 40, height: 40, borderRadius: 8,
+    alignItems: 'center', justifyContent: 'center',
+    marginRight: 0,
+  },
+  productBadgeText: { fontSize: 16, fontWeight: '600', color: '#374151' },
+  productCenter: { flex: 1, paddingLeft: 12, gap: 3 },
+  productName: { fontSize: 16, fontWeight: '600', color: '#111827' },
+  productStockText: { fontSize: 13, color: '#6B7280' },
+  stockLowRow: {
+    flexDirection: 'row', alignItems: 'center', gap: 4,
+    alignSelf: 'flex-start',
+    backgroundColor: '#FFFBEB',
+    borderRadius: 99,
+    paddingHorizontal: 8, paddingVertical: 3,
+  },
+  stockLowText: { fontSize: 12, fontWeight: '500', color: '#B45309' },
+  stockOutRow: {
+    flexDirection: 'row', alignItems: 'center', gap: 4,
+    alignSelf: 'flex-start',
+    backgroundColor: colors.danger[50],
+    borderRadius: 99,
+    paddingHorizontal: 8, paddingVertical: 3,
+  },
+  stockOutText: { fontSize: 12, fontWeight: '600', color: colors.danger[600] },
   productMeta: { flexDirection: 'row', gap: spacing[2], alignItems: 'center' },
   categoryBadge: {
     backgroundColor: palette.primaryLight, borderRadius: radius.sm,
@@ -898,16 +992,42 @@ const styles = StyleSheet.create({
     backgroundColor: colors.warning[50], borderRadius: radius.sm,
     paddingHorizontal: spacing[1.5], paddingVertical: 2, borderWidth: 1, borderColor: colors.warning[100],
   },
-  productRight: { alignItems: 'flex-end', gap: 4 },
-  priceText: { color: palette.textPrimary },
-  stockBadge: { borderRadius: radius.sm, paddingHorizontal: spacing[2], paddingVertical: 2 },
+  productRight: { alignItems: 'flex-end' },
+  priceText: { fontSize: 15, fontWeight: '600', color: '#4F46E5' },
   restoreBtn: {
     borderRadius: radius.sm, paddingHorizontal: spacing[3], paddingVertical: spacing[1.5],
     borderWidth: 1.5, borderColor: palette.primary, backgroundColor: palette.primaryLight,
   },
   emptyState: { flex: 1, alignItems: 'center', justifyContent: 'center', padding: spacing[8], gap: spacing[3] },
-  emptyIcon: { fontSize: 48 },
   emptyDesc: { textAlign: 'center', maxWidth: 260 },
+
+  // FAB
+  fabContainer: {
+    position: 'absolute',
+    bottom: 194,
+    right: spacing[4],
+    zIndex: 10,
+  },
+  fab: {
+    width: 56,
+    height: 56,
+    borderRadius: radius.full,
+    backgroundColor: palette.primary,
+    alignItems: 'center',
+    justifyContent: 'center',
+    shadowColor: colors.neutral[900],
+    shadowOffset: { width: 0, height: 4 },
+    shadowOpacity: 0.18,
+    shadowRadius: 8,
+    elevation: 8,
+  },
+  fabIcon: {
+    fontSize: 28,
+    lineHeight: 32,
+    fontWeight: '300' as const,
+    color: palette.textInverse,
+    marginTop: -2,
+  },
 
   // Modal shared
   modalSafe: { flex: 1, backgroundColor: palette.background },

@@ -1,5 +1,7 @@
-import { useCallback, useEffect, useMemo, useState } from 'react';
-import { Alert, Linking, Modal, Pressable, ScrollView, StyleSheet, TextInput, View } from 'react-native';
+import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
+import { Alert, Animated, Linking, Modal, Pressable, ScrollView, StyleSheet, Text as RNText, TextInput, View } from 'react-native';
+import { Ionicons } from '@expo/vector-icons';
+import { haptics } from '@/lib/haptics';
 import { SafeAreaView } from 'react-native-safe-area-context';
 import { router, useLocalSearchParams } from 'expo-router';
 import { Card } from '@/src/components/ui/Card';
@@ -46,9 +48,9 @@ type HistoryItem =
 // ─── Edit Client Modal ────────────────────────────────────────────────────────
 
 function EditModal({
-  visible, clientName, record, businessId, userId, onClose, onSaved,
+  visible, displayName, record, businessId, userId, onClose, onSaved,
 }: {
-  visible: boolean; clientName: string; record: ClientRecord | null;
+  visible: boolean; displayName: string; record: ClientRecord | null;
   businessId: string; userId: string;
   onClose: () => void; onSaved: (r: ClientRecord) => void;
 }) {
@@ -68,14 +70,14 @@ function EditModal({
         .update({ phone: phone.trim() || null, notes: notes.trim() || null, updated_at: new Date().toISOString() })
         .eq('id', record.id);
       if (!error) onSaved({ ...record, phone: phone.trim() || null, notes: notes.trim() || null });
-      else Alert.alert('Erreur', 'Impossible de modifier.');
+      else Alert.alert('Pas enregistré. On reprend :)');
     } else {
       const { data, error } = await supabase
         .from('clients')
-        .insert({ business_id: businessId, name: clientName, phone: phone.trim() || null, notes: notes.trim() || null, created_by: userId })
+        .insert({ business_id: businessId, name: displayName, phone: phone.trim() || null, notes: notes.trim() || null, created_by: userId })
         .select().single();
       if (!error && data) onSaved(data as ClientRecord);
-      else Alert.alert('Erreur', 'Impossible de sauvegarder.');
+      else Alert.alert('Pas enregistré. On reprend :)');
     }
     setSaving(false);
   };
@@ -89,7 +91,7 @@ function EditModal({
           <View style={{ width: 60 }} />
         </View>
         <ScrollView contentContainerStyle={styles.pad} keyboardShouldPersistTaps="handled">
-          <Text variant="label">{clientName}</Text>
+          <Text variant="label">{displayName}</Text>
           <Input label="Téléphone" value={phone} onChangeText={setPhone}
             placeholder="Ex: 620 00 00 00" keyboardType="phone-pad" />
           <Input label="Notes" value={notes} onChangeText={setNotes}
@@ -107,10 +109,10 @@ function EditModal({
 // ─── Payment Modal ────────────────────────────────────────────────────────────
 
 function PayModal({
-  visible, clientName, totalOwed, creditSales, currency, saving,
+  visible, displayName, totalOwed, creditSales, currency, saving,
   onClose, onRecord,
 }: {
-  visible: boolean; clientName: string; totalOwed: number;
+  visible: boolean; displayName: string; totalOwed: number;
   creditSales: Vente[]; currency: string; saving: boolean;
   onClose: () => void;
   onRecord: (amount: number, method: string, date: string, specificSaleId?: string) => void;
@@ -140,15 +142,15 @@ function PayModal({
   };
 
   const handleRecord = () => {
-    if (amount <= 0) { Alert.alert('Montant invalide', 'Entrez un montant supérieur à zéro.'); return; }
+    if (amount <= 0) { Alert.alert('Vérifiez le montant :)'); return; }
     if (allocation === 'fifo' && amount > totalOwed + 0.01) {
-      Alert.alert('Montant trop élevé', `Le solde dû est de ${fmt(totalOwed, currency)}.`);
+      Alert.alert('Le montant dépasse le total :)');
       return;
     }
     if (allocation === 'specific') {
       const max = saleRemaining(specificSaleId);
       if (amount > max + 0.01) {
-        Alert.alert('Montant trop élevé', `Le reste à payer pour cette vente est de ${fmt(max, currency)}.`);
+        Alert.alert('Le montant dépasse le total :)');
         return;
       }
       onRecord(amount, method, date, specificSaleId);
@@ -163,20 +165,20 @@ function PayModal({
         <View style={styles.hdr}>
           <Pressable onPress={onClose}><Text variant="body" color="secondary">Annuler</Text></Pressable>
           <Text variant="h4" style={{ flex: 1, textAlign: 'center' }} numberOfLines={1}>
-            {clientName} a payé combien?
+            {displayName} a payé combien?
           </Text>
           <View style={{ width: 60 }} />
         </View>
         <ScrollView contentContainerStyle={styles.pad} keyboardShouldPersistTaps="handled">
           {/* Context */}
           <Card style={[styles.contextCard, { borderLeftColor: palette.warning, borderLeftWidth: 3 }]}>
-            <Text variant="caption" color="secondary">Doit en total</Text>
+            <Text variant="caption" color="secondary">{displayName} vous doit</Text>
             <Text variant="amountLarge" style={{ color: palette.warning }}>{fmt(totalOwed, currency)}</Text>
           </Card>
 
           {/* Amount */}
           <View style={{ gap: spacing[2] }}>
-            <Text variant="label">Montant reçu</Text>
+            <Text variant="label">Combien {displayName} vous donne ?</Text>
             <View style={styles.amountRow}>
               <TextInput
                 style={styles.amountInput}
@@ -191,14 +193,14 @@ function PayModal({
                 style={styles.solderBtn}
                 onPress={() => setAmountStr(Math.round(totalOwed).toString())}
               >
-                <Text variant="label" style={{ color: palette.primary }}>Solder tout</Text>
+                <Text variant="label" style={{ color: palette.primary }}>Tout régler</Text>
               </Pressable>
             </View>
           </View>
 
           {/* Method */}
           <View style={{ gap: spacing[2] }}>
-            <Text variant="label">Mode de paiement</Text>
+            <Text variant="label">Payé par :</Text>
             <View style={styles.chipRow}>
               {PAY_METHODS.map(m => (
                 <Pressable key={m.key} onPress={() => setMethod(m.key)}
@@ -213,18 +215,18 @@ function PayModal({
 
           {/* Allocation */}
           <View style={{ gap: spacing[2] }}>
-            <Text variant="label">Imputer à</Text>
+            <Text variant="label">Déduire de :</Text>
             <View style={styles.chipRow}>
               <Pressable style={[styles.chip, allocation === 'fifo' && styles.chipActive]}
                 onPress={() => setAllocation('fifo')}>
                 <Text variant="caption" style={{ color: allocation === 'fifo' ? palette.textInverse : palette.textPrimary }}>
-                  Plus ancien d'abord
+                  Dette la plus ancienne
                 </Text>
               </Pressable>
               <Pressable style={[styles.chip, allocation === 'specific' && styles.chipActive]}
                 onPress={() => setAllocation('specific')}>
                 <Text variant="caption" style={{ color: allocation === 'specific' ? palette.textInverse : palette.textPrimary }}>
-                  Vente spécifique
+                  Choisir une dette
                 </Text>
               </Pressable>
             </View>
@@ -246,7 +248,7 @@ function PayModal({
           </View>
         </ScrollView>
         <View style={styles.footer}>
-          <Button label={saving ? 'Enregistrement…' : 'Enregistrer'}
+          <Button label={saving ? 'Enregistrement…' : 'Confirmer le paiement'}
             onPress={handleRecord} loading={saving} fullWidth size="lg" />
         </View>
       </SafeAreaView>
@@ -256,9 +258,12 @@ function PayModal({
 
 // ─── Main Screen ──────────────────────────────────────────────────────────────
 
+const UUID_RE = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
+
 export default function ClientLedgerScreen() {
   const { name: encodedName } = useLocalSearchParams<{ name: string }>();
-  const clientName = decodeURIComponent(encodedName ?? '');
+  const routeParam = decodeURIComponent(encodedName ?? '');
+  const isClientId = UUID_RE.test(routeParam);
 
   const session = useAuthStore(s => s.session);
   const businessId = session?.activeBusiness?.id ?? '';
@@ -269,11 +274,22 @@ export default function ClientLedgerScreen() {
 
   const { sales, loading, saving, fetchSales, recordPayment, recordClientPayment } = useVentesStore();
 
+  // displayName is resolved after clientRecord loads when routing by UUID
+  const [displayName, setDisplayName] = useState(isClientId ? '' : routeParam);
   const [ledgerPayments, setLedgerPayments] = useState<LedgerPayment[]>([]);
   const [clientRecord, setClientRecord] = useState<ClientRecord | null>(null);
   const [loadingLocal, setLoadingLocal] = useState(true);
   const [showPayModal, setShowPayModal] = useState(false);
   const [showEditModal, setShowEditModal] = useState(false);
+  const [successPayment, setSuccessPayment] = useState<{ amount: number } | null>(null);
+  const checkScale = useRef(new Animated.Value(0)).current;
+
+  useEffect(() => {
+    if (successPayment) {
+      checkScale.setValue(0);
+      Animated.spring(checkScale, { toValue: 1, useNativeDriver: true, tension: 65, friction: 8 }).start();
+    }
+  }, [successPayment]);
 
   // Load sales + client record on mount — always refresh to catch new credit sales
   useEffect(() => {
@@ -286,38 +302,60 @@ export default function ClientLedgerScreen() {
   useEffect(() => {
     if (loading) return;
     loadLedgerPayments();
-  }, [sales, loading, clientName]);
+  }, [sales, loading, displayName]);
 
   const loadClientRecord = async () => {
-    const { data } = await supabase
-      .from('clients').select('*').eq('business_id', businessId).eq('name', clientName).maybeSingle();
-    setClientRecord(data as ClientRecord | null);
+    let query = supabase.from('clients').select('*').eq('business_id', businessId);
+    if (isClientId) {
+      query = query.eq('id', routeParam);
+    } else {
+      query = query.eq('name', routeParam);
+    }
+    const { data } = await query.maybeSingle();
+    const record = data as ClientRecord | null;
+    setClientRecord(record);
+    if (isClientId && record) setDisplayName(record.name);
   };
 
   const loadLedgerPayments = async () => {
-    const clientSales = sales.filter(s => s.customer_name === clientName);
+    const name = isClientId ? displayName : routeParam;
+    const clientSales = isClientId
+      ? sales.filter(s => s.client_id === routeParam || (s.client_id == null && s.customer_name === name))
+      : sales.filter(s => s.customer_name === routeParam);
     if (clientSales.length === 0) { setLoadingLocal(false); return; }
 
     const saleIds = clientSales.map(s => s.id);
-    const { data } = await supabase
+    const { data, error } = await supabase
       .from('payments')
       .select('id, order_id, method, amount, date')
       .in('order_id', saleIds)
       .order('date', { ascending: true });
-    setLedgerPayments((data ?? []) as LedgerPayment[]);
+    if (error) { setLoadingLocal(false); return; }
+    setLedgerPayments((data ?? []).map(p => ({ ...(p as object), amount: (p as { amount: number }).amount / 100 })) as LedgerPayment[]);
     setLoadingLocal(false);
   };
 
-  const clientSales = useMemo(
-    () => sales.filter(s => s.customer_name === clientName && s.status !== 'annule'),
-    [sales, clientName],
-  );
+  const clientSales = useMemo(() => {
+    const name = isClientId ? displayName : routeParam;
+    return sales.filter(s =>
+      s.status !== 'annule' &&
+      (isClientId
+        ? s.client_id === routeParam || (s.client_id == null && name && s.customer_name === name)
+        : s.customer_name === routeParam)
+    );
+  }, [sales, routeParam, isClientId, displayName]);
 
   const creditSales = useMemo(
     () => clientSales.filter(s => s.status === 'credit')
       .sort((a, b) => new Date(a.created_at).getTime() - new Date(b.created_at).getTime()),
     [clientSales],
   );
+
+  const debtAge = useMemo(() => {
+    if (creditSales.length === 0) return 0;
+    const oldest = creditSales[0].sale_date ?? creditSales[0].created_at.split('T')[0];
+    return Math.floor((Date.now() - new Date(oldest + 'T00:00:00').getTime()) / 86400000);
+  }, [creditSales]);
 
   const totalSold = clientSales.reduce((s, v) => s + v.total_amount, 0);
   const totalPaid = ledgerPayments.reduce((s, p) => s + p.amount, 0);
@@ -340,31 +378,30 @@ export default function ClientLedgerScreen() {
     if (specificSaleId) {
       result = await recordPayment(specificSaleId, amount, method, date);
     } else {
-      result = await recordClientPayment(clientName, businessId, amount, method, date);
+      result = await recordClientPayment(displayName, businessId, amount, method, date);
     }
     if (result.ok) {
       setShowPayModal(false);
-      const settled = result.fullySettled ?? result.fullyPaid ?? false;
-      if (settled) Alert.alert(`${clientName} est soldé(e) ✓`, 'Compte entièrement payé.');
-      // Reload ledger payments to reflect changes
+      haptics.success();
+      setSuccessPayment({ amount });
       loadLedgerPayments();
     }
-  }, [clientName, businessId, recordPayment, recordClientPayment]);
+  }, [displayName, businessId, recordPayment, recordClientPayment]);
 
   const openMenu = useCallback(() => {
     if (!canEdit) return;
-    Alert.alert(clientName, undefined, [
+    Alert.alert(displayName, undefined, [
       { text: 'Modifier les infos', onPress: () => setShowEditModal(true) },
       { text: 'Annuler', style: 'cancel' },
     ]);
-  }, [clientName, canEdit]);
+  }, [displayName, canEdit]);
 
   if (loadingLocal && loading) {
     return (
       <SafeAreaView style={styles.safe} edges={['top']}>
         <View style={styles.hdr}>
           <Pressable onPress={() => router.back()}><Text variant="body" color="secondary">‹ Retour</Text></Pressable>
-          <Text variant="h4" style={{ flex: 1, textAlign: 'center' }} numberOfLines={1}>{clientName}</Text>
+          <Text variant="h4" style={{ flex: 1, textAlign: 'center' }} numberOfLines={1}>{displayName}</Text>
           <View style={{ width: 60 }} />
         </View>
         <Text variant="body" color="secondary" style={{ textAlign: 'center', marginTop: spacing[8] }}>
@@ -379,7 +416,7 @@ export default function ClientLedgerScreen() {
       {/* Header */}
       <View style={styles.hdr}>
         <Pressable onPress={() => router.back()}><Text variant="body" color="secondary">‹ Retour</Text></Pressable>
-        <Text variant="h4" style={{ flex: 1, textAlign: 'center' }} numberOfLines={1}>{clientName}</Text>
+        <Text variant="h4" style={{ flex: 1, textAlign: 'center' }} numberOfLines={1}>{displayName}</Text>
         {canEdit ? (
           <Pressable onPress={openMenu} style={{ width: 60, alignItems: 'flex-end' }}>
             <Text variant="body" color="secondary">⋯</Text>
@@ -394,23 +431,33 @@ export default function ClientLedgerScreen() {
         {/* Status banner */}
         {totalOwed > 0 ? (
           <View style={styles.bannerOrange}>
-            <View style={{ flex: 1, minWidth: 0 }}>
-              <Text variant="caption" style={{ color: colors.warning[700] }}>⏳ Doit</Text>
-              <Text
-                variant="amountLarge"
-                style={{ color: colors.warning[700] }}
-                adjustsFontSizeToFit
-                numberOfLines={1}
-              >
-                {fmt(totalOwed, currency)}
-              </Text>
-            </View>
-            <Button label="+ Enregistrer un paiement" size="sm"
-              onPress={() => setShowPayModal(true)} style={{ flexShrink: 0 }} />
+            <Text style={styles.bannerLabel}>{displayName} vous doit</Text>
+            <Text style={styles.bannerAmount}>{fmt(totalOwed, currency)}</Text>
+            <RNText style={[styles.bannerAge, { color: debtAge >= 30 ? palette.danger : debtAge >= 7 ? '#B45309' : '#9CA3AF' }]}>
+              {debtAge === 0 ? "depuis aujourd'hui" : `depuis ${debtAge} jour${debtAge > 1 ? 's' : ''}`}
+            </RNText>
+            {totalSold > 0 && totalPaid > 0 && (
+              <>
+                <View style={styles.progressTrack}>
+                  <View style={[styles.progressFill, { width: `${Math.min(100, Math.round((totalPaid / totalSold) * 100))}%` }]} />
+                </View>
+                <RNText style={styles.progressLabel}>A déjà remboursé {fmt(totalPaid, currency)}</RNText>
+              </>
+            )}
+            <Pressable
+              onPress={() => setShowPayModal(true)}
+              style={({ pressed }) => [styles.bannerBtn, pressed && { opacity: 0.85 }]}
+            >
+              <Text style={styles.bannerBtnText}>+ Enregistrer un paiement</Text>
+            </Pressable>
           </View>
         ) : (
           <View style={styles.bannerGreen}>
-            <Text variant="label" style={{ color: colors.success[700] }}>✓ Compte soldé</Text>
+            <Ionicons name="checkmark-circle" size={22} color={colors.success[700]} />
+            <View style={{ flex: 1 }}>
+              <RNText style={{ fontSize: 14, fontWeight: '700', color: colors.success[700] }}>{displayName} ne vous doit plus rien</RNText>
+              <RNText style={{ fontSize: 12, color: colors.success[600], marginTop: 2 }}>Compte soldé · tout est à jour</RNText>
+            </View>
           </View>
         )}
 
@@ -434,11 +481,13 @@ export default function ClientLedgerScreen() {
                 const remaining = s.total_amount - (s.amount_paid ?? 0);
                 const isCredit = s.status === 'credit';
                 return (
-                  <Pressable key={`s-${s.id}`} onPress={() => router.push(`/ventes`)}
-                    style={[styles.ledgerRow, idx < history.length - 1 && styles.rowBorder]}>
+                  <View key={`s-${s.id}`} style={[styles.ledgerRow, idx < history.length - 1 && styles.rowBorder]}>
+                    <View style={[styles.rowIcon, { backgroundColor: isCredit ? '#FEF3C7' : '#F3F4F6' }]}>
+                      <Ionicons name="cart-outline" size={14} color={isCredit ? '#D97706' : '#9CA3AF'} />
+                    </View>
                     <View style={{ flex: 1 }}>
                       <Text variant="body" numberOfLines={1}>
-                        {s.lines?.map(l => l.product_name).join(', ') || 'Vente'}
+                        {s.lines?.map(l => l.product_name).join(', ') || 'Achat à crédit'}
                       </Text>
                       <Text variant="caption" color="secondary">{dateLabel(item.date)}</Text>
                       {isCredit && (s.amount_paid ?? 0) > 0 && (
@@ -448,19 +497,22 @@ export default function ClientLedgerScreen() {
                       )}
                     </View>
                     <Text variant="label" style={{ color: isCredit ? palette.warning : palette.textSecondary }}>
-                      +{fmt(s.total_amount, currency)}
+                      {fmt(s.total_amount, currency)}
                     </Text>
-                  </Pressable>
+                  </View>
                 );
               } else {
                 const p = item.payment;
                 return (
                   <View key={`p-${p.id}`} style={[styles.ledgerRow, idx < history.length - 1 && styles.rowBorder]}>
+                    <View style={[styles.rowIcon, { backgroundColor: '#F0FDF4' }]}>
+                      <Ionicons name="arrow-down-circle-outline" size={14} color="#16A34A" />
+                    </View>
                     <View style={{ flex: 1 }}>
                       <Text variant="body">{methodLabel(p.method)}</Text>
                       <Text variant="caption" color="secondary">{dateLabel(p.date)}</Text>
                     </View>
-                    <Text variant="label" style={{ color: palette.success }}>−{fmt(p.amount, currency)}</Text>
+                    <Text variant="label" style={{ color: '#16A34A' }}>+ {fmt(p.amount, currency)}</Text>
                   </View>
                 );
               }
@@ -478,17 +530,17 @@ export default function ClientLedgerScreen() {
         {clientSales.length > 0 && (
           <Card style={{ gap: spacing[3] }}>
             <View style={styles.totalRow}>
-              <Text variant="body" color="secondary">Total vendu à {clientName}</Text>
+              <Text variant="body" color="secondary">Achats totaux</Text>
               <Text variant="label">{fmt(totalSold, currency)}</Text>
             </View>
             <View style={styles.totalRow}>
-              <Text variant="body" color="secondary">Total payé</Text>
+              <Text variant="body" color="secondary">Déjà payé</Text>
               <Text variant="label" style={{ color: palette.success }}>{fmt(totalPaid, currency)}</Text>
             </View>
             <View style={[styles.totalRow, styles.totalRowBold]}>
-              <Text variant="label">Solde</Text>
+              <Text variant="label">Reste à payer</Text>
               <Text variant="label" style={{ color: totalOwed > 0 ? palette.warning : palette.success }}>
-                {totalOwed > 0 ? fmt(totalOwed, currency) : '✓ Soldé'}
+                {fmt(totalOwed, currency)}
               </Text>
             </View>
           </Card>
@@ -497,7 +549,7 @@ export default function ClientLedgerScreen() {
 
       <PayModal
         visible={showPayModal}
-        clientName={clientName}
+        displayName={displayName}
         totalOwed={totalOwed}
         creditSales={creditSales}
         currency={currency}
@@ -508,13 +560,32 @@ export default function ClientLedgerScreen() {
 
       <EditModal
         visible={showEditModal}
-        clientName={clientName}
+        displayName={displayName}
         record={clientRecord}
         businessId={businessId}
         userId={userId}
         onClose={() => setShowEditModal(false)}
         onSaved={(r) => { setClientRecord(r); setShowEditModal(false); }}
       />
+
+      {/* Payment success overlay */}
+      {successPayment && (
+        <View style={styles.successOverlay}>
+          <Animated.View style={[styles.successBadge, { transform: [{ scale: checkScale }] }]}>
+            <Ionicons name="checkmark" size={44} color="#16A34A" />
+          </Animated.View>
+          <Text style={styles.successHeadline}>C'est réglé !</Text>
+          <Text style={styles.successSubtitle}>
+            {displayName} vous a payé {fmt(successPayment.amount, currency)}.
+          </Text>
+          <Pressable
+            style={({ pressed }) => [styles.successBtn, pressed && { opacity: 0.85 }]}
+            onPress={() => setSuccessPayment(null)}
+          >
+            <Text style={styles.successBtnText}>Continuer</Text>
+          </Pressable>
+        </View>
+      )}
     </SafeAreaView>
   );
 }
@@ -525,20 +596,34 @@ const styles = StyleSheet.create({
     flexDirection: 'row', alignItems: 'center', justifyContent: 'space-between',
     padding: spacing[5], borderBottomWidth: 1, borderBottomColor: palette.border,
   },
-  content: { padding: spacing[5], gap: spacing[4], paddingBottom: spacing[10] },
+  content: { paddingHorizontal: spacing[5], paddingTop: 12, paddingBottom: spacing[10], gap: spacing[4] },
 
   bannerOrange: {
     backgroundColor: colors.warning[50], borderRadius: radius.lg,
     borderWidth: 1, borderColor: colors.warning[100],
-    padding: spacing[4], flexDirection: 'row',
-    alignItems: 'center', justifyContent: 'space-between',
-    gap: spacing[3],
+    flexDirection: 'column', alignItems: 'center', justifyContent: 'flex-start',
+    paddingHorizontal: 16, paddingTop: 16, paddingBottom: 16,
   },
+  bannerLabel: { fontSize: 14, color: '#6B7280', textAlign: 'center', fontWeight: '400' },
+  bannerAmount: { fontSize: 32, fontWeight: '700', lineHeight: 44, color: '#B45309', textAlign: 'center', marginVertical: 4 },
+  bannerBtn: {
+    width: '100%', backgroundColor: '#4F46E5', borderRadius: 12,
+    paddingVertical: 12, alignItems: 'center', justifyContent: 'center', marginTop: 12,
+  },
+  bannerBtnText: { fontSize: 16, fontWeight: '600', color: '#FFFFFF' },
   bannerGreen: {
     backgroundColor: colors.success[50], borderRadius: radius.lg,
     borderWidth: 1, borderColor: colors.success[100],
-    padding: spacing[4], alignItems: 'center',
+    padding: spacing[4], flexDirection: 'row', alignItems: 'center', justifyContent: 'flex-start', gap: 8,
   },
+  bannerAge: { fontSize: 12, textAlign: 'center', marginBottom: 6 },
+  progressTrack: {
+    width: '100%', height: 4, backgroundColor: '#E5E7EB',
+    borderRadius: 2, overflow: 'hidden', marginBottom: 4,
+  },
+  progressFill: { height: '100%', backgroundColor: '#16A34A', borderRadius: 2 },
+  progressLabel: { fontSize: 12, color: '#6B7280', textAlign: 'center', marginBottom: 8 },
+  rowIcon: { width: 28, height: 28, borderRadius: 8, alignItems: 'center', justifyContent: 'center' },
   contactRow: { flexDirection: 'row', alignItems: 'center', justifyContent: 'space-between' },
 
   section: {
@@ -582,6 +667,33 @@ const styles = StyleSheet.create({
     backgroundColor: palette.surface,
   },
   chipActive: { backgroundColor: palette.primary, borderColor: palette.primary },
+  successOverlay: {
+    ...StyleSheet.absoluteFillObject,
+    backgroundColor: '#F0FDF4',
+    alignItems: 'center',
+    justifyContent: 'center',
+    padding: 32,
+    zIndex: 100,
+  },
+  successBadge: {
+    width: 80, height: 80, borderRadius: 40,
+    backgroundColor: '#DCFCE7',
+    alignItems: 'center', justifyContent: 'center',
+    marginBottom: 24,
+  },
+  successHeadline: {
+    fontSize: 28, fontWeight: '700', lineHeight: 40, color: '#16A34A',
+    textAlign: 'center', marginBottom: 8,
+  },
+  successSubtitle: {
+    fontSize: 18, color: '#374151',
+    textAlign: 'center', marginTop: 8, marginBottom: 40,
+  },
+  successBtn: {
+    width: '100%', backgroundColor: '#4F46E5', borderRadius: 14,
+    paddingVertical: 16, alignItems: 'center',
+  },
+  successBtnText: { fontSize: 16, fontWeight: '600', color: '#FFFFFF' },
   saleOption: {
     paddingHorizontal: spacing[3], paddingVertical: spacing[2],
     borderRadius: radius.md, borderWidth: 1, borderColor: palette.border,

@@ -41,8 +41,14 @@ const TRANSLATIONS: [string, string][] = [
 ];
 
 export function translateError(err: unknown, fallback: string): string {
-  if (!(err instanceof Error)) return fallback;
-  const lower = err.message.toLowerCase();
+  const message =
+    err instanceof Error
+      ? err.message
+      : typeof (err as Record<string, unknown>)?.message === 'string'
+        ? (err as Record<string, unknown>).message as string
+        : null;
+  if (!message) return fallback;
+  const lower = message.toLowerCase();
   for (const [pattern, translation] of TRANSLATIONS) {
     if (lower.includes(pattern)) return translation;
   }

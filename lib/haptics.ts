@@ -4,7 +4,7 @@ import * as Haptics from 'expo-haptics';
 // try/catch guards against broken vibration motors on cheap Android hardware.
 export const haptics = {
   tap: () => {
-    void (async () => { try { await Haptics.selectionAsync(); } catch {} })();
+    void (async () => { try { await Haptics.impactAsync(Haptics.ImpactFeedbackStyle.Light); } catch {} })();
   },
   success: () => {
     void (async () => {

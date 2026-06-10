@@ -1,8 +1,11 @@
 import { create } from 'zustand';
 import { supabase } from '@/lib/supabase';
-import { generateId } from '@/lib/id';
+import { generateId, generateFallbackName } from '@/lib/id';
 import { translateError } from '@/lib/errors';
 import { trackEvent } from '@/lib/analytics';
+import { saveVentesCache, getVentesCache, getCacheTimestamp, enqueue, getQueueCount } from '@/lib/db';
+import { isNetworkError } from '@/lib/sync';
+import { useSyncStore } from '@/stores/sync';
 
 export interface VenteLigne {
   id: string;
@@ -25,6 +28,7 @@ export interface Vente {
   id: string;
   business_id: string;
   customer_name: string | null;
+  client_id: string | null;
   seller_id: string;
   seller_name: string;
   status: string;
@@ -47,6 +51,8 @@ interface VentesStore {
   loading: boolean;
   saving: boolean;
   error: string | null;
+  offline: boolean;
+  offlineSince: number | null;
   fetchSales: (businessId: string, sellerId?: string, since?: string) => Promise<void>;
   loadDetail: (saleId: string) => Promise<void>;
   recordPayment: (saleId: string, amount: number, method: string, date: string) => Promise<{ ok: boolean; fullyPaid: boolean }>;
@@ -62,9 +68,12 @@ export const useVentesStore = create<VentesStore>((set, get) => ({
   loading: false,
   saving: false,
   error: null,
+  offline: false,
+  offlineSince: null,
 
   fetchSales: async (businessId, sellerId, since) => {
     set({ loading: true, error: null });
+    const cacheKey = `${businessId}:${sellerId ?? 'all'}`;
 
     let query = supabase
       .from('sale_orders')
@@ -76,7 +85,24 @@ export const useVentesStore = create<VentesStore>((set, get) => ({
     if (since) query = query.gte('sale_date', since);
 
     const { data, error: fetchErr } = await query;
-    if (fetchErr) { set({ loading: false, error: translateError(fetchErr, 'Erreur de chargement') }); return; }
+    if (fetchErr) {
+      if (isNetworkError(fetchErr)) {
+        const cached = await getVentesCache(cacheKey) as Vente[] | null;
+        if (cached) {
+          const ts = await getCacheTimestamp('ventes_cache', cacheKey);
+          set({ sales: cached, loading: false, offline: true, offlineSince: ts, error: null });
+          return;
+        }
+        set({
+          error: 'Pas de connexion. Ouvrez l\'application en ligne une première fois pour activer le mode hors ligne.',
+          loading: false,
+          offline: true,
+        });
+        return;
+      }
+      set({ loading: false, error: translateError(fetchErr, 'Erreur de chargement') });
+      return;
+    }
     if (!data) { set({ loading: false }); return; }
 
     const orderIds = data.map((s: Record<string, unknown>) => s.id as string);
@@ -115,27 +141,26 @@ export const useVentesStore = create<VentesStore>((set, get) => ({
       paidByOrder[p.order_id] = (paidByOrder[p.order_id] ?? 0) + p.amount / 100;
     }
 
-    set({
-      sales: data.map((s: Record<string, unknown>) => {
-        const discount = ((s.discount_amount as number) ?? 0) / 100;
-        const totalAmount = (s.total_amount as number) / 100;
-        // Expose amount_paid for credit sales and for discounted (rabais) sales
-        const hasDiscount = discount > 0;
-        const isCreditStatus = s.status === 'credit';
-        return {
-          ...s,
-          total_amount: totalAmount,
-          seller_name: pm[s.seller_id as string] ?? 'Inconnu',
-          is_credit: (s.is_credit as boolean) ?? false,
-          discount_amount: discount,
-          cancelled_at: (s.cancelled_at as string | null) ?? null,
-          cancellation_reason: (s.cancellation_reason as string | null) ?? null,
-          profit: hasCostByOrder[s.id as string] ? (profitByOrder[s.id as string] ?? null) : null,
-          amount_paid: (isCreditStatus || hasDiscount) ? (paidByOrder[s.id as string] ?? 0) : undefined,
-        } as Vente;
-      }),
-      loading: false,
+    const sales = data.map((s: Record<string, unknown>) => {
+      const discount = ((s.discount_amount as number) ?? 0) / 100;
+      const totalAmount = (s.total_amount as number) / 100;
+      const hasDiscount = discount > 0;
+      const isCreditStatus = s.status === 'credit';
+      return {
+        ...s,
+        total_amount: totalAmount,
+        seller_name: pm[s.seller_id as string] || generateFallbackName(s.seller_id as string),
+        is_credit: (s.is_credit as boolean) ?? false,
+        discount_amount: discount,
+        client_id: (s.client_id as string | null) ?? null,
+        cancelled_at: (s.cancelled_at as string | null) ?? null,
+        cancellation_reason: (s.cancellation_reason as string | null) ?? null,
+        profit: hasCostByOrder[s.id as string] ? (profitByOrder[s.id as string] ?? null) : null,
+        amount_paid: (isCreditStatus || hasDiscount) ? (paidByOrder[s.id as string] ?? 0) : undefined,
+      } as Vente;
     });
+    void saveVentesCache(cacheKey, sales as unknown[]);
+    set({ sales, loading: false, offline: false, offlineSince: null });
   },
 
   loadDetail: async (saleId) => {
@@ -147,6 +172,8 @@ export const useVentesStore = create<VentesStore>((set, get) => ({
         .eq('order_id', saleId)
         .order('date', { ascending: true }),
     ]);
+
+    if (linesRes.error || paysRes.error) return;
 
     type ProductJoin = { name: string; cost_price: number } | null;
     const lines: VenteLigne[] = (linesRes.data ?? []).map((l: Record<string, unknown>) => ({
@@ -181,9 +208,12 @@ export const useVentesStore = create<VentesStore>((set, get) => ({
     if (!sale) { set({ saving: false }); return { ok: false, fullyPaid: false }; }
 
     const alreadyPaid = sale.amount_paid ?? 0;
-    const remaining = sale.total_amount - alreadyPaid;
+    const owed = sale.total_amount - (sale.discount_amount ?? 0);
+    const newAmountPaid = alreadyPaid + amount;
+    const fullyPaid = newAmountPaid >= owed - 0.01;
+    const now = new Date().toISOString();
 
-    const { error: payErr } = await supabase.from('payments').insert({
+    const paymentRow = {
       id: generateId(),
       order_id: saleId,
       customer_name: sale.customer_name,
@@ -191,50 +221,65 @@ export const useVentesStore = create<VentesStore>((set, get) => ({
       method,
       amount: Math.round(amount * 100),
       date,
-    });
-    if (payErr) {
-      set({ saving: false, error: translateError(payErr, 'Paiement impossible') });
+    };
+
+    const applyOptimistic = () => {
+      const newPaymentEntry: VentePayment = { id: paymentRow.id, method, amount, date };
+      set(state => ({
+        sales: state.sales.map(s =>
+          s.id === saleId
+            ? {
+                ...s,
+                amount_paid: newAmountPaid,
+                status: fullyPaid ? 'paye' : s.status,
+                paid_at: fullyPaid ? now : s.paid_at,
+                payments: s.payments ? [...s.payments, newPaymentEntry] : undefined,
+              }
+            : s,
+        ),
+        saving: false,
+      }));
+    };
+
+    try {
+      const { error: payErr } = await supabase.from('payments').insert(paymentRow);
+      if (payErr) throw payErr;
+
+      if (fullyPaid) {
+        const { error: statusErr } = await supabase
+          .from('sale_orders')
+          .update({ status: 'paye', paid_at: now })
+          .eq('id', saleId)
+          .eq('business_id', sale.business_id);
+        if (statusErr) {
+          applyOptimistic();
+          set({ error: translateError(statusErr, 'Paiement enregistré, mais le statut n\'a pas pu être mis à jour.') });
+          return { ok: true, fullyPaid: true };
+        }
+      }
+      applyOptimistic();
+      return { ok: true, fullyPaid };
+    } catch (err) {
+      if (isNetworkError(err)) {
+        await enqueue('record_payment', {
+          payments: [paymentRow],
+          fully_paid_ids: fullyPaid ? [saleId] : [],
+        });
+        const count = await getQueueCount();
+        useSyncStore.setState({ pendingCount: count });
+        applyOptimistic();
+        return { ok: true, fullyPaid };
+      }
+      set({ saving: false, error: translateError(err, 'Paiement impossible') });
       return { ok: false, fullyPaid: false };
     }
-
-    const newAmountPaid = alreadyPaid + amount;
-    const fullyPaid = newAmountPaid >= remaining - 0.01 + alreadyPaid;
-
-    if (fullyPaid) {
-      const { error: statusErr } = await supabase
-        .from('sale_orders')
-        .update({ status: 'paye', paid_at: new Date().toISOString() })
-        .eq('id', saleId);
-      if (statusErr) {
-        set({ saving: false, error: translateError(statusErr, 'Paiement enregistré, mais le statut n\'a pas pu être mis à jour.') });
-        return { ok: true, fullyPaid: true };
-      }
-    }
-
-    const newPaymentEntry: VentePayment = { id: generateId(), method, amount, date };
-
-    set(state => ({
-      sales: state.sales.map(s =>
-        s.id === saleId
-          ? {
-              ...s,
-              amount_paid: newAmountPaid,
-              status: fullyPaid ? 'paye' : s.status,
-              paid_at: fullyPaid ? new Date().toISOString() : s.paid_at,
-              payments: s.payments ? [...s.payments, newPaymentEntry] : undefined,
-            }
-          : s,
-      ),
-      saving: false,
-    }));
-
-    return { ok: true, fullyPaid };
   },
 
   recordClientPayment: async (customerName, businessId, amount, method, date) => {
     set({ saving: true, error: null });
 
-    // Oldest credit sales for this client first (FIFO)
+    // Oldest credit sales for this client first (FIFO). All allocation logic runs
+    // purely over in-memory state, so it works identically online and offline.
     const creditSales = get().sales
       .filter(s =>
         s.customer_name === customerName &&
@@ -251,16 +296,17 @@ export const useVentesStore = create<VentesStore>((set, get) => ({
     let toAllocate = amount;
     const paymentRows: object[] = [];
     const storeUpdates: { id: string; newAmountPaid: number; fullyPaid: boolean; paidAt: string }[] = [];
+    const now = new Date().toISOString();
 
     for (const sale of creditSales) {
       if (toAllocate <= 0.005) break;
-      const saleRemaining = sale.total_amount - (sale.amount_paid ?? 0);
+      const saleOwed = sale.total_amount - (sale.discount_amount ?? 0);
+      const saleRemaining = saleOwed - (sale.amount_paid ?? 0);
       if (saleRemaining <= 0.005) continue;
 
       const allocated = Math.min(toAllocate, saleRemaining);
       const newAmountPaid = (sale.amount_paid ?? 0) + allocated;
-      const fullyPaid = newAmountPaid >= sale.total_amount - 0.01;
-      const paidAt = new Date().toISOString();
+      const fullyPaid = newAmountPaid >= saleOwed - 0.01;
 
       paymentRows.push({
         id: generateId(),
@@ -272,42 +318,59 @@ export const useVentesStore = create<VentesStore>((set, get) => ({
         date,
       });
 
-      storeUpdates.push({ id: sale.id, newAmountPaid, fullyPaid, paidAt });
+      storeUpdates.push({ id: sale.id, newAmountPaid, fullyPaid, paidAt: now });
       toAllocate -= allocated;
     }
 
-    const { error: payErr } = await supabase.from('payments').insert(paymentRows);
-    if (payErr) {
-      set({ saving: false, error: translateError(payErr, 'Paiement impossible') });
-      return { ok: false, fullySettled: false };
-    }
-
-    // Flip fully-paid orders to 'paye' in Supabase
     const fullyPaidIds = storeUpdates.filter(u => u.fullyPaid).map(u => u.id);
-    if (fullyPaidIds.length > 0) {
-      await supabase
-        .from('sale_orders')
-        .update({ status: 'paye', paid_at: new Date().toISOString() })
-        .in('id', fullyPaidIds);
-    }
 
-    set(state => ({
-      sales: state.sales.map(s => {
-        const upd = storeUpdates.find(u => u.id === s.id);
-        if (!upd) return s;
-        return {
-          ...s,
-          amount_paid: upd.newAmountPaid,
-          status: upd.fullyPaid ? 'paye' : s.status,
-          paid_at: upd.fullyPaid ? upd.paidAt : s.paid_at,
-        };
-      }),
-      saving: false,
-    }));
+    const applyOptimistic = () => {
+      set(state => ({
+        sales: state.sales.map(s => {
+          const upd = storeUpdates.find(u => u.id === s.id);
+          if (!upd) return s;
+          return {
+            ...s,
+            amount_paid: upd.newAmountPaid,
+            status: upd.fullyPaid ? 'paye' : s.status,
+            paid_at: upd.fullyPaid ? upd.paidAt : s.paid_at,
+          };
+        }),
+        saving: false,
+      }));
+    };
+
+    try {
+      const { error: payErr } = await supabase.from('payments').insert(paymentRows);
+      if (payErr) throw payErr;
+
+      if (fullyPaidIds.length > 0) {
+        await supabase
+          .from('sale_orders')
+          .update({ status: 'paye', paid_at: now })
+          .in('id', fullyPaidIds)
+          .eq('business_id', businessId);
+      }
+
+      applyOptimistic();
+    } catch (err) {
+      if (isNetworkError(err)) {
+        // Queue as record_payment — the drainQueue handler already handles arrays
+        // of payment rows and multiple fully_paid_ids.
+        await enqueue('record_payment', { payments: paymentRows, fully_paid_ids: fullyPaidIds });
+        const count = await getQueueCount();
+        useSyncStore.setState({ pendingCount: count });
+        applyOptimistic();
+        // Fall through to compute stillOwed from the now-updated in-memory state.
+      } else {
+        set({ saving: false, error: translateError(err, 'Paiement impossible') });
+        return { ok: false, fullySettled: false };
+      }
+    }
 
     const stillOwed = get().sales
       .filter(s => s.customer_name === customerName && s.business_id === businessId && s.status === 'credit')
-      .reduce((sum, s) => sum + (s.total_amount - (s.amount_paid ?? 0)), 0);
+      .reduce((sum, s) => sum + (s.total_amount - (s.discount_amount ?? 0) - (s.amount_paid ?? 0)), 0);
 
     trackEvent('debt_payment_recorded', businessId, null, {
       fully_settled: stillOwed < 0.01,
@@ -317,28 +380,50 @@ export const useVentesStore = create<VentesStore>((set, get) => ({
 
   cancelSale: async (saleId, businessId, _userId, reason) => {
     set({ saving: true, error: null });
-    const { error } = await supabase.rpc('cancel_sale', {
-      p_sale_id:     saleId,
-      p_business_id: businessId,
-      p_reason:      reason,
-    });
-    if (error) { set({ saving: false, error: translateError(error, "Impossible d'annuler") }); return false; }
     const now = new Date().toISOString();
-    set(state => ({
-      sales: state.sales.map(s =>
-        s.id === saleId ? { ...s, status: 'annule', cancelled_at: now, cancellation_reason: reason } : s,
-      ),
-      saving: false,
-    }));
-    return true;
+    try {
+      const { error } = await supabase.rpc('cancel_sale', {
+        p_sale_id:     saleId,
+        p_business_id: businessId,
+        p_reason:      reason,
+      });
+      if (error) throw error;
+      set(state => ({
+        sales: state.sales.map(s =>
+          s.id === saleId ? { ...s, status: 'annule', cancelled_at: now, cancellation_reason: reason } : s,
+        ),
+        saving: false,
+      }));
+      return true;
+    } catch (err) {
+      if (isNetworkError(err)) {
+        await enqueue('cancel_sale', { p_sale_id: saleId, p_business_id: businessId, p_reason: reason });
+        const count = await getQueueCount();
+        useSyncStore.setState({ pendingCount: count });
+        const updatedSales = get().sales.map(s =>
+          s.id === saleId ? { ...s, status: 'annule', cancelled_at: now, cancellation_reason: reason } : s,
+        );
+        set({ sales: updatedSales, saving: false });
+        const sale = get().sales.find(s => s.id === saleId);
+        if (sale?.business_id) {
+          const cacheKey = `${sale.business_id}:all`;
+          void saveVentesCache(cacheKey, updatedSales as unknown[]);
+        }
+        return true;
+      }
+      set({ saving: false, error: translateError(err, "Impossible d'annuler") });
+      return false;
+    }
   },
 
   updateSaleClient: async (saleId, customerName) => {
     set({ saving: true, error: null });
+    const businessId = get().sales.find(s => s.id === saleId)?.business_id;
     const { error } = await supabase
       .from('sale_orders')
       .update({ customer_name: customerName.trim() || null })
-      .eq('id', saleId);
+      .eq('id', saleId)
+      .eq('business_id', businessId ?? '');
     if (error) { set({ saving: false, error: translateError(error, 'Impossible de modifier') }); return false; }
     set(state => ({
       sales: state.sales.map(s =>
@@ -350,5 +435,5 @@ export const useVentesStore = create<VentesStore>((set, get) => ({
   },
 
   clearError: () => set({ error: null }),
-  reset: () => set({ sales: [], loading: false, saving: false, error: null }),
+  reset: () => set({ sales: [], loading: false, saving: false, error: null, offline: false, offlineSince: null }),
 }));

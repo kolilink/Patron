@@ -1,6 +1,9 @@
 import React, { useCallback, useEffect, useMemo, useRef, useState } from 'react';
+import { router } from 'expo-router';
 import {
   Alert,
+  Animated,
+  Easing,
   FlatList,
   Keyboard,
   KeyboardAvoidingView,
@@ -12,12 +15,17 @@ import {
   TextInput,
   View,
 } from 'react-native';
+import { captureRef } from 'react-native-view-shot';
+import * as Sharing from 'expo-sharing';
 import { SafeAreaView } from 'react-native-safe-area-context';
 import { Ionicons } from '@expo/vector-icons';
 import { Button } from '@/src/components/ui/Button';
 import { Card } from '@/src/components/ui/Card';
 import { Input } from '@/src/components/ui/Input';
 import { Text } from '@/src/components/ui/Text';
+import { PhoneInput } from '@/src/components/ui/PhoneInput';
+import { SaleSuccessOverlay } from '@/src/components/ui/SaleSuccessOverlay';
+import { SaleReceiptView, type ReceiptData, type ReceiptItem } from '@/src/components/ui/SaleReceiptView';
 import { colors, palette, radius, spacing } from '@/src/theme';
 import { formatAmount } from '@/src/utils/format';
 import { todayIso } from '@/src/utils/dates';
@@ -110,153 +118,6 @@ function CartRow({ line, currency, onInc, onDec, onRemove, onToggleBulk, onSetQt
           <Text variant="label" style={{ color: palette.primary }}>+</Text>
         </Pressable>
       </View>
-      <View style={{ minWidth: 80, alignItems: 'flex-end' }}>
-        <Text variant="label">{formatAmount(line.unit_price * line.qty, currency)}</Text>
-      </View>
-    </View>
-  );
-}
-
-// ─── Inline client picker ─────────────────────────────────────────────────────
-
-interface InlineClientPickerProps {
-  businessId: string;
-  sellerId: string;
-  isVendeur: boolean;
-  value: string;
-  onChange: (name: string) => void;
-  required: boolean;
-  expanded: boolean;
-  onExpandChange: (v: boolean) => void;
-}
-
-function InlineClientPicker({
-  businessId, sellerId, isVendeur,
-  value, onChange, required, expanded, onExpandChange,
-}: InlineClientPickerProps) {
-  const [clientNames, setClientNames] = useState<string[]>([]);
-  const [showList, setShowList] = useState(false);
-  const [showNewForm, setShowNewForm] = useState(false);
-  const [newName, setNewName] = useState('');
-  const [newPhone, setNewPhone] = useState('');
-
-  useEffect(() => { loadClients(); }, [businessId]);
-
-  const loadClients = async () => {
-    const [clientsRes, salesRes] = await Promise.all([
-      supabase.from('clients').select('name').eq('business_id', businessId),
-      supabase
-        .from('sale_orders')
-        .select('customer_name')
-        .eq('business_id', businessId)
-        .not('customer_name', 'is', null),
-    ]);
-    const fromClients = (clientsRes.data ?? []).map((r: { name: string }) => r.name);
-    const fromSales = (salesRes.data ?? [])
-      .map((r: { customer_name: string }) => r.customer_name?.trim())
-      .filter(Boolean) as string[];
-    setClientNames([...new Set([...fromClients, ...fromSales])].sort());
-  };
-
-  const suggestions = useMemo(() => {
-    const q = value.toLowerCase().trim();
-    if (!q) return clientNames;
-    return clientNames.filter(n => n.toLowerCase().includes(q));
-  }, [value, clientNames]);
-
-  const handleAddNewClient = async () => {
-    if (!newName.trim()) return;
-    const name = newName.trim();
-    await supabase.from('clients').upsert(
-      { business_id: businessId, name, phone: newPhone.trim() || null },
-      { onConflict: 'business_id,name' },
-    );
-    setClientNames(prev => [...new Set([...prev, name])].sort());
-    onChange(name);
-    setShowNewForm(false);
-    setNewName('');
-    setNewPhone('');
-    onExpandChange(false);
-  };
-
-  // Client already selected — show name + change link
-  if (value && !expanded && !showNewForm) {
-    return (
-      <View style={styles.clientSelectedRow}>
-        <Text variant="body">
-          Client : <Text variant="label">{value}</Text>
-        </Text>
-        <Pressable onPress={() => { onChange(''); onExpandChange(true); }}>
-          <Text variant="caption" style={{ color: palette.primary }}>× changer</Text>
-        </Pressable>
-      </View>
-    );
-  }
-
-  // Not expanded and optional — show link only
-  if (!expanded && !required) {
-    return (
-      <Pressable onPress={() => onExpandChange(true)} style={styles.attachLink}>
-        <Text variant="body" style={{ color: palette.primary }}>+ Attacher un client (optionnel)</Text>
-      </Pressable>
-    );
-  }
-
-  // Expanded or required — show search input + suggestions
-  return (
-    <View style={{ zIndex: 50, elevation: 50 }}>
-      {required && !value && (
-        <Text variant="caption" color="secondary" style={{ marginBottom: spacing[2] }}>
-          Qui prend à crédit ?
-        </Text>
-      )}
-      <TextInput
-        style={styles.clientInput}
-        value={value}
-        onChangeText={v => { onChange(v); setShowList(true); }}
-        onFocus={() => setShowList(true)}
-        placeholder="Rechercher un client…"
-        placeholderTextColor={palette.textDisabled}
-        autoFocus={expanded && !required}
-      />
-      {showList && !showNewForm && (suggestions.length > 0 || value.trim().length >= 1) && (
-        <View style={styles.suggestionList}>
-          <ScrollView keyboardShouldPersistTaps="handled" style={{ maxHeight: 160 }} nestedScrollEnabled>
-            {suggestions.map(name => (
-              <Pressable
-                key={name}
-                onPress={() => { onChange(name); setShowList(false); onExpandChange(false); Keyboard.dismiss(); }}
-                style={styles.suggestionRow}
-              >
-                <Text variant="body">{name}</Text>
-              </Pressable>
-            ))}
-            <Pressable
-              onPress={() => { setShowNewForm(true); setShowList(false); }}
-              style={[styles.suggestionRow, { flexDirection: 'row', alignItems: 'center', gap: spacing[2] }]}
-            >
-              <Ionicons name="add-circle-outline" size={16} color={palette.primary} />
-              <Text variant="body" style={{ color: palette.primary }}>Nouveau client</Text>
-            </Pressable>
-          </ScrollView>
-        </View>
-      )}
-      {showNewForm && (
-        <View style={styles.newClientForm}>
-          <Input label="Nom" value={newName} onChangeText={setNewName} placeholder="Nom du client" />
-          <Input
-            label="Téléphone (optionnel)"
-            value={newPhone}
-            onChangeText={setNewPhone}
-            keyboardType="phone-pad"
-            placeholder="Ex: 622 00 00 00"
-          />
-          <View style={{ flexDirection: 'row', gap: spacing[2] }}>
-            <Button label="Annuler" onPress={() => setShowNewForm(false)} variant="outline" style={{ flex: 1 }} />
-            <Button label="Ajouter" onPress={handleAddNewClient} style={{ flex: 1 }} disabled={!newName.trim()} />
-          </View>
-        </View>
-      )}
     </View>
   );
 }
@@ -275,7 +136,7 @@ interface PaymentModalProps {
   sellerId: string;
   isVendeur: boolean;
   onClose: () => void;
-  onConfirm: (payment: SalePayment | null, customerName?: string, discountAmount?: number) => void;
+  onConfirm: (payment: SalePayment | null, customerName?: string, discountAmount?: number, clientId?: string) => void;
   submitting: boolean;
 }
 
@@ -288,7 +149,15 @@ function PaymentModal({
   const [amountInput, setAmountInput] = useState('');
   const [disambig, setDisambig] = useState<Disambig>(null);
   const [clientName, setClientName] = useState('');
-  const [clientExpanded, setClientExpanded] = useState(false);
+  const [clientPhone, setClientPhone] = useState('');
+  const [clientId, setClientId] = useState<string | undefined>();
+  const [showClientSection, setShowClientSection] = useState(false);
+  const [clientSearch, setClientSearch] = useState('');
+  const [clients, setClients] = useState<{ id?: string; name: string; phone?: string | null }[]>([]);
+  const [showNewClientForm, setShowNewClientForm] = useState(false);
+  const [newClientName, setNewClientName] = useState('');
+  const [newClientPhone, setNewClientPhone] = useState('');
+  const clientSearchRef = useRef<TextInput>(null);
 
   useEffect(() => {
     if (visible) {
@@ -297,19 +166,78 @@ function PaymentModal({
       setAmountInput(String(total));
       setDisambig(null);
       setClientName('');
-      setClientExpanded(false);
+      setClientPhone('');
+      setClientId(undefined);
+      setShowClientSection(false);
+      setClientSearch('');
+      setShowNewClientForm(false);
+      setNewClientName('');
+      setNewClientPhone('');
+      loadClients();
     }
   }, [visible, initialStep, total]);
 
-  // When step changes to credit, always show client picker expanded
+  const loadClients = async () => {
+    const [clientsRes, salesRes] = await Promise.all([
+      supabase.from('clients').select('id, name, phone').eq('business_id', businessId),
+      supabase.from('sale_orders').select('customer_name')
+        .eq('business_id', businessId).not('customer_name', 'is', null),
+    ]);
+    const fromClients = (clientsRes.data ?? []).map((r: { id: string; name: string; phone?: string | null }) => ({
+      id: r.id, name: r.name, phone: r.phone,
+    }));
+    const knownNames = new Set(fromClients.map(c => c.name));
+    const fromSales = (salesRes.data ?? [])
+      .map((r: { customer_name: string }) => r.customer_name?.trim())
+      .filter((n): n is string => Boolean(n) && !knownNames.has(n))
+      .map(name => ({ name, phone: null }));
+    const all = [...fromClients, ...fromSales].sort((a, b) => a.name.localeCompare(b.name));
+    const seen = new Set<string>();
+    setClients(all.filter(c => { if (seen.has(c.name)) return false; seen.add(c.name); return true; }));
+  };
+
+  const filteredClients = useMemo(() => {
+    const q = clientSearch.toLowerCase().trim();
+    if (!q) return clients;
+    return clients.filter(c =>
+      c.name.toLowerCase().includes(q) || (c.phone ?? '').includes(q)
+    );
+  }, [clientSearch, clients]);
+
   useEffect(() => {
-    if (step === 'credit') setClientExpanded(true);
+    if (showClientSection && !showNewClientForm) setTimeout(() => clientSearchRef.current?.focus(), 80);
+  }, [showClientSection, showNewClientForm]);
+
+  useEffect(() => {
+    if (step === 'credit' && visible && !clientName) setShowClientSection(true);
   }, [step]);
 
-  // When disambig becomes 'credit' and no client yet, expand picker
   useEffect(() => {
-    if (disambig === 'credit' && !clientName) setClientExpanded(true);
+    if (disambig === 'credit' && !clientName) setShowClientSection(true);
   }, [disambig]);
+
+  const handleSelectClient = (name: string, phone?: string | null, id?: string) => {
+    setClientName(name);
+    setClientPhone(phone ?? '');
+    setClientId(id);
+    setShowClientSection(false);
+    setClientSearch('');
+    setShowNewClientForm(false);
+    setNewClientName('');
+    setNewClientPhone('');
+    Keyboard.dismiss();
+  };
+
+  const handleAddNewClient = async () => {
+    if (!newClientName.trim()) return;
+    const name = newClientName.trim();
+    const phone = newClientPhone || null;
+    const { data } = await supabase.from('clients').upsert(
+      { business_id: businessId, name, phone },
+      { onConflict: 'business_id,name' },
+    ).select('id').single();
+    handleSelectClient(name, phone, data?.id ?? undefined);
+  };
 
   const parsedAmount = parseFloat(amountInput.replace(/\s/g, '').replace(',', '.')) || 0;
   const shortfall = total - parsedAmount;
@@ -328,17 +256,18 @@ function PaymentModal({
   const handleConfirmPay = () => {
     const discountAmount = disambig === 'rabais' ? shortfall : 0;
     const payment: SalePayment = { method: payMethod, amount: parsedAmount };
-    onConfirm(payment, clientName.trim() || undefined, discountAmount);
+    onConfirm(payment, clientName.trim() || undefined, discountAmount, clientId);
   };
 
   const handleConfirmCredit = () => {
-    onConfirm(null, clientName.trim());
+    onConfirm(null, clientName.trim(), undefined, clientId);
   };
 
   return (
     <Modal visible={visible} animationType="slide" presentationStyle="formSheet" onRequestClose={onClose}>
       <SafeAreaView style={styles.modalSafe} edges={['bottom']}>
-        {/* Header — always visible at top */}
+
+        {/* Header */}
         <View style={styles.modalHeader}>
           <Pressable onPress={onClose} style={styles.modalCancel}>
             <Text variant="body" color="secondary">Retour</Text>
@@ -347,13 +276,18 @@ function PaymentModal({
           <View style={{ width: 64 }} />
         </View>
 
-        {/* KAV pushes the footer up when keyboard appears; flex:1 fills remaining space */}
         <KeyboardAvoidingView
           behavior={Platform.OS === 'ios' ? 'padding' : 'height'}
           style={{ flex: 1 }}
-          keyboardVerticalOffset={0}
+          keyboardVerticalOffset={Platform.OS === 'ios' ? 44 : 0}
         >
-          {/* Total — full-width so adjustsFontSizeToFit has room to work */}
+          {/* Single scroll for all content — keyboard pushes footer up, scroll handles the rest */}
+          <ScrollView
+            style={{ flex: 1 }}
+            contentContainerStyle={{ paddingBottom: spacing[6] }}
+            keyboardShouldPersistTaps="handled"
+            showsVerticalScrollIndicator={false}
+          >
           <View style={styles.totalSection}>
             <Text variant="caption" color="secondary" style={{ textAlign: 'center' }}>Total</Text>
             <Text
@@ -365,9 +299,8 @@ function PaymentModal({
             </Text>
           </View>
 
-          {/* Scrollable middle: amount input + disambig + methods (pay step) */}
-          {step === 'pay' && (
-            <ScrollView style={{ flex: 1 }} contentContainerStyle={styles.payContent} keyboardShouldPersistTaps="handled">
+          {step === 'pay' && !showClientSection && (
+            <View style={styles.payContent}>
               <View style={{ gap: spacing[2] }}>
                 <Text variant="label" style={styles.sectionLabel}>Combien le client a payé ?</Text>
                 <TextInput
@@ -390,7 +323,7 @@ function PaymentModal({
                     <Pressable onPress={() => setDisambig('rabais')} style={styles.radioRow}>
                       <View style={[styles.radio, disambig === 'rabais' && styles.radioActive]} />
                       <View style={{ flex: 1 }}>
-                        <Text variant="label">Un rabais</Text>
+                        <Text variant="label">Une réduction</Text>
                         <Text variant="caption" color="secondary">Le client ne doit plus rien</Text>
                       </View>
                     </Pressable>
@@ -410,7 +343,7 @@ function PaymentModal({
                 {isOver && (
                   <View style={styles.warnRow}>
                     <Text variant="caption" style={{ color: colors.warning[700] }}>
-                      Le montant dépasse le prix de vente. Vérifie.
+                      Le montant dépasse le prix de vente. Vérifiez.
                     </Text>
                   </View>
                 )}
@@ -440,33 +373,161 @@ function PaymentModal({
                   ))}
                 </View>
               </View>
-            </ScrollView>
+            </View>
           )}
 
-          {/* Client picker — fixed above confirm button, outside scroll so dropdown zIndex works */}
+          {/* ── Inline client section ── */}
           <View style={styles.clientSection}>
-            <InlineClientPicker
-              businessId={businessId}
-              sellerId={sellerId}
-              isVendeur={isVendeur}
-              value={clientName}
-              onChange={setClientName}
-              required={step === 'credit' || disambig === 'credit'}
-              expanded={clientExpanded}
-              onExpandChange={setClientExpanded}
-            />
-          </View>
+            {clientName ? (
+              /* ── Selected tag ── */
+              <View style={styles.clientSelectedTag}>
+                <Ionicons name="person-circle-outline" size={28} color={palette.primary} />
+                <View style={{ flex: 1 }}>
+                  <Text variant="caption" color="secondary">Client</Text>
+                  <Text variant="label">{clientName}</Text>
+                  {clientPhone ? (
+                    <Text variant="caption" color="secondary">{clientPhone}</Text>
+                  ) : null}
+                </View>
+                <Pressable
+                  onPress={() => { setClientName(''); setClientPhone(''); setClientId(undefined); setClientSearch(''); }}
+                  hitSlop={12}
+                >
+                  <Ionicons name="close-circle" size={20} color={palette.textSecondary} />
+                </Pressable>
+              </View>
 
-          {/* Confirm button — pinned to bottom */}
+            ) : showClientSection ? (
+              /* ── Expanded section ── */
+              <View>
+                {/* Search bar — hidden while new client form is open */}
+                {!showNewClientForm && (
+                  <View style={styles.clientSearchRow}>
+                    <Ionicons name="search-outline" size={15} color={palette.textSecondary} />
+                    <TextInput
+                      ref={clientSearchRef}
+                      value={clientSearch}
+                      onChangeText={setClientSearch}
+                      placeholder="Rechercher un client..."
+                      placeholderTextColor={palette.textDisabled}
+                      style={styles.clientSearchInput}
+                      returnKeyType="search"
+                      clearButtonMode="while-editing"
+                    />
+                    <Pressable
+                      onPress={() => { setShowClientSection(false); setClientSearch(''); setShowNewClientForm(false); Keyboard.dismiss(); }}
+                      hitSlop={8}
+                    >
+                      <Text variant="caption" style={{ color: palette.textSecondary }}>Annuler</Text>
+                    </Pressable>
+                  </View>
+                )}
+
+                {!showNewClientForm ? (
+                  <>
+                    {/* Nouveau client — always first */}
+                    <Pressable
+                      onPress={() => { setShowNewClientForm(true); Keyboard.dismiss(); }}
+                      style={({ pressed }) => [styles.clientResultRow, styles.clientResultRowNew, pressed && { opacity: 0.55 }]}
+                    >
+                      <Ionicons name="add-circle-outline" size={16} color={palette.primary} />
+                      <Text variant="body" style={{ color: palette.primary, fontWeight: '600' }}>Nouveau client</Text>
+                    </Pressable>
+
+                    {filteredClients.length === 0 && clientSearch.length > 0 ? (
+                      <View style={{ paddingVertical: spacing[3], paddingHorizontal: spacing[2] }}>
+                        <Text variant="caption" color="secondary">Aucun résultat pour « {clientSearch} »</Text>
+                      </View>
+                    ) : (
+                      filteredClients.map(c => {
+                        const AVATAR_COLORS = ['#DAFCE3', '#FDF0DA', '#E0E7FF', '#FEF3C7'];
+                        const sum = c.name ? c.name.split('').reduce((acc, ch) => acc + ch.charCodeAt(0), 0) : 0;
+                        const avatarBg = AVATAR_COLORS[sum % AVATAR_COLORS.length];
+                        const initial = c.name ? c.name.charAt(0).toUpperCase() : '?';
+                        return (
+                          <Pressable
+                            key={c.id ?? c.name}
+                            onPress={() => handleSelectClient(c.name, c.phone, c.id)}
+                            style={({ pressed }) => [styles.clientResultRow, pressed && { opacity: 0.55 }]}
+                          >
+                            <View style={[styles.clientAvatar, { backgroundColor: avatarBg }]}>
+                              <Text style={styles.clientAvatarText}>{initial}</Text>
+                            </View>
+                            <View style={{ flex: 1 }}>
+                              <Text variant="body">{c.name}</Text>
+                              {c.phone ? (
+                                <Text variant="caption" color="secondary">{c.phone}</Text>
+                              ) : null}
+                            </View>
+                          </Pressable>
+                        );
+                      })
+                    )}
+                  </>
+                ) : (
+                  /* ── New client form ── */
+                  <KeyboardAvoidingView behavior={Platform.OS === 'ios' ? 'padding' : undefined}>
+                    <View style={{ flexDirection: 'row', alignItems: 'center', gap: spacing[2], paddingTop: spacing[2], marginBottom: spacing[1] }}>
+                      <Pressable onPress={() => setShowNewClientForm(false)} hitSlop={8}>
+                        <Ionicons name="arrow-back" size={18} color={palette.textSecondary} />
+                      </Pressable>
+                      <Text variant="label">Nouveau client</Text>
+                    </View>
+                    <ScrollView
+                      contentContainerStyle={{ paddingHorizontal: 16, paddingTop: 12, paddingBottom: 32 }}
+                      showsVerticalScrollIndicator={false}
+                      keyboardShouldPersistTaps="handled"
+                    >
+                      <Input
+                        label="Nom"
+                        value={newClientName}
+                        onChangeText={setNewClientName}
+                        placeholder="ex : Mamadou Diallo"
+                        autoFocus
+                      />
+                      <PhoneInput
+                        label="Téléphone (optionnel)"
+                        onChange={setNewClientPhone}
+                        strict={false}
+                      />
+                    </ScrollView>
+                  </KeyboardAvoidingView>
+                )}
+              </View>
+
+            ) : (
+              /* ── Trigger ── */
+              <Pressable
+                onPress={() => setShowClientSection(true)}
+                style={({ pressed }) => [styles.clientTrigger, pressed && { opacity: 0.55 }]}
+              >
+                <Ionicons name="person-add-outline" size={18} color={palette.textSecondary} />
+                <Text variant="body" style={{ color: palette.textSecondary }}>Nom du client</Text>
+              </Pressable>
+            )}
+          </View>
+          </ScrollView>
+
+          {/* Footer — morphs based on state, always above keyboard */}
           <View style={styles.modalFooter}>
-            <Button
-              label={submitting ? 'Enregistrement…' : (step === 'credit' ? 'Enregistrer le crédit' : 'Confirmer la vente')}
-              onPress={step === 'credit' ? handleConfirmCredit : handleConfirmPay}
-              loading={submitting}
-              fullWidth
-              size="lg"
-              disabled={step === 'credit' ? !canConfirmCredit : !canConfirmPay}
-            />
+            {showNewClientForm ? (
+              <Button
+                label="Ajouter ce client"
+                onPress={handleAddNewClient}
+                fullWidth
+                size="lg"
+                disabled={!newClientName.trim()}
+              />
+            ) : (
+              <Button
+                label={submitting ? 'Enregistrement…' : (step === 'credit' ? 'Enregistrer le crédit' : 'Confirmer la vente')}
+                onPress={step === 'credit' ? handleConfirmCredit : handleConfirmPay}
+                loading={submitting}
+                fullWidth
+                size="lg"
+                disabled={step === 'credit' ? !canConfirmCredit : !canConfirmPay}
+              />
+            )}
           </View>
         </KeyboardAvoidingView>
       </SafeAreaView>
@@ -512,7 +573,7 @@ function ProductTile({ product, currency, onAdd, onAddBulk, cartQty, cartBulkQty
       )}
       <Text variant="label" numberOfLines={2} style={styles.tileName}>{product.name}</Text>
       <Text variant="caption" color="secondary" numberOfLines={1}>
-        {outOfStock ? 'Rupture de stock' : `${product.stock_qty} ${product.unit}`}
+        {outOfStock ? 'Ce produit est fini' : `${product.stock_qty} ${product.unit}`}
       </Text>
       <Text variant="label" style={{ color: outOfStock ? palette.textDisabled : palette.primary }}>
         {formatAmount(product.sale_price, currency)}
@@ -523,6 +584,44 @@ function ProductTile({ product, currency, onAdd, onAddBulk, cartQty, cartBulkQty
         </Text>
       ) : null}
     </Pressable>
+  );
+}
+
+// ─── Animated FAB ─────────────────────────────────────────────────────────────
+
+function AnimatedFAB({ onPress }: { onPress: () => void }) {
+  const scale   = useRef(new Animated.Value(1)).current;
+  const opacity = useRef(new Animated.Value(1)).current;
+
+  useEffect(() => {
+    const easing = Easing.inOut(Easing.sin);
+    const loop = Animated.loop(
+      Animated.sequence([
+        Animated.parallel([
+          Animated.timing(scale,   { toValue: 1.06, duration: 2000, easing, useNativeDriver: true }),
+          Animated.timing(opacity, { toValue: 0.85, duration: 2000, easing, useNativeDriver: true }),
+        ]),
+        Animated.parallel([
+          Animated.timing(scale,   { toValue: 1,    duration: 2000, easing, useNativeDriver: true }),
+          Animated.timing(opacity, { toValue: 1,    duration: 2000, easing, useNativeDriver: true }),
+        ]),
+      ])
+    );
+    loop.start();
+    return () => loop.stop();
+  }, []);
+
+  return (
+    <Animated.View style={[styles.fabContainer, { transform: [{ scale }], opacity }]}>
+      <Pressable
+        onPress={onPress}
+        style={({ pressed }) => [styles.fab, pressed && { opacity: 0.82 }]}
+        accessibilityLabel="Ajouter un produit"
+        accessibilityRole="button"
+      >
+        <Text style={styles.fabIcon}>+</Text>
+      </Pressable>
+    </Animated.View>
   );
 }
 
@@ -544,11 +643,17 @@ export default function VendreScreen() {
   const [search, setSearch] = useState('');
   const [showPayment, setShowPayment] = useState(false);
   const [payStep, setPayStep] = useState<PayStep>('pay');
-  const [successMsg, setSuccessMsg] = useState('');
+  const [offlineMsg, setOfflineMsg] = useState('');
+  const [showConfirmSheet, setShowConfirmSheet] = useState(false);
+  const [lastReceipt, setLastReceipt] = useState<ReceiptData | null>(null);
+  const currencyConfirmedRef = useRef(false);
+  const receiptViewRef = useRef<View>(null);
+  const pendingReceiptRef = useRef<ReceiptData | null>(null);
 
   useEffect(() => {
     if (businessId) fetchProducts(businessId, userId);
   }, [businessId]);
+
 
   const filtered = useMemo(() => {
     const q = search.toLowerCase().trim();
@@ -577,26 +682,80 @@ export default function VendreScreen() {
   const openCredit = () => { setPayStep('credit'); setShowPayment(true); };
 
   const handleConfirmPayment = useCallback(
-    async (payment: SalePayment | null, customerName?: string, discountAmount?: number) => {
+    async (payment: SalePayment | null, customerName?: string, discountAmount?: number, clientId?: string) => {
       const total = cartTotal;
       const isCredit = payment === null;
-      const ok = await submitSale(businessId, userId, payment, customerName, undefined, discountAmount);
+
+      // Before the very first sale, confirm the currency lock
+      if (!currencyConfirmedRef.current) {
+        const { count } = await supabase
+          .from('sale_orders')
+          .select('id', { count: 'exact', head: true })
+          .eq('business_id', businessId);
+
+        if ((count ?? 1) === 0) {
+          const confirmed = await new Promise<boolean>(resolve =>
+            Alert.alert(
+              `Confirmer votre monnaie :)`,
+              `Ceci sera votre monnaie officielle — ${currency} :)`,
+              [
+                { text: 'Annuler', style: 'cancel', onPress: () => resolve(false) },
+                { text: `Continuer en ${currency}`, onPress: () => resolve(true) },
+              ],
+            ),
+          );
+          if (!confirmed) return;
+        }
+        currencyConfirmedRef.current = true;
+      }
+
+      // Snapshot cart before submitSale clears it
+      const receiptItems: ReceiptItem[] = cart.map(l => ({
+        name: l.product.name,
+        qty: l.qty,
+        unit_price: l.unit_price,
+        is_bulk: l.is_bulk,
+      }));
+      pendingReceiptRef.current = {
+        businessName: business?.name ?? '',
+        currency,
+        items: receiptItems,
+        total: cartTotal,
+        payment: payment ?? null,
+        customerName,
+        date: new Date(),
+      };
+
+      const ok = await submitSale(businessId, userId, payment, customerName, undefined, discountAmount, clientId);
       if (ok) {
+        setLastReceipt(pendingReceiptRef.current);
         setShowPayment(false);
         setSearch('');
         const queued = useSalesStore.getState().lastSubmitQueued;
-        if (!queued) fetchProducts(businessId, userId);
-        const msg = queued
-          ? 'Vente enregistrée hors ligne  ⏳'
-          : isCredit
-          ? 'Crédit enregistré ✓'
-          : `Vente enregistrée ✓  ${formatAmount(total, currency)}`;
-        setSuccessMsg(msg);
-        setTimeout(() => setSuccessMsg(''), queued ? 4000 : 2500);
+        if (!queued) {
+          fetchProducts(businessId, userId);
+          setShowConfirmSheet(true);
+        } else {
+          setOfflineMsg('Vente enregistrée hors ligne ⏳');
+          setTimeout(() => setOfflineMsg(''), 4000);
+        }
       }
     },
     [businessId, userId, cartTotal, currency, submitSale, fetchProducts],
   );
+
+  const handleShareReceipt = async () => {
+    if (!receiptViewRef.current || !lastReceipt) return;
+    try {
+      const uri = await captureRef(receiptViewRef, { format: 'png', quality: 1 });
+      setShowConfirmSheet(false);
+      // Wait for modal close animation before presenting the share sheet
+      await new Promise<void>(r => setTimeout(r, 350));
+      await Sharing.shareAsync(uri, { mimeType: 'image/png', UTI: 'public.png', dialogTitle: 'Partager le reçu' });
+    } catch {
+      Alert.alert('Impossible de partager le reçu pour l\'instant.');
+    }
+  };
 
   if (loading && products.length === 0) {
     return (
@@ -614,29 +773,21 @@ export default function VendreScreen() {
         <View style={styles.emptyFull}>
           <Ionicons name="receipt-outline" size={48} color={palette.textDisabled} />
           <Text variant="h4">Point de vente</Text>
-          {isVendeur ? (
-            <Text variant="body" color="secondary" style={styles.emptyDesc}>
-              Aucun produit disponible pour l'instant.{'\n\n'}Vous avez été ajouté comme vendeur. Un administrateur ou manager doit d'abord ajouter des produits avant que vous puissiez vendre.
-            </Text>
-          ) : (
-            <Text variant="body" color="secondary" style={styles.emptyDesc}>
-              Ajoutez des produits dans votre catalogue pour commencer à enregistrer des ventes.
-            </Text>
-          )}
+          <Text variant="body" color="secondary" style={styles.emptyDesc}>
+            {isVendeur
+              ? 'Le catalogue est vide pour l\'instant — votre responsable prépare les produits.'
+              : 'Ajoutez votre premier produit au catalogue pour commencer à vendre.'}
+          </Text>
         </View>
+        {!isVendeur && (
+          <AnimatedFAB onPress={() => router.push({ pathname: '/(app)/(tabs)/catalogue', params: { openForm: '1' } })} />
+        )}
       </SafeAreaView>
     );
   }
 
   return (
     <SafeAreaView style={styles.safe} edges={['top']}>
-      {/* Success banner */}
-      {successMsg ? (
-        <View style={styles.successBanner}>
-          <Text variant="label" style={{ color: '#fff' }}>{successMsg}</Text>
-        </View>
-      ) : null}
-
       {/* Error banner */}
       {saleError ? (
         <Pressable onPress={clearError} style={styles.errorBanner}>
@@ -687,8 +838,8 @@ export default function VendreScreen() {
             currency={currency}
             cartQty={cartQtyMap[item.id]?.unit ?? 0}
             cartBulkQty={cartQtyMap[item.id]?.bulk ?? 0}
-            onAdd={() => { haptics.tap(); Keyboard.dismiss(); addToCart(item, false); }}
-            onAddBulk={() => { haptics.tap(); Keyboard.dismiss(); addToCart(item, true); }}
+            onAdd={() => { setLastReceipt(null); haptics.tap(); Keyboard.dismiss(); addToCart(item, false); }}
+            onAddBulk={() => { setLastReceipt(null); haptics.tap(); Keyboard.dismiss(); addToCart(item, true); }}
           />
         )}
         ListEmptyComponent={
@@ -755,6 +906,71 @@ export default function VendreScreen() {
         onConfirm={handleConfirmPayment}
         submitting={submitting}
       />
+
+      {/* Confirm + share sheet — slides up immediately after each online sale */}
+      <Modal
+        visible={showConfirmSheet}
+        transparent
+        animationType="slide"
+        onRequestClose={() => setShowConfirmSheet(false)}
+      >
+        <View style={styles.sheetOverlay}>
+          {/* Receipt at (0,0) — within modal bounds so GPU composites it; captureRef reads it directly */}
+          {lastReceipt && (
+            <View
+              ref={receiptViewRef}
+              collapsable={false}
+              pointerEvents="none"
+              style={{ position: 'absolute', top: 0, left: 0 }}
+            >
+              <SaleReceiptView data={lastReceipt} />
+            </View>
+          )}
+          {/* Solid white layer hides the receipt from the user */}
+          <View style={[StyleSheet.absoluteFill, { backgroundColor: '#fff' }]} pointerEvents="none" />
+          {/* Semi-transparent dark overlay + dismiss tap — renders on top of white */}
+          <Pressable style={[StyleSheet.absoluteFill, { backgroundColor: 'rgba(0,0,0,0.45)' }]} onPress={() => setShowConfirmSheet(false)} />
+
+          <View style={styles.sheet}>
+            <View style={styles.sheetHead}>
+              <View style={styles.sheetCheckCircle}>
+                <View style={styles.sheetCheckmark} />
+              </View>
+              <Text variant="h3" style={{ textAlign: 'center' }}>
+                {lastReceipt?.payment === null ? 'Crédit enregistré' : 'Vente enregistrée'}
+              </Text>
+              {lastReceipt && (
+                <Text variant="h4" style={{ color: palette.primary, textAlign: 'center' }}>
+                  {formatAmount(lastReceipt.total, lastReceipt.currency)}
+                </Text>
+              )}
+            </View>
+
+            <View style={styles.sheetDivider} />
+
+            <View style={styles.sheetFoot}>
+              <View style={styles.shareCtaBox}>
+                <Ionicons name="shield-checkmark-outline" size={20} color={palette.primary} />
+                <View style={{ flex: 1, gap: 3 }}>
+                  <Text variant="label">Partagez le reçu</Text>
+                  <Text variant="bodySmall" color="secondary">
+                    {lastReceipt?.payment === null
+                      ? 'Envoyez la preuve du crédit — évitez les disputes plus tard.'
+                      : 'Ça donne plus confiance au client 🤗'}
+                  </Text>
+                </View>
+              </View>
+              <Button label="Partager le reçu" onPress={handleShareReceipt} fullWidth size="lg" />
+              <Pressable onPress={() => setShowConfirmSheet(false)} style={styles.ignorePressable}>
+                <Text variant="caption" color="secondary">Ignorer</Text>
+              </Pressable>
+            </View>
+          </View>
+        </View>
+      </Modal>
+
+      {/* Offline-only fallback overlay */}
+      <SaleSuccessOverlay visible={!!offlineMsg} message={offlineMsg} />
     </SafeAreaView>
   );
 }
@@ -765,10 +981,6 @@ const TILE_GAP = spacing[3];
 
 const styles = StyleSheet.create({
   safe: { flex: 1, backgroundColor: palette.background },
-  successBanner: {
-    backgroundColor: palette.success, paddingHorizontal: spacing[5], paddingVertical: spacing[3],
-    alignItems: 'center',
-  },
   errorBanner: {
     backgroundColor: palette.danger, paddingHorizontal: spacing[5], paddingVertical: spacing[3],
     alignItems: 'center', gap: 2,
@@ -795,8 +1007,8 @@ const styles = StyleSheet.create({
   tileDisabled: { opacity: 0.5 },
   tileName: { minHeight: 36 },
   tileBadge: {
-    position: 'absolute', top: -6, right: -6, backgroundColor: palette.primary,
-    borderRadius: radius.full, width: 22, height: 22, alignItems: 'center', justifyContent: 'center', zIndex: 1,
+    position: 'absolute', top: 8, right: 8, backgroundColor: palette.primary,
+    borderRadius: radius.full, width: 22, height: 22, alignItems: 'center', justifyContent: 'center', zIndex: 10,
   },
   tileGrosBadge: {
     position: 'absolute', top: 4, right: 4,
@@ -810,6 +1022,45 @@ const styles = StyleSheet.create({
     backgroundColor: palette.surface, borderTopWidth: 1, borderTopColor: palette.border,
     maxHeight: 300, shadowColor: '#0F172A', shadowOffset: { width: 0, height: -4 },
     shadowOpacity: 0.1, shadowRadius: 12, elevation: 10,
+  },
+  sheetOverlay: {
+    flex: 1, justifyContent: 'flex-end',
+  },
+  sheet: {
+    backgroundColor: palette.surface,
+    borderTopLeftRadius: 24, borderTopRightRadius: 24,
+    overflow: 'hidden',
+  },
+  sheetHead: {
+    paddingHorizontal: spacing[6], paddingTop: spacing[6], paddingBottom: spacing[4],
+    gap: spacing[3], alignItems: 'center',
+  },
+  sheetCheckCircle: {
+    width: 64, height: 64, borderRadius: 32,
+    backgroundColor: '#22c55e',
+    justifyContent: 'center', alignItems: 'center',
+  },
+  sheetCheckmark: {
+    width: 22, height: 13,
+    borderLeftWidth: 3, borderBottomWidth: 3,
+    borderColor: '#fff', borderRadius: 1,
+    transform: [{ rotate: '-45deg' }], marginTop: -3,
+  },
+  sheetDivider: {
+    height: 1, backgroundColor: palette.border,
+  },
+  sheetFoot: {
+    paddingHorizontal: spacing[6], paddingTop: spacing[4], paddingBottom: spacing[10],
+    gap: spacing[4], alignItems: 'center',
+  },
+  shareCtaBox: {
+    flexDirection: 'row', alignItems: 'flex-start',
+    gap: spacing[3], alignSelf: 'stretch',
+    backgroundColor: palette.primaryLight,
+    borderRadius: 12, padding: spacing[4],
+  },
+  ignorePressable: {
+    paddingVertical: spacing[2],
   },
   cartScroll: { maxHeight: 160 },
   cartRow: {
@@ -846,6 +1097,9 @@ const styles = StyleSheet.create({
   // Empty states
   emptyFull: { flex: 1, alignItems: 'center', justifyContent: 'center', padding: spacing[8], gap: spacing[3] },
   emptyDesc: { textAlign: 'center', maxWidth: 260 },
+  fabContainer: { position: 'absolute', bottom: 194, right: spacing[4], zIndex: 10 },
+  fab: { width: 56, height: 56, borderRadius: radius.full, backgroundColor: palette.primary, alignItems: 'center', justifyContent: 'center', shadowColor: colors.neutral[900], shadowOffset: { width: 0, height: 4 }, shadowOpacity: 0.18, shadowRadius: 8, elevation: 8 },
+  fabIcon: { fontSize: 28, lineHeight: 32, fontWeight: '300' as const, color: palette.textInverse, marginTop: -2 },
   emptySearch: { alignItems: 'center', paddingVertical: spacing[10] },
 
   // Payment modal
@@ -870,14 +1124,78 @@ const styles = StyleSheet.create({
   // Pay step scrollable content
   payContent: { padding: spacing[5], gap: spacing[4] },
 
-  // Client picker — fixed layer between scroll and method grid
+  // Inline client section
   clientSection: {
-    paddingHorizontal: spacing[5], paddingVertical: spacing[3],
-    borderTopWidth: 1, borderTopColor: palette.border,
-    zIndex: 50, elevation: 50,
+    paddingHorizontal: spacing[5],
+    paddingTop: spacing[3],
+    paddingBottom: spacing[2],
+    borderTopWidth: 1,
+    borderTopColor: palette.border,
+  },
+  clientTrigger: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    justifyContent: 'center',
+    gap: spacing[2],
+    paddingVertical: spacing[3],
+  },
+  clientResultRowNew: {
+    borderBottomWidth: 2,
+    borderBottomColor: palette.border,
+    marginBottom: 2,
+  },
+  clientSelectedTag: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: spacing[3],
+    backgroundColor: `${palette.primary}12`,
+    borderRadius: radius.md,
+    paddingHorizontal: spacing[4],
+    paddingVertical: spacing[3],
+    borderWidth: 1,
+    borderColor: `${palette.primary}30`,
+  },
+  clientSearchRow: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: spacing[2],
+    paddingHorizontal: spacing[3],
+    paddingVertical: spacing[2],
+    borderWidth: 1,
+    borderColor: palette.border,
+    borderRadius: radius.md,
+    backgroundColor: palette.surface,
+    marginBottom: spacing[1],
+  },
+  clientSearchInput: {
+    flex: 1,
+    fontSize: 15,
+    color: palette.textPrimary,
+    paddingVertical: 0,
+  },
+  clientResultRow: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: spacing[3],
+    paddingVertical: spacing[3],
+    paddingHorizontal: spacing[1],
+    borderBottomWidth: 1,
+    borderBottomColor: palette.border,
+  },
+  clientAvatar: {
+    width: 36,
+    height: 36,
+    borderRadius: 18,
+    justifyContent: 'center',
+    alignItems: 'center',
+  },
+  clientAvatarText: {
+    fontSize: 16,
+    fontWeight: '700',
+    color: '#111827',
   },
 
-  // Method grid — outside scroll, always below client section
+  // Method grid — outside scroll, always below client card
   methodSection: {
     paddingHorizontal: spacing[5], paddingTop: spacing[3], paddingBottom: spacing[4], gap: spacing[2],
   },
@@ -886,7 +1204,8 @@ const styles = StyleSheet.create({
   methodGrid: { flexDirection: 'row', flexWrap: 'wrap', gap: spacing[3] },
   methodChip: {
     flex: 1, alignItems: 'center', justifyContent: 'center',
-    paddingVertical: spacing[4], paddingHorizontal: spacing[2],
+    paddingVertical: spacing[3], paddingHorizontal: spacing[2],
+    minHeight: 56,
     borderRadius: radius.md, borderWidth: 1.5, borderColor: palette.border,
     backgroundColor: palette.surface, minWidth: '45%',
   },
@@ -919,40 +1238,4 @@ const styles = StyleSheet.create({
     padding: spacing[3], borderWidth: 1, borderColor: colors.warning[100],
   },
 
-  // Client picker
-  clientSelectedRow: {
-    flexDirection: 'row', alignItems: 'center', justifyContent: 'space-between',
-    paddingVertical: spacing[2],
-  },
-  attachLink: {
-    paddingVertical: spacing[3], alignItems: 'center',
-  },
-  clientInput: {
-    paddingHorizontal: spacing[4], paddingVertical: spacing[3],
-    borderRadius: radius.md, borderWidth: 1, borderColor: palette.border,
-    backgroundColor: palette.surface, color: palette.textPrimary, fontSize: 16,
-  },
-  suggestionList: {
-    position: 'absolute',
-    top: 50,
-    left: 0,
-    right: 0,
-    backgroundColor: palette.surface, borderWidth: 1, borderColor: palette.border,
-    borderRadius: radius.md, overflow: 'hidden',
-    zIndex: 100,
-    elevation: 100,
-    shadowColor: '#0F172A',
-    shadowOffset: { width: 0, height: 4 },
-    shadowOpacity: 0.12,
-    shadowRadius: 8,
-  },
-  suggestionRow: {
-    paddingHorizontal: spacing[4], paddingVertical: spacing[3],
-    borderBottomWidth: 1, borderBottomColor: palette.border,
-  },
-  newClientForm: {
-    backgroundColor: palette.surface, borderRadius: radius.md,
-    borderWidth: 1, borderColor: palette.border,
-    padding: spacing[4], gap: spacing[3], marginTop: spacing[2],
-  },
 });

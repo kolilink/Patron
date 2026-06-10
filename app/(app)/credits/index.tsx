@@ -1,5 +1,6 @@
 import { useCallback, useEffect, useMemo } from 'react';
 import { FlatList, Pressable, StyleSheet, View } from 'react-native';
+import { Ionicons } from '@expo/vector-icons';
 import { SafeAreaView } from 'react-native-safe-area-context';
 import { router, useFocusEffect } from 'expo-router';
 import { Card } from '@/src/components/ui/Card';
@@ -32,7 +33,7 @@ export default function CreditsScreen() {
   const role = session?.activeMembership?.role;
   const isVendeur = role === 'vendeur';
 
-  const { sales, loading, fetchSales } = useVentesStore();
+  const { sales, loading, error, fetchSales } = useVentesStore();
 
   useFocusEffect(
     useCallback(() => {
@@ -86,29 +87,43 @@ export default function CreditsScreen() {
     <SafeAreaView style={styles.safe} edges={['top']}>
       <View style={styles.header}>
         <Pressable onPress={() => router.back()}><Text variant="body" color="secondary">‹ Retour</Text></Pressable>
-        <Text variant="h4">Clients qui doivent</Text>
+        <Text variant="h4">Clients qui vous doivent</Text>
         <View style={{ width: 60 }} />
       </View>
 
-      {/* Total outstanding */}
-      <Card style={styles.totalCard}>
-        <Text variant="caption" color="secondary">Total dû</Text>
+      {/* Total outstanding — hidden when nothing is owed */}
+      {debtors.length > 0 && <Card style={styles.totalCard}>
+        <Text variant="caption" color="secondary">Crédit total</Text>
         <Text variant="amountLarge" style={{ color: debtors.length > 0 ? palette.warning : palette.textPrimary }}>
           {fmt(totalOutstanding, currency)}
         </Text>
         <Text variant="caption" color="secondary">
-          {debtors.length} client{debtors.length !== 1 ? 's' : ''} en attente
+          {debtors.length} client{debtors.length !== 1 ? 's' : ''} vous {debtors.length !== 1 ? 'doivent' : 'doit'} de l'argent
         </Text>
-      </Card>
+      </Card>}
 
       {loading && debtors.length === 0 ? (
         <Text variant="body" color="secondary" style={styles.center}>Chargement…</Text>
+      ) : !loading && debtors.length === 0 && error ? (
+        <View style={styles.empty}>
+          <Text variant="body" color="secondary" style={{ textAlign: 'center' }}>
+            Données non disponibles
+          </Text>
+          <Pressable
+            onPress={() => fetchSales(businessId, isVendeur ? userId : undefined)}
+            style={{ marginTop: spacing[4] }}
+          >
+            <Text variant="label" style={{ color: palette.primary }}>Réessayer</Text>
+          </Pressable>
+        </View>
       ) : debtors.length === 0 ? (
         <View style={styles.empty}>
-          <Text variant="label" style={{ color: palette.success }}>✓ Aucun crédit en attente</Text>
-          <Text variant="body" color="secondary" style={{ textAlign: 'center', marginTop: spacing[2] }}>
-            Tous les paiements sont à jour.
-          </Text>
+          <View style={{ flexDirection: 'row', alignItems: 'center', gap: 6 }}>
+            <Ionicons name="checkmark-circle" size={18} color={palette.success} />
+            <Text variant="label" style={{ color: palette.success }}>
+              Félicitations, aucun client ne vous doit !
+            </Text>
+          </View>
         </View>
       ) : (
         <FlatList
@@ -131,13 +146,13 @@ export default function CreditsScreen() {
                     <Text variant="label" numberOfLines={1}>{item.name}</Text>
                   </View>
                   <Text variant="caption" color="secondary">
-                    {item.nbSales} vente{item.nbSales > 1 ? 's' : ''} en attente
+                    {item.nbSales} vente{item.nbSales > 1 ? 's' : ''} à crédit
                     {' · '}
                     {item.daysOldest === 0 ? "aujourd'hui" : `il y a ${item.daysOldest} j`}
                   </Text>
                   {!isVendeur && item.sellers.length > 0 && (
                     <Text variant="caption" color="secondary">
-                      Vendeur: {item.sellers.join(', ')}
+                      {item.sellers.join(', ')} à fait cette vente
                     </Text>
                   )}
                 </View>

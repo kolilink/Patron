@@ -5,49 +5,309 @@
   <meta name="viewport" content="width=device-width, initial-scale=1.0">
   <title>Patron — Support</title>
   <style>
+    :root {
+      --indigo: #6366F1;
+      --indigo-dark: #4F46E5;
+      --indigo-light: #EEF2FF;
+      --text: #111827;
+      --muted: #6B7280;
+      --border: #E5E7EB;
+      --bg: #F9FAFB;
+      --white: #ffffff;
+    }
+
     * { margin: 0; padding: 0; box-sizing: border-box; }
-    body { font-family: -apple-system, sans-serif; background: #f9f9f9; color: #111; }
-    .hero { background: #6366F1; color: white; padding: 60px 20px; text-align: center; }
-    .hero h1 { font-size: 32px; font-weight: 700; margin-bottom: 12px; }
-    .hero p { font-size: 18px; opacity: 0.9; }
-    .container { max-width: 640px; margin: 0 auto; padding: 48px 20px; }
-    .card { background: white; border-radius: 16px; padding: 32px; margin-bottom: 24px; box-shadow: 0 2px 12px rgba(0,0,0,0.06); }
-    h2 { font-size: 20px; margin-bottom: 12px; color: #6366F1; }
-    p { font-size: 16px; line-height: 1.7; color: #444; }
-    a { color: #6366F1; text-decoration: none; font-weight: 600; }
-    .footer { text-align: center; padding: 32px 20px; color: #999; font-size: 14px; }
+
+    body {
+      font-family: -apple-system, BlinkMacSystemFont, 'Inter', 'Segoe UI', sans-serif;
+      background: var(--bg);
+      color: var(--text);
+      -webkit-font-smoothing: antialiased;
+    }
+
+    /* ── Header ── */
+    header {
+      background: var(--white);
+      border-bottom: 1px solid var(--border);
+      padding: 20px 32px;
+      display: flex;
+      align-items: center;
+      justify-content: space-between;
+    }
+    .logo {
+      font-size: 20px;
+      font-weight: 800;
+      color: var(--indigo);
+      letter-spacing: -0.5px;
+    }
+    header span {
+      font-size: 13px;
+      color: var(--muted);
+    }
+
+    /* ── Hero ── */
+    .hero {
+      background: linear-gradient(160deg, var(--indigo) 0%, var(--indigo-dark) 100%);
+      padding: 80px 32px 64px;
+      text-align: center;
+    }
+    .hero h1 {
+      font-size: 40px;
+      font-weight: 800;
+      color: #fff;
+      letter-spacing: -1px;
+      margin-bottom: 12px;
+    }
+    .hero p {
+      font-size: 15px;
+      color: rgba(255,255,255,0.6);
+      font-weight: 400;
+    }
+
+    /* ── Layout ── */
+    .wrapper {
+      max-width: 720px;
+      margin: 0 auto;
+      padding: 64px 24px 96px;
+    }
+
+    /* ── Section ── */
+    .section {
+      margin-bottom: 48px;
+    }
+    .section-label {
+      font-size: 11px;
+      font-weight: 700;
+      letter-spacing: 1.5px;
+      text-transform: uppercase;
+      color: var(--indigo);
+      margin-bottom: 10px;
+    }
+    .section h2 {
+      font-size: 22px;
+      font-weight: 700;
+      color: var(--text);
+      letter-spacing: -0.3px;
+      margin-bottom: 16px;
+    }
+    .section p {
+      font-size: 16px;
+      line-height: 1.75;
+      color: var(--muted);
+      margin-bottom: 12px;
+    }
+    .section p:last-child { margin-bottom: 0; }
+
+    /* ── FAQ ── */
+    .faq {
+      display: flex;
+      flex-direction: column;
+      gap: 24px;
+      margin-top: 8px;
+    }
+    .faq-item {
+      background: var(--white);
+      border: 1px solid var(--border);
+      border-radius: 12px;
+      padding: 20px 24px;
+    }
+    .faq-item strong {
+      display: block;
+      font-size: 15px;
+      font-weight: 700;
+      color: var(--text);
+      margin-bottom: 8px;
+    }
+    .faq-item p {
+      font-size: 15px;
+      line-height: 1.65;
+      color: var(--muted);
+      margin: 0;
+    }
+    .faq-item a {
+      color: var(--indigo);
+      font-weight: 600;
+      text-decoration: none;
+    }
+    .faq-item a:hover { text-decoration: underline; }
+
+    /* ── Callout ── */
+    .callout {
+      background: var(--indigo-light);
+      border-radius: 12px;
+      padding: 20px 24px;
+      margin: 20px 0;
+    }
+    .callout p {
+      font-size: 15px;
+      line-height: 1.65;
+      color: #3730A3;
+      font-weight: 500;
+      margin: 0;
+    }
+
+    /* ── Divider ── */
+    hr {
+      border: none;
+      border-top: 1px solid var(--border);
+      margin: 48px 0;
+    }
+
+    /* ── Contact ── */
+    .contact-grid {
+      display: grid;
+      grid-template-columns: 1fr 1fr;
+      gap: 16px;
+      margin-top: 20px;
+    }
+    @media (max-width: 520px) {
+      .contact-grid { grid-template-columns: 1fr; }
+    }
+    .contact-card {
+      background: var(--white);
+      border: 1px solid var(--border);
+      border-radius: 12px;
+      padding: 20px 24px;
+    }
+    .contact-card .type {
+      font-size: 11px;
+      font-weight: 700;
+      letter-spacing: 1px;
+      text-transform: uppercase;
+      color: var(--muted);
+      margin-bottom: 6px;
+    }
+    .contact-card a {
+      font-size: 15px;
+      font-weight: 600;
+      color: var(--indigo);
+      text-decoration: none;
+    }
+    .contact-card a:hover { text-decoration: underline; }
+    .contact-card p {
+      font-size: 13px;
+      color: var(--muted);
+      margin-top: 4px;
+    }
+
+    /* ── Footer ── */
+    footer {
+      border-top: 1px solid var(--border);
+      padding: 32px 24px;
+      text-align: center;
+    }
+    footer p {
+      font-size: 13px;
+      color: var(--muted);
+      line-height: 1.8;
+    }
   </style>
 </head>
 <body>
+
+  <header>
+    <span class="logo">patron</span>
+    <span>Support</span>
+  </header>
+
   <div class="hero">
-    <h1>Patron — Support</h1>
-    <p>Nous sommes là pour vous aider.</p>
+    <h1>Support</h1>
+    <p>On répond vite. Posez votre question.</p>
   </div>
-  <div class="container">
-    <div class="card">
-      <h2>Nous contacter</h2>
-      <p>Vous avez une question ou un problème avec l'application ?<br>
-      Envoyez-nous un email et nous répondons sous 48 heures.</p>
-      <br>
-      <p><a href="mailto:mdousebastiao@gmail.com">mdousebastiao@gmail.com</a></p>
+
+  <div class="wrapper">
+
+    <div class="section">
+      <div class="section-label">Nous contacter</div>
+      <h2>Une question ou un problème ?</h2>
+      <p>WhatsApp est le moyen le plus rapide. On répond généralement le jour même. L'email fonctionne aussi pour les sujets plus détaillés.</p>
+      <div class="contact-grid">
+        <div class="contact-card">
+          <div class="type">WhatsApp</div>
+          <a href="https://wa.me/16094454809">+1 609 445 4809</a>
+          <p>Réponse le jour même</p>
+        </div>
+        <div class="contact-card">
+          <div class="type">Email</div>
+          <a href="mailto:patroncommercesupprt@gmail.com">patroncommercesupprt@gmail.com</a>
+          <p>Réponse sous 10 h</p>
+        </div>
+      </div>
     </div>
-    <div class="card">
-      <h2>Questions fréquentes</h2>
-      <p><strong>Comment créer un commerce ?</strong><br>
-      Après votre inscription, appuyez sur "Créer un commerce" et suivez les étapes.</p>
-      <br>
-      <p><strong>Comment ajouter un produit ?</strong><br>
-      Allez dans l'onglet Catalogue, appuyez sur le bouton +.</p>
-      <br>
-      <p><strong>Comment inviter un vendeur ?</strong><br>
-      Allez dans Équipe et partagez le code d'invitation à votre collaborateur.</p>
-      <br>
-      <p><strong>Comment supprimer mon compte ?</strong><br>
-      Envoyez-nous un email à <a href="mailto:mdousebastiao@gmail.com">mdousebastiao@gmail.com</a> et nous supprimerons toutes vos données sous 7 jours.</p>
+
+    <hr>
+
+    <div class="section">
+      <div class="section-label">Questions fréquentes</div>
+      <h2>Ce qu'on nous demande souvent</h2>
+
+      <div class="faq">
+
+        <div class="faq-item">
+          <strong>Comment créer un commerce ?</strong>
+          <p>Après votre inscription avec votre numéro WhatsApp, appuyez sur "Créer un commerce" et suivez les étapes. Votre commerce est prêt en moins d'une minute.</p>
+        </div>
+
+        <div class="faq-item">
+          <strong>Comment ajouter un produit ?</strong>
+          <p>Allez dans l'onglet Catalogue et appuyez sur le bouton +. Vous pouvez définir le prix d'achat, le prix de vente, le stock initial et un prix de gros si vous vendez en grande quantité.</p>
+        </div>
+
+        <div class="faq-item">
+          <strong>Comment inviter un collaborateur ?</strong>
+          <p>Allez dans l'onglet Plus → Équipe → générer un code d'invitation. Partagez ce code à votre collaborateur. Il l'entre dans son application pour rejoindre votre commerce. Vous choisissez son rôle : manager, vendeur ou investisseur.</p>
+        </div>
+
+        <div class="faq-item">
+          <strong>Quels sont les rôles disponibles ?</strong>
+          <p>Il y a quatre rôles : <strong>Administrateur</strong> (contrôle total), <strong>Manager</strong> (gestion complète sans supprimer le commerce), <strong>Vendeur</strong> (enregistre les ventes et les dépenses), <strong>Investisseur</strong> (lecture seule — voit les chiffres sans pouvoir modifier).</p>
+        </div>
+
+        <div class="faq-item">
+          <strong>L'application marche sans internet ?</strong>
+          <p>Oui. Ventes, dépenses, créations de produits, ajustements de stock et paiements fonctionnent hors ligne. Une bannière dans l'application indique le nombre d'opérations en attente. Tout se synchronise automatiquement dès que la connexion revient.</p>
+        </div>
+
+        <div class="faq-item">
+          <strong>Comment enregistrer une vente à crédit ?</strong>
+          <p>Sur l'écran de vente, activez l'option "À crédit" avant de valider. La vente apparaît dans l'historique avec le statut Crédit. Quand le client paie, allez dans la vente et appuyez sur "Enregistrer un paiement".</p>
+        </div>
+
+        <div class="faq-item">
+          <strong>Qu'est-ce que Le Marché ?</strong>
+          <p>Le Marché est un forum communautaire accessible depuis l'onglet Plus. Tous les utilisateurs de Patron peuvent y poser des questions, partager des conseils et discuter de commerce. Vos publications sont visibles par toute la communauté.</p>
+        </div>
+
+        <div class="faq-item">
+          <strong>Comment supprimer mon compte ?</strong>
+          <p>Allez dans Plus → Paramètres → Supprimer mon compte. Toutes vos données sont effacées immédiatement et définitivement. Si vous êtes administrateur d'un commerce avec d'autres membres actifs, retirez-les d'abord.</p>
+        </div>
+
+        <div class="faq-item">
+          <strong>Je n'arrive pas à me connecter.</strong>
+          <p>La connexion se fait par WhatsApp : vous recevez un code sur votre numéro et vous le copiez dans l'application. Si le code n'arrive pas après quelques minutes, vérifiez que votre numéro est bien au format international (ex. +224...) et réessayez. Si le problème persiste, écrivez-nous sur WhatsApp.</p>
+        </div>
+
+      </div>
     </div>
+
+    <hr>
+
+    <div class="section">
+      <div class="section-label">Confidentialité</div>
+      <h2>Vos données, vos droits.</h2>
+      <p>Pour tout savoir sur ce que nous collectons, comment nous le protégeons et comment exercer vos droits, consultez notre politique de confidentialité.</p>
+      <div class="callout">
+        <p><a href="https://patron.kolilink.com/privacy.html">Lire la politique de confidentialité →</a></p>
+      </div>
+    </div>
+
   </div>
-  <div class="footer">
-    <p>© 2026— Patron</p>
-  </div>
+
+  <footer>
+    <p>© 2026 — Patron</p>
+    <p>Conakry, Guinée · Tous droits réservés</p>
+  </footer>
+
 </body>
 </html>

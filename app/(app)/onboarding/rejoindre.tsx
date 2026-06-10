@@ -36,7 +36,7 @@ export default function RejoindreScreen() {
           </Pressable>
           <Text variant="h2">Rejoindre un commerce</Text>
           <Text variant="body" color="secondary">
-            Entrez le code d'invitation partagé par votre responsable.
+            Entrez le code d'invitation partagé par votre partenaire :)
           </Text>
         </View>
 

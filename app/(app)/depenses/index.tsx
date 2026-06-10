@@ -7,6 +7,7 @@ import { Card } from '@/src/components/ui/Card';
 import { Input } from '@/src/components/ui/Input';
 import { Text } from '@/src/components/ui/Text';
 import { DatePickerField } from '@/src/components/ui/DatePickerField';
+import { OfflineNotice } from '@/src/components/ui/OfflineNotice';
 import { palette, spacing, radius } from '@/src/theme';
 import { useAuthStore } from '@/stores/auth';
 import { useExpensesStore, type CreateExpenseData } from '@/stores/expenses';
@@ -21,8 +22,8 @@ function todayIso() {
 
 function statusLabel(s: string) {
   if (s === 'approuve') return 'Enregistré';
-  if (s === 'rejete') return 'Rejeté';
-  return 'En attente';
+  if (s === 'rejete') return 'Refusé';
+  return 'Pas encore accepté';
 }
 
 function statusColor(s: string) {
@@ -63,8 +64,8 @@ function ExpenseFormModal({ visible, editing, onClose, onSave, saving, currency 
 
   const handleSave = async () => {
     const amt = parseFloat(amount);
-    if (!description.trim()) { Alert.alert('Description requise'); return; }
-    if (isNaN(amt) || amt <= 0) { Alert.alert('Montant invalide'); return; }
+    if (!description.trim()) { Alert.alert('Écrivez un petit mot :)'); return; }
+    if (isNaN(amt) || amt <= 0) { Alert.alert('Vérifiez le montant :)'); return; }
     await onSave({
       amount: amt,
       description,
@@ -192,8 +193,8 @@ function ExpenseCard({ expense, currency, isManager, canEdit, onApprove, onRejec
 
       {isManager && isPending && (
         <View style={styles.actionRow}>
-          <Button label="Valider" size="sm" onPress={onApprove} style={{ flex: 1 }} />
-          <Button label="Rejeter" size="sm" variant="danger" onPress={onReject} style={{ flex: 1 }} />
+          <Button label="Accepter" size="sm" onPress={onApprove} style={{ flex: 1 }} />
+          <Button label="Refuser" size="sm" variant="danger" onPress={onReject} style={{ flex: 1 }} />
         </View>
       )}
     </Card>
@@ -262,7 +263,7 @@ export default function DepensesScreen() {
   const role = session?.activeMembership?.role;
   const isManager = role === 'administrateur' || role === 'manager';
 
-  const { expenses, loading, saving, fetchExpenses, createExpense, updateExpense, approveExpense, rejectExpense } =
+  const { expenses, loading, saving, error, offline, offlineSince, fetchExpenses, createExpense, updateExpense, approveExpense, rejectExpense } =
     useExpensesStore();
 
   const [showForm, setShowForm] = useState(false);
@@ -313,12 +314,12 @@ export default function DepensesScreen() {
     } else {
       ok = await createExpense(businessId, userId, data, isManager);
       if (ok && !isManager) {
-        Alert.alert('Dépense soumise', 'En attente de validation.');
+        Alert.alert('Dépense enregistrée', 'Pas encore acceptée par le gérant.');
       }
     }
     if (!ok) {
       const msg = useExpensesStore.getState().error;
-      Alert.alert('Erreur', msg ?? "Impossible d'enregistrer la dépense.");
+      Alert.alert('La dépense n\'est pas passée :)');
     }
     if (ok) {
       setShowForm(false);
@@ -330,9 +331,9 @@ export default function DepensesScreen() {
   const handleAdd = () => { setEditingExpense(null); setShowForm(true); };
 
   const handleApprove = (id: string) => {
-    Alert.alert('Valider cette dépense ?', '', [
+    Alert.alert('Accepter cette dépense ?', '', [
       { text: 'Annuler', style: 'cancel' },
-      { text: 'Valider', onPress: async () => {
+      { text: 'Accepter', onPress: async () => {
         const ok = await approveExpense(id, userId);
         if (ok) haptics.success(); else haptics.error();
       }},
@@ -340,9 +341,9 @@ export default function DepensesScreen() {
   };
 
   const handleReject = (id: string) => {
-    Alert.alert('Rejeter cette dépense ?', '', [
+    Alert.alert('Refuser cette dépense ?', '', [
       { text: 'Annuler', style: 'cancel' },
-      { text: 'Rejeter', style: 'destructive', onPress: async () => {
+      { text: 'Refuser', style: 'destructive', onPress: async () => {
         const ok = await rejectExpense(id, userId);
         if (ok) haptics.error();
       }},
@@ -365,24 +366,29 @@ export default function DepensesScreen() {
       {/* Summary bar */}
       <View style={styles.summary}>
         <Card style={styles.summaryCard}>
-          <Text variant="caption" color="secondary">Ce mois</Text>
+          <Text variant="caption" color="secondary">Ce mois, vous avez déjà dépensé</Text>
           <Text variant="label">{fmt(thisMonthApproved, currency)}</Text>
         </Card>
         {pendingExpenses.length > 0 && (
           <Card style={[styles.summaryCard, { borderColor: palette.warning, borderWidth: 1 }]}>
-            <Text variant="caption" color="secondary">En attente</Text>
+            <Text variant="caption" color="secondary">Pas encore accepté</Text>
             <Text variant="label" style={{ color: palette.warning }}>{pendingExpenses.length}</Text>
           </Card>
         )}
       </View>
 
+      {offline && <OfflineNotice offlineSince={offlineSince} />}
+
       {loading && isEmpty ? (
         <Text variant="body" color="secondary" style={styles.center}>Chargement…</Text>
+      ) : !loading && isEmpty && error ? (
+        <View style={styles.empty}>
+          <Text variant="body" color="secondary" style={{ textAlign: 'center' }}>Données non disponibles hors ligne</Text>
+        </View>
       ) : isEmpty ? (
         <View style={styles.empty}>
-          <Text style={{ fontSize: 40, lineHeight: 48 }}>💸</Text>
-          <Text variant="body" color="secondary">Aucune dépense ce mois</Text>
-          <Text variant="caption" color="secondary">Tes dépenses apparaîtront ici</Text>
+          <Text variant="body" color="secondary" style={{ textAlign: 'center', fontWeight: '600' }}>Aucune dépense ce mois — c'est bon signe.</Text>
+          <Text variant="caption" color="secondary" style={{ textAlign: 'center' }}>Ajoutez-en une dès qu'elle se présente.</Text>
           <Button label="+ Ajouter une dépense" onPress={handleAdd} size="sm" style={{ marginTop: spacing[2] }} />
         </View>
       ) : (
@@ -489,6 +495,7 @@ const styles = StyleSheet.create({
   actionRow: { flexDirection: 'row', gap: spacing[2] },
 
   // Empty
+  offlineBanner: { alignItems: 'center', justifyContent: 'center', paddingVertical: spacing[1], borderBottomWidth: StyleSheet.hairlineWidth, borderBottomColor: palette.border },
   empty: { flex: 1, alignItems: 'center', justifyContent: 'center', gap: spacing[3] },
   center: { textAlign: 'center', marginTop: spacing[10] },
 

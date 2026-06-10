@@ -3,19 +3,26 @@ import { FlatList, Pressable, StyleSheet, View } from 'react-native';
 import { SafeAreaView } from 'react-native-safe-area-context';
 import { router, useFocusEffect } from 'expo-router';
 import { Text } from '@/src/components/ui/Text';
-import { palette, spacing, colors, radius } from '@/src/theme';
+import { palette, spacing, radius } from '@/src/theme';
 import { useAuthStore } from '@/stores/auth';
 import { useVentesStore } from '@/stores/ventes';
 
 function fmt(n: number, cur: string) { return `${Math.round(n).toLocaleString('fr-FR')} ${cur}`; }
 
-function fmtDate(iso: string) {
+function relativeDate(iso: string) {
   const d = iso.includes('T') ? new Date(iso) : new Date(iso + 'T00:00:00');
+  const now = new Date();
+  const todayStart = new Date(now.getFullYear(), now.getMonth(), now.getDate()).getTime();
+  const dStart = new Date(d.getFullYear(), d.getMonth(), d.getDate()).getTime();
+  const diff = Math.floor((todayStart - dStart) / 86400000);
+  if (diff === 0) return "Aujourd'hui";
+  if (diff === 1) return 'Hier';
   return d.toLocaleDateString('fr-FR', { day: 'numeric', month: 'short' });
 }
 
 interface Client {
   name: string;
+  clientId?: string;
   totalAchats: number;
   totalCredit: number;
   nbCommandes: number;
@@ -39,7 +46,7 @@ export default function ClientsScreen() {
   const role = session?.activeMembership?.role;
   const isVendeur = role === 'vendeur';
 
-  const { sales, loading, fetchSales } = useVentesStore();
+  const { sales, loading, error, offline, fetchSales } = useVentesStore();
   const [filter, setFilter] = useState<FilterType>('tous');
 
   useFocusEffect(
@@ -52,8 +59,10 @@ export default function ClientsScreen() {
     const map = new Map<string, Client>();
     for (const s of sales) {
       const name = s.customer_name?.trim();
-      if (!name) continue; // skip anonymous / walk-in sales
-      const existing = map.get(name) ?? { name, totalAchats: 0, totalCredit: 0, nbCommandes: 0, lastSaleDate: '', sellers: [] };
+      if (!name) continue;
+      // Key by client_id when available — prevents two "Mamadou"s from merging
+      const key = s.client_id ?? name;
+      const existing = map.get(key) ?? { name, clientId: s.client_id ?? undefined, totalAchats: 0, totalCredit: 0, nbCommandes: 0, lastSaleDate: '', sellers: [] };
       if (s.status !== 'annule') {
         existing.totalAchats += s.total_amount;
         const sDate = s.sale_date ?? s.created_at.split('T')[0];
@@ -62,14 +71,14 @@ export default function ClientsScreen() {
         }
       }
       if (s.status === 'credit') {
-        const remaining = s.total_amount - (s.amount_paid ?? 0);
+        const remaining = s.total_amount - (s.discount_amount ?? 0) - (s.amount_paid ?? 0);
         if (remaining > 0.01) existing.totalCredit += remaining;
       }
       existing.nbCommandes += 1;
       if (s.seller_name && !existing.sellers.includes(s.seller_name)) {
         existing.sellers.push(s.seller_name);
       }
-      map.set(name, existing);
+      map.set(key, existing);
     }
     return Array.from(map.values()).sort((a, b) => b.totalCredit - a.totalCredit || b.totalAchats - a.totalAchats);
   }, [sales]);
@@ -113,49 +122,65 @@ export default function ClientsScreen() {
         ))}
       </View>
 
+      {offline && (
+        <View style={styles.offlineBanner}>
+          <Text variant="caption" color="secondary">Pas de réseau · Informations non actualisées</Text>
+        </View>
+      )}
+
       {loading && allClients.length === 0 ? (
         <Text variant="body" color="secondary" style={styles.center}>Chargement…</Text>
+      ) : !loading && allClients.length === 0 && error ? (
+        <View style={styles.empty}>
+          <Text variant="body" color="secondary" style={{ textAlign: 'center' }}>Données non disponibles hors ligne</Text>
+        </View>
       ) : displayedClients.length === 0 ? (
         <View style={styles.empty}>
           <Text variant="body" color="secondary">
             {filter === 'doivent'
-              ? 'Aucun client ne doit en ce moment.'
-              : isVendeur ? 'Aucun client enregistré sur vos ventes.' : 'Aucun client enregistré.'}
+              ? 'Aucun crédit en cours — tout est à jour.'
+              : isVendeur
+                ? 'Vos clients apparaîtront ici dès la première vente.'
+                : 'Vos clients s\'afficheront ici automatiquement.'}
           </Text>
         </View>
       ) : (
         <FlatList
           data={displayedClients}
-          keyExtractor={c => c.name}
+          keyExtractor={c => c.clientId ?? c.name}
           contentContainerStyle={styles.list}
           renderItem={({ item }) => (
             <Pressable
-              onPress={() => router.push(`/clients/${encodeURIComponent(item.name)}`)}
+              onPress={() => router.push(`/clients/${encodeURIComponent(item.clientId ?? item.name)}`)}
               style={({ pressed }) => [styles.clientRow, pressed && { opacity: 0.75 }]}>
-              <View style={[styles.avatar, { backgroundColor: item.totalCredit > 0 ? colors.warning[50] : palette.primaryLight }]}>
-                <Text variant="label" style={{ color: item.totalCredit > 0 ? palette.warning : palette.primary }}>
+              <View style={[styles.avatar, { backgroundColor: item.totalCredit > 0 ? '#FEF3C7' : '#F0FDF4' }]}>
+                <Text variant="label" style={{ color: item.totalCredit > 0 ? '#D97706' : '#16A34A' }}>
                   {item.name[0]?.toUpperCase()}
                 </Text>
               </View>
               <View style={{ flex: 1, gap: 2 }}>
                 <Text variant="label">{item.name}</Text>
-                {item.totalCredit > 0 ? (
-                  <Text variant="caption" style={{ color: palette.warning }}>
-                    Doit {fmt(item.totalCredit, currency)}
-                  </Text>
-                ) : (
+                {item.lastSaleDate ? (
                   <Text variant="caption" color="secondary">
-                    {item.nbCommandes} achat{item.nbCommandes > 1 ? 's' : ''}
-                    {item.lastSaleDate ? ` · ${fmtDate(item.lastSaleDate)}` : ''}
+                    Dernier achat · {relativeDate(item.lastSaleDate)}
                   </Text>
-                )}
+                ) : null}
                 {!isVendeur && item.sellers.length > 0 && (
                   <Text variant="caption" color="secondary">
                     Vendeur: {item.sellers.join(', ')}
                   </Text>
                 )}
               </View>
-              <Text variant="caption" color="secondary">›</Text>
+              <View style={{ flexDirection: 'row', alignItems: 'center', justifyContent: 'flex-end' }}>
+                {item.totalCredit > 0 ? (
+                  <Text variant="label" style={{ color: '#B45309', marginRight: 8 }}>
+                    {fmt(item.totalCredit, currency)}
+                  </Text>
+                ) : (
+                  <Text variant="caption" style={{ color: '#16A34A', fontWeight: '600', marginRight: 8 }}>À jour</Text>
+                )}
+                <Text variant="caption" color="secondary">›</Text>
+              </View>
             </Pressable>
           )}
           ItemSeparatorComponent={() => <View style={{ height: 1, backgroundColor: palette.border }} />}
@@ -181,10 +206,11 @@ const styles = StyleSheet.create({
   filterChipActive: { backgroundColor: palette.primary, borderColor: palette.primary },
   list: { paddingBottom: spacing[10] },
   clientRow: {
-    flexDirection: 'row', alignItems: 'center', gap: spacing[3],
+    flexDirection: 'row', alignItems: 'center', justifyContent: 'space-between', gap: spacing[3],
     paddingHorizontal: spacing[5], paddingVertical: spacing[3], backgroundColor: palette.surface,
   },
   avatar: { width: 40, height: 40, borderRadius: 20, alignItems: 'center', justifyContent: 'center' },
+  offlineBanner: { alignItems: 'center', justifyContent: 'center', paddingVertical: spacing[1], borderBottomWidth: StyleSheet.hairlineWidth, borderBottomColor: palette.border },
   empty: { flex: 1, alignItems: 'center', justifyContent: 'center' },
   center: { textAlign: 'center', marginTop: spacing[10] },
 });

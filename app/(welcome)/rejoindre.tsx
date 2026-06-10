@@ -13,6 +13,7 @@ import { SafeAreaView } from 'react-native-safe-area-context';
 import { Button } from '@/src/components/ui/Button';
 import { Input } from '@/src/components/ui/Input';
 import { Text } from '@/src/components/ui/Text';
+import { PhoneInput } from '@/src/components/ui/PhoneInput';
 import { colors, palette, radius, spacing } from '@/src/theme';
 import { useAuthStore } from '@/stores/auth';
 import { supabase } from '@/lib/supabase';
@@ -23,12 +24,16 @@ type Step = 'phone' | 'attente' | 'code';
 
 export default function RejoindreScreen() {
   const { createPhoneVerification, upgradePhone, joinBusiness, loading, error, clearError } = useAuthStore();
+  const memberships = useAuthStore(s => s.session?.memberships) ?? [];
+  const joinedCount = memberships.filter(m => m.role !== 'administrateur').length;
+  const joinLimitReached = joinedCount >= 3;
   const hasPhone = Boolean(useAuthStore.getState().session?.user.phone);
   const [step, setStep] = useState<Step>(hasPhone ? 'code' : 'phone');
   const [phone, setPhone] = useState('');
+  const [phoneComplete, setPhoneComplete] = useState(false);
+  const [resetKey, setResetKey] = useState(0);
   const [token, setToken] = useState('');
   const [checking, setChecking] = useState(false);
-  const [notYet, setNotYet] = useState(false);
   const [inviteCode, setInviteCode] = useState('');
 
   const verificationIdRef = useRef('');
@@ -57,7 +62,6 @@ export default function RejoindreScreen() {
     const ph = phoneRef.current;
     if (!id || !ph) return;
     setChecking(true);
-    setNotYet(false);
     const { data } = await supabase
       .from('phone_verifications')
       .select('status')
@@ -66,8 +70,6 @@ export default function RejoindreScreen() {
     setChecking(false);
     if (data?.status === 'verifie') {
       handleVerified(ph);
-    } else {
-      setNotYet(true);
     }
   };
 
@@ -95,6 +97,7 @@ export default function RejoindreScreen() {
     };
   }, [step]);
 
+  // AppState: auto-check when user comes back from WhatsApp
   useEffect(() => {
     if (step !== 'attente') return;
     const sub = AppState.addEventListener('change', (nextState) => {
@@ -115,6 +118,8 @@ export default function RejoindreScreen() {
       verificationIdRef.current = result.verificationId;
       phoneRef.current = normalized;
       setStep('attente');
+      // Immediate check — catches demo account (already verifie on insert).
+      checkVerificationStatus();
     }
   };
 
@@ -126,8 +131,8 @@ export default function RejoindreScreen() {
 
   const SUBS: Record<Step, string> = {
     phone: 'Votre responsable vous a partagé un code. Vérifiez votre identité pour y accéder.',
-    attente: "Appuyez sur le bouton, WhatsApp s'ouvre avec le code déjà rempli. Envoyez simplement le message.",
-    code: 'Entrez le code partagé par votre responsable pour rejoindre son commerce.',
+    attente: 'Ouvrez WhatsApp et envoyez le code. On détecte automatiquement.',
+    code: 'Entrez le code partagé par votre partenaire pour rejoindre son commerce :)',
   };
 
   return (
@@ -171,17 +176,13 @@ export default function RejoindreScreen() {
 
           {step === 'phone' && (
             <View style={styles.form}>
-              <Input
+              <PhoneInput
                 label="Numéro WhatsApp"
-                value={phone}
-                onChangeText={setPhone}
-                placeholder="+224, +33, +1..."
-                keyboardType="phone-pad"
-                returnKeyType="done"
-                onSubmitEditing={handleContinuer}
+                onChange={(e164, complete) => { setPhone(e164); setPhoneComplete(complete); }}
                 autoFocus
+                resetKey={resetKey}
               />
-              <Button label="Continuer" loading={loading} onPress={handleContinuer} fullWidth size="lg" />
+              <Button label="Continuer" loading={loading} onPress={handleContinuer} fullWidth size="lg" disabled={!phoneComplete} />
             </View>
           )}
 
@@ -201,23 +202,11 @@ export default function RejoindreScreen() {
                 size="lg"
               />
 
-              <Button
-                label="J'ai envoyé le message →"
-                variant="secondary"
-                onPress={checkVerificationStatus}
-                loading={checking || loading}
-                fullWidth
-              />
-
-              {notYet && (
-                <Text variant="bodySmall" color="secondary" style={{ textAlign: 'center' }}>
-                  Message pas encore reçu — patientez quelques secondes puis réessayez.
-                </Text>
-              )}
-
               <View style={styles.waitingRow}>
                 <ActivityIndicator size="small" color={palette.primary} />
-                <Text variant="body" color="secondary">En attente de confirmation…</Text>
+                <Text variant="body" color="secondary">
+                  {checking ? 'Vérification en cours…' : 'En attente de confirmation…'}
+                </Text>
               </View>
 
               <Button
@@ -227,6 +216,7 @@ export default function RejoindreScreen() {
                   clearError();
                   setStep('phone');
                   setToken('');
+                  setResetKey(k => k + 1);
                   verificationIdRef.current = '';
                   phoneRef.current = '';
                   if (channelRef.current) {
@@ -239,20 +229,31 @@ export default function RejoindreScreen() {
           )}
 
           {step === 'code' && (
-            <View style={styles.form}>
-              <Input
-                label="Code d'invitation"
-                value={inviteCode}
-                onChangeText={v => setInviteCode(v.toUpperCase())}
-                placeholder="Ex: MANGO-47"
-                autoCapitalize="characters"
-                autoCorrect={false}
-                returnKeyType="done"
-                onSubmitEditing={handleJoin}
-                autoFocus
-              />
-              <Button label="Rejoindre" loading={loading} onPress={handleJoin} fullWidth size="lg" />
-            </View>
+            joinLimitReached ? (
+              <View style={styles.lockedBox}>
+                <Text variant="body" style={styles.lockedText}>
+                  Vous avez rejoint 3 commerces.
+                </Text>
+                <Text variant="bodySmall" color="secondary" style={{ textAlign: 'center' }}>
+                  Bientôt, vous pourrez en rejoindre davantage depuis Patron.
+                </Text>
+              </View>
+            ) : (
+              <View style={styles.form}>
+                <Input
+                  label="Code d'invitation"
+                  value={inviteCode}
+                  onChangeText={v => setInviteCode(v.toUpperCase())}
+                  placeholder="Ex: MANGO-47"
+                  autoCapitalize="characters"
+                  autoCorrect={false}
+                  returnKeyType="done"
+                  onSubmitEditing={handleJoin}
+                  autoFocus
+                />
+                <Button label="Rejoindre" loading={loading} onPress={handleJoin} fullWidth size="lg" />
+              </View>
+            )
           )}
         </View>
       </KeyboardAvoidingView>
@@ -282,4 +283,14 @@ const styles = StyleSheet.create({
   tokenLabel: { textTransform: 'uppercase', letterSpacing: 1 },
   tokenText: { letterSpacing: 2, color: palette.primary },
   waitingRow: { flexDirection: 'row', alignItems: 'center', justifyContent: 'center', gap: spacing[3] },
+  lockedBox: {
+    backgroundColor: palette.surface,
+    borderRadius: radius.md,
+    borderWidth: 1,
+    borderColor: palette.border,
+    padding: spacing[5],
+    gap: spacing[2],
+    alignItems: 'center',
+  },
+  lockedText: { textAlign: 'center', fontWeight: '600' },
 });

@@ -1,16 +1,21 @@
-import { useCallback, useEffect, useMemo, useState } from 'react';
-import { Alert, FlatList, Modal, Pressable, ScrollView, StyleSheet, TextInput, View } from 'react-native';
+import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
+import { Alert, Animated, Easing, FlatList, Modal, Pressable, ScrollView, StyleSheet, TextInput, View } from 'react-native';
+import { captureRef } from 'react-native-view-shot';
+import * as Sharing from 'expo-sharing';
 import { SafeAreaView } from 'react-native-safe-area-context';
+import { Ionicons } from '@expo/vector-icons';
 import { router, useFocusEffect } from 'expo-router';
 import { Card } from '@/src/components/ui/Card';
 import { Text } from '@/src/components/ui/Text';
 import { Button } from '@/src/components/ui/Button';
 import { Input } from '@/src/components/ui/Input';
 import { DatePickerField } from '@/src/components/ui/DatePickerField';
+import { OfflineNotice } from '@/src/components/ui/OfflineNotice';
 import { palette, spacing, radius, colors } from '@/src/theme';
 import { formatAmount } from '@/src/utils/format';
 import { useAuthStore } from '@/stores/auth';
 import { useVentesStore, type Vente } from '@/stores/ventes';
+import { SaleReceiptView, type ReceiptData, type ReceiptItem } from '@/src/components/ui/SaleReceiptView';
 
 function fmt(n: number, cur: string) { return formatAmount(n, cur); }
 
@@ -58,14 +63,14 @@ function buildSummaryLine(all: Vente[], filtered: Vente[], filter: string, curre
 
   switch (filter) {
     case 'all': {
-      const total = active.reduce((s, v) => s + v.total_amount, 0);
+      const total = active.reduce((s, v) => s + v.total_amount - (v.discount_amount ?? 0), 0);
       const n = active.length;
       const c = creditSales.length;
       return `${n} vente${n !== 1 ? 's' : ''} · ${fmt(total, currency)} · ${c} à payer`;
     }
     case 'paye': {
       const paid = filtered;
-      const total = paid.reduce((s, v) => s + v.total_amount, 0);
+      const total = paid.reduce((s, v) => s + v.total_amount - (v.discount_amount ?? 0), 0);
       const n = paid.length;
       return `${n} vente${n !== 1 ? 's' : ''} payée${n !== 1 ? 's' : ''} · ${fmt(total, currency)}`;
     }
@@ -86,34 +91,63 @@ function buildSummaryLine(all: Vente[], filtered: Vente[], filter: string, curre
 // ─── Day-grouped list ──────────────────────────────────────────────────────────
 
 type ListItem =
-  | { type: 'header'; label: string; key: string }
-  | { type: 'sale'; sale: Vente };
+  | { type: 'header'; label: string; key: string; count: number; total: number; hasCredit: boolean }
+  | { type: 'sale'; sale: Vente; dateKey: string };
 
-function buildGroupedList(sales: Vente[]): ListItem[] {
-  const todayMs = (() => { const d = new Date(); d.setHours(0, 0, 0, 0); return d.getTime(); })();
-  const yesterdayMs = todayMs - 86400000;
+// Build a YYYY-MM-DD key from LOCAL date components — avoids UTC offset shifting the day
+function localDateKey(d: Date): string {
+  return `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, '0')}-${String(d.getDate()).padStart(2, '0')}`;
+}
 
-  const items: ListItem[] = [];
-  let lastKey = '';
+function buildGroupedList(sales: Vente[], currency: string): ListItem[] {
+  const now = new Date();
+  const todayKey = localDateKey(now);
+  const yesterday = new Date(now); yesterday.setDate(now.getDate() - 1);
+  const yesterdayKey = localDateKey(yesterday);
+  const currentYear = now.getFullYear();
+
+  const dayOrder: string[] = [];
+  const dayStats = new Map<string, { label: string; count: number; total: number; hasCredit: boolean }>();
+  const daysSales = new Map<string, Vente[]>();
 
   for (const sale of sales) {
     const raw = sale.sale_date ?? sale.created_at;
+    // Parse into LOCAL date — append T00:00:00 (no Z) so JS treats it as local time
     const d = raw.includes('T') ? new Date(raw) : new Date(raw + 'T00:00:00');
-    d.setHours(0, 0, 0, 0);
-    const key = d.toISOString().split('T')[0];
+    const key = localDateKey(d);
 
-    if (key !== lastKey) {
-      const label =
-        d.getTime() === todayMs ? "AUJOURD'HUI" :
-        d.getTime() === yesterdayMs ? 'HIER' :
-        d.toLocaleDateString('fr-FR', { day: 'numeric', month: 'short' }).toUpperCase();
-      items.push({ type: 'header', label, key });
-      lastKey = key;
+    if (!dayStats.has(key)) {
+      let label: string;
+      if (key === todayKey) {
+        label = "Aujourd'hui";
+      } else if (key === yesterdayKey) {
+        label = 'Hier';
+      } else {
+        const opts: Intl.DateTimeFormatOptions = { weekday: 'long', day: 'numeric', month: 'long' };
+        if (d.getFullYear() !== currentYear) opts.year = 'numeric';
+        const s = d.toLocaleDateString('fr-FR', opts);
+        label = s.charAt(0).toUpperCase() + s.slice(1);
+      }
+      dayStats.set(key, { label, count: 0, total: 0, hasCredit: false });
+      daysSales.set(key, []);
+      dayOrder.push(key);
     }
 
-    items.push({ type: 'sale', sale });
+    const stats = dayStats.get(key)!;
+    const ds = getSaleDisplayState(sale);
+    stats.count++;
+    if (ds !== 'annule') stats.total += sale.total_amount - (sale.discount_amount ?? 0);
+    if (ds === 'credit' || ds === 'partiel') stats.hasCredit = true;
+    daysSales.get(key)!.push(sale);
   }
 
+  const items: ListItem[] = [];
+  for (const key of dayOrder) {
+    items.push({ type: 'header', key, ...dayStats.get(key)! });
+    for (const sale of daysSales.get(key)!) {
+      items.push({ type: 'sale', sale, dateKey: key });
+    }
+  }
   return items;
 }
 
@@ -130,7 +164,7 @@ interface PaymentSheetProps {
 
 function PaymentSheet({ visible, sale, currency, onClose, onConfirm, saving }: PaymentSheetProps) {
   const amountPaid = sale.amount_paid ?? 0;
-  const remaining = sale.total_amount - amountPaid;
+  const remaining = sale.total_amount - (sale.discount_amount ?? 0) - amountPaid;
 
   const [amount, setAmount] = useState('');
   const [method, setMethod] = useState('especes');
@@ -146,9 +180,9 @@ function PaymentSheet({ visible, sale, currency, onClose, onConfirm, saving }: P
 
   const handleConfirm = () => {
     const amt = parseFloat(amount.replace(/\s/g, '').replace(',', '.'));
-    if (!amt || amt <= 0) { Alert.alert('Montant invalide', 'Entrez un montant valide.'); return; }
+    if (!amt || amt <= 0) { Alert.alert('Vérifiez le montant :)'); return; }
     if (amt > remaining + 0.01) {
-      Alert.alert('Montant trop élevé', `Le reste dû est ${Math.round(remaining).toLocaleString('fr-FR')} ${currency}.`);
+      Alert.alert('Le montant dépasse le total :)');
       return;
     }
     onConfirm(amt, method, date);
@@ -226,7 +260,9 @@ function PaymentSheet({ visible, sale, currency, onClose, onConfirm, saving }: P
 interface DetailModalProps {
   sale: Vente | null;
   currency: string;
+  businessName: string;
   singleVendor: boolean;
+  role: string | undefined;
   onClose: () => void;
   onRecordPayment: (amount: number, method: string, date: string) => Promise<{ ok: boolean; fullyPaid: boolean }>;
   onCancel: (reason: string) => void;
@@ -234,13 +270,42 @@ interface DetailModalProps {
   saving: boolean;
 }
 
-function DetailModal({ sale, currency, singleVendor, onClose, onRecordPayment, onCancel, onUpdateClient, saving }: DetailModalProps) {
+function DetailModal({ sale, currency, businessName, singleVendor, role, onClose, onRecordPayment, onCancel, onUpdateClient, saving }: DetailModalProps) {
   const [showPaymentSheet, setShowPaymentSheet] = useState(false);
   const [showCancelForm, setShowCancelForm] = useState(false);
   const [showEditClient, setShowEditClient] = useState(false);
   const [editedClient, setEditedClient] = useState('');
   const [cancelReason, setCancelReason] = useState('');
   const [toast, setToast] = useState('');
+  const receiptRef = useRef<View>(null);
+
+  const handleShareReceipt = async () => {
+    if (!sale || !receiptRef.current) return;
+    try {
+      const uri = await captureRef(receiptRef, { format: 'png', quality: 1 });
+      await new Promise<void>(r => setTimeout(r, 350));
+      await Sharing.shareAsync(uri, { mimeType: 'image/png', UTI: 'public.png', dialogTitle: 'Partager le reçu' });
+    } catch {
+      Alert.alert('Impossible de partager le reçu pour l\'instant.');
+    }
+  };
+
+  const receiptData: ReceiptData | null = sale?.lines?.length
+    ? {
+        businessName,
+        currency,
+        items: sale.lines.map((l): ReceiptItem => ({
+          name: l.product_name,
+          qty: l.qty,
+          unit_price: l.unit_price,
+          is_bulk: false,
+        })),
+        total: sale.total_amount,
+        payment: sale.is_credit ? null : (sale.payments?.[0] ? { method: sale.payments[0].method, amount: sale.payments[0].amount } : null),
+        customerName: sale.customer_name ?? undefined,
+        date: new Date(sale.created_at),
+      }
+    : null;
 
   useEffect(() => {
     if (sale) {
@@ -287,7 +352,7 @@ function DetailModal({ sale, currency, singleVendor, onClose, onRecordPayment, o
 
   const handleCancel = () => {
     if (!cancelReason.trim()) {
-      Alert.alert('Motif requis', 'Entrez un motif pour annuler cette vente.');
+      Alert.alert('Précisez la raison :)');
       return;
     }
     Alert.alert(
@@ -489,8 +554,8 @@ function DetailModal({ sale, currency, singleVendor, onClose, onRecordPayment, o
               </Card>
             )}
 
-            {/* Cancel */}
-            {displayState !== 'annule' && (
+            {/* Cancel — hidden for investisseurs who have no write access */}
+            {displayState !== 'annule' && role !== 'investisseur' && (
               showCancelForm ? (
                 <Card style={{ gap: spacing[3], borderColor: palette.danger + '40', borderWidth: 1 }}>
                   <Text variant="caption" color="secondary">
@@ -500,7 +565,7 @@ function DetailModal({ sale, currency, singleVendor, onClose, onRecordPayment, o
                     style={styles.textInput}
                     value={cancelReason}
                     onChangeText={setCancelReason}
-                    placeholder="Motif (requis)"
+                    placeholder="Précisez la raison…"
                     placeholderTextColor={palette.textDisabled}
                     multiline
                   />
@@ -522,6 +587,17 @@ function DetailModal({ sale, currency, singleVendor, onClose, onRecordPayment, o
               )
             )}
           </View>
+
+          {/* Share receipt — only when lines are loaded */}
+          {receiptData && (
+            <View style={styles.receiptSection}>
+              <View style={styles.receiptDivider} />
+              <View ref={receiptRef} collapsable={false}>
+                <SaleReceiptView data={receiptData} />
+              </View>
+              <Button label="Partager le reçu" onPress={handleShareReceipt} fullWidth variant="outline" />
+            </View>
+          )}
         </ScrollView>
 
         <PaymentSheet
@@ -546,11 +622,41 @@ export default function VentesScreen() {
   const currency = session?.activeBusiness?.currency ?? 'GNF';
   const role = session?.activeMembership?.role;
   const isVendeur = role === 'vendeur';
+  const isInvestisseur = role === 'investisseur';
+  const canSell = !isInvestisseur;
 
-  const { sales, loading, saving, fetchSales, loadDetail, recordPayment, cancelSale, updateSaleClient } = useVentesStore();
+  const fabScale   = useRef(new Animated.Value(1)).current;
+  const fabOpacity = useRef(new Animated.Value(1)).current;
+
+  useEffect(() => {
+    const easing = Easing.inOut(Easing.sin);
+    const loop = Animated.loop(
+      Animated.sequence([
+        Animated.parallel([
+          Animated.timing(fabScale,   { toValue: 1.06, duration: 2000, easing, useNativeDriver: true }),
+          Animated.timing(fabOpacity, { toValue: 0.85, duration: 2000, easing, useNativeDriver: true }),
+        ]),
+        Animated.parallel([
+          Animated.timing(fabScale,   { toValue: 1,    duration: 2000, easing, useNativeDriver: true }),
+          Animated.timing(fabOpacity, { toValue: 1,    duration: 2000, easing, useNativeDriver: true }),
+        ]),
+      ])
+    );
+    loop.start();
+    return () => loop.stop();
+  }, []);
+
+  const { sales, loading, saving, error, offline, offlineSince, fetchSales, loadDetail, recordPayment, cancelSale, updateSaleClient } = useVentesStore();
   const [selected, setSelected] = useState<Vente | null>(null);
   const [filter, setFilter] = useState<'all' | 'paye' | 'credit' | 'annule'>('all');
   const [showAll, setShowAll] = useState(false);
+
+  const [expandedDays, setExpandedDays] = useState<Set<string>>(() => new Set());
+  const toggleDay = (key: string) => setExpandedDays(prev => {
+    const next = new Set(prev);
+    if (next.has(key)) next.delete(key); else next.add(key);
+    return next;
+  });
 
   const since90 = useMemo(() => {
     const d = new Date();
@@ -580,7 +686,11 @@ export default function VentesScreen() {
   // Hide vendor column when all sales belong to the same seller
   const singleVendor = useMemo(() => new Set(sales.map(s => s.seller_id)).size <= 1, [sales]);
 
-  const listItems = useMemo(() => buildGroupedList(filtered), [filtered]);
+  const listItems = useMemo(() => buildGroupedList(filtered, currency), [filtered, currency]);
+  const visibleItems = useMemo(
+    () => listItems.filter(item => item.type === 'header' || expandedDays.has(item.dateKey)),
+    [listItems, expandedDays],
+  );
 
   const open = async (sale: Vente) => {
     setSelected(sale);
@@ -652,20 +762,32 @@ export default function VentesScreen() {
         ))}
       </View>
 
+      {offline && <OfflineNotice offlineSince={offlineSince} />}
+
       {loading && sales.length === 0 ? (
         <Text variant="body" color="secondary" style={styles.center}>Chargement…</Text>
+      ) : !loading && sales.length === 0 && error ? (
+        <View style={styles.emptyState}>
+          <Text variant="body" color="secondary" style={{ textAlign: 'center' }}>Données non disponibles hors ligne</Text>
+        </View>
       ) : filtered.length === 0 ? (
         <View style={styles.emptyState}>
-          <Text variant="body" color="secondary">Aucune vente trouvée.</Text>
-          <Pressable onPress={() => setShowAll(v => !v)} style={{ marginTop: spacing[4] }}>
-            <Text variant="caption" style={{ color: palette.primary }}>
-              {showAll ? 'Voir les 90 derniers jours' : "Voir tout l'historique"}
-            </Text>
-          </Pressable>
+          <Text variant="body" color="secondary" style={{ textAlign: 'center' }}>
+            {sales.length === 0
+              ? 'Prêt pour la première vente ? Elle apparaîtra ici.'
+              : 'Pas de vente sur cette période.'}
+          </Text>
+          {sales.length > 0 && (
+            <Pressable onPress={() => setShowAll(v => !v)} style={{ marginTop: spacing[4] }}>
+              <Text variant="caption" style={{ color: palette.primary }}>
+                {showAll ? 'Voir les 90 derniers jours' : "Voir tout l'historique"}
+              </Text>
+            </Pressable>
+          )}
         </View>
       ) : (
         <FlatList
-          data={listItems}
+          data={visibleItems}
           keyExtractor={item => item.type === 'header' ? `hdr-${item.key}` : item.sale.id}
           contentContainerStyle={styles.list}
           ListFooterComponent={() => (
@@ -677,10 +799,25 @@ export default function VentesScreen() {
           )}
           renderItem={({ item }) => {
             if (item.type === 'header') {
+              const expanded = expandedDays.has(item.key);
               return (
-                <View style={styles.dayHeader}>
-                  <Text variant="overline" color="secondary">{item.label}</Text>
-                </View>
+                <Pressable
+                  onPress={() => toggleDay(item.key)}
+                  style={({ pressed }) => [styles.dayHeader, pressed && { opacity: 0.7 }]}
+                >
+                  <View style={{ flex: 1 }}>
+                    <Text variant="label" style={styles.dayLabel}>{item.label}</Text>
+                    <Text variant="caption" color="secondary">
+                      {item.count} vente{item.count !== 1 ? 's' : ''} · {fmt(item.total, currency)}
+                      {item.hasCredit ? ' · crédit' : ''}
+                    </Text>
+                  </View>
+                  <Ionicons
+                    name={expanded ? 'chevron-down' : 'chevron-forward'}
+                    size={16}
+                    color={palette.textSecondary}
+                  />
+                </Pressable>
               );
             }
 
@@ -734,13 +871,28 @@ export default function VentesScreen() {
         <DetailModal
           sale={selected}
           currency={currency}
+          businessName={session?.activeBusiness?.name ?? ''}
           singleVendor={singleVendor}
+          role={role}
           onClose={() => setSelected(null)}
           onRecordPayment={handleRecordPayment}
           onCancel={handleCancel}
           onUpdateClient={handleUpdateClient}
           saving={saving}
         />
+      )}
+
+      {canSell && !selected && (
+        <Animated.View style={[styles.fabContainer, { transform: [{ scale: fabScale }], opacity: fabOpacity }]}>
+          <Pressable
+            onPress={() => router.push('/(app)/(tabs)/vendre')}
+            style={({ pressed }) => [styles.fab, pressed && { opacity: 0.82 }]}
+            accessibilityLabel="Nouvelle vente"
+            accessibilityRole="button"
+          >
+            <Text style={styles.fabIcon}>+</Text>
+          </Pressable>
+        </Animated.View>
       )}
     </SafeAreaView>
   );
@@ -756,15 +908,36 @@ const styles = StyleSheet.create({
   filterTab: { flex: 1, alignItems: 'center', paddingHorizontal: spacing[2], paddingVertical: spacing[1.5], borderRadius: radius.full, backgroundColor: palette.surface, borderWidth: 1, borderColor: palette.border },
   filterTabActive: { backgroundColor: palette.primary, borderColor: palette.primary },
   list: { paddingHorizontal: spacing[5], paddingBottom: spacing[10] },
-  dayHeader: { paddingTop: spacing[4], paddingBottom: spacing[2] },
+  dayHeader: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    paddingTop: spacing[4],
+    paddingBottom: spacing[3],
+    paddingHorizontal: spacing[1],
+    gap: spacing[2],
+  },
+  dayLabel: { marginBottom: 2 },
   saleRow: { paddingVertical: spacing[3], backgroundColor: palette.surface },
   saleTop: { flexDirection: 'row', alignItems: 'center', gap: spacing[2] },
+  offlineBanner: { alignItems: 'center', justifyContent: 'center', paddingVertical: spacing[1], borderBottomWidth: StyleSheet.hairlineWidth, borderBottomColor: palette.border },
   emptyState: { flex: 1, alignItems: 'center', justifyContent: 'center' },
   center: { textAlign: 'center', marginTop: spacing[10] },
   showAllBtn: { alignItems: 'center', paddingVertical: spacing[5] },
+  fabContainer: { position: 'absolute', bottom: 194, right: spacing[4], zIndex: 10 },
+  fab: {
+    width: 56, height: 56, borderRadius: radius.full,
+    backgroundColor: palette.primary,
+    alignItems: 'center', justifyContent: 'center',
+    shadowColor: colors.neutral[900],
+    shadowOffset: { width: 0, height: 4 }, shadowOpacity: 0.18, shadowRadius: 8,
+    elevation: 8,
+  },
+  fabIcon: { fontSize: 28, lineHeight: 32, fontWeight: '300', color: palette.textInverse, marginTop: -2 },
 
   // Detail modal
   modalSafe: { flex: 1, backgroundColor: palette.background },
+  receiptSection: { paddingHorizontal: spacing[5], paddingBottom: spacing[6], gap: spacing[3] },
+  receiptDivider: { height: 1, backgroundColor: palette.border },
   modalHeader: {
     flexDirection: 'row', alignItems: 'center', justifyContent: 'space-between',
     paddingHorizontal: spacing[5], paddingVertical: spacing[4],

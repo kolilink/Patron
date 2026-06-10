@@ -14,9 +14,13 @@ jest.mock('@/lib/supabase', () => ({
 }));
 
 jest.mock('@/lib/db', () => ({
-  enqueue: jest.fn().mockResolvedValue(undefined),
-  getQueueCount: jest.fn().mockResolvedValue(1),
-  openDb: jest.fn(),
+  enqueue:           jest.fn().mockResolvedValue(undefined),
+  getQueueCount:     jest.fn().mockResolvedValue(1),
+  openDb:            jest.fn(),
+  saveProductCache:  jest.fn().mockResolvedValue(undefined),
+  getProductCache:   jest.fn().mockResolvedValue(null),
+  saveVentesCache:   jest.fn().mockResolvedValue(undefined),
+  getVentesCache:    jest.fn().mockResolvedValue(null),
 }));
 
 import { useSalesStore } from '@/stores/sales';

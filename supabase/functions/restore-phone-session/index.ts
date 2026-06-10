@@ -11,7 +11,6 @@ serve(async (req) => {
 
   try {
     const { phone, verificationId } = await req.json() as { phone: string; verificationId: string };
-    console.log('restore-phone-session called | phone:', phone, '| verificationId:', verificationId);
 
     if (!phone || !verificationId) {
       return new Response(JSON.stringify({ error: 'Paramètres manquants' }), {
@@ -26,36 +25,64 @@ serve(async (req) => {
 
     const { data: verif } = await serviceClient
       .from('phone_verifications')
-      .select('status, phone')
+      .select('status, phone, user_id')
       .eq('id', verificationId)
       .eq('status', 'verifie')
       .maybeSingle();
 
-    console.log('verif row:', JSON.stringify(verif));
-
     if (!verif || verif.phone !== phone.trim()) {
-      console.log('FAIL: verif mismatch | verif.phone:', verif?.phone, '| phone:', phone.trim());
       return new Response(JSON.stringify({ error: 'Vérification invalide ou expirée' }), {
         status: 401, headers: { ...corsHeaders, 'Content-Type': 'application/json' },
       });
     }
 
-    const { data: profile } = await serviceClient
+    // Defense-in-depth: confirm the caller is the same anon session that initiated the
+    // verification. verif.user_id is set for all rows created by the current app version.
+    if (verif.user_id) {
+      const authHeader = req.headers.get('Authorization') ?? '';
+      if (!authHeader.startsWith('Bearer ')) {
+        return new Response(JSON.stringify({ error: 'Accès refusé' }), {
+          status: 403, headers: { ...corsHeaders, 'Content-Type': 'application/json' },
+        });
+      }
+      const callerJwt = authHeader.substring(7);
+      const { data: { user: callerUser }, error: jwtErr } = await serviceClient.auth.getUser(callerJwt);
+      if (jwtErr || !callerUser || callerUser.id !== verif.user_id) {
+        return new Response(JSON.stringify({ error: 'Accès refusé' }), {
+          status: 403, headers: { ...corsHeaders, 'Content-Type': 'application/json' },
+        });
+      }
+    }
+
+    // Look up by phone first (normal returning-user login).
+    // Fallback to verif.user_id — handles demo account and fresh installs where
+    // no profile has this phone yet (the anon user initiated the verification).
+    const { data: profileByPhone } = await serviceClient
       .from('profiles')
       .select('id')
       .eq('phone', phone.trim())
       .maybeSingle();
 
-    console.log('profile:', JSON.stringify(profile));
+    let profileId: string | null = profileByPhone?.id ?? null;
 
-    if (!profile) {
+    if (!profileId && verif.user_id) {
+      const { data: profileByUser } = await serviceClient
+        .from('profiles')
+        .select('id')
+        .eq('id', verif.user_id)
+        .maybeSingle();
+      profileId = profileByUser?.id ?? null;
+    }
+
+    if (!profileId) {
       return new Response(JSON.stringify({ error: 'Aucun compte trouvé pour ce numéro' }), {
         status: 404, headers: { ...corsHeaders, 'Content-Type': 'application/json' },
       });
     }
 
+    const profile = { id: profileId };
+
     const { data: { user }, error: userErr } = await serviceClient.auth.admin.getUserById(profile.id);
-    console.log('user email:', user?.email, '| userErr:', userErr?.message);
 
     if (!user) {
       return new Response(JSON.stringify({ error: 'Compte introuvable' }), {
@@ -66,21 +93,17 @@ serve(async (req) => {
     let email = user.email;
     if (!email) {
       email = `patron-${profile.id}@patron.internal`;
-      console.log('assigning synthetic email:', email);
       const { error: updateErr } = await serviceClient.auth.admin.updateUserById(profile.id, {
         email,
         email_confirm: true,
       });
-      console.log('updateUser error:', updateErr?.message ?? 'none');
+      if (updateErr) console.error('updateUser error:', updateErr.message);
     }
 
-    console.log('calling generateLink for email:', email);
     const { data: linkData, error: linkErr } = await serviceClient.auth.admin.generateLink({
       type: 'magiclink',
       email,
     });
-    console.log('linkErr:', linkErr?.message ?? 'none');
-    console.log('hashed_token present:', !!linkData?.properties?.hashed_token);
 
     if (linkErr || !linkData?.properties?.hashed_token) {
       const errMsg = linkErr?.message ?? 'Impossible de générer le lien de connexion';
