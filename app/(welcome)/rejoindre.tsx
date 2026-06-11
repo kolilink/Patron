@@ -18,7 +18,7 @@ import { colors, palette, radius, spacing } from '@/src/theme';
 import { useAuthStore } from '@/stores/auth';
 import { supabase } from '@/lib/supabase';
 
-const TWILIO_WHATSAPP_NUMBER = '14155238886';
+const TWILIO_WHATSAPP_NUMBER = '15559897763';
 
 type Step = 'phone' | 'attente' | 'code';
 

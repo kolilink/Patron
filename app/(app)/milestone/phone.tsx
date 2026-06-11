@@ -17,7 +17,7 @@ import { useAuthStore } from '@/stores/auth';
 import { supabase } from '@/lib/supabase';
 
 // Twilio sandbox number — update to your dedicated number before production
-const TWILIO_WHATSAPP_NUMBER = '14155238886';
+const TWILIO_WHATSAPP_NUMBER = '15559897763';
 
 export default function MilestonePhoneScreen() {
   const { createPhoneVerification, upgradePhone, loading, error, clearError } = useAuthStore();
