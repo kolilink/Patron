@@ -34,7 +34,7 @@ function ProfileTabIcon({ focused, size }: { focused: boolean; size: number }) {
   const initial = name[0]?.toUpperCase() ?? '?';
   const roleColor = (resolvedScheme === 'dark' ? ROLE_COLORS_DARK : ROLE_COLORS_LIGHT)[role] ?? palette.primary;
 
-  const sz = size + 10;
+  const sz = size + 16;
   return (
     <View style={{
       width: sz, height: sz, borderRadius: sz / 2,
@@ -101,7 +101,7 @@ export default function TabsLayout() {
           backgroundColor: palette.surface,
           borderTopColor: palette.border,
           borderTopWidth: 1,
-          height: 60 + insets.bottom,
+          height: 66 + insets.bottom,
           paddingBottom: insets.bottom || 8,
         },
       }}
@@ -138,7 +138,7 @@ export default function TabsLayout() {
         options={{
           title: 'Plus',
           tabBarIcon: ({ focused, size }) => <ProfileTabIcon focused={focused} size={size} />,
-          tabBarLabel: () => null,
+          tabBarLabel: () => <View style={{ height: 13, marginTop: 4 }} />,
         }}
       />
     </Tabs>
