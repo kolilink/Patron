@@ -1,9 +1,12 @@
-import { useCallback, useEffect, useRef, useState } from 'react';
+import { useCallback, useEffect, useRef, useState, useMemo } from 'react';
 import {
   FlatList,
   KeyboardAvoidingView,
+  Modal,
   Platform,
   Pressable,
+  ScrollView,
+  StyleSheet,
   TextInput,
   View,
 } from 'react-native';
@@ -12,7 +15,8 @@ import { router, useLocalSearchParams, useFocusEffect } from 'expo-router';
 import { Ionicons } from '@expo/vector-icons';
 import { Text } from '@/src/components/ui/Text';
 import { haptics } from '@/lib/haptics';
-import { palette, radius, spacing, colors } from '@/src/theme';
+import { useTheme, radius, spacing, colors } from '@/src/theme';
+import type { Palette } from '@/src/theme';
 import { useAuthStore } from '@/stores/auth';
 import { useMarketStore } from '@/stores/market';
 import { supabase } from '@/lib/supabase';
@@ -53,13 +57,16 @@ function avatarColor(id: string) {
 // ─── Post header block ────────────────────────────────────────────────────────
 
 function PostHeaderBlock({
-  post, isLiked, isOwnPost, onLike,
+  post, isLiked, isOwnPost, onLike, onEdit,
 }: {
   post: MarketPost;
   isLiked: boolean;
   isOwnPost: boolean;
   onLike: () => void;
+  onEdit: () => void;
 }) {
+  const { palette } = useTheme();
+  const styles = useMemo(() => makeStyles(palette), [palette]);
   const authorName = post.author_name || generateFallbackName(post.author_id);
   const initial    = authorName.charAt(0).toUpperCase();
   const color      = avatarColor(post.author_id);
@@ -86,8 +93,16 @@ function PostHeaderBlock({
         </View>
         <View style={styles.authorInfo}>
           <Text style={styles.authorName}>{authorName}</Text>
-          <Text style={styles.authorMeta}>Commerçant • {relativeTime(post.created_at)}</Text>
+          <Text style={styles.authorMeta}>
+            Commerçant • {relativeTime(post.created_at)}
+            {post.edited_at ? ' · modifié' : ''}
+          </Text>
         </View>
+        {isOwnPost && (
+          <Pressable onPress={onEdit} hitSlop={8} style={styles.editPostBtn}>
+            <Ionicons name="ellipsis-horizontal" size={20} color={palette.textSecondary} />
+          </Pressable>
+        )}
       </View>
 
       {/* Title */}
@@ -103,17 +118,17 @@ function PostHeaderBlock({
         <Pressable
           onPress={onLike}
           disabled={isOwnPost}
-          style={[
-            styles.likeBtn,
-            {
-              borderColor: isLiked ? palette.primary : palette.border,
-              backgroundColor: isLiked ? `${palette.primary}10` : 'transparent',
-            },
-            isOwnPost && { opacity: 0.35 },
-          ]}
+          style={({ pressed }) => ({
+            flexDirection: 'row' as const,
+            alignItems: 'center' as const,
+            gap: 6,
+            paddingHorizontal: 16,
+            paddingVertical: 6,
+            opacity: isOwnPost ? 0.35 : pressed ? 0.6 : 1,
+          })}
         >
           <Ionicons
-            name={isLiked ? 'thumbs-up' : 'thumbs-up-outline'}
+            name={isLiked ? 'heart' : 'heart-outline'}
             size={16}
             color={isLiked ? palette.primary : palette.textSecondary}
           />
@@ -151,6 +166,8 @@ function CommentItem({
   onLikeComment: () => void;
   currentUserId: string;
 }) {
+  const { palette } = useTheme();
+  const styles = useMemo(() => makeStyles(palette), [palette]);
   const authorName   = comment.author_name || generateFallbackName(comment.author_id);
   const initial      = authorName.charAt(0).toUpperCase();
   const color        = avatarColor(comment.author_id);
@@ -202,7 +219,7 @@ function CommentItem({
             style={[styles.commentActionBtn, { opacity: isSelf ? 0.3 : 1 }]}
           >
             <Ionicons
-              name={isCommentLiked ? 'thumbs-up' : 'thumbs-up-outline'}
+              name={isCommentLiked ? 'heart' : 'heart-outline'}
               size={13}
               color={isCommentLiked ? palette.primary : palette.textSecondary}
             />
@@ -229,13 +246,15 @@ function CommentItem({
 // ─── Screen ───────────────────────────────────────────────────────────────────
 
 export default function PostDetailScreen() {
+  const { palette } = useTheme();
+  const styles = useMemo(() => makeStyles(palette), [palette]);
   const { id } = useLocalSearchParams<{ id: string }>();
   const session  = useAuthStore(s => s.session);
   const userId   = session?.user.id ?? '';
 
   const {
     activePost, comments, loadingDetail,
-    fetchPostDetail, addComment, appendComment, toggleLike,
+    fetchPostDetail, addComment, appendComment, toggleLike, editPost,
     likedPostIds, likedCommentIds, toggleCommentLike,
   } = useMarketStore();
 
@@ -243,6 +262,13 @@ export default function PostDetailScreen() {
   const [replyingTo, setReplyingTo] = useState<MarketComment | null>(null);
   const inputRef                    = useRef<TextInput>(null);
   const channelRef                  = useRef<ReturnType<typeof supabase.channel> | null>(null);
+
+  // Edit post state
+  const [showEdit, setShowEdit]       = useState(false);
+  const [editTitle, setEditTitle]     = useState('');
+  const [editContent, setEditContent] = useState('');
+  const [editSaving, setEditSaving]   = useState(false);
+  const [editError, setEditError]     = useState('');
 
   const isLiked   = likedPostIds.includes(id ?? '');
   const isOwnPost = activePost?.author_id === userId;
@@ -266,6 +292,33 @@ export default function PostDetailScreen() {
       channelRef.current = null;
     };
   }, [id]);
+
+  const openEdit = () => {
+    if (!activePost) return;
+    setEditTitle(activePost.title);
+    setEditContent(activePost.content);
+    setEditError('');
+    setShowEdit(true);
+  };
+
+  const handleSaveEdit = async () => {
+    if (!activePost) return;
+    const title   = editTitle.trim();
+    const content = editContent.trim();
+    if (!title) { setEditError('Le titre est obligatoire'); return; }
+    if (!content) { setEditError('Le contenu est obligatoire'); return; }
+    setEditSaving(true);
+    try {
+      await editPost(activePost.id, title, content);
+      haptics.success();
+      setShowEdit(false);
+    } catch {
+      haptics.error();
+      setEditError('Impossible de modifier le post');
+    } finally {
+      setEditSaving(false);
+    }
+  };
 
   const handleSend = async () => {
     const trimmed = text.trim();
@@ -307,7 +360,7 @@ export default function PostDetailScreen() {
         <View style={{ width: 60 }} />
       </View>
 
-      <KeyboardAvoidingView style={{ flex: 1 }} behavior={Platform.OS === 'ios' ? 'padding' : undefined}>
+      <KeyboardAvoidingView style={{ flex: 1 }} behavior={Platform.OS === 'ios' ? 'padding' : 'height'}>
         {loadingDetail ? (
           <View style={styles.centered}>
             <Text variant="body" color="secondary">Chargement…</Text>
@@ -324,6 +377,7 @@ export default function PostDetailScreen() {
                 isLiked={isLiked}
                 isOwnPost={isOwnPost}
                 onLike={() => { if (!isOwnPost) { haptics.tap(); toggleLike(activePost.id, userId); } }}
+                onEdit={openEdit}
               />
             )}
             ListEmptyComponent={() => (
@@ -370,172 +424,263 @@ export default function PostDetailScreen() {
               style={styles.input}
               value={text}
               onChangeText={setText}
-              placeholder={replyingTo ? 'Écrire une réponse…' : 'Ajouter un commentaire…'}
+              placeholder={replyingTo ? 'Votre réponse' : 'Votre commentaire'}
               placeholderTextColor={palette.textSecondary}
               multiline
               maxLength={500}
             />
-            <Pressable
-              onPress={handleSend}
-              disabled={!text.trim()}
-              style={({ pressed }) => [
-                styles.sendBtn,
-                !text.trim() && styles.sendBtnDisabled,
-                pressed && { opacity: 0.75 },
-              ]}
-            >
-              <Text style={styles.sendIcon}>↑</Text>
-            </Pressable>
+            {!!text.trim() && (
+              <Pressable
+                onPress={handleSend}
+                style={({ pressed }) => [styles.sendBtn, pressed && { opacity: 0.75 }]}
+              >
+                <Ionicons name="arrow-forward" size={20} color={palette.textInverse} />
+              </Pressable>
+            )}
           </View>
         </View>
       </KeyboardAvoidingView>
+
+      {/* ── Edit post modal ── */}
+      <Modal visible={showEdit} animationType="slide" onRequestClose={() => setShowEdit(false)}>
+        <SafeAreaView style={styles.modalSafe} edges={['top', 'bottom']}>
+          <View style={styles.modalHeader}>
+            <Pressable onPress={() => setShowEdit(false)} hitSlop={8}>
+              <Text variant="body" color="secondary">Annuler</Text>
+            </Pressable>
+            <Text variant="h4">Modifier le post</Text>
+            <Pressable
+              onPress={handleSaveEdit}
+              disabled={editSaving || !editTitle.trim() || !editContent.trim()}
+              hitSlop={8}
+            >
+              <Text variant="body" style={{
+                color: (editSaving || !editTitle.trim() || !editContent.trim())
+                  ? palette.textDisabled
+                  : palette.primary,
+                fontWeight: '600',
+              }}>
+                {editSaving ? '…' : 'Enregistrer'}
+              </Text>
+            </Pressable>
+          </View>
+          <ScrollView style={{ flex: 1 }} contentContainerStyle={styles.modalContent} keyboardShouldPersistTaps="handled">
+            <View style={styles.editCard}>
+              <TextInput
+                style={styles.editTitleInput}
+                value={editTitle}
+                onChangeText={t => { setEditTitle(t); setEditError(''); }}
+                placeholder="Titre"
+                placeholderTextColor={palette.textSecondary}
+                maxLength={100}
+              />
+              <View style={styles.editDivider} />
+              <TextInput
+                style={styles.editBodyInput}
+                value={editContent}
+                onChangeText={t => { setEditContent(t); setEditError(''); }}
+                placeholder="Partagez votre idée"
+                placeholderTextColor={palette.textSecondary}
+                multiline
+                maxLength={1000}
+                textAlignVertical="top"
+              />
+            </View>
+            {editError ? (
+              <Text variant="caption" style={{ color: palette.warning, marginTop: 8 }}>{editError}</Text>
+            ) : null}
+          </ScrollView>
+        </SafeAreaView>
+      </Modal>
+
     </SafeAreaView>
   );
 }
 
 // ─── Styles ───────────────────────────────────────────────────────────────────
 
-import { StyleSheet } from 'react-native';
+function makeStyles(p: Palette) {
+  return StyleSheet.create({
+    safe:   { flex: 1, backgroundColor: p.background },
+    header: {
+      flexDirection: 'row',
+      alignItems: 'center',
+      padding: spacing[5],
+      borderBottomWidth: 1,
+      borderBottomColor: p.border,
+      gap: spacing[3],
+    },
+    headerTitle: { flex: 1 },
+    listContent:   { paddingBottom: spacing[8] },
+    centered:      { alignItems: 'center', justifyContent: 'center', padding: spacing[8] },
+    emptyComments: { alignItems: 'center', padding: spacing[6] },
 
-const styles = StyleSheet.create({
-  safe:   { flex: 1, backgroundColor: palette.background },
-  header: {
-    flexDirection: 'row',
-    alignItems: 'center',
-    padding: spacing[5],
-    borderBottomWidth: 1,
-    borderBottomColor: palette.border,
-    gap: spacing[3],
-  },
-  headerTitle: { flex: 1 },
-  listContent:   { paddingBottom: spacing[8] },
-  centered:      { alignItems: 'center', justifyContent: 'center', padding: spacing[8] },
-  emptyComments: { alignItems: 'center', padding: spacing[6] },
+    // ── Post header ──
+    postHeader: { padding: spacing[5] },
+    authorRow:  { flexDirection: 'row', alignItems: 'center', gap: spacing[3] },
+    postAvatar: {
+      width: 36, height: 36, borderRadius: 18,
+      alignItems: 'center', justifyContent: 'center',
+    },
+    postAvatarText: { fontSize: 15, fontWeight: '700' as const, color: '#fff' },
+    authorInfo:     { flex: 1 },
+    authorName:  { fontSize: 15, fontWeight: '600' as const, color: p.textPrimary },
+    authorMeta:  { fontSize: 13, color: p.textSecondary, marginTop: 2 },
+    postTitle:   { fontSize: 18, fontWeight: '700' as const, color: p.textPrimary, marginTop: 14, marginBottom: 8 },
+    postBody:    { fontSize: 15, lineHeight: 22, color: p.textPrimary, marginBottom: 16 },
 
-  // ── Post header ──
-  postHeader: { padding: spacing[5] },
-  authorRow:  { flexDirection: 'row', alignItems: 'center', gap: spacing[3] },
-  postAvatar: {
-    width: 36, height: 36, borderRadius: 18,
-    alignItems: 'center', justifyContent: 'center',
-  },
-  postAvatarText: { fontSize: 15, fontWeight: '700' as const, color: '#fff' },
-  authorInfo:     { flex: 1 },
-  authorName:  { fontSize: 15, fontWeight: '600' as const, color: palette.textPrimary },
-  authorMeta:  { fontSize: 13, color: palette.textSecondary, marginTop: 2 },
-  postTitle:   { fontSize: 18, fontWeight: '700' as const, color: palette.textPrimary, marginTop: 14, marginBottom: 8 },
-  postBody:    { fontSize: 15, lineHeight: 22, color: palette.textPrimary, marginBottom: 16 },
+    interactionBar: {
+      flexDirection: 'row',
+      justifyContent: 'space-between',
+      alignItems: 'center',
+      borderTopWidth: 1,
+      borderTopColor: p.border,
+      borderBottomWidth: 1,
+      borderBottomColor: p.border,
+      paddingVertical: 10,
+      marginVertical: 12,
+    },
+    likeBtn: {
+      flexDirection: 'row',
+      alignItems: 'center',
+      gap: 6,
+      paddingHorizontal: 16,
+      paddingVertical: 6,
+      borderRadius: 6,
+      borderWidth: 1,
+      borderColor: p.border,
+    },
+    likeBtnText:       { fontSize: 14, color: p.textSecondary, fontWeight: '500' as const },
+    likeBtnTextActive: { color: p.primary },
+    commentCountView:  { flexDirection: 'row' as const, alignItems: 'center' as const, gap: 6 },
+    commentCountText:  { fontSize: 13, color: p.textSecondary },
 
-  interactionBar: {
-    flexDirection: 'row',
-    justifyContent: 'space-between',
-    alignItems: 'center',
-    borderTopWidth: 1,
-    borderTopColor: palette.border,
-    borderBottomWidth: 1,
-    borderBottomColor: palette.border,
-    paddingVertical: 10,
-    marginVertical: 12,
-  },
-  likeBtn: {
-    flexDirection: 'row',
-    alignItems: 'center',
-    gap: 6,
-    paddingHorizontal: 16,
-    paddingVertical: 6,
-    borderRadius: 6,
-    borderWidth: 1,
-    borderColor: palette.border,
-  },
-  likeBtnText:       { fontSize: 14, color: palette.textSecondary, fontWeight: '500' as const },
-  likeBtnTextActive: { color: palette.primary },
-  commentCountView:  { flexDirection: 'row' as const, alignItems: 'center' as const, gap: 6 },
-  commentCountText:  { fontSize: 13, color: palette.textSecondary },
+    commentsLabel:     { borderTopWidth: 1, borderTopColor: p.border, paddingTop: spacing[3] },
+    commentsLabelText: { fontSize: 13, fontWeight: '600' as const, color: p.textSecondary },
 
-  commentsLabel:     { borderTopWidth: 1, borderTopColor: palette.border, paddingTop: spacing[3] },
-  commentsLabelText: { fontSize: 13, fontWeight: '600' as const, color: palette.textSecondary },
+    // ── Comment items ──
+    commentItem: {
+      flexDirection: 'row' as const,
+      gap: 10,
+      paddingVertical: 10,
+      paddingHorizontal: spacing[5],
+    },
+    commentItemReply: { paddingLeft: 52 },
 
-  // ── Comment items ──
-  commentItem: {
-    flexDirection: 'row' as const,
-    gap: 10,
-    paddingVertical: 10,
-    paddingHorizontal: spacing[5],
-  },
-  commentItemReply: { paddingLeft: 52 },
+    commentAvatarWrap: { position: 'relative' as const, width: 32, height: 32 },
+    commentAvatar: {
+      width: 32, height: 32, borderRadius: 16,
+      alignItems: 'center' as const, justifyContent: 'center' as const,
+    },
+    commentAvatarText: { fontSize: 12, fontWeight: '700' as const, color: '#fff' },
+    levelBadge: {
+      position: 'absolute' as const,
+      bottom: -2, right: -2,
+      width: 14, height: 14, borderRadius: 7,
+      backgroundColor: p.primary,
+      alignItems: 'center' as const, justifyContent: 'center' as const,
+      borderWidth: 1.5, borderColor: p.surface,
+    },
+    levelBadgeText: { fontSize: 7, fontWeight: '800' as const, color: '#fff', lineHeight: 10 },
 
-  commentAvatarWrap: { position: 'relative' as const, width: 32, height: 32 },
-  commentAvatar: {
-    width: 32, height: 32, borderRadius: 16,
-    alignItems: 'center' as const, justifyContent: 'center' as const,
-  },
-  commentAvatarText: { fontSize: 12, fontWeight: '700' as const, color: '#fff' },
-  levelBadge: {
-    position: 'absolute' as const,
-    bottom: -2, right: -2,
-    width: 14, height: 14, borderRadius: 7,
-    backgroundColor: palette.primary,
-    alignItems: 'center' as const, justifyContent: 'center' as const,
-    borderWidth: 1.5, borderColor: palette.surface,
-  },
-  levelBadgeText: { fontSize: 7, fontWeight: '800' as const, color: '#fff', lineHeight: 10 },
+    commentRight:  { flex: 1 },
+    commentBubble: {
+      backgroundColor: p.surfaceElevated,
+      borderRadius: 14,
+      borderTopLeftRadius: 2,
+      paddingHorizontal: 12,
+      paddingVertical: 10,
+    },
+    commentMeta:    { flexDirection: 'row' as const, alignItems: 'center' as const, marginBottom: 4 },
+    commentAuthor:  { fontSize: 13, fontWeight: '600' as const, color: p.textPrimary },
+    commentTime:    { fontSize: 11, color: p.textSecondary },
+    commentContent: { fontSize: 14, lineHeight: 19, color: p.textPrimary },
 
-  commentRight:  { flex: 1 },
-  commentBubble: {
-    backgroundColor: '#F2F4F7',
-    borderRadius: 14,
-    borderTopLeftRadius: 2,
-    paddingHorizontal: 12,
-    paddingVertical: 10,
-  },
-  commentMeta:    { flexDirection: 'row' as const, alignItems: 'center' as const, marginBottom: 4 },
-  commentAuthor:  { fontSize: 13, fontWeight: '600' as const, color: palette.textPrimary },
-  commentTime:    { fontSize: 11, color: palette.textSecondary },
-  commentContent: { fontSize: 14, lineHeight: 19, color: palette.textPrimary },
+    commentActions:   { flexDirection: 'row' as const, alignItems: 'center' as const, gap: 16, marginTop: 6, paddingLeft: 2 },
+    commentActionBtn: { flexDirection: 'row' as const, alignItems: 'center' as const, gap: 4 },
+    commentActionText: { fontSize: 12, color: p.textSecondary, fontWeight: '500' as const },
 
-  commentActions:   { flexDirection: 'row' as const, alignItems: 'center' as const, gap: 16, marginTop: 6, paddingLeft: 2 },
-  commentActionBtn: { flexDirection: 'row' as const, alignItems: 'center' as const, gap: 4 },
-  commentActionText: { fontSize: 12, color: palette.textSecondary, fontWeight: '500' as const },
+    // ── Input bar ──
+    inputWrap: { borderTopWidth: 1, borderTopColor: p.border, backgroundColor: p.surface },
+    replyPill: {
+      flexDirection: 'row',
+      alignItems: 'center',
+      justifyContent: 'space-between',
+      paddingHorizontal: spacing[4],
+      paddingTop: spacing[2],
+      gap: spacing[2],
+    },
+    replyPillText: { color: p.primary, fontStyle: 'italic' as const, flex: 1 },
+    replyClose:    { fontSize: 16, color: p.textSecondary, fontWeight: '600' as const },
+    inputRow: {
+      flexDirection: 'row',
+      alignItems: 'flex-end',
+      gap: spacing[2],
+      padding: spacing[3],
+    },
+    input: {
+      flex: 1,
+      minHeight: 40,
+      maxHeight: 100,
+      borderWidth: 1,
+      borderColor: p.border,
+      borderRadius: radius.lg,
+      paddingHorizontal: spacing[3],
+      paddingVertical: spacing[2],
+      fontSize: 15,
+      color: p.textPrimary,
+      backgroundColor: p.background,
+    },
+    sendBtn: { width: 40, height: 40, borderRadius: radius.full, backgroundColor: p.primary, alignItems: 'center', justifyContent: 'center' },
+    readOnlyBar: {
+      paddingHorizontal: spacing[5],
+      paddingVertical: spacing[4],
+      borderTopWidth: 1,
+      borderTopColor: p.border,
+      backgroundColor: p.surface,
+    },
 
-  // ── Input bar ──
-  inputWrap: { borderTopWidth: 1, borderTopColor: palette.border, backgroundColor: palette.surface },
-  replyPill: {
-    flexDirection: 'row',
-    alignItems: 'center',
-    justifyContent: 'space-between',
-    paddingHorizontal: spacing[4],
-    paddingTop: spacing[2],
-    gap: spacing[2],
-  },
-  replyPillText: { color: palette.primary, fontStyle: 'italic' as const, flex: 1 },
-  replyClose:    { fontSize: 16, color: palette.textSecondary, fontWeight: '600' as const },
-  inputRow: {
-    flexDirection: 'row',
-    alignItems: 'flex-end',
-    gap: spacing[2],
-    padding: spacing[3],
-  },
-  input: {
-    flex: 1,
-    minHeight: 40,
-    maxHeight: 100,
-    borderWidth: 1,
-    borderColor: palette.border,
-    borderRadius: radius.lg,
-    paddingHorizontal: spacing[3],
-    paddingVertical: spacing[2],
-    fontSize: 15,
-    color: palette.textPrimary,
-    backgroundColor: palette.background,
-  },
-  sendBtn:         { width: 40, height: 40, borderRadius: radius.full, backgroundColor: palette.primary, alignItems: 'center', justifyContent: 'center' },
-  sendBtnDisabled: { backgroundColor: palette.border },
-  sendIcon:        { fontSize: 20, color: palette.textInverse, lineHeight: 24 },
-  readOnlyBar: {
-    paddingHorizontal: spacing[5],
-    paddingVertical: spacing[4],
-    borderTopWidth: 1,
-    borderTopColor: palette.border,
-    backgroundColor: palette.surface,
-  },
-});
+    // ── Edit post button (ellipsis) ──
+    editPostBtn: { padding: 4 },
+
+    // ── Edit post modal ──
+    modalSafe: { flex: 1, backgroundColor: p.background },
+    modalHeader: {
+      flexDirection: 'row' as const,
+      alignItems: 'center' as const,
+      justifyContent: 'space-between' as const,
+      padding: spacing[5],
+      borderBottomWidth: 1,
+      borderBottomColor: p.border,
+    },
+    modalContent: { padding: spacing[5] },
+    editCard: {
+      borderWidth: 1,
+      borderColor: p.border,
+      borderRadius: radius.lg,
+      backgroundColor: p.surface,
+      overflow: 'hidden' as const,
+    },
+    editTitleInput: {
+      paddingHorizontal: spacing[4],
+      paddingTop: spacing[4],
+      paddingBottom: spacing[3],
+      fontSize: 18,
+      fontWeight: '600' as const,
+      color: p.textPrimary,
+    },
+    editDivider: {
+      height: StyleSheet.hairlineWidth,
+      backgroundColor: p.border,
+      marginHorizontal: spacing[4],
+    },
+    editBodyInput: {
+      paddingHorizontal: spacing[4],
+      paddingTop: spacing[3],
+      paddingBottom: spacing[4],
+      fontSize: 15,
+      color: p.textPrimary,
+      minHeight: 200,
+    },
+  });
+}

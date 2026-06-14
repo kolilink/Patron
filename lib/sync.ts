@@ -78,11 +78,11 @@ async function executeOp(operation: string, payload: Record<string, unknown>): P
         product: object;
         stockMove: object | null;
       };
-      const { error } = await supabase.from('products').insert(product);
+      const { error } = await supabase.rpc('create_product_with_stock', {
+        p_product: product,
+        p_stock_move: stockMove,
+      });
       if (error) throw error;
-      if (stockMove) {
-        await supabase.from('stock_moves').insert(stockMove);
-      }
       break;
     }
     case 'update_product': {

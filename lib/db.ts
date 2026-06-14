@@ -344,7 +344,7 @@ export interface SyncQueueItem {
   last_error: string | null;
 }
 
-const MAX_SYNC_ATTEMPTS = 20;
+const MAX_SYNC_ATTEMPTS = 5;
 
 export async function enqueue(operation: string, payload: object): Promise<void> {
   const db = await openDb();
@@ -454,7 +454,7 @@ export async function saveDashboardKpiCache(businessId: string, kpis: unknown): 
       'INSERT OR REPLACE INTO dashboard_kpi_cache (business_id, data, cached_at) VALUES (?, ?, ?)',
       [businessId, encrypted, Date.now()],
     );
-  } catch {}
+  } catch { }
 }
 
 export async function getDashboardKpiCache(businessId: string): Promise<unknown | null> {
@@ -482,7 +482,7 @@ export async function saveProductCache(businessId: string, products: Product[]):
       'INSERT OR REPLACE INTO product_cache (business_id, data, cached_at) VALUES (?, ?, ?)',
       [businessId, encrypted, Date.now()],
     );
-  } catch {}
+  } catch { }
 }
 
 export async function getProductCache(businessId: string): Promise<Product[] | null> {
@@ -511,7 +511,7 @@ export async function saveVentesCache(cacheKey: string, data: unknown[]): Promis
       'INSERT OR REPLACE INTO ventes_cache (cache_key, data, cached_at) VALUES (?, ?, ?)',
       [cacheKey, encrypted, Date.now()],
     );
-  } catch {}
+  } catch { }
 }
 
 export async function getVentesCache(cacheKey: string): Promise<unknown[] | null> {
@@ -539,7 +539,7 @@ export async function saveFournisseurCache(businessId: string, data: unknown[]):
       'INSERT OR REPLACE INTO fournisseur_cache (business_id, data, cached_at) VALUES (?, ?, ?)',
       [businessId, encrypted, Date.now()],
     );
-  } catch {}
+  } catch { }
 }
 
 export async function getFournisseurCache(businessId: string): Promise<unknown[] | null> {
@@ -567,7 +567,7 @@ export async function saveCommandeCache(businessId: string, data: unknown[]): Pr
       'INSERT OR REPLACE INTO commande_cache (business_id, data, cached_at) VALUES (?, ?, ?)',
       [businessId, encrypted, Date.now()],
     );
-  } catch {}
+  } catch { }
 }
 
 export async function getCommandeCache(businessId: string): Promise<unknown[] | null> {
@@ -595,7 +595,7 @@ export async function saveExpenseCache(businessId: string, data: unknown[]): Pro
       'INSERT OR REPLACE INTO expense_cache (business_id, data, cached_at) VALUES (?, ?, ?)',
       [businessId, encrypted, Date.now()],
     );
-  } catch {}
+  } catch { }
 }
 
 export async function getExpenseCache(businessId: string): Promise<unknown[] | null> {
@@ -623,7 +623,7 @@ export async function saveChatCache(businessId: string, data: unknown): Promise<
       'INSERT OR REPLACE INTO chat_cache (business_id, data, cached_at) VALUES (?, ?, ?)',
       [businessId, encrypted, Date.now()],
     );
-  } catch {}
+  } catch { }
 }
 
 export async function getChatCache(businessId: string): Promise<unknown | null> {
@@ -651,7 +651,7 @@ export async function saveMarketCache(data: unknown[]): Promise<void> {
       'INSERT OR REPLACE INTO market_cache (id, data, cached_at) VALUES (1, ?, ?)',
       [encrypted, Date.now()],
     );
-  } catch {}
+  } catch { }
 }
 
 export async function getMarketCache(): Promise<unknown[] | null> {

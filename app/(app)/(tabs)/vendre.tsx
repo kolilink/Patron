@@ -26,7 +26,9 @@ import { Text } from '@/src/components/ui/Text';
 import { PhoneInput } from '@/src/components/ui/PhoneInput';
 import { SaleSuccessOverlay } from '@/src/components/ui/SaleSuccessOverlay';
 import { SaleReceiptView, type ReceiptData, type ReceiptItem } from '@/src/components/ui/SaleReceiptView';
-import { colors, palette, radius, spacing } from '@/src/theme';
+import { DatePickerField } from '@/src/components/ui/DatePickerField';
+import { colors, useTheme, radius, spacing } from '@/src/theme';
+import type { Palette } from '@/src/theme';
 import { formatAmount } from '@/src/utils/format';
 import { todayIso } from '@/src/utils/dates';
 import type { Product } from '@/src/types';
@@ -36,6 +38,19 @@ import type { CartLine, SalePayment } from '@/stores/sales';
 import { useSalesStore } from '@/stores/sales';
 import { supabase } from '@/lib/supabase';
 import { haptics } from '@/lib/haptics';
+import { SkeletonList } from '@/src/components/ui/SkeletonPlaceholder';
+
+function toISO(d: Date): string {
+  return `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, '0')}-${String(d.getDate()).padStart(2, '0')}`;
+}
+
+function fmtDue(iso: string): string {
+  const d = new Date(iso + 'T00:00:00');
+  const diff = Math.round((d.getTime() - Date.now()) / 86400000);
+  if (diff < 0) return `En retard de ${Math.abs(diff)} j`;
+  if (diff === 0) return "Prévu aujourd'hui";
+  return `Prévu le ${d.toLocaleDateString('fr-FR', { day: 'numeric', month: 'long' })}`;
+}
 
 // Final payment methods: Wave removed.
 // 'mtn' is labeled "Mobile Money" in the UI (consolidates old mtn/moov).
@@ -59,6 +74,8 @@ interface CartRowProps {
 }
 
 function CartRow({ line, currency, onInc, onDec, onRemove, onToggleBulk, onSetQty }: CartRowProps) {
+  const { palette } = useTheme();
+  const styles = useMemo(() => makeStyles(palette), [palette]);
   const hasBulk = !!(line.product.bulk_price && line.product.bulk_min_qty);
   const [editing, setEditing] = useState(false);
   const [inputVal, setInputVal] = useState('');
@@ -136,7 +153,7 @@ interface PaymentModalProps {
   sellerId: string;
   isVendeur: boolean;
   onClose: () => void;
-  onConfirm: (payment: SalePayment | null, customerName?: string, discountAmount?: number, clientId?: string) => void;
+  onConfirm: (payment: SalePayment | null, customerName?: string, discountAmount?: number, clientId?: string, dueDate?: string | null) => void;
   submitting: boolean;
 }
 
@@ -144,10 +161,15 @@ function PaymentModal({
   visible, initialStep, total, currency, businessId, sellerId, isVendeur,
   onClose, onConfirm, submitting,
 }: PaymentModalProps) {
+  const { palette } = useTheme();
+  const styles = useMemo(() => makeStyles(palette), [palette]);
   const [step, setStep] = useState<PayStep>(initialStep);
   const [payMethod, setPayMethod] = useState<'especes' | 'orange' | 'mtn' | 'digital'>('especes');
   const [amountInput, setAmountInput] = useState('');
   const [disambig, setDisambig] = useState<Disambig>(null);
+  const [creditDiscountInput, setCreditDiscountInput] = useState('');
+  const [creditUpfrontInput, setCreditUpfrontInput] = useState('');
+  const [creditPayMethod, setCreditPayMethod] = useState<'especes' | 'orange' | 'mtn' | 'digital'>('especes');
   const [clientName, setClientName] = useState('');
   const [clientPhone, setClientPhone] = useState('');
   const [clientId, setClientId] = useState<string | undefined>();
@@ -157,6 +179,8 @@ function PaymentModal({
   const [showNewClientForm, setShowNewClientForm] = useState(false);
   const [newClientName, setNewClientName] = useState('');
   const [newClientPhone, setNewClientPhone] = useState('');
+  const [dueDatePill, setDueDatePill] = useState<'1w' | '1m' | 'custom' | null>(null);
+  const [customDueDateInput, setCustomDueDateInput] = useState('');
   const clientSearchRef = useRef<TextInput>(null);
 
   useEffect(() => {
@@ -165,6 +189,9 @@ function PaymentModal({
       setPayMethod('especes');
       setAmountInput(String(total));
       setDisambig(null);
+      setCreditDiscountInput('');
+      setCreditUpfrontInput('');
+      setCreditPayMethod('especes');
       setClientName('');
       setClientPhone('');
       setClientId(undefined);
@@ -173,6 +200,8 @@ function PaymentModal({
       setShowNewClientForm(false);
       setNewClientName('');
       setNewClientPhone('');
+      setDueDatePill(null);
+      setCustomDueDateInput('');
       loadClients();
     }
   }, [visible, initialStep, total]);
@@ -180,8 +209,12 @@ function PaymentModal({
   const loadClients = async () => {
     const [clientsRes, salesRes] = await Promise.all([
       supabase.from('clients').select('id, name, phone').eq('business_id', businessId),
-      supabase.from('sale_orders').select('customer_name')
-        .eq('business_id', businessId).not('customer_name', 'is', null),
+      (() => {
+        let q = supabase.from('sale_orders').select('customer_name')
+          .eq('business_id', businessId).not('customer_name', 'is', null);
+        if (isVendeur) q = q.eq('seller_id', sellerId);
+        return q;
+      })(),
     ]);
     const fromClients = (clientsRes.data ?? []).map((r: { id: string; name: string; phone?: string | null }) => ({
       id: r.id, name: r.name, phone: r.phone,
@@ -239,10 +272,22 @@ function PaymentModal({
     handleSelectClient(name, phone, data?.id ?? undefined);
   };
 
-  const parsedAmount = parseFloat(amountInput.replace(/\s/g, '').replace(',', '.')) || 0;
+  const cleanNum = (s: string) => s.replace(/[^\d.,]/g, '').replace(',', '.');
+  const parsedAmount = parseFloat(cleanNum(amountInput)) || 0;
   const shortfall = total - parsedAmount;
   const isShort = shortfall > 0.5;
-  const isOver = parsedAmount > total + 0.5;
+
+  const creditDiscount = parseFloat(cleanNum(creditDiscountInput)) || 0;
+  const creditUpfront  = parseFloat(cleanNum(creditUpfrontInput)) || 0;
+  const creditEffectiveTotal = total - creditDiscount;
+  const creditUpfrontCoversAll = creditUpfront >= creditEffectiveTotal - 0.01 && creditUpfront > 0;
+
+  const computedDueDate: string | null = (() => {
+    if (dueDatePill === '1w') { const d = new Date(); d.setDate(d.getDate() + 7); return toISO(d); }
+    if (dueDatePill === '1m') { const d = new Date(); d.setMonth(d.getMonth() + 1); return toISO(d); }
+    if (dueDatePill === 'custom') return customDueDateInput || null;
+    return null;
+  })();
 
   const handleAmountChange = (val: string) => {
     setAmountInput(val);
@@ -251,7 +296,7 @@ function PaymentModal({
 
   const requiresClient = disambig === 'credit';
   const canConfirmPay = !isShort || (disambig !== null && (!requiresClient || clientName.trim().length > 0));
-  const canConfirmCredit = clientName.trim().length > 0;
+  const canConfirmCredit = creditUpfrontCoversAll || clientName.trim().length > 0;
 
   const handleConfirmPay = () => {
     const discountAmount = disambig === 'rabais' ? shortfall : 0;
@@ -260,7 +305,14 @@ function PaymentModal({
   };
 
   const handleConfirmCredit = () => {
-    onConfirm(null, clientName.trim(), undefined, clientId);
+    const disc = creditDiscount > 0 ? creditDiscount : undefined;
+    const dueDate = creditUpfrontCoversAll ? null : computedDueDate;
+    if (creditUpfront > 0) {
+      const payment: SalePayment = { method: creditPayMethod, amount: creditUpfront };
+      onConfirm(payment, clientName.trim() || undefined, disc, clientId, dueDate);
+    } else {
+      onConfirm(null, clientName.trim() || undefined, disc, clientId, dueDate);
+    }
   };
 
   return (
@@ -289,20 +341,150 @@ function PaymentModal({
             showsVerticalScrollIndicator={false}
           >
           <View style={styles.totalSection}>
-            <Text variant="caption" color="secondary" style={{ textAlign: 'center' }}>Total</Text>
+            <Text variant="caption" color="secondary" style={{ textAlign: 'center' }}>
+              {step === 'credit' && (creditDiscount > 0 || creditUpfront > 0) ? 'Reste à payer' : 'Total'}
+            </Text>
             <Text
               style={[styles.totalBig, { color: step === 'credit' ? palette.warning : palette.primary, textAlign: 'center' }]}
               adjustsFontSizeToFit
               numberOfLines={1}
             >
-              {formatAmount(total, currency)}
+              {formatAmount(step === 'credit' ? Math.max(0, creditEffectiveTotal - creditUpfront) : total, currency)}
             </Text>
+            {step === 'credit' && creditDiscount > 0 && (
+              <Text variant="caption" color="secondary" style={{ textAlign: 'center' }}>
+                Réduction de {formatAmount(creditDiscount, currency)} appliquée
+              </Text>
+            )}
           </View>
+
+          {step === 'credit' && !showClientSection && (
+            <View style={styles.payContent}>
+              {/* Discount */}
+              <View style={{ gap: spacing[2] }}>
+                <Text variant="label" style={styles.sectionLabel}>Réduction</Text>
+                <TextInput
+                  style={styles.amountBigInput}
+                  value={creditDiscountInput}
+                  onChangeText={setCreditDiscountInput}
+                  keyboardType="decimal-pad"
+                  placeholderTextColor={palette.textDisabled}
+                  selectTextOnFocus
+                />
+              </View>
+
+              {/* Upfront payment */}
+              <View style={{ gap: spacing[2] }}>
+                <Text variant="label" style={styles.sectionLabel}>Payé maintenant</Text>
+                <TextInput
+                  style={styles.amountBigInput}
+                  value={creditUpfrontInput}
+                  onChangeText={setCreditUpfrontInput}
+                  keyboardType="decimal-pad"
+                  placeholderTextColor={palette.textDisabled}
+                  selectTextOnFocus
+                />
+              </View>
+
+              {/* Show remaining only when upfront > 0 */}
+              {creditUpfront > 0 && !creditUpfrontCoversAll && (
+                <View style={[styles.disambigBox, { backgroundColor: '#FFF7ED', borderColor: '#FED7AA' }]}>
+                  <Text variant="label" style={{ color: colors.warning[700] }}>
+                    Reste à payer : {formatAmount(Math.max(0, creditEffectiveTotal - creditUpfront), currency)}
+                  </Text>
+                </View>
+              )}
+
+              {creditUpfrontCoversAll && (
+                <View style={styles.warnRow}>
+                  <Text variant="caption" style={{ color: colors.warning[700] }}>
+                    Payé en entier — pas de crédit.
+                  </Text>
+                </View>
+              )}
+
+              {/* Payment method — only when upfront entered */}
+              {creditUpfront > 0 && (
+                <View style={styles.methodSection}>
+                  <Text variant="label" style={[styles.sectionLabel, { marginBottom: spacing[2] }]}>Payé en</Text>
+                  <View style={styles.methodGrid}>
+                    {PAY_NOW_METHODS.map(m => (
+                      <Pressable key={m.key} onPress={() => setCreditPayMethod(m.key)}
+                        style={[styles.methodChip, creditPayMethod === m.key && styles.methodChipActive]}>
+                        <Text variant="label" style={{
+                          color: creditPayMethod === m.key ? palette.textInverse : palette.textSecondary,
+                          textAlign: 'center', fontSize: 13,
+                          opacity: creditPayMethod === m.key ? 1 : 0.45,
+                        }}>
+                          {m.label}
+                        </Text>
+                      </Pressable>
+                    ))}
+                  </View>
+                </View>
+              )}
+
+              {/* Due date — optional, only when it's an actual credit */}
+              {!creditUpfrontCoversAll && (
+                <View style={{ gap: spacing[2] }}>
+                  <View style={{ flexDirection: 'row', alignItems: 'center', gap: spacing[2] }}>
+                    <Text variant="label" style={styles.sectionLabel}>Remboursement prévu ?</Text>
+                    <Text variant="caption" style={{ color: palette.textSecondary }}>(optionnel)</Text>
+                  </View>
+                  <View style={styles.methodGrid}>
+                    {(['1w', '1m', 'custom'] as const).map(pill => (
+                      <Pressable
+                        key={pill}
+                        onPress={() => {
+                          haptics.tap();
+                          const next = dueDatePill === pill ? null : pill;
+                          setDueDatePill(next);
+                          if (pill === 'custom' && next === 'custom' && !customDueDateInput) {
+                            const d = new Date(); d.setMonth(d.getMonth() + 1);
+                            setCustomDueDateInput(toISO(d));
+                          }
+                        }}
+                        style={[styles.methodChip, dueDatePill === pill && styles.methodChipActive]}
+                      >
+                        <Text variant="label" style={{
+                          color: dueDatePill === pill ? palette.textInverse : palette.textSecondary,
+                          textAlign: 'center', fontSize: 13,
+                          opacity: dueDatePill === pill ? 1 : 0.45,
+                        }}>
+                          {pill === '1w' ? '1 semaine' : pill === '1m' ? '1 mois' : 'Choisir'}
+                        </Text>
+                      </Pressable>
+                    ))}
+                  </View>
+                  {dueDatePill === 'custom' && (
+                    <DatePickerField
+                      value={customDueDateInput}
+                      onChange={setCustomDueDateInput}
+                      minDate={toISO(new Date())}
+                    />
+                  )}
+                  {computedDueDate !== null && (
+                    <View style={{ flexDirection: 'row', alignItems: 'center', gap: spacing[2] }}>
+                      <Text variant="caption" style={{ color: palette.success }}>
+                        ✓ {fmtDue(computedDueDate)}
+                      </Text>
+                      <Pressable
+                        onPress={() => { setDueDatePill(null); setCustomDueDateInput(''); }}
+                        hitSlop={8}
+                      >
+                        <Text variant="caption" style={{ color: palette.textSecondary }}>✕</Text>
+                      </Pressable>
+                    </View>
+                  )}
+                </View>
+              )}
+            </View>
+          )}
 
           {step === 'pay' && !showClientSection && (
             <View style={styles.payContent}>
               <View style={{ gap: spacing[2] }}>
-                <Text variant="label" style={styles.sectionLabel}>Combien le client a payé ?</Text>
+                <Text variant="label" style={styles.sectionLabel}>Vendu pour combien ?</Text>
                 <TextInput
                   style={styles.amountBigInput}
                   value={amountInput}
@@ -316,7 +498,7 @@ function PaymentModal({
                 {isShort && (
                   <View style={styles.disambigBox}>
                     <Text variant="label" style={{ color: colors.warning[700] }}>
-                      ⚠️ {formatAmount(shortfall, currency)} de moins que le prix.
+                      😊 {formatAmount(shortfall, currency)} de moins que le prix
                     </Text>
                     <Text variant="label" style={{ marginTop: spacing[3] }}>C'est :</Text>
 
@@ -340,13 +522,6 @@ function PaymentModal({
                   </View>
                 )}
 
-                {isOver && (
-                  <View style={styles.warnRow}>
-                    <Text variant="caption" style={{ color: colors.warning[700] }}>
-                      Le montant dépasse le prix de vente. Vérifiez.
-                    </Text>
-                  </View>
-                )}
               </View>
 
               {/* Payment method grid — inside scroll so all 4 chips are always reachable */}
@@ -408,7 +583,7 @@ function PaymentModal({
                       ref={clientSearchRef}
                       value={clientSearch}
                       onChangeText={setClientSearch}
-                      placeholder="Rechercher un client..."
+                      placeholder="Rechercher un client…"
                       placeholderTextColor={palette.textDisabled}
                       style={styles.clientSearchInput}
                       returnKeyType="search"
@@ -466,7 +641,7 @@ function PaymentModal({
                   </>
                 ) : (
                   /* ── New client form ── */
-                  <KeyboardAvoidingView behavior={Platform.OS === 'ios' ? 'padding' : undefined}>
+                  <KeyboardAvoidingView behavior={Platform.OS === 'ios' ? 'padding' : 'height'}>
                     <View style={{ flexDirection: 'row', alignItems: 'center', gap: spacing[2], paddingTop: spacing[2], marginBottom: spacing[1] }}>
                       <Pressable onPress={() => setShowNewClientForm(false)} hitSlop={8}>
                         <Ionicons name="arrow-back" size={18} color={palette.textSecondary} />
@@ -482,7 +657,7 @@ function PaymentModal({
                         label="Nom"
                         value={newClientName}
                         onChangeText={setNewClientName}
-                        placeholder="ex : Mamadou Diallo"
+                        placeholder="Mamadou Diallo"
                         autoFocus
                       />
                       <PhoneInput
@@ -519,14 +694,21 @@ function PaymentModal({
                 disabled={!newClientName.trim()}
               />
             ) : (
-              <Button
-                label={submitting ? 'Enregistrement…' : (step === 'credit' ? 'Enregistrer le crédit' : 'Confirmer la vente')}
-                onPress={step === 'credit' ? handleConfirmCredit : handleConfirmPay}
-                loading={submitting}
-                fullWidth
-                size="lg"
-                disabled={step === 'credit' ? !canConfirmCredit : !canConfirmPay}
-              />
+              <>
+                {step === 'credit' && !canConfirmCredit && !showClientSection && (
+                  <Text variant="caption" style={{ color: palette.warning, textAlign: 'center', marginBottom: spacing[2] }}>
+                    Ajoutez un nom de client pour enregistrer le crédit
+                  </Text>
+                )}
+                <Button
+                  label={submitting ? 'Enregistrement…' : (step === 'credit' ? (creditUpfrontCoversAll ? 'Enregistrer la vente' : 'Enregistrer le crédit') : 'Confirmer la vente')}
+                  onPress={step === 'credit' ? handleConfirmCredit : handleConfirmPay}
+                  loading={submitting}
+                  fullWidth
+                  size="lg"
+                  disabled={step === 'credit' ? !canConfirmCredit : !canConfirmPay}
+                />
+              </>
             )}
           </View>
         </KeyboardAvoidingView>
@@ -547,6 +729,8 @@ interface ProductTileProps {
 }
 
 function ProductTile({ product, currency, onAdd, onAddBulk, cartQty, cartBulkQty }: ProductTileProps) {
+  const { palette } = useTheme();
+  const styles = useMemo(() => makeStyles(palette), [palette]);
   const outOfStock = product.stock_qty === 0;
   const totalInCart = cartQty + cartBulkQty;
   const hasBulk = !!(product.bulk_price && product.bulk_min_qty);
@@ -587,9 +771,19 @@ function ProductTile({ product, currency, onAdd, onAddBulk, cartQty, cartBulkQty
   );
 }
 
+// ─── Helpers ─────────────────────────────────────────────────────────────────
+
+function pairUp<T>(arr: T[]): T[][] {
+  const result: T[][] = [];
+  for (let i = 0; i < arr.length; i += 2) result.push(arr.slice(i, i + 2));
+  return result;
+}
+
 // ─── Animated FAB ─────────────────────────────────────────────────────────────
 
 function AnimatedFAB({ onPress }: { onPress: () => void }) {
+  const { palette } = useTheme();
+  const styles = useMemo(() => makeStyles(palette), [palette]);
   const scale   = useRef(new Animated.Value(1)).current;
   const opacity = useRef(new Animated.Value(1)).current;
 
@@ -628,6 +822,8 @@ function AnimatedFAB({ onPress }: { onPress: () => void }) {
 // ─── Main Screen ──────────────────────────────────────────────────────────────
 
 export default function VendreScreen() {
+  const { palette } = useTheme();
+  const styles = useMemo(() => makeStyles(palette), [palette]);
   const session = useAuthStore(s => s.session);
   const business = session?.activeBusiness;
   const userId = session?.user.id ?? '';
@@ -657,16 +853,25 @@ export default function VendreScreen() {
 
   const filtered = useMemo(() => {
     const q = search.toLowerCase().trim();
-    if (!q) return products;
-    return products.filter(
-      p =>
-        p.name.toLowerCase().includes(q) ||
-        (p.category?.toLowerCase().includes(q) ?? false),
-    );
+    const base = q
+      ? products.filter(p => p.name.toLowerCase().includes(q) || (p.category?.toLowerCase().includes(q) ?? false))
+      : products;
+    return [...base].sort((a, b) => a.name.localeCompare(b.name, 'fr'));
   }, [products, search]);
+
+  const inStockFiltered    = useMemo(() => filtered.filter(p => p.stock_qty > 0),  [filtered]);
+  const outOfStockFiltered = useMemo(() => filtered.filter(p => p.stock_qty === 0), [filtered]);
 
   const cartTotal = useMemo(() => cart.reduce((s, l) => s + l.unit_price * l.qty, 0), [cart]);
   const cartCount = useMemo(() => cart.reduce((s, l) => s + l.qty, 0), [cart]);
+
+  // Confirmation sheet: pre-computed breakdown for lastReceipt
+  const confirmNet       = lastReceipt ? lastReceipt.total - (lastReceipt.discountAmount ?? 0) : 0;
+  const confirmUpfront   = lastReceipt?.amountPaid ?? 0;
+  const confirmRemaining = Math.max(0, confirmNet - confirmUpfront);
+  const confirmIsCredit  = lastReceipt
+    ? lastReceipt.payment === null || confirmRemaining > 0.01
+    : false;
 
   const cartQtyMap = useMemo(() => {
     const map: Record<string, { unit: number; bulk: number }> = {};
@@ -682,7 +887,7 @@ export default function VendreScreen() {
   const openCredit = () => { setPayStep('credit'); setShowPayment(true); };
 
   const handleConfirmPayment = useCallback(
-    async (payment: SalePayment | null, customerName?: string, discountAmount?: number, clientId?: string) => {
+    async (payment: SalePayment | null, customerName?: string, discountAmount?: number, clientId?: string, dueDate?: string | null) => {
       const total = cartTotal;
       const isCredit = payment === null;
 
@@ -716,17 +921,21 @@ export default function VendreScreen() {
         unit_price: l.unit_price,
         is_bulk: l.is_bulk,
       }));
+      // When merchant sells above catalog price, use their typed amount as the actual sale total
+      const effectiveTotal = payment && payment.amount > total + 0.5 ? payment.amount : total;
       pendingReceiptRef.current = {
         businessName: business?.name ?? '',
         currency,
         items: receiptItems,
-        total: cartTotal,
+        total: effectiveTotal,
+        discountAmount: discountAmount && discountAmount > 0 ? discountAmount : undefined,
+        amountPaid: payment ? payment.amount : undefined,
         payment: payment ?? null,
         customerName,
         date: new Date(),
       };
 
-      const ok = await submitSale(businessId, userId, payment, customerName, undefined, discountAmount, clientId);
+      const ok = await submitSale(businessId, userId, payment, customerName, undefined, discountAmount, clientId, effectiveTotal !== total ? effectiveTotal : undefined, dueDate ?? null);
       if (ok) {
         setLastReceipt(pendingReceiptRef.current);
         setShowPayment(false);
@@ -748,11 +957,11 @@ export default function VendreScreen() {
     if (!receiptViewRef.current || !lastReceipt) return;
     try {
       const uri = await captureRef(receiptViewRef, { format: 'png', quality: 1 });
-      setShowConfirmSheet(false);
-      // Wait for modal close animation before presenting the share sheet
-      await new Promise<void>(r => setTimeout(r, 350));
+      // Share while modal is still mounted — iOS can present share sheet on top.
+      // Close only after the share sheet is dismissed (shareAsync resolves).
       await Sharing.shareAsync(uri, { mimeType: 'image/png', UTI: 'public.png', dialogTitle: 'Partager le reçu' });
-    } catch {
+      setShowConfirmSheet(false);
+    } catch (shareErr) {
       Alert.alert('Impossible de partager le reçu pour l\'instant.');
     }
   };
@@ -760,9 +969,7 @@ export default function VendreScreen() {
   if (loading && products.length === 0) {
     return (
       <SafeAreaView style={styles.safe} edges={['top']}>
-        <View style={styles.emptyFull}>
-          <Text variant="body" color="secondary">Chargement…</Text>
-        </View>
+        <SkeletonList count={9} />
       </SafeAreaView>
     );
   }
@@ -826,7 +1033,7 @@ export default function VendreScreen() {
 
       {/* Product grid */}
       <FlatList
-        data={filtered}
+        data={inStockFiltered}
         keyExtractor={p => p.id}
         numColumns={2}
         columnWrapperStyle={styles.tileRow}
@@ -838,14 +1045,50 @@ export default function VendreScreen() {
             currency={currency}
             cartQty={cartQtyMap[item.id]?.unit ?? 0}
             cartBulkQty={cartQtyMap[item.id]?.bulk ?? 0}
-            onAdd={() => { setLastReceipt(null); haptics.tap(); Keyboard.dismiss(); addToCart(item, false); }}
+            onAdd={() => {
+              setLastReceipt(null);
+              const inCart = cartQtyMap[item.id]?.unit ?? 0;
+              if (inCart + 1 >= item.stock_qty) haptics.warning(); else haptics.tap();
+              Keyboard.dismiss();
+              addToCart(item, false);
+            }}
             onAddBulk={() => { setLastReceipt(null); haptics.tap(); Keyboard.dismiss(); addToCart(item, true); }}
           />
         )}
         ListEmptyComponent={
-          <View style={styles.emptySearch}>
-            <Text variant="body" color="secondary">Aucun résultat pour "{search}"</Text>
-          </View>
+          outOfStockFiltered.length === 0 ? (
+            <View style={styles.emptySearch}>
+              <Text variant="body" color="secondary">Aucun résultat pour "{search}"</Text>
+            </View>
+          ) : null
+        }
+        ListFooterComponent={
+          outOfStockFiltered.length > 0 ? (
+            <View>
+              <View style={styles.outOfStockHeader}>
+                <View style={styles.outOfStockLine} />
+                <Text variant="caption" color="secondary" style={{ paddingHorizontal: spacing[3] }}>
+                  Rupture de stock
+                </Text>
+                <View style={styles.outOfStockLine} />
+              </View>
+              {pairUp(outOfStockFiltered).map((pair, i) => (
+                <View key={i} style={[styles.tileRow, { flexDirection: 'row' }]}>
+                  {pair.map(p => (
+                    <ProductTile
+                      key={p.id}
+                      product={p}
+                      currency={currency}
+                      cartQty={0}
+                      cartBulkQty={0}
+                      onAdd={() => {}}
+                    />
+                  ))}
+                  {pair.length === 1 && <View style={{ flex: 1 }} />}
+                </View>
+              ))}
+            </View>
+          ) : null
         }
       />
 
@@ -914,34 +1157,44 @@ export default function VendreScreen() {
         animationType="slide"
         onRequestClose={() => setShowConfirmSheet(false)}
       >
-        <View style={styles.sheetOverlay}>
-          {/* Receipt at (0,0) — within modal bounds so GPU composites it; captureRef reads it directly */}
-          {lastReceipt && (
-            <View
-              ref={receiptViewRef}
-              collapsable={false}
-              pointerEvents="none"
-              style={{ position: 'absolute', top: 0, left: 0 }}
-            >
-              <SaleReceiptView data={lastReceipt} />
-            </View>
-          )}
-          {/* Solid white layer hides the receipt from the user */}
-          <View style={[StyleSheet.absoluteFill, { backgroundColor: '#fff' }]} pointerEvents="none" />
-          {/* Semi-transparent dark overlay + dismiss tap — renders on top of white */}
-          <Pressable style={[StyleSheet.absoluteFill, { backgroundColor: 'rgba(0,0,0,0.45)' }]} onPress={() => setShowConfirmSheet(false)} />
-
+        {/* Receipt at (0,0) — within modal bounds so GPU composites it; captureRef reads it directly */}
+        {lastReceipt && (
+          <View
+            ref={receiptViewRef}
+            collapsable={false}
+            pointerEvents="none"
+            style={{ position: 'absolute', top: 0, left: 0 }}
+          >
+            <SaleReceiptView data={lastReceipt} />
+          </View>
+        )}
+        {/* Solid white layer hides the receipt from the user */}
+        <View style={[StyleSheet.absoluteFill, { backgroundColor: '#fff' }]} pointerEvents="none" />
+        {/* Outer container — box-none so it never consumes touches itself */}
+        <View style={styles.sheetOverlay} pointerEvents="box-none">
+          {/* Backdrop — sits behind the sheet in z-order (rendered first) */}
+          <Pressable
+            style={[StyleSheet.absoluteFill, { backgroundColor: 'rgba(0,0,0,0.45)' }]}
+            onPress={() => setShowConfirmSheet(false)}
+          />
+          {/* Sheet — rendered after backdrop, higher z-order, captures its own touches */}
           <View style={styles.sheet}>
             <View style={styles.sheetHead}>
               <View style={styles.sheetCheckCircle}>
                 <View style={styles.sheetCheckmark} />
               </View>
               <Text variant="h3" style={{ textAlign: 'center' }}>
-                {lastReceipt?.payment === null ? 'Crédit enregistré' : 'Vente enregistrée'}
+                {confirmIsCredit ? 'Crédit enregistré' : 'Vente enregistrée'}
               </Text>
               {lastReceipt && (
                 <Text variant="h4" style={{ color: palette.primary, textAlign: 'center' }}>
-                  {formatAmount(lastReceipt.total, lastReceipt.currency)}
+                  {formatAmount(confirmNet, lastReceipt.currency)}
+                </Text>
+              )}
+              {/* Credit with upfront: show what was received vs what remains */}
+              {lastReceipt && confirmIsCredit && confirmUpfront > 0.01 && (
+                <Text variant="caption" color="secondary" style={{ textAlign: 'center' }}>
+                  {formatAmount(confirmUpfront, lastReceipt.currency)} reçu · {formatAmount(confirmRemaining, lastReceipt.currency)} restant
                 </Text>
               )}
             </View>
@@ -979,263 +1232,196 @@ export default function VendreScreen() {
 
 const TILE_GAP = spacing[3];
 
-const styles = StyleSheet.create({
-  safe: { flex: 1, backgroundColor: palette.background },
-  errorBanner: {
-    backgroundColor: palette.danger, paddingHorizontal: spacing[5], paddingVertical: spacing[3],
-    alignItems: 'center', gap: 2,
-  },
-  header: {
-    flexDirection: 'row', alignItems: 'center', justifyContent: 'space-between',
-    paddingHorizontal: spacing[5], paddingTop: spacing[4], paddingBottom: spacing[2],
-  },
-  searchRow: { paddingHorizontal: spacing[5], paddingBottom: spacing[2] },
-  hintBanner: {
-    flexDirection: 'row', alignItems: 'center', gap: spacing[2],
-    paddingHorizontal: spacing[5], paddingVertical: spacing[2],
-    backgroundColor: colors.warning[50], borderBottomWidth: 1, borderBottomColor: colors.warning[100],
-    marginBottom: spacing[2],
-  },
+function makeStyles(p: Palette) {
+  return StyleSheet.create({
+    safe: { flex: 1, backgroundColor: p.background },
+    errorBanner: {
+      backgroundColor: p.danger, paddingHorizontal: spacing[5], paddingVertical: spacing[3],
+      alignItems: 'center', gap: 2,
+    },
+    header: {
+      flexDirection: 'row', alignItems: 'center', justifyContent: 'space-between',
+      paddingHorizontal: spacing[5], paddingTop: spacing[4], paddingBottom: spacing[2],
+    },
+    searchRow: { paddingHorizontal: spacing[5], paddingBottom: spacing[2] },
+    hintBanner: {
+      flexDirection: 'row', alignItems: 'center', gap: spacing[2],
+      paddingHorizontal: spacing[5], paddingVertical: spacing[2],
+      backgroundColor: colors.warning[50], borderBottomWidth: 1, borderBottomColor: colors.warning[100],
+      marginBottom: spacing[2],
+    },
 
-  // Product tiles
-  tileList: { paddingHorizontal: spacing[5], paddingBottom: spacing[6] },
-  tileRow: { gap: TILE_GAP, marginBottom: TILE_GAP },
-  tile: {
-    flex: 1, backgroundColor: palette.surface, borderRadius: radius.lg,
-    borderWidth: 1, borderColor: palette.border, padding: spacing[3], gap: spacing[1], position: 'relative',
-  },
-  tileDisabled: { opacity: 0.5 },
-  tileName: { minHeight: 36 },
-  tileBadge: {
-    position: 'absolute', top: 8, right: 8, backgroundColor: palette.primary,
-    borderRadius: radius.full, width: 22, height: 22, alignItems: 'center', justifyContent: 'center', zIndex: 10,
-  },
-  tileGrosBadge: {
-    position: 'absolute', top: 4, right: 4,
-    backgroundColor: colors.warning[50], borderRadius: radius.sm, paddingHorizontal: 4, paddingVertical: 2,
-    borderWidth: 1, borderColor: colors.warning[100],
-  },
+    tileList: { paddingHorizontal: spacing[5], paddingBottom: spacing[6] },
+    tileRow: { gap: TILE_GAP, marginBottom: TILE_GAP },
+    tile: {
+      flex: 1, backgroundColor: p.surface, borderRadius: radius.lg,
+      borderWidth: 1, borderColor: p.border, padding: spacing[3], gap: spacing[1], position: 'relative',
+    },
+    tileDisabled: { opacity: 0.5 },
+    tileName: { minHeight: 36 },
+    tileBadge: {
+      position: 'absolute', top: 8, right: 8, backgroundColor: p.primary,
+      borderRadius: radius.full, width: 22, height: 22, alignItems: 'center', justifyContent: 'center', zIndex: 10,
+    },
+    tileGrosBadge: {
+      position: 'absolute', top: 4, right: 4,
+      backgroundColor: colors.warning[50], borderRadius: radius.sm, paddingHorizontal: 4, paddingVertical: 2,
+      borderWidth: 1, borderColor: colors.warning[100],
+    },
 
-  // Cart panel
-  cartPanel: {
-    position: 'absolute', bottom: 0, left: 0, right: 0,
-    backgroundColor: palette.surface, borderTopWidth: 1, borderTopColor: palette.border,
-    maxHeight: 300, shadowColor: '#0F172A', shadowOffset: { width: 0, height: -4 },
-    shadowOpacity: 0.1, shadowRadius: 12, elevation: 10,
-  },
-  sheetOverlay: {
-    flex: 1, justifyContent: 'flex-end',
-  },
-  sheet: {
-    backgroundColor: palette.surface,
-    borderTopLeftRadius: 24, borderTopRightRadius: 24,
-    overflow: 'hidden',
-  },
-  sheetHead: {
-    paddingHorizontal: spacing[6], paddingTop: spacing[6], paddingBottom: spacing[4],
-    gap: spacing[3], alignItems: 'center',
-  },
-  sheetCheckCircle: {
-    width: 64, height: 64, borderRadius: 32,
-    backgroundColor: '#22c55e',
-    justifyContent: 'center', alignItems: 'center',
-  },
-  sheetCheckmark: {
-    width: 22, height: 13,
-    borderLeftWidth: 3, borderBottomWidth: 3,
-    borderColor: '#fff', borderRadius: 1,
-    transform: [{ rotate: '-45deg' }], marginTop: -3,
-  },
-  sheetDivider: {
-    height: 1, backgroundColor: palette.border,
-  },
-  sheetFoot: {
-    paddingHorizontal: spacing[6], paddingTop: spacing[4], paddingBottom: spacing[10],
-    gap: spacing[4], alignItems: 'center',
-  },
-  shareCtaBox: {
-    flexDirection: 'row', alignItems: 'flex-start',
-    gap: spacing[3], alignSelf: 'stretch',
-    backgroundColor: palette.primaryLight,
-    borderRadius: 12, padding: spacing[4],
-  },
-  ignorePressable: {
-    paddingVertical: spacing[2],
-  },
-  cartScroll: { maxHeight: 160 },
-  cartRow: {
-    flexDirection: 'row', alignItems: 'center', paddingHorizontal: spacing[4],
-    paddingVertical: spacing[2], borderBottomWidth: 1, borderBottomColor: palette.border, gap: spacing[2],
-  },
-  bulkToggle: {
-    paddingHorizontal: spacing[2], paddingVertical: 2, borderRadius: radius.sm,
-    borderWidth: 1, borderColor: palette.border, backgroundColor: palette.surface,
-  },
-  bulkToggleActive: { backgroundColor: colors.warning[500], borderColor: colors.warning[500] },
-  qtyControl: {
-    flexDirection: 'row', alignItems: 'center', borderWidth: 1, borderColor: palette.border,
-    borderRadius: radius.md, overflow: 'hidden',
-  },
-  qtyBtn: {
-    width: 32, height: 32, alignItems: 'center', justifyContent: 'center',
-    backgroundColor: palette.background,
-  },
-  qtyNumPress: { minWidth: 28, alignItems: 'center', paddingHorizontal: 2 },
-  qtyNum: { width: 28, textAlign: 'center' },
-  qtyInput: {
-    width: 44, textAlign: 'center', fontWeight: '600', fontSize: 15,
-    color: palette.textPrimary, paddingVertical: 2,
-    borderBottomWidth: 1.5, borderBottomColor: palette.primary,
-  },
-  cartFooter: {
-    flexDirection: 'row', alignItems: 'center', padding: spacing[4],
-    borderTopWidth: 1, borderTopColor: palette.border, gap: spacing[3],
-  },
-  cartActions: { flex: 1, gap: 0 },
-  creditLink: { alignItems: 'center', paddingTop: spacing[2] },
+    cartPanel: {
+      position: 'absolute', bottom: 0, left: 0, right: 0,
+      backgroundColor: p.surface, borderTopWidth: 1, borderTopColor: p.border,
+      maxHeight: 300, shadowColor: '#0F172A', shadowOffset: { width: 0, height: -4 },
+      shadowOpacity: 0.1, shadowRadius: 12, elevation: 10,
+    },
+    sheetOverlay: { flex: 1, justifyContent: 'flex-end' },
+    sheet: { backgroundColor: p.surface, borderTopLeftRadius: 24, borderTopRightRadius: 24, overflow: 'hidden' },
+    sheetHead: {
+      paddingHorizontal: spacing[6], paddingTop: spacing[6], paddingBottom: spacing[4],
+      gap: spacing[3], alignItems: 'center',
+    },
+    sheetCheckCircle: {
+      width: 64, height: 64, borderRadius: 32,
+      backgroundColor: '#22c55e', justifyContent: 'center', alignItems: 'center',
+    },
+    sheetCheckmark: {
+      width: 22, height: 13,
+      borderLeftWidth: 3, borderBottomWidth: 3,
+      borderColor: '#fff', borderRadius: 1,
+      transform: [{ rotate: '-45deg' }], marginTop: -3,
+    },
+    sheetDivider: { height: 1, backgroundColor: p.border },
+    sheetFoot: {
+      paddingHorizontal: spacing[6], paddingTop: spacing[4], paddingBottom: spacing[10],
+      gap: spacing[4], alignItems: 'center',
+    },
+    shareCtaBox: {
+      flexDirection: 'row', alignItems: 'flex-start',
+      gap: spacing[3], alignSelf: 'stretch',
+      backgroundColor: p.primaryLight,
+      borderRadius: radius.card, padding: spacing[4],
+    },
+    ignorePressable: { paddingVertical: spacing[2] },
+    cartScroll: { maxHeight: 160 },
+    cartRow: {
+      flexDirection: 'row', alignItems: 'center', paddingHorizontal: spacing[4],
+      paddingVertical: spacing[2], borderBottomWidth: 1, borderBottomColor: p.border, gap: spacing[2],
+    },
+    bulkToggle: {
+      paddingHorizontal: spacing[2], paddingVertical: 2, borderRadius: radius.sm,
+      borderWidth: 1, borderColor: p.border, backgroundColor: p.surface,
+    },
+    bulkToggleActive: { backgroundColor: colors.warning[500], borderColor: colors.warning[500] },
+    qtyControl: {
+      flexDirection: 'row', alignItems: 'center', borderWidth: 1, borderColor: p.border,
+      borderRadius: radius.md, overflow: 'hidden',
+    },
+    qtyBtn: { width: 32, height: 32, alignItems: 'center', justifyContent: 'center', backgroundColor: p.background },
+    qtyNumPress: { minWidth: 28, alignItems: 'center', paddingHorizontal: 2 },
+    qtyNum: { width: 28, textAlign: 'center' },
+    qtyInput: {
+      width: 44, textAlign: 'center', fontWeight: '600', fontSize: 15,
+      color: p.textPrimary, paddingVertical: 2,
+      borderBottomWidth: 1.5, borderBottomColor: p.primary,
+    },
+    cartFooter: {
+      flexDirection: 'row', alignItems: 'center', padding: spacing[4],
+      borderTopWidth: 1, borderTopColor: p.border, gap: spacing[3],
+    },
+    cartActions: { flex: 1, gap: 0 },
+    creditLink: { alignItems: 'center', paddingTop: spacing[2] },
 
-  // Empty states
-  emptyFull: { flex: 1, alignItems: 'center', justifyContent: 'center', padding: spacing[8], gap: spacing[3] },
-  emptyDesc: { textAlign: 'center', maxWidth: 260 },
-  fabContainer: { position: 'absolute', bottom: 194, right: spacing[4], zIndex: 10 },
-  fab: { width: 56, height: 56, borderRadius: radius.full, backgroundColor: palette.primary, alignItems: 'center', justifyContent: 'center', shadowColor: colors.neutral[900], shadowOffset: { width: 0, height: 4 }, shadowOpacity: 0.18, shadowRadius: 8, elevation: 8 },
-  fabIcon: { fontSize: 28, lineHeight: 32, fontWeight: '300' as const, color: palette.textInverse, marginTop: -2 },
-  emptySearch: { alignItems: 'center', paddingVertical: spacing[10] },
+    emptyFull: { flex: 1, alignItems: 'center', justifyContent: 'center', padding: spacing[8], gap: spacing[3] },
+    emptyDesc: { textAlign: 'center', maxWidth: 260 },
+    fabContainer: { position: 'absolute', bottom: 194, right: spacing[4], zIndex: 10 },
+    fab: { width: 56, height: 56, borderRadius: radius.full, backgroundColor: p.primary, alignItems: 'center', justifyContent: 'center', shadowColor: colors.neutral[900], shadowOffset: { width: 0, height: 4 }, shadowOpacity: 0.18, shadowRadius: 8, elevation: 8 },
+    fabIcon: { fontSize: 28, lineHeight: 32, fontWeight: '300' as const, color: p.textInverse, marginTop: -2 },
+    emptySearch: { alignItems: 'center', paddingVertical: spacing[10] },
+    outOfStockHeader: { flexDirection: 'row', alignItems: 'center', paddingTop: spacing[4], paddingBottom: spacing[3] },
+    outOfStockLine: { flex: 1, height: StyleSheet.hairlineWidth, backgroundColor: p.border },
 
-  // Payment modal
-  modalSafe: { flex: 1, backgroundColor: palette.background },
-  modalHeader: {
-    flexDirection: 'row', alignItems: 'center', justifyContent: 'space-between',
-    paddingHorizontal: spacing[5], paddingVertical: spacing[4],
-    borderBottomWidth: 1, borderBottomColor: palette.border, backgroundColor: palette.surface,
-  },
-  modalCancel: { minWidth: 64 },
-  modalFooter: {
-    padding: spacing[5], borderTopWidth: 1, borderTopColor: palette.border, backgroundColor: palette.surface,
-  },
+    modalSafe: { flex: 1, backgroundColor: p.background },
+    modalHeader: {
+      flexDirection: 'row', alignItems: 'center', justifyContent: 'space-between',
+      paddingHorizontal: spacing[5], paddingVertical: spacing[4],
+      borderBottomWidth: 1, borderBottomColor: p.border, backgroundColor: p.surface,
+    },
+    modalCancel: { minWidth: 64 },
+    modalFooter: {
+      padding: spacing[5], borderTopWidth: 1, borderTopColor: p.border, backgroundColor: p.surface,
+    },
 
-  // Total — sits outside scroll so it has full width for adjustsFontSizeToFit
-  totalSection: {
-    paddingHorizontal: spacing[5], paddingTop: spacing[5], paddingBottom: spacing[5],
-    borderBottomWidth: 1, borderBottomColor: palette.border, gap: spacing[1],
-  },
-  totalBig: { fontSize: 36, lineHeight: 50, fontWeight: '700', letterSpacing: -0.5 },
+    totalSection: {
+      paddingHorizontal: spacing[5], paddingTop: spacing[5], paddingBottom: spacing[5],
+      borderBottomWidth: 1, borderBottomColor: p.border, gap: spacing[1],
+    },
+    totalBig: { fontSize: 36, lineHeight: 50, fontWeight: '700', letterSpacing: -0.5 },
 
-  // Pay step scrollable content
-  payContent: { padding: spacing[5], gap: spacing[4] },
+    payContent: { padding: spacing[5], gap: spacing[4] },
 
-  // Inline client section
-  clientSection: {
-    paddingHorizontal: spacing[5],
-    paddingTop: spacing[3],
-    paddingBottom: spacing[2],
-    borderTopWidth: 1,
-    borderTopColor: palette.border,
-  },
-  clientTrigger: {
-    flexDirection: 'row',
-    alignItems: 'center',
-    justifyContent: 'center',
-    gap: spacing[2],
-    paddingVertical: spacing[3],
-  },
-  clientResultRowNew: {
-    borderBottomWidth: 2,
-    borderBottomColor: palette.border,
-    marginBottom: 2,
-  },
-  clientSelectedTag: {
-    flexDirection: 'row',
-    alignItems: 'center',
-    gap: spacing[3],
-    backgroundColor: `${palette.primary}12`,
-    borderRadius: radius.md,
-    paddingHorizontal: spacing[4],
-    paddingVertical: spacing[3],
-    borderWidth: 1,
-    borderColor: `${palette.primary}30`,
-  },
-  clientSearchRow: {
-    flexDirection: 'row',
-    alignItems: 'center',
-    gap: spacing[2],
-    paddingHorizontal: spacing[3],
-    paddingVertical: spacing[2],
-    borderWidth: 1,
-    borderColor: palette.border,
-    borderRadius: radius.md,
-    backgroundColor: palette.surface,
-    marginBottom: spacing[1],
-  },
-  clientSearchInput: {
-    flex: 1,
-    fontSize: 15,
-    color: palette.textPrimary,
-    paddingVertical: 0,
-  },
-  clientResultRow: {
-    flexDirection: 'row',
-    alignItems: 'center',
-    gap: spacing[3],
-    paddingVertical: spacing[3],
-    paddingHorizontal: spacing[1],
-    borderBottomWidth: 1,
-    borderBottomColor: palette.border,
-  },
-  clientAvatar: {
-    width: 36,
-    height: 36,
-    borderRadius: 18,
-    justifyContent: 'center',
-    alignItems: 'center',
-  },
-  clientAvatarText: {
-    fontSize: 16,
-    fontWeight: '700',
-    color: '#111827',
-  },
+    clientSection: {
+      paddingHorizontal: spacing[5],
+      paddingTop: spacing[3],
+      paddingBottom: spacing[2],
+      borderTopWidth: 1,
+      borderTopColor: p.border,
+    },
+    clientTrigger: {
+      flexDirection: 'row', alignItems: 'center', justifyContent: 'center',
+      gap: spacing[2], paddingVertical: spacing[3],
+    },
+    clientResultRowNew: { borderBottomWidth: 2, borderBottomColor: p.border, marginBottom: 2 },
+    clientSelectedTag: {
+      flexDirection: 'row', alignItems: 'center', gap: spacing[3],
+      backgroundColor: `${p.primary}12`,
+      borderRadius: radius.md, paddingHorizontal: spacing[4], paddingVertical: spacing[3],
+      borderWidth: 1, borderColor: `${p.primary}30`,
+    },
+    clientSearchRow: {
+      flexDirection: 'row', alignItems: 'center', gap: spacing[2],
+      paddingHorizontal: spacing[3], paddingVertical: spacing[2],
+      borderWidth: 1, borderColor: p.border, borderRadius: radius.md,
+      backgroundColor: p.surface, marginBottom: spacing[1],
+    },
+    clientSearchInput: { flex: 1, fontSize: 15, color: p.textPrimary, paddingVertical: 0 },
+    clientResultRow: {
+      flexDirection: 'row', alignItems: 'center', gap: spacing[3],
+      paddingVertical: spacing[3], paddingHorizontal: spacing[1],
+      borderBottomWidth: 1, borderBottomColor: p.border,
+    },
+    clientAvatar: { width: 40, height: 40, borderRadius: 20, justifyContent: 'center', alignItems: 'center' },
+    clientAvatarText: { fontSize: 16, fontWeight: '700', color: p.textPrimary },
 
-  // Method grid — outside scroll, always below client card
-  methodSection: {
-    paddingHorizontal: spacing[5], paddingTop: spacing[3], paddingBottom: spacing[4], gap: spacing[2],
-  },
+    methodSection: { paddingHorizontal: spacing[5], paddingTop: spacing[3], paddingBottom: spacing[4], gap: spacing[2] },
+    sectionLabel: { marginBottom: spacing[2] },
+    methodGrid: { flexDirection: 'row', flexWrap: 'wrap', gap: spacing[3] },
+    methodChip: {
+      flex: 1, alignItems: 'center', justifyContent: 'center',
+      paddingVertical: spacing[3], paddingHorizontal: spacing[2],
+      minHeight: 56,
+      borderRadius: radius.md, borderWidth: 1.5, borderColor: p.border,
+      backgroundColor: p.surface, minWidth: '45%',
+    },
+    methodChipActive: { backgroundColor: p.primary, borderColor: p.primary },
 
-  sectionLabel: { marginBottom: spacing[2] },
-  methodGrid: { flexDirection: 'row', flexWrap: 'wrap', gap: spacing[3] },
-  methodChip: {
-    flex: 1, alignItems: 'center', justifyContent: 'center',
-    paddingVertical: spacing[3], paddingHorizontal: spacing[2],
-    minHeight: 56,
-    borderRadius: radius.md, borderWidth: 1.5, borderColor: palette.border,
-    backgroundColor: palette.surface, minWidth: '45%',
-  },
-  methodChipActive: { backgroundColor: palette.primary, borderColor: palette.primary },
+    amountBigInput: {
+      fontSize: 28, fontWeight: '700', color: p.textPrimary,
+      borderBottomWidth: 2, borderBottomColor: p.primary,
+      paddingVertical: spacing[2], textAlign: 'center',
+    },
 
-  // Amount input
-  amountBigInput: {
-    fontSize: 28, fontWeight: '700', color: palette.textPrimary,
-    borderBottomWidth: 2, borderBottomColor: palette.primary,
-    paddingVertical: spacing[2], textAlign: 'center',
-  },
-
-  // Shortfall disambiguation
-  disambigBox: {
-    backgroundColor: colors.warning[50], borderRadius: radius.md,
-    borderWidth: 1, borderColor: colors.warning[100],
-    padding: spacing[4], gap: spacing[2],
-  },
-  radioRow: {
-    flexDirection: 'row', alignItems: 'flex-start', gap: spacing[3],
-    paddingVertical: spacing[2],
-  },
-  radio: {
-    width: 20, height: 20, borderRadius: 10, borderWidth: 2,
-    borderColor: palette.border, marginTop: 2,
-  },
-  radioActive: { borderColor: palette.primary, backgroundColor: palette.primary },
-  warnRow: {
-    backgroundColor: colors.warning[50], borderRadius: radius.md,
-    padding: spacing[3], borderWidth: 1, borderColor: colors.warning[100],
-  },
-
-});
+    disambigBox: {
+      backgroundColor: colors.warning[50], borderRadius: radius.md,
+      borderWidth: 1, borderColor: colors.warning[100],
+      padding: spacing[4], gap: spacing[2],
+    },
+    radioRow: { flexDirection: 'row', alignItems: 'flex-start', gap: spacing[3], paddingVertical: spacing[2] },
+    radio: { width: 20, height: 20, borderRadius: 10, borderWidth: 2, borderColor: p.border, marginTop: 2 },
+    radioActive: { borderColor: p.primary, backgroundColor: p.primary },
+    warnRow: {
+      backgroundColor: colors.warning[50], borderRadius: radius.md,
+      padding: spacing[3], borderWidth: 1, borderColor: colors.warning[100],
+    },
+  });
+}

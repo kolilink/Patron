@@ -5,6 +5,20 @@ import { createClient } from 'https://esm.sh/@supabase/supabase-js@2';
 // Twilio sends: { from: "whatsapp:+224...", body: "Patron-AB12CD", secret: "<WHATSAPP_WEBHOOK_SECRET>" }
 // Secret is in the JSON body (not URL — query params appear in server logs).
 
+// Constant-time comparison — prevents timing-based brute-force of the webhook secret.
+function timingSafeEqual(a: string, b: string): boolean {
+  const enc = new TextEncoder();
+  const aBytes = enc.encode(a);
+  const bBytes = enc.encode(b);
+  // Always compare full length to prevent short-circuit leaks
+  const len = Math.max(aBytes.length, bBytes.length);
+  let diff = aBytes.length ^ bBytes.length;
+  for (let i = 0; i < len; i++) {
+    diff |= (aBytes[i] ?? 0) ^ (bBytes[i] ?? 0);
+  }
+  return diff === 0;
+}
+
 serve(async (req) => {
   try {
     // Twilio Studio sends JSON; Twilio direct webhook sends form-encoded — try JSON first
@@ -19,7 +33,8 @@ serve(async (req) => {
 
     // Secret must be in the JSON body — never in URL query params (they appear in logs)
     const secret = payload.secret ?? '';
-    if (!secret || secret !== Deno.env.get('WHATSAPP_WEBHOOK_SECRET')) {
+    const expected = Deno.env.get('WHATSAPP_WEBHOOK_SECRET') ?? '';
+    if (!secret || !timingSafeEqual(secret, expected)) {
       return new Response('Unauthorized', { status: 401 });
     }
 

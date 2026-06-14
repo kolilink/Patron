@@ -1,4 +1,4 @@
-import React from 'react';
+import React, { useMemo } from 'react';
 import {
   ActivityIndicator,
   Pressable,
@@ -9,7 +9,9 @@ import {
   View,
   ViewStyle,
 } from 'react-native';
-import { palette, radius, spacing, typography } from '../../theme';
+import { useTheme } from '../../theme';
+import { radius, spacing, typography } from '../../theme';
+import type { Palette } from '../../theme';
 import { Text } from './Text';
 
 type Variant = 'primary' | 'secondary' | 'outline' | 'ghost' | 'danger';
@@ -36,6 +38,9 @@ export function Button({
   style,
   ...props
 }: ButtonProps) {
+  const { palette } = useTheme();
+  const styles = useMemo(() => makeStyles(palette), [palette]);
+
   const isDisabled = disabled || loading;
   const sizeStyle = size === 'sm' ? styles.size_sm : size === 'lg' ? styles.size_lg : styles.size_md;
 
@@ -49,12 +54,14 @@ export function Button({
     style,
   ];
 
+  const textColor = variant === 'outline' || variant === 'ghost'
+    ? palette.primary
+    : variant === 'secondary'
+      ? palette.textPrimary
+      : palette.textInverse;
+
   return (
-    <Pressable
-      disabled={isDisabled}
-      style={getStyle}
-      {...props}
-    >
+    <Pressable disabled={isDisabled} style={getStyle} {...props}>
       {loading ? (
         <ActivityIndicator
           size="small"
@@ -66,7 +73,7 @@ export function Button({
           <Text
             style={[
               typography.labelLarge,
-              { color: variant === 'outline' || variant === 'ghost' ? palette.primary : variant === 'secondary' ? palette.textPrimary : palette.textInverse },
+              { color: textColor },
               variant === 'danger' && { color: palette.textInverse },
             ]}
           >
@@ -78,64 +85,32 @@ export function Button({
   );
 }
 
-const styles = StyleSheet.create({
-  base: {
-    borderRadius: radius.md,
-    alignItems: 'center',
-    justifyContent: 'center',
-    flexDirection: 'row',
-  },
-  content: {
-    flexDirection: 'row',
-    alignItems: 'center',
-    gap: spacing[2],
-  },
-  icon: {
-    marginRight: 2,
-  },
-  fullWidth: {
-    width: '100%',
-  },
-  pressed: {
-    opacity: 0.82,
-  },
-  disabled: {
-    opacity: 0.45,
-  },
+function makeStyles(p: Palette) {
+  return StyleSheet.create({
+    base: {
+      borderRadius: radius.md,
+      alignItems: 'center',
+      justifyContent: 'center',
+      flexDirection: 'row',
+    },
+    content: {
+      flexDirection: 'row',
+      alignItems: 'center',
+      gap: spacing[2],
+    },
+    icon: { marginRight: 2 },
+    fullWidth: { width: '100%' },
+    pressed:   { opacity: 0.82 },
+    disabled:  { opacity: 0.45 },
 
-  // Variants
-  primary: {
-    backgroundColor: palette.primary,
-  },
-  secondary: {
-    backgroundColor: palette.border,
-  },
-  outline: {
-    backgroundColor: 'transparent',
-    borderWidth: 1.5,
-    borderColor: palette.primary,
-  },
-  ghost: {
-    backgroundColor: 'transparent',
-  },
-  danger: {
-    backgroundColor: palette.danger,
-  },
+    primary:   { backgroundColor: p.primary },
+    secondary: { backgroundColor: p.border },
+    outline:   { backgroundColor: 'transparent', borderWidth: 1.5, borderColor: p.primary },
+    ghost:     { backgroundColor: 'transparent' },
+    danger:    { backgroundColor: p.danger },
 
-  // Sizes
-  size_sm: {
-    paddingHorizontal: spacing[3],
-    paddingVertical: spacing[1.5],
-    minHeight: 34,
-  },
-  size_md: {
-    paddingHorizontal: spacing[4],
-    paddingVertical: spacing[2.5],
-    minHeight: 44,
-  },
-  size_lg: {
-    paddingHorizontal: spacing[6],
-    paddingVertical: spacing[3.5],
-    minHeight: 52,
-  },
-});
+    size_sm: { paddingHorizontal: spacing[3],  paddingVertical: spacing[2],   minHeight: 44 },
+    size_md: { paddingHorizontal: spacing[5],  paddingVertical: spacing[3],   minHeight: 48 },
+    size_lg: { paddingHorizontal: spacing[6],  paddingVertical: spacing[4],   minHeight: 56 },
+  });
+}

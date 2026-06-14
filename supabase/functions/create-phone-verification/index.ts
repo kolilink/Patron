@@ -6,27 +6,12 @@ const corsHeaders = {
   'Access-Control-Allow-Headers': 'authorization, x-client-info, apikey, content-type',
 };
 
-// Cryptographically secure token using Deno's Web Crypto API.
-// 8 chars from 36-char alphabet = ~2.8 trillion combinations.
-function generateToken(): string {
-  const chars = 'ABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789';
-  const bytes = new Uint8Array(8);
-  crypto.getRandomValues(bytes);
-  let token = 'PATRON-';
-  for (const byte of bytes) {
-    token += chars[byte % chars.length];
-  }
-  return token;
-}
-
 serve(async (req) => {
   if (req.method === 'OPTIONS') {
     return new Response('ok', { headers: corsHeaders });
   }
 
   try {
-    // login=true: caller wants to log in as an existing phone-verified account.
-    // login=false (default): caller is registering — phone must not already exist.
     const { phone, login = false } = await req.json() as { phone: string; login?: boolean };
     if (!phone) {
       return new Response(JSON.stringify({ error: 'Numéro requis' }), {
@@ -64,12 +49,10 @@ serve(async (req) => {
     );
 
     // ── Demo / App Store review bypass ───────────────────────────────────────
-    // If the phone matches DEMO_PHONE env var, skip WhatsApp and rate limiting.
     const DEMO_PHONE = Deno.env.get('DEMO_PHONE') ?? '';
     const isDemo = DEMO_PHONE !== '' && phone.trim() === DEMO_PHONE;
 
     // ── Rate limiting (skip for demo) ─────────────────────────────────────────
-    // Max 3 verification requests per phone number per 10 minutes.
     if (!isDemo) {
       const { count } = await serviceClient
         .from('phone_verification_attempts')
@@ -77,19 +60,15 @@ serve(async (req) => {
         .eq('phone', phone.trim())
         .gt('attempted_at', new Date(Date.now() - 10 * 60 * 1000).toISOString());
 
-      if ((count ?? 0) >= 3) {
+      if ((count ?? 0) >= 5) {
         return new Response(
           JSON.stringify({ error: 'Trop de tentatives. Réessayez dans 10 minutes.' }),
           { status: 429, headers: { ...corsHeaders, 'Content-Type': 'application/json' } },
         );
       }
 
-      // Record this attempt before proceeding
-      await serviceClient
-        .from('phone_verification_attempts')
-        .insert({ phone: phone.trim() });
+      await serviceClient.from('phone_verification_attempts').insert({ phone: phone.trim() });
 
-      // Clean up attempts older than 1 hour to keep the table small
       await serviceClient
         .from('phone_verification_attempts')
         .delete()
@@ -117,16 +96,48 @@ serve(async (req) => {
       }
     }
 
-    const token = isDemo ? 'PATRON-000000' : generateToken();
-    const status = isDemo ? 'verifie' : 'en_attente';
+    // ── Generate 6-digit code ─────────────────────────────────────────────────
+    const token = isDemo ? '000000' : Math.floor(100000 + Math.random() * 900000).toString();
 
+    // ── Send via Twilio Verify with custom code (skip for demo) ─────────────
+    if (!isDemo) {
+      const accountSid = Deno.env.get('TWILIO_ACCOUNT_SID')!;
+      const authToken  = Deno.env.get('TWILIO_AUTH_TOKEN')!;
+      const verifySid  = Deno.env.get('TWILIO_VERIFY_SID')!;
+
+      const verifyRes = await fetch(
+        `https://verify.twilio.com/v2/Services/${verifySid}/Verifications`,
+        {
+          method:  'POST',
+          headers: {
+            Authorization:  'Basic ' + btoa(`${accountSid}:${authToken}`),
+            'Content-Type': 'application/x-www-form-urlencoded',
+          },
+          body: new URLSearchParams({
+            To:         phone.trim(),
+            Channel:    'sms',
+            CustomCode: token,
+          }),
+        },
+      );
+
+      if (!verifyRes.ok) {
+        const errJson = await verifyRes.json().catch(() => ({})) as { code?: number; message?: string };
+        if (errJson.code === 60200 || errJson.code === 21211) {
+          throw new Error('Numéro de téléphone invalide. Vérifiez votre numéro et réessayez.');
+        }
+        throw new Error('Impossible d\'envoyer le code. Réessayez dans quelques instants.');
+      }
+    }
+
+    // ── Insert verification row ───────────────────────────────────────────────
     const { data, error: insertErr } = await serviceClient
       .from('phone_verifications')
       .insert({
-        user_id: user.id,
-        phone: phone.trim(),
+        user_id:    user.id,
+        phone:      phone.trim(),
         token,
-        status,
+        status:     'en_attente',
         expires_at: new Date(Date.now() + 30 * 60 * 1000).toISOString(),
       })
       .select('id')
@@ -134,7 +145,7 @@ serve(async (req) => {
 
     if (insertErr) throw insertErr;
 
-    return new Response(JSON.stringify({ token, verificationId: data.id }), {
+    return new Response(JSON.stringify({ verificationId: data.id }), {
       headers: { ...corsHeaders, 'Content-Type': 'application/json' },
     });
   } catch (err) {

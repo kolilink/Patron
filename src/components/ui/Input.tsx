@@ -1,6 +1,8 @@
-import React, { forwardRef, useState } from 'react';
+import React, { forwardRef, useMemo, useState } from 'react';
 import { StyleSheet, TextInput, TextInputProps, View } from 'react-native';
-import { palette, radius, spacing, typography } from '../../theme';
+import { useTheme } from '../../theme';
+import { radius, spacing, typography } from '../../theme';
+import type { Palette } from '../../theme';
 import { Text } from './Text';
 
 interface InputProps extends TextInputProps {
@@ -20,6 +22,8 @@ export const Input = forwardRef<TextInput, InputProps>(function Input({
   style,
   ...props
 }: InputProps, ref: React.ForwardedRef<TextInput>) {
+  const { palette } = useTheme();
+  const styles = useMemo(() => makeStyles(palette), [palette]);
   const [focused, setFocused] = useState(false);
 
   return (
@@ -39,6 +43,7 @@ export const Input = forwardRef<TextInput, InputProps>(function Input({
         {leftIcon && <View style={styles.leftIcon}>{leftIcon}</View>}
         <TextInput
           ref={ref}
+          allowFontScaling={false}
           style={[styles.input, leftIcon ? styles.inputWithLeft : null, rightIcon ? styles.inputWithRight : null, style]}
           placeholderTextColor={palette.textDisabled}
           onFocus={(e) => { setFocused(true); props.onFocus?.(e); }}
@@ -56,50 +61,33 @@ export const Input = forwardRef<TextInput, InputProps>(function Input({
   );
 });
 
-const styles = StyleSheet.create({
-  wrapper: {
-    gap: spacing[1.5],
-  },
-  label: {
-    color: palette.textPrimary,
-  },
-  container: {
-    flexDirection: 'row',
-    alignItems: 'center',
-    borderWidth: 1.5,
-    borderColor: palette.border,
-    borderRadius: radius.md,
-    backgroundColor: palette.surface,
-    minHeight: 48,
-  },
-  containerFocused: {
-    borderColor: palette.primary,
-    backgroundColor: palette.surface,
-  },
-  containerError: {
-    borderColor: palette.danger,
-  },
-  input: {
-    flex: 1,
-    paddingHorizontal: spacing[3],
-    paddingVertical: spacing[2.5],
-    ...typography.body,
-    color: palette.textPrimary,
-    backgroundColor: 'transparent',
-  },
-  inputWithLeft: {
-    paddingLeft: spacing[1],
-  },
-  inputWithRight: {
-    paddingRight: spacing[1],
-  },
-  leftIcon: {
-    paddingLeft: spacing[3],
-  },
-  rightIcon: {
-    paddingRight: spacing[3],
-  },
-  hint: {
-    marginTop: 2,
-  },
-});
+function makeStyles(p: Palette) {
+  return StyleSheet.create({
+    wrapper: { gap: spacing[1.5] },
+    label: { color: p.textPrimary },
+    container: {
+      flexDirection: 'row',
+      alignItems: 'center',
+      borderWidth: 1.5,
+      borderColor: p.border,
+      borderRadius: radius.md,
+      backgroundColor: p.surface,
+      minHeight: 48,
+    },
+    containerFocused: { borderColor: p.primary, backgroundColor: p.surface },
+    containerError:   { borderColor: p.danger },
+    input: {
+      flex: 1,
+      paddingHorizontal: spacing[3],
+      paddingVertical: spacing[2.5],
+      ...typography.body,
+      color: p.textPrimary,
+      backgroundColor: 'transparent',
+    },
+    inputWithLeft:  { paddingLeft: spacing[1] },
+    inputWithRight: { paddingRight: spacing[1] },
+    leftIcon:       { paddingLeft: spacing[3] },
+    rightIcon:      { paddingRight: spacing[3] },
+    hint:           { marginTop: 2 },
+  });
+}

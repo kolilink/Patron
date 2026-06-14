@@ -38,9 +38,13 @@ serve(async (req) => {
     );
 
     // Mark the most recent pending verification for this phone as verified.
+    // Also extend expires_at so restore-phone-session doesn't reject an expired row.
     const { data, error } = await serviceClient
       .from('phone_verifications')
-      .update({ status: 'verifie' })
+      .update({
+        status: 'verifie',
+        expires_at: new Date(Date.now() + 30 * 60 * 1000).toISOString(),
+      })
       .eq('phone', phone.trim())
       .eq('status', 'en_attente')
       .order('created_at', { ascending: false })

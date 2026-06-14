@@ -1,15 +1,18 @@
-import { useEffect, useMemo, useState } from 'react';
-import { ActivityIndicator, Pressable, ScrollView, StyleSheet, View } from 'react-native';
+import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
+import { useFocusEffect } from 'expo-router';
+import { Animated, Easing, Pressable, ScrollView, StyleSheet, View } from 'react-native';
 import { SafeAreaView } from 'react-native-safe-area-context';
 import { router } from 'expo-router';
 import { Card } from '@/src/components/ui/Card';
+import { SkeletonKpiGrid } from '@/src/components/ui/SkeletonPlaceholder';
 import { Text } from '@/src/components/ui/Text';
-import { palette, spacing, radius } from '@/src/theme';
+import { useTheme, spacing, radius } from '@/src/theme';
+import type { Palette } from '@/src/theme';
 import { useAuthStore } from '@/stores/auth';
 import { useVentesStore } from '@/stores/ventes';
 import { useProductStore } from '@/stores/products';
 import { useExpensesStore } from '@/stores/expenses';
-import { supabase } from '@/lib/supabase';
+import { useRapportsStore } from '@/stores/rapports';
 
 function fmt(n: number, cur: string) {
   return `${Math.round(n).toLocaleString('fr-FR')} ${cur}`;
@@ -23,17 +26,39 @@ const PERIOD_SELLER: Record<Period, string> = { semaine: 'de la semaine', mois: 
 
 // ── Mini stat card ─────────────────────────────────────────────────────────────
 
+function ValueSkeleton() {
+  const { palette } = useTheme();
+  const pulse = useRef(new Animated.Value(0.3)).current;
+  useEffect(() => {
+    Animated.loop(
+      Animated.sequence([
+        Animated.timing(pulse, { toValue: 0.7, duration: 900, useNativeDriver: true, easing: Easing.inOut(Easing.ease) }),
+        Animated.timing(pulse, { toValue: 0.3, duration: 900, useNativeDriver: true, easing: Easing.inOut(Easing.ease) }),
+      ])
+    ).start();
+  }, [pulse]);
+  return (
+    <View style={{ height: 22, width: 88, borderRadius: 6, overflow: 'hidden', marginVertical: 1 }}>
+      <Animated.View style={{ flex: 1, backgroundColor: palette.successLight, opacity: pulse }} />
+    </View>
+  );
+}
+
 function StatCard({
-  label, value, accent, bg, note,
+  label, value, accent, bg, note, loading,
 }: {
-  label: string; value: string; accent: string; bg: string; note?: string;
+  label: string; value: string; accent: string; bg: string; note?: string; loading?: boolean;
 }) {
+  const { palette } = useTheme();
+  const styles = useMemo(() => makeStyles(palette), [palette]);
   return (
     <Card style={[styles.statCard, { backgroundColor: bg }]}>
       <Text style={styles.statLabel}>{label}</Text>
-      <Text style={[styles.statValue, { color: accent }]} numberOfLines={2}>
-        {value}
-      </Text>
+      {loading ? <ValueSkeleton /> : (
+        <Text style={[styles.statValue, { color: accent }]} numberOfLines={2}>
+          {value}
+        </Text>
+      )}
       {note ? <Text style={styles.statNote}>{note}</Text> : null}
     </Card>
   );
@@ -42,6 +67,8 @@ function StatCard({
 // ── Main screen ────────────────────────────────────────────────────────────────
 
 export default function RapportsScreen() {
+  const { palette } = useTheme();
+  const styles = useMemo(() => makeStyles(palette), [palette]);
   const session    = useAuthStore(s => s.session);
   const businessId = session?.activeBusiness?.id ?? '';
   const userId     = session?.user.id ?? '';
@@ -55,32 +82,18 @@ export default function RapportsScreen() {
   const { expenses, fetchExpenses }                  = useExpensesStore();
 
   const [period, setPeriod] = useState<Period>('mois');
-  const [allPayments, setAllPayments] = useState<{ order_id: string; amount: number; date: string }[]>([]);
+  const { allPayments, cogsByOrder, cogsLoading } = useRapportsStore();
 
   useEffect(() => {
     if (!businessId) return;
     fetchSales(businessId);
-    fetchProducts(businessId, userId);
     fetchExpenses(businessId);
   }, [businessId]);
 
-  useEffect(() => {
+  useFocusEffect(useCallback(() => {
     if (!businessId) return;
-    const since = new Date();
-    since.setDate(since.getDate() - 180);
-    supabase
-      .from('payments')
-      .select('order_id, amount, date')
-      .eq('business_id', businessId)
-      .gte('date', since.toISOString().split('T')[0])
-      .then(({ data }) => {
-        setAllPayments((data ?? []).map(p => ({
-          order_id: (p as { order_id: string }).order_id,
-          amount: (p as { amount: number }).amount / 100,
-          date: (p as { date: string }).date,
-        })));
-      });
-  }, [businessId]);
+    fetchProducts(businessId, userId);
+  }, [businessId, userId]));
 
   // ── Date windows ──────────────────────────────────────────────────────────────
   const cutoff = useMemo(() => {
@@ -127,24 +140,40 @@ export default function RapportsScreen() {
     [expenses, cutoff],
   );
 
+  // ── COGS for current period (cost of goods whose payments fell in this window) ─
+  const periodCOGS = useMemo(() => {
+    const orderIds = new Set(periodPayments.map(p => p.order_id));
+    return Object.entries(cogsByOrder)
+      .filter(([id]) => orderIds.has(id))
+      .reduce((s, [, cost]) => s + cost, 0);
+  }, [periodPayments, cogsByOrder]);
+
   // ── Net ───────────────────────────────────────────────────────────────────────
-  const net = revenue - periodExpenses;
+  const net = revenue - periodCOGS - periodExpenses;
 
   // ── Credit ───────────────────────────────────────────────────────────────────
   const creditSales   = sales.filter(s => s.status === 'credit');
   // remaining = catalog total minus any partial payments already received
-  const creditPending = creditSales.reduce((s, v) => s + v.total_amount - (v.amount_paid ?? 0), 0);
-  const creditCount   = creditSales.length;
+  const creditPending = creditSales.reduce((s, v) => s + v.total_amount - (v.discount_amount ?? 0) - (v.amount_paid ?? 0), 0);
+  const creditCount   = new Set(creditSales.map(s => s.client_id ?? s.customer_name ?? s.id)).size;
 
   // ── Stock ─────────────────────────────────────────────────────────────────────
   const stockValue = products.reduce((s, p) => s + p.cost_price * p.stock_qty, 0);
   const lowStock   = products.filter(p => p.reorder_level > 0 && p.stock_qty <= p.reorder_level);
 
   // ── Top sellers ───────────────────────────────────────────────────────────────
+  // Use actual payments (same basis as overall revenue) so percentages stay ≤ 100%.
+  const periodPaymentsByOrder = useMemo(() => {
+    const m: Record<string, number> = {};
+    for (const p of periodPayments) m[p.order_id] = (m[p.order_id] ?? 0) + p.amount;
+    return m;
+  }, [periodPayments]);
+
   const sellerMap = new Map<string, { count: number; revenue: number }>();
   for (const s of periodSales) {
     const cur = sellerMap.get(s.seller_name) ?? { count: 0, revenue: 0 };
-    sellerMap.set(s.seller_name, { count: cur.count + 1, revenue: cur.revenue + s.total_amount - (s.discount_amount ?? 0) });
+    const rev = periodPaymentsByOrder[s.id as string] ?? (s.total_amount - (s.discount_amount ?? 0));
+    sellerMap.set(s.seller_name, { count: cur.count + 1, revenue: cur.revenue + rev });
   }
   const topSellers        = Array.from(sellerMap.entries()).sort((a, b) => b[1].revenue - a[1].revenue).slice(0, 5);
   const hasMultipleSellers = sellerMap.size > 1;
@@ -202,9 +231,7 @@ export default function RapportsScreen() {
       </View>
 
       {salesLoading && sales.length === 0 ? (
-        <View style={{ flex: 1, alignItems: 'center', justifyContent: 'center' }}>
-          <ActivityIndicator size="large" color={palette.primary} />
-        </View>
+        <SkeletonKpiGrid />
       ) : (
       <ScrollView contentContainerStyle={styles.content} showsVerticalScrollIndicator={false}>
 
@@ -253,14 +280,14 @@ export default function RapportsScreen() {
             value={fmt(periodExpenses, currency)}
             accent="#92400E"
             bg="#FFFBEB"
-            note={periodExpenses === 0 ? 'Aucune pour cette période' : undefined}
+            note={undefined}
           />
           <StatCard
-            label={net >= 0 ? 'Mon bénéfice' : 'Mon déficit'}
-            value={fmt(Math.abs(net), currency)}
-            accent={net >= 0 ? '#065F46' : '#92400E'}
-            bg={net >= 0 ? '#ECFDF5' : '#FFFBEB'}
-            note={net < 0 ? 'Dépenses supérieures aux ventes' : undefined}
+            label="Mon bénéfice"
+            value={fmt(net, currency)}
+            accent="#065F46"
+            bg="#ECFDF5"
+            loading={cogsLoading}
           />
         </View>
 
@@ -342,13 +369,14 @@ export default function RapportsScreen() {
   );
 }
 
-const styles = StyleSheet.create({
-  safe:    { flex: 1, backgroundColor: '#F5F7FA' },
+function makeStyles(p: Palette) {
+  return StyleSheet.create({
+  safe:    { flex: 1, backgroundColor: p.background },
   hdr:     {
     flexDirection: 'row', alignItems: 'center', justifyContent: 'space-between',
     paddingHorizontal: spacing[5], paddingVertical: spacing[4],
-    backgroundColor: '#F5F7FA',
-    borderBottomWidth: StyleSheet.hairlineWidth, borderBottomColor: palette.border,
+    backgroundColor: p.background,
+    borderBottomWidth: StyleSheet.hairlineWidth, borderBottomColor: p.border,
   },
   content: { padding: spacing[4], gap: spacing[4], paddingBottom: spacing[10] },
 
@@ -356,40 +384,40 @@ const styles = StyleSheet.create({
   periodRow:        { flexDirection: 'row', gap: spacing[2] },
   periodChip:       {
     flex: 1, paddingVertical: spacing[2], alignItems: 'center',
-    borderRadius: radius.md, borderWidth: 1.5, borderColor: palette.border,
-    backgroundColor: '#fff',
+    borderRadius: radius.md, borderWidth: 1.5, borderColor: p.border,
+    backgroundColor: p.surface,
   },
-  periodActive:     { backgroundColor: '#1E293B', borderColor: '#1E293B' },
-  periodLabel:      { fontSize: 13, fontWeight: '600' as const, color: palette.textSecondary },
-  periodLabelActive:{ color: '#fff' },
+  periodActive:     { backgroundColor: p.textPrimary, borderColor: p.textPrimary },
+  periodLabel:      { fontSize: 13, fontWeight: '600' as const, color: p.textSecondary },
+  periodLabelActive:{ color: p.background },
 
   // Hero card
-  hero:       { gap: spacing[2], alignItems: 'center', paddingVertical: spacing[5], backgroundColor: '#fff' },
-  heroCaption:{ fontSize: 13, color: palette.textSecondary, fontWeight: '500' as const },
-  heroAmount: { fontSize: 32, fontWeight: '800' as const, color: '#111827', letterSpacing: -0.5, lineHeight: 42 },
-  heroSub:    { fontSize: 13, color: palette.textSecondary },
+  hero:       { gap: spacing[2], alignItems: 'center', paddingVertical: spacing[5], backgroundColor: p.surface },
+  heroCaption:{ fontSize: 13, color: p.textSecondary, fontWeight: '500' as const },
+  heroAmount: { fontSize: 32, fontWeight: '800' as const, color: p.textPrimary, letterSpacing: -0.5, lineHeight: 42 },
+  heroSub:    { fontSize: 13, color: p.textSecondary },
   deltaRow:   {
     marginTop: spacing[2], paddingHorizontal: spacing[4], paddingVertical: spacing[2],
     borderRadius: radius.full,
   },
   deltaText:  { fontSize: 13, fontWeight: '600' as const, textAlign: 'center' },
-  zeroNote:   { fontSize: 13, color: palette.textSecondary, textAlign: 'center', paddingHorizontal: spacing[4] },
+  zeroNote:   { fontSize: 13, color: p.textSecondary, textAlign: 'center', paddingHorizontal: spacing[4] },
 
   // 2-col grid
   gridRow:   { flexDirection: 'row', gap: spacing[4] },
   statCard:  { flex: 1, gap: spacing[1], minHeight: 90 },
-  statLabel: { fontSize: 12, color: palette.textSecondary, fontWeight: '500' as const },
+  statLabel: { fontSize: 12, color: p.textSecondary, fontWeight: '500' as const },
   statValue: { fontSize: 16, fontWeight: '700' as const, lineHeight: 22 },
-  statNote:  { fontSize: 11, color: palette.textSecondary },
+  statNote:  { fontSize: 11, color: p.textSecondary },
 
   // Section title (inside cards)
-  sectionTitle: { fontSize: 14, fontWeight: '700' as const, color: '#374151' },
+  sectionTitle: { fontSize: 14, fontWeight: '700' as const, color: p.textPrimary },
 
   // Bar chart
   barsRow:  { flexDirection: 'row', alignItems: 'flex-end', gap: 3, height: 80 },
   barWrap:  { flex: 1, alignItems: 'center', gap: 3, justifyContent: 'flex-end' },
-  bar:      { width: '100%', backgroundColor: palette.primary, borderRadius: 3, minHeight: 4 },
-  barLabel: { fontSize: 9, color: palette.textSecondary, textAlign: 'center' },
+  bar:      { width: '100%', backgroundColor: p.primary, borderRadius: 3, minHeight: 4 },
+  barLabel: { fontSize: 9, color: p.textSecondary, textAlign: 'center' },
 
   // List rows (low stock, sellers)
   listRow: { flexDirection: 'row', alignItems: 'center', gap: spacing[2] },
@@ -401,8 +429,9 @@ const styles = StyleSheet.create({
 
   // Seller progress bar
   barTrack: {
-    height: 4, backgroundColor: '#E5E7EB', borderRadius: 2,
+    height: 4, backgroundColor: p.border, borderRadius: 2,
     marginLeft: 18, marginRight: 4,
   },
-  barFill: { height: 4, backgroundColor: palette.primary, borderRadius: 2 },
-});
+  barFill: { height: 4, backgroundColor: p.primary, borderRadius: 2 },
+  });
+}

@@ -1,4 +1,4 @@
-import { useEffect, useRef, useState } from 'react';
+import { useEffect, useMemo, useRef, useState } from 'react';
 import { Alert, Animated, KeyboardAvoidingView, Linking, Platform, Pressable, ScrollView, StyleSheet, TextInput, View } from 'react-native';
 import { SafeAreaView } from 'react-native-safe-area-context';
 import { router } from 'expo-router';
@@ -6,10 +6,13 @@ import { Ionicons } from '@expo/vector-icons';
 import { Card } from '@/src/components/ui/Card';
 import { Input } from '@/src/components/ui/Input';
 import { Text } from '@/src/components/ui/Text';
-import { palette, spacing, radius } from '@/src/theme';
+import { useTheme, spacing, radius } from '@/src/theme';
+import type { Palette } from '@/src/theme';
 import { useAuthStore } from '@/stores/auth';
 import { generateFallbackName } from '@/lib/id';
 import { supabase } from '@/lib/supabase';
+import { haptics } from '@/lib/haptics';
+import { toast } from '@/stores/toast';
 import type { Business } from '@/src/types';
 
 // Must match the list in creer.tsx — all currencies we support
@@ -27,6 +30,8 @@ const CURRENCY_NAMES: Record<string, string> = {
 };
 
 export default function ParametresScreen() {
+  const { palette, colorScheme, setColorScheme } = useTheme();
+  const styles = useMemo(() => makeStyles(palette), [palette]);
   const session  = useAuthStore(s => s.session);
   const business = session?.activeBusiness;
   const userId   = session?.user.id ?? '';
@@ -34,7 +39,7 @@ export default function ParametresScreen() {
   const isAdmin  = role === 'administrateur';
 
   const [bizName,  setBizName]  = useState(business?.name ?? '');
-  const [currency, setCurrency] = useState(business?.currency ?? 'GNF');
+  const [currency, setCurrency] = useState(business?.currency ?? '');
   const [userName, setUserName] = useState(session?.user.name ?? '');
   const [saving,   setSaving]   = useState(false);
   const [hasSales, setHasSales] = useState<boolean | null>(null);
@@ -46,7 +51,11 @@ export default function ParametresScreen() {
       .from('sale_orders')
       .select('id', { count: 'exact', head: true })
       .eq('business_id', business.id)
-      .then(({ count }) => setHasSales((count ?? 0) > 0));
+      .then(({ count }) => {
+        const salesExist = (count ?? 0) > 0;
+        setHasSales(salesExist);
+        if (!salesExist) setCurrency(business.currency ?? 'GNF');
+      });
   }, [business?.id]);
 
   const isDirty = (isAdmin
@@ -81,8 +90,8 @@ export default function ParametresScreen() {
   const saveAll = async () => {
     const trimmedBiz  = bizName.trim();
     const trimmedUser = userName.trim();
-    if (isAdmin && !trimmedBiz) { Alert.alert('Donnez un nom au commerce :)'); return; }
-    if (!trimmedUser) { Alert.alert('Entrez votre nom :)'); return; }
+    if (isAdmin && !trimmedBiz) { toast.warning('Donnez un nom au commerce :)'); return; }
+    if (!trimmedUser) { toast.warning('Entrez votre nom :)'); return; }
 
     setSaving(true);
 
@@ -127,9 +136,11 @@ export default function ParametresScreen() {
     setSaving(false);
 
     if (errors.some(Boolean)) {
-      Alert.alert('Pas tout enregistré. On reprend :)');
+      haptics.error();
+      toast.warning('Pas tout enregistré. On reprend :)');
     } else {
-      Alert.alert('Modifications enregistrées');
+      haptics.success();
+      toast.success('Modifications enregistrées');
     }
   };
 
@@ -142,6 +153,7 @@ export default function ParametresScreen() {
         {
           text: 'Quitter', style: 'destructive',
           onPress: async () => {
+            haptics.error();
             const memId = session?.activeMembership?.id;
             if (!memId) return;
             const { error } = await supabase.from('memberships').delete().eq('id', memId);
@@ -177,6 +189,7 @@ export default function ParametresScreen() {
 
   const handleDeleteAccount = async () => {
     if (deleteInput !== 'SUPPRIMER') return;
+    haptics.error();
     setDeleting(true);
 
     const memberships    = session?.memberships ?? [];
@@ -202,7 +215,7 @@ export default function ParametresScreen() {
     const { error } = await supabase.rpc('delete_my_account');
     if (error) {
       setDeleting(false);
-      Alert.alert('Ça n\'a pas fonctionné. Écrivez-nous si ça continue :)');
+      toast.warning('Ça n\'a pas fonctionné. Écrivez-nous si ça continue :)');
       return;
     }
     await useAuthStore.getState().logout();
@@ -226,7 +239,7 @@ export default function ParametresScreen() {
         </Animated.View>
       </View>
 
-      <KeyboardAvoidingView behavior={Platform.OS === 'ios' ? 'padding' : undefined} style={{ flex: 1 }}>
+      <KeyboardAvoidingView behavior={Platform.OS === 'ios' ? 'padding' : 'height'} style={{ flex: 1 }}>
         <ScrollView contentContainerStyle={styles.content} keyboardShouldPersistTaps="handled">
 
           {/* Commerce — admin only */}
@@ -237,40 +250,37 @@ export default function ParametresScreen() {
                 label="Nom du commerce"
                 value={bizName}
                 onChangeText={setBizName}
-                placeholder="Nom de votre commerce…"
+                placeholder="Nom de votre commerce"
                 returnKeyType="done"
               />
-              {hasSales !== null && (
-                <View style={{ gap: spacing[2] }}>
-                  <Text variant="label">Monnaie</Text>
-                  {hasSales ? (
-                    // Locked: currency cannot change after first sale
-                    <View style={styles.currencyLocked}>
-                      <View style={{ flex: 1 }}>
-                        <Text variant="label">{currency} — {CURRENCY_NAMES[currency] ?? currency}</Text>
-                        <Text variant="caption" color="secondary">
-                          Ceci est votre monnaie officielle
+              <View style={{ gap: spacing[2] }}>
+                <Text variant="label">Monnaie</Text>
+                {hasSales === false ? (
+                  <View style={styles.chipRow}>
+                    {CURRENCIES.map(c => (
+                      <Pressable
+                        key={c}
+                        onPress={() => setCurrency(c)}
+                        style={[styles.chip, currency === c ? styles.chipActive : styles.chipGhost]}
+                      >
+                        <Text variant="label" style={{ color: currency === c ? palette.textInverse : palette.textDisabled }}>
+                          {c}
                         </Text>
-                      </View>
-                      <Ionicons name="lock-closed-outline" size={16} color={palette.textDisabled} />
+                      </Pressable>
+                    ))}
+                  </View>
+                ) : (
+                  <View style={styles.currencyLocked}>
+                    <View style={{ flex: 1 }}>
+                      <Text variant="label">{business?.currency} — {CURRENCY_NAMES[business?.currency ?? ''] ?? business?.currency}</Text>
+                      <Text variant="caption" color="secondary">
+                        Ceci est votre monnaie officielle
+                      </Text>
                     </View>
-                  ) : (
-                    <View style={styles.chipRow}>
-                      {CURRENCIES.map(c => (
-                        <Pressable
-                          key={c}
-                          onPress={() => setCurrency(c)}
-                          style={[styles.chip, currency === c ? styles.chipActive : styles.chipGhost]}
-                        >
-                          <Text variant="label" style={{ color: currency === c ? palette.textInverse : palette.textDisabled }}>
-                            {c}
-                          </Text>
-                        </Pressable>
-                      ))}
-                    </View>
-                  )}
-                </View>
-              )}
+                    <Ionicons name="lock-closed-outline" size={16} color={palette.textDisabled} />
+                  </View>
+                )}
+              </View>
             </Card>
           )}
 
@@ -297,6 +307,27 @@ export default function ParametresScreen() {
               <Text variant="body">Contacter le support</Text>
               <Text variant="caption" color="secondary">›</Text>
             </Pressable>
+          </Card>
+
+          {/* Apparence */}
+          <Card style={styles.section}>
+            <Text variant="label" color="secondary">Apparence</Text>
+            <View style={styles.chipRow}>
+              {(['system', 'light', 'dark'] as const).map(mode => {
+                const label = mode === 'system' ? 'Auto' : mode === 'light' ? 'Clair' : 'Sombre';
+                return (
+                  <Pressable
+                    key={mode}
+                    onPress={() => setColorScheme(mode)}
+                    style={[styles.chip, colorScheme === mode ? styles.chipActive : styles.chipGhost]}
+                  >
+                    <Text variant="label" style={{ color: colorScheme === mode ? palette.textInverse : palette.textDisabled }}>
+                      {label}
+                    </Text>
+                  </Pressable>
+                );
+              })}
+            </View>
           </Card>
 
           {/* Danger — plain section, no loud box, at the very bottom */}
@@ -356,39 +387,41 @@ export default function ParametresScreen() {
   );
 }
 
-const styles = StyleSheet.create({
-  safe:    { flex: 1, backgroundColor: palette.background },
-  hdr:     {
-    flexDirection: 'row', alignItems: 'center', justifyContent: 'space-between',
-    paddingHorizontal: spacing[5], paddingVertical: spacing[4],
-    borderBottomWidth: 1, borderBottomColor: palette.border,
-  },
-  content: { padding: spacing[5], gap: spacing[4], paddingBottom: spacing[10] },
-  section: { gap: spacing[4] },
+function makeStyles(p: Palette) {
+  return StyleSheet.create({
+    safe:    { flex: 1, backgroundColor: p.background },
+    hdr:     {
+      flexDirection: 'row', alignItems: 'center', justifyContent: 'space-between',
+      paddingHorizontal: spacing[5], paddingVertical: spacing[4],
+      borderBottomWidth: 1, borderBottomColor: p.border,
+    },
+    content: { padding: spacing[5], gap: spacing[4], paddingBottom: spacing[10] },
+    section: { gap: spacing[4] },
 
-  chipRow:   { flexDirection: 'row', gap: spacing[2], flexWrap: 'wrap' },
-  chip:      { paddingHorizontal: spacing[4], paddingVertical: spacing[2], borderRadius: radius.full, borderWidth: 1.5, borderColor: palette.border, backgroundColor: palette.surface },
-  chipActive:{ backgroundColor: palette.primary, borderColor: palette.primary },
-  chipGhost: { borderColor: 'transparent', backgroundColor: 'transparent' },
+    chipRow:    { flexDirection: 'row', gap: spacing[2], flexWrap: 'wrap' },
+    chip:       { paddingHorizontal: spacing[4], paddingVertical: spacing[2], borderRadius: radius.full, borderWidth: 1.5, borderColor: p.border, backgroundColor: p.surface },
+    chipActive: { backgroundColor: p.primary, borderColor: p.primary },
+    chipGhost:  { borderColor: 'transparent', backgroundColor: 'transparent' },
 
-  // Locked currency display
-  currencyLocked: {
-    flexDirection: 'row', alignItems: 'center', gap: spacing[3],
-    paddingHorizontal: spacing[3], paddingVertical: spacing[3],
-    backgroundColor: palette.surface, borderRadius: radius.md,
-    borderWidth: 1, borderColor: palette.border,
-  },
+    // Locked currency display
+    currencyLocked: {
+      flexDirection: 'row', alignItems: 'center', gap: spacing[3],
+      paddingHorizontal: spacing[3], paddingVertical: spacing[3],
+      backgroundColor: p.surface, borderRadius: radius.md,
+      borderWidth: 1, borderColor: p.border,
+    },
 
-  linkRow: { flexDirection: 'row', alignItems: 'center', justifyContent: 'space-between', paddingVertical: spacing[2] },
+    linkRow: { flexDirection: 'row', alignItems: 'center', justifyContent: 'space-between', paddingVertical: spacing[2] },
 
-  // Danger — plain text rows, no border, no background tint
-  dangerRow: { paddingVertical: spacing[2] },
-  dangerText:{ fontSize: 15, color: palette.danger },
+    // Danger — plain text rows, no border, no background tint
+    dangerRow:  { paddingVertical: spacing[2] },
+    dangerText: { fontSize: 15, color: p.danger },
 
-  deleteConfirmBox: { gap: spacing[3] },
-  deleteInput: {
-    borderWidth: 1.5, borderColor: palette.danger + '60', borderRadius: radius.md,
-    paddingHorizontal: spacing[4], paddingVertical: spacing[3],
-    color: palette.danger, fontWeight: '700' as const, fontSize: 16, letterSpacing: 2,
-  },
-});
+    deleteConfirmBox: { gap: spacing[3] },
+    deleteInput: {
+      borderWidth: 1.5, borderColor: p.danger + '60', borderRadius: radius.md,
+      paddingHorizontal: spacing[4], paddingVertical: spacing[3],
+      color: p.danger, fontWeight: '700' as const, fontSize: 16, letterSpacing: 2,
+    },
+  });
+}

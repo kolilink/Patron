@@ -5,15 +5,26 @@ import { SafeAreaView } from 'react-native-safe-area-context';
 import { router, useFocusEffect } from 'expo-router';
 import { Card } from '@/src/components/ui/Card';
 import { Text } from '@/src/components/ui/Text';
-import { palette, spacing, colors, radius } from '@/src/theme';
+import { useTheme, spacing, colors, radius } from '@/src/theme';
+import type { Palette } from '@/src/theme';
 import { useAuthStore } from '@/stores/auth';
 import { useVentesStore } from '@/stores/ventes';
+import { SkeletonList } from '@/src/components/ui/SkeletonPlaceholder';
 
 function fmt(n: number, cur: string) { return `${Math.round(n).toLocaleString('fr-FR')} ${cur}`; }
 
 function getDaysAgo(dateStr: string): number {
   const d = dateStr.includes('T') ? new Date(dateStr) : new Date(dateStr + 'T00:00:00');
   return Math.floor((Date.now() - d.getTime()) / (1000 * 60 * 60 * 24));
+}
+
+function fmtDue(iso: string): string {
+  const d = new Date(iso + 'T00:00:00');
+  const diff = Math.round((d.getTime() - Date.now()) / 86400000);
+  if (diff < 0) return `En retard de ${Math.abs(diff)} j`;
+  if (diff === 0) return "Prévu aujourd'hui";
+  if (diff <= 3) return `Dans ${diff} jour${diff > 1 ? 's' : ''}`;
+  return `Prévu le ${d.toLocaleDateString('fr-FR', { day: 'numeric', month: 'short' })}`;
 }
 
 interface DebtorClient {
@@ -23,9 +34,12 @@ interface DebtorClient {
   oldestDate: string;
   daysOldest: number;
   sellers: string[];
+  nearestDueDate: string | null;
 }
 
 export default function CreditsScreen() {
+  const { palette } = useTheme();
+  const styles = useMemo(() => makeStyles(palette), [palette]);
   const session = useAuthStore(s => s.session);
   const businessId = session?.activeBusiness?.id ?? '';
   const userId = session?.user.id ?? '';
@@ -47,7 +61,7 @@ export default function CreditsScreen() {
     for (const s of sales) {
       if (s.status !== 'credit') continue;
       const name = s.customer_name?.trim() || 'Client inconnu';
-      const remaining = s.total_amount - (s.amount_paid ?? 0);
+      const remaining = s.total_amount - (s.discount_amount ?? 0) - (s.amount_paid ?? 0);
       if (remaining < 0.01) continue;
 
       const saleDate = s.sale_date ?? s.created_at.split('T')[0];
@@ -62,6 +76,10 @@ export default function CreditsScreen() {
         if (s.seller_name && !existing.sellers.includes(s.seller_name)) {
           existing.sellers.push(s.seller_name);
         }
+        const dd = s.due_date ?? null;
+        if (dd && (!existing.nearestDueDate || dd < existing.nearestDueDate)) {
+          existing.nearestDueDate = dd;
+        }
       } else {
         map.set(name, {
           name,
@@ -70,6 +88,7 @@ export default function CreditsScreen() {
           oldestDate: saleDate,
           daysOldest: getDaysAgo(saleDate),
           sellers: s.seller_name ? [s.seller_name] : [],
+          nearestDueDate: s.due_date ?? null,
         });
       }
     }
@@ -103,7 +122,7 @@ export default function CreditsScreen() {
       </Card>}
 
       {loading && debtors.length === 0 ? (
-        <Text variant="body" color="secondary" style={styles.center}>Chargement…</Text>
+        <SkeletonList count={5} />
       ) : !loading && debtors.length === 0 && error ? (
         <View style={styles.empty}>
           <Text variant="body" color="secondary" style={{ textAlign: 'center' }}>
@@ -150,6 +169,13 @@ export default function CreditsScreen() {
                     {' · '}
                     {item.daysOldest === 0 ? "aujourd'hui" : `il y a ${item.daysOldest} j`}
                   </Text>
+                  {item.nearestDueDate && (
+                    <Text variant="caption" style={{
+                      color: new Date(item.nearestDueDate + 'T00:00:00') < new Date() ? palette.warning : palette.textSecondary,
+                    }}>
+                      {fmtDue(item.nearestDueDate)}
+                    </Text>
+                  )}
                   {!isVendeur && item.sellers.length > 0 && (
                     <Text variant="caption" color="secondary">
                       {item.sellers.join(', ')} à fait cette vente
@@ -170,25 +196,27 @@ export default function CreditsScreen() {
   );
 }
 
-const styles = StyleSheet.create({
-  safe: { flex: 1, backgroundColor: palette.background },
+function makeStyles(p: Palette) {
+  return StyleSheet.create({
+  safe: { flex: 1, backgroundColor: p.background },
   header: {
     flexDirection: 'row', alignItems: 'center', justifyContent: 'space-between',
     paddingHorizontal: spacing[5], paddingVertical: spacing[4],
-    borderBottomWidth: 1, borderBottomColor: palette.border,
+    borderBottomWidth: 1, borderBottomColor: p.border,
   },
   totalCard: {
     marginHorizontal: spacing[5], marginVertical: spacing[4],
     alignItems: 'center', gap: spacing[1],
-    borderColor: palette.warning + '40', borderWidth: 1,
+    borderColor: p.warning + '40', borderWidth: 1,
   },
   list: { paddingBottom: spacing[10] },
   row: {
     flexDirection: 'row', alignItems: 'center', gap: spacing[3],
     paddingHorizontal: spacing[5], paddingVertical: spacing[3],
-    backgroundColor: palette.surface,
+    backgroundColor: p.surface,
   },
   avatar: { width: 40, height: 40, borderRadius: 20, alignItems: 'center', justifyContent: 'center' },
   empty: { flex: 1, alignItems: 'center', justifyContent: 'center', padding: spacing[8] },
   center: { textAlign: 'center', marginTop: spacing[10] },
-});
+  });
+}

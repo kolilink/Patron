@@ -21,9 +21,12 @@ export interface ReceiptData {
   currency: string;
   items: ReceiptItem[];
   total: number;
+  discountAmount?: number;
+  amountPaid?: number;
   payment: ReceiptPayment | null;
   customerName?: string;
   date: Date;
+  receiptId?: string;
 }
 
 const METHOD_LABELS: Record<string, string> = {
@@ -44,18 +47,22 @@ function formatReceiptDate(d: Date): string {
 }
 
 export function SaleReceiptView({ data }: { data: ReceiptData }) {
-  const { businessName, currency, items, total, payment, customerName, date } = data;
-  const isCredit = payment === null;
+  const { businessName, currency, items, total, discountAmount, amountPaid, payment, customerName, date, receiptId } = data;
+  const discount   = discountAmount ?? 0;
+  const netTotal   = total - discount;
+  const paid       = amountPaid ?? (payment ? payment.amount : 0);
+  const remaining  = Math.max(0, netTotal - paid);
+  const isCredit   = payment === null || remaining > 0.01;
 
   return (
     <View style={styles.receipt}>
-      {/* Top brand stripe */}
-      <View style={styles.stripe} />
-
       {/* Business + date */}
       <View style={styles.header}>
         <Text variant="h3" style={styles.bizName}>{businessName}</Text>
         <Text variant="caption" style={styles.dateText}>{formatReceiptDate(date)}</Text>
+        {receiptId && (
+          <Text variant="caption" style={styles.receiptId}>#{receiptId}</Text>
+        )}
       </View>
 
       <View style={styles.divider} />
@@ -67,7 +74,7 @@ export function SaleReceiptView({ data }: { data: ReceiptData }) {
             <Text variant="bodySmall" style={styles.itemName} numberOfLines={2}>
               {line.name}{line.is_bulk ? ' (lot)' : ''}
             </Text>
-            <Text variant="bodySmall" style={styles.itemQty}>×{line.qty}</Text>
+            <Text variant="bodySmall" style={styles.itemQty}>× {line.qty}</Text>
             <Text variant="bodySmall" style={styles.itemAmount}>
               {formatAmount(line.unit_price * line.qty, currency)}
             </Text>
@@ -78,10 +85,27 @@ export function SaleReceiptView({ data }: { data: ReceiptData }) {
       <View style={styles.divider} />
 
       {/* Total */}
-      <View style={styles.totalRow}>
-        <Text variant="overline" style={styles.totalLabel}>Total</Text>
-        <Text variant="h2" style={styles.totalAmount}>{formatAmount(total, currency)}</Text>
-      </View>
+      {discount > 0 ? (
+        <View style={styles.totalBlock}>
+          <View style={styles.totalRow}>
+            <Text variant="overline" style={styles.totalLabel}>Sous-total</Text>
+            <Text variant="bodySmall" style={[styles.totalAmount, { fontSize: 14, color: palette.textSecondary }]}>{formatAmount(total, currency)}</Text>
+          </View>
+          <View style={styles.totalRow}>
+            <Text variant="overline" style={styles.totalLabel}>Réduction</Text>
+            <Text variant="bodySmall" style={[styles.totalAmount, { fontSize: 14, color: colors.success[700] }]}>−{formatAmount(discount, currency)}</Text>
+          </View>
+          <View style={[styles.totalRow, { borderTopWidth: 1, borderTopColor: colors.neutral[200] }]}>
+            <Text variant="overline" style={styles.totalLabel}>Net à payer</Text>
+            <Text variant="h2" style={styles.totalAmount}>{formatAmount(netTotal, currency)}</Text>
+          </View>
+        </View>
+      ) : (
+        <View style={styles.totalRow}>
+          <Text variant="overline" style={styles.totalLabel}>Total</Text>
+          <Text variant="h2" style={styles.totalAmount}>{formatAmount(total, currency)}</Text>
+        </View>
+      )}
 
       <View style={styles.divider} />
 
@@ -91,7 +115,16 @@ export function SaleReceiptView({ data }: { data: ReceiptData }) {
           <View style={[styles.badge, styles.creditBadge]}>
             <Text variant="label" style={{ color: colors.warning[700] }}>💳  Crédit</Text>
           </View>
-          <Text variant="h4" style={styles.creditOwed}>{formatAmount(total, currency)} dû</Text>
+          {paid > 0 && (
+            <View style={styles.paymentRow}>
+              <Text variant="bodySmall" style={styles.clientLine}>Acompte reçu</Text>
+              <Text variant="bodySmall" style={{ fontWeight: '700', color: colors.success[700] }}>{formatAmount(paid, currency)}</Text>
+            </View>
+          )}
+          <View style={styles.paymentRow}>
+            <Text variant="bodySmall" style={styles.clientLine}>Reste à payer</Text>
+            <Text variant="h4" style={styles.creditOwed}>{formatAmount(remaining, currency)}</Text>
+          </View>
           {customerName ? (
             <Text variant="bodySmall" style={styles.clientLine}>Client : {customerName}</Text>
           ) : null}
@@ -100,7 +133,7 @@ export function SaleReceiptView({ data }: { data: ReceiptData }) {
         <View style={styles.statusSection}>
           <View style={[styles.badge, styles.paidBadge]}>
             <Text variant="label" style={{ color: colors.success[700] }}>
-              ✓  {METHOD_LABELS[payment.method] ?? payment.method}
+              ✓  {METHOD_LABELS[payment!.method] ?? payment!.method}
             </Text>
           </View>
           {customerName ? (
@@ -111,8 +144,8 @@ export function SaleReceiptView({ data }: { data: ReceiptData }) {
 
       {/* Footer */}
       <View style={styles.footer}>
-        <Text variant="caption" style={styles.merci}>Merci pour votre achat 🤗</Text>
-        <Text variant="label" style={styles.brand} numberOfLines={1} adjustsFontSizeToFit>Faites comme nous, gérez votre commerce avec Patron</Text>
+        <Text variant="caption" style={styles.merci}>Merci.</Text>
+        <Text variant="caption" style={styles.brand}>Géré avec Patron</Text>
       </View>
     </View>
   );
@@ -123,10 +156,6 @@ const styles = StyleSheet.create({
     width: W,
     backgroundColor: '#ffffff',
     overflow: 'hidden',
-  },
-  stripe: {
-    height: 6,
-    backgroundColor: palette.primary,
   },
   header: {
     paddingHorizontal: spacing[6],
@@ -140,6 +169,11 @@ const styles = StyleSheet.create({
   },
   dateText: {
     color: palette.textSecondary,
+  },
+  receiptId: {
+    color: colors.neutral[400],
+    fontSize: 11,
+    letterSpacing: 0.5,
   },
   divider: {
     height: 1,
@@ -161,15 +195,20 @@ const styles = StyleSheet.create({
     color: palette.textPrimary,
   },
   itemQty: {
-    color: palette.textSecondary,
+    color: colors.neutral[400],
     minWidth: 28,
     textAlign: 'right',
   },
   itemAmount: {
     color: palette.textPrimary,
-    fontWeight: '600',
+    fontWeight: '800',
     minWidth: 100,
     textAlign: 'right',
+  },
+  totalBlock: {
+    paddingHorizontal: spacing[6],
+    paddingVertical: spacing[2],
+    gap: spacing[1],
   },
   totalRow: {
     paddingHorizontal: spacing[6],
@@ -177,6 +216,11 @@ const styles = StyleSheet.create({
     flexDirection: 'row',
     alignItems: 'center',
     justifyContent: 'space-between',
+  },
+  paymentRow: {
+    flexDirection: 'row',
+    justifyContent: 'space-between',
+    alignItems: 'center',
   },
   totalLabel: {
     color: palette.textSecondary,
@@ -202,7 +246,7 @@ const styles = StyleSheet.create({
     borderColor: colors.warning[100],
   },
   creditOwed: {
-    color: colors.warning[700],
+    color: palette.textPrimary,
     fontWeight: '700',
   },
   paidBadge: {
@@ -226,9 +270,8 @@ const styles = StyleSheet.create({
     color: palette.textSecondary,
   },
   brand: {
-    color: palette.primary,
-    fontWeight: '700',
-    letterSpacing: 0.3,
+    color: colors.neutral[400],
+    fontWeight: '400',
     textAlign: 'center',
     fontSize: 11,
   },

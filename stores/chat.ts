@@ -30,8 +30,10 @@ interface ChatStore {
   _boutiqueLastRead: Date;
   _marcheLastRead: Date;
   load: (businessId: string, currentUserId: string) => Promise<void>;
-  sendMessage: (params: { roomId: string; senderId: string; senderName: string; content: string }) => Promise<void>;
+  sendMessage: (params: { roomId: string; senderId: string; senderName: string; content: string; replyTo?: { id: string; content: string; senderName: string } | null }) => Promise<void>;
+  editMessage: (messageId: string, newContent: string) => Promise<void>;
   appendMessage: (msg: ChatMessage) => void;
+  updateMessage: (msg: ChatMessage) => void;
   markRead: (which: 'boutique' | 'marche', businessId: string) => Promise<void>;
   reset: () => void;
 }
@@ -54,7 +56,33 @@ export const useChatStore = create<ChatStore>((set, get) => ({
   ...initialState,
 
   load: async (businessId, currentUserId) => {
-    set({ loading: true, error: null });
+    if (get().messages.length === 0) {
+      const cached = await getChatCache(businessId) as {
+        boutiqueRoom: ChatRoom | null;
+        globalRoom: ChatRoom | null;
+        messages: ChatMessage[];
+      } | null;
+      if (cached) {
+        const [bTs, mTs] = await Promise.all([getKV(boutiqueKey(businessId)), getKV(MARCHE_KEY)]);
+        const boutiqueLastRead = bTs ? new Date(bTs) : new Date(0);
+        const marcheLastRead   = mTs ? new Date(mTs) : new Date(0);
+        set({
+          boutiqueRoom: cached.boutiqueRoom,
+          globalRoom: cached.globalRoom,
+          messages: cached.messages,
+          boutiqueUnread: cached.boutiqueRoom ? countUnread(cached.messages, cached.boutiqueRoom.id, boutiqueLastRead, currentUserId) : 0,
+          marcheUnread: cached.globalRoom ? countUnread(cached.messages, cached.globalRoom.id, marcheLastRead, currentUserId) : 0,
+          _currentUserId: currentUserId,
+          _boutiqueLastRead: boutiqueLastRead,
+          _marcheLastRead: marcheLastRead,
+          loading: false,
+        });
+      } else {
+        set({ loading: true, error: null });
+      }
+    } else {
+      set({ error: null });
+    }
     try {
       // 1. Fetch both accessible rooms (boutique + global)
       const { data: rooms, error: roomsErr } = await supabase
@@ -150,7 +178,7 @@ export const useChatStore = create<ChatStore>((set, get) => ({
     }
   },
 
-  sendMessage: async ({ roomId, senderId, senderName, content }) => {
+  sendMessage: async ({ roomId, senderId, senderName, content, replyTo }) => {
     set({ sending: true, error: null });
     const optimisticMsg: ChatMessage = {
       id: `optimistic-${Date.now()}`,
@@ -159,13 +187,24 @@ export const useChatStore = create<ChatStore>((set, get) => ({
       sender_name: senderName,
       content,
       created_at: new Date().toISOString(),
+      reply_to_id: replyTo?.id ?? null,
+      reply_to_content: replyTo?.content ?? null,
+      reply_to_sender_name: replyTo?.senderName ?? null,
     };
     // Optimistic append
     get().appendMessage(optimisticMsg);
     try {
+      const insertRow = {
+        room_id: roomId, sender_id: senderId, sender_name: senderName, content,
+        ...(replyTo ? {
+          reply_to_id: replyTo.id,
+          reply_to_content: replyTo.content,
+          reply_to_sender_name: replyTo.senderName,
+        } : {}),
+      };
       const { data, error } = await supabase
         .from('chat_messages')
-        .insert({ room_id: roomId, sender_id: senderId, sender_name: senderName, content })
+        .insert(insertRow)
         .select()
         .single();
       if (error) throw error;
@@ -183,6 +222,27 @@ export const useChatStore = create<ChatStore>((set, get) => ({
           ? 'Pas de connexion — message non envoyé'
           : translateError(err, 'Erreur d\'envoi'),
       }));
+    }
+  },
+
+  editMessage: async (messageId, newContent) => {
+    const prevMessages = get().messages;
+    // Optimistic update
+    set(state => ({
+      messages: state.messages.map(m =>
+        m.id === messageId ? { ...m, content: newContent } : m,
+      ),
+    }));
+    try {
+      const { error } = await supabase
+        .from('chat_messages')
+        .update({ content: newContent })
+        .eq('id', messageId);
+      if (error) throw error;
+    } catch (err) {
+      // Revert on failure
+      set({ messages: prevMessages });
+      throw err;
     }
   },
 
@@ -213,6 +273,12 @@ export const useChatStore = create<ChatStore>((set, get) => ({
 
       return { messages: newMessages, boutiqueUnread, marcheUnread };
     });
+  },
+
+  updateMessage: (msg) => {
+    set(state => ({
+      messages: state.messages.map(m => m.id === msg.id ? { ...m, ...msg } : m),
+    }));
   },
 
   markRead: async (which, businessId) => {

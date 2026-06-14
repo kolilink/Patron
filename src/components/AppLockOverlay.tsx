@@ -1,10 +1,12 @@
-import { useCallback, useEffect, useRef, useState } from 'react';
+import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { AppState, PanResponder, Pressable, StyleSheet, View } from 'react-native';
 import { BlurView } from 'expo-blur';
 import * as LocalAuthentication from 'expo-local-authentication';
 import { Button } from '@/src/components/ui/Button';
 import { Text } from '@/src/components/ui/Text';
-import { palette, spacing } from '@/src/theme';
+import { useTheme } from '@/src/theme';
+import { spacing } from '@/src/theme';
+import type { Palette } from '@/src/theme';
 
 type LockState = 'clear' | 'blurred' | 'auth';
 
@@ -12,6 +14,8 @@ const INACTIVITY_MS  = 60_000;        // 1 min no touch → blur
 const BACKGROUND_MS  = 3 * 60_000;   // 3 min backgrounded → auth
 
 export function AppLockOverlay({ children }: { children: React.ReactNode }) {
+  const { palette } = useTheme();
+  const styles = useMemo(() => makeStyles(palette), [palette]);
   // Use a ref so AppState callbacks always read the current value (no stale closure)
   const lockRef  = useRef<LockState>('clear');
   const [lockState, _setLock] = useState<LockState>('clear');
@@ -174,26 +178,24 @@ export function AppLockOverlay({ children }: { children: React.ReactNode }) {
   );
 }
 
-const styles = StyleSheet.create({
-  root: { flex: 1 },
-  authContainer: {
-    flex: 1,
-    alignItems: 'center',
-    justifyContent: 'center',
-    padding: spacing[6],
-  },
-  authCard: {
-    width: '100%',
-    backgroundColor: palette.surface,
-    borderRadius: 16,
-    padding: spacing[6],
-    gap: spacing[3],
-    alignItems: 'center',
-  },
-  authTitle: {
-    textAlign: 'center',
-  },
-  authSub: {
-    textAlign: 'center',
-  },
-});
+function makeStyles(p: Palette) {
+  return StyleSheet.create({
+    root: { flex: 1 },
+    authContainer: {
+      flex: 1,
+      alignItems: 'center',
+      justifyContent: 'center',
+      padding: spacing[6],
+    },
+    authCard: {
+      width: '100%',
+      backgroundColor: p.surface,
+      borderRadius: 16,
+      padding: spacing[6],
+      gap: spacing[3],
+      alignItems: 'center',
+    },
+    authTitle: { textAlign: 'center' },
+    authSub:   { textAlign: 'center' },
+  });
+}

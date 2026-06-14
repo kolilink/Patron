@@ -9,10 +9,12 @@ import { Input } from '@/src/components/ui/Input';
 import { Text } from '@/src/components/ui/Text';
 import { PhoneInput } from '@/src/components/ui/PhoneInput';
 import { DatePickerField } from '@/src/components/ui/DatePickerField';
-import { palette, spacing, radius } from '@/src/theme';
+import { useTheme, spacing, radius } from '@/src/theme';
+import type { Palette } from '@/src/theme';
 import { useAuthStore } from '@/stores/auth';
 import { useProductStore } from '@/stores/products';
 import { useFournisseursStore, type CommandeAchat, type Fournisseur } from '@/stores/fournisseurs';
+import { haptics } from '@/lib/haptics';
 import { translateError } from '@/lib/errors';
 import { generateId } from '@/lib/id';
 import { supabase } from '@/lib/supabase';
@@ -35,23 +37,25 @@ const AVATAR_PALETTE = [
   { bg: '#ECFEFF', text: '#0E7490' },
 ];
 
-function relativeTime(dateStr: string): string {
+function compactTime(dateStr: string): string {
   const days = Math.floor((Date.now() - new Date(dateStr).getTime()) / 86_400_000);
-  if (days === 0) return "aujourd'hui";
+  if (days === 0) return "auj.";
   if (days === 1) return 'hier';
-  if (days < 7) return `il y a ${days} jours`;
-  if (days < 14) return 'la semaine dernière';
-  if (days < 60) return `il y a ${Math.floor(days / 7)} semaines`;
-  return new Date(dateStr).toLocaleDateString('fr-FR', { day: 'numeric', month: 'long' });
+  if (days < 7) return `${days}j`;
+  if (days < 60) return `${Math.floor(days / 7)}sem`;
+  return new Date(dateStr).toLocaleDateString('fr-FR', { day: 'numeric', month: 'short' });
 }
 
 const STATUS_LABEL: Record<string, string> = {
   brouillon: 'Non confirmé', envoye: 'Envoyé', recu_partiel: 'Partiel', recu: 'Reçu', annule: 'Annulé',
 };
-const STATUS_COLOR: Record<string, string> = {
-  brouillon: palette.textSecondary, envoye: palette.primary,
-  recu_partiel: palette.warning, recu: palette.success, annule: palette.danger,
-};
+function getStatusColor(status: string, p: Palette): string {
+  const map: Record<string, string> = {
+    brouillon: p.textSecondary, envoye: p.primary,
+    recu_partiel: p.warning, recu: p.success, annule: p.textSecondary,
+  };
+  return map[status] ?? p.textSecondary;
+}
 
 interface FournisseurFormData {
   name: string; phone: string; country: string; notes: string; leadDays: string;
@@ -65,6 +69,8 @@ function FournisseurForm({ visible, editing, products, onClose, onSave, saving }
   visible: boolean; editing: Fournisseur | null; products: Product[];
   onClose: () => void; onSave: (d: FournisseurFormData) => Promise<void>; saving: boolean;
 }) {
+  const { palette } = useTheme();
+  const styles = useMemo(() => makeStyles(palette), [palette]);
   const [name, setName] = useState('');
   const [phone, setPhone] = useState('');
   const [linkedIds, setLinkedIds] = useState<Set<string>>(new Set());
@@ -129,7 +135,7 @@ function FournisseurForm({ visible, editing, products, onClose, onSave, saving }
   return (
     <Modal visible={visible} animationType="slide" presentationStyle="pageSheet" onRequestClose={onClose}>
       <SafeAreaView style={styles.modalSafe} edges={['bottom']}>
-        <KeyboardAvoidingView behavior={Platform.OS === 'ios' ? 'padding' : undefined} style={{ flex: 1 }}
+        <KeyboardAvoidingView behavior={Platform.OS === 'ios' ? 'padding' : 'height'} style={{ flex: 1 }}
           keyboardVerticalOffset={Platform.OS === 'ios' ? 44 : 0}>
           <View style={styles.mhdr}>
             <Pressable onPress={onClose}><Text variant="body" color="secondary">Annuler</Text></Pressable>
@@ -138,7 +144,7 @@ function FournisseurForm({ visible, editing, products, onClose, onSave, saving }
           </View>
 
           <ScrollView contentContainerStyle={styles.mpad} keyboardShouldPersistTaps="handled">
-            <Input label="Nom du fournisseur" value={name} onChangeText={setName} placeholder="Ex: Diallo Import" />
+            <Input label="Nom du fournisseur" value={name} onChangeText={setName} placeholder="Diallo Import" />
             <PhoneInput label="Téléphone" onChange={(e164) => setPhone(e164)} strict={false} />
 
             <View style={{ gap: spacing[2] }}>
@@ -211,7 +217,7 @@ function FournisseurForm({ visible, editing, products, onClose, onSave, saving }
                     style={styles.newProdInput}
                     value={newProductName}
                     onChangeText={setNewProductName}
-                    placeholder="Nom du nouveau produit…"
+                    placeholder="Nom du produit"
                     placeholderTextColor={palette.textDisabled}
                     autoFocus
                     returnKeyType="done"
@@ -268,6 +274,8 @@ function SuccessSheet({ visible, fournisseur, onCommander, onDette, onDismiss }:
   visible: boolean; fournisseur: Fournisseur | null;
   onCommander: () => void; onDette: () => void; onDismiss: () => void;
 }) {
+  const { palette } = useTheme();
+  const styles = useMemo(() => makeStyles(palette), [palette]);
   return (
     <Modal visible={visible} animationType="slide" presentationStyle="formSheet" onRequestClose={onDismiss}>
       <SafeAreaView style={[styles.modalSafe, styles.successSheetSafe]} edges={['bottom']}>
@@ -308,6 +316,8 @@ function DebtModal({ visible, fournisseur, currency, saving, onClose, onSave }: 
   visible: boolean; fournisseur: Fournisseur | null; currency: string; saving: boolean;
   onClose: () => void; onSave: (amount: number, description: string, date: string) => Promise<void>;
 }) {
+  const { palette } = useTheme();
+  const styles = useMemo(() => makeStyles(palette), [palette]);
   const [amount, setAmount] = useState('');
   const [description, setDescription] = useState('');
   const [date, setDate] = useState(todayISO());
@@ -332,9 +342,9 @@ function DebtModal({ visible, fournisseur, currency, saving, onClose, onSave }: 
             </Card>
           )}
           <Input label={`Montant (${currency})`} value={amount} onChangeText={setAmount}
-            keyboardType="decimal-pad" placeholder="0" />
+            keyboardType="decimal-pad" />
           <Input label="Description (optionnel)" value={description} onChangeText={setDescription}
-            placeholder="Ex: 50 sacs de riz, livraison du 5 juin…" />
+            placeholder="50 sacs de riz, livraison du 5 juin" />
           <DatePickerField label="Date" value={date} onChange={setDate} maxToday />
         </ScrollView>
         <View style={styles.mfooter}>
@@ -361,8 +371,10 @@ function CommandeForm({ visible, fournisseur, currency, onClose, onSave, saving 
   onSave: (lines: { product_id: string; product_name: string; qty: number; unit_cost: number }[]) => Promise<void>;
   saving: boolean;
 }) {
+  const { palette } = useTheme();
+  const styles = useMemo(() => makeStyles(palette), [palette]);
   const { products } = useProductStore();
-  const [lines, setLines] = useState<{ product_id: string; product_name: string; qty: string; unit_cost: string }[]>([]);
+  const [lines, setLines] = useState<{ product_id: string; product_name: string; qty: string; total_cost: string }[]>([]);
   const [showPicker, setShowPicker] = useState(false);
   const seededForRef = useRef<string | null>(null);
 
@@ -372,21 +384,19 @@ function CommandeForm({ visible, fournisseur, currency, onClose, onSave, saving 
       return;
     }
     const fId = fournisseur?.id ?? null;
-    // Seed when the modal first opens for a given supplier, or when products update before the user
-    // has touched any line (lines.length check avoids wiping edits on incidental store ticks)
     if (seededForRef.current === fId && lines.length > 0) return;
     seededForRef.current = fId;
     setShowPicker(false);
     const linked = fId
       ? products.filter(p => p.supplier_id === fId && !p.archived)
       : [];
-    setLines(linked.map(p => ({ product_id: p.id, product_name: p.name, qty: '1', unit_cost: String(p.cost_price) })));
+    setLines(linked.map(p => ({ product_id: p.id, product_name: p.name, qty: '1', total_cost: p.cost_price > 0 ? String(p.cost_price) : '' })));
   }, [visible, products, fournisseur?.id]);
 
   const addLine = (p: Product) =>
-    setLines(prev => [...prev, { product_id: p.id, product_name: p.name, qty: '1', unit_cost: String(p.cost_price) }]);
+    setLines(prev => [...prev, { product_id: p.id, product_name: p.name, qty: '1', total_cost: p.cost_price > 0 ? String(p.cost_price) : '' }]);
 
-  const total = lines.reduce((s, l) => s + (parseInt(l.qty) || 0) * (parseFloat(l.unit_cost) || 0), 0);
+  const total = lines.reduce((s, l) => s + (parseFloat(l.total_cost) || 0), 0);
 
   // Picker only shows products not already in lines, supplier-linked ones first
   const lineIds = new Set(lines.map(l => l.product_id));
@@ -444,11 +454,21 @@ function CommandeForm({ visible, fournisseur, currency, onClose, onSave, saving 
                     keyboardType="number-pad" />
                 </View>
                 <View style={{ flex: 2 }}>
-                  <Input label={`Coût (${currency})`} value={l.unit_cost}
-                    onChangeText={v => setLines(prev => prev.map((x, j) => j === i ? { ...x, unit_cost: v } : x))}
+                  <Input label={`Coût total (${currency})`} value={l.total_cost}
+                    onChangeText={v => setLines(prev => prev.map((x, j) => j === i ? { ...x, total_cost: v } : x))}
                     keyboardType="decimal-pad" />
                 </View>
               </View>
+              {(() => {
+                const qty = parseInt(l.qty) || 0;
+                const tc = parseFloat(l.total_cost) || 0;
+                const unit = qty > 0 && tc > 0 ? fmt(tc / qty, currency) : '—';
+                return (
+                  <Text variant="caption" color="secondary">
+                    Prix d'achat unitaire : {unit}
+                  </Text>
+                );
+              })()}
             </Card>
           ))}
           {lines.length > 0 && !showPicker && (
@@ -471,10 +491,11 @@ function CommandeForm({ visible, fournisseur, currency, onClose, onSave, saving 
           <Button label={saving ? '…' : 'Créer la commande'} loading={saving} fullWidth size="lg"
             disabled={lines.length === 0}
             onPress={() => {
-              const parsed = lines.map(l => ({
-                product_id: l.product_id, product_name: l.product_name,
-                qty: parseInt(l.qty) || 0, unit_cost: parseFloat(l.unit_cost) || 0,
-              }));
+              const parsed = lines.map(l => {
+                const qty = parseInt(l.qty) || 0;
+                const tc = parseFloat(l.total_cost) || 0;
+                return { product_id: l.product_id, product_name: l.product_name, qty, unit_cost: qty > 0 ? tc / qty : 0 };
+              });
               const invalid = parsed.find(l => l.qty <= 0 || l.unit_cost <= 0);
               if (invalid) { Alert.alert(`Un petit contrôle sur la quantité et le coût :)`, `"${invalid.product_name}"`); return; }
               onSave(parsed);
@@ -489,35 +510,128 @@ function CommandeForm({ visible, fournisseur, currency, onClose, onSave, saving 
 
 function CommandeDetail({ commande, currency, onClose, onRecevoir, saving }: {
   commande: CommandeAchat; currency: string;
-  onClose: () => void; onRecevoir: () => void; saving: boolean;
+  onClose: () => void;
+  onRecevoir: (lines: { id: string; qty: number }[] | null) => void;
+  saving: boolean;
 }) {
+  const { palette } = useTheme();
+  const styles = useMemo(() => makeStyles(palette), [palette]);
+  const [step, setStep] = useState<'detail' | 'select'>('detail');
+  const [receivedQtys, setReceivedQtys] = useState<Map<string, number>>(new Map());
+
+  const unreceivedLines = (commande.lines ?? []).filter(l => l.qty_received < l.qty_ordered);
+
+  const enterSelect = () => {
+    const init = new Map<string, number>();
+    for (const l of unreceivedLines) init.set(l.id, l.qty_ordered - l.qty_received);
+    setReceivedQtys(init);
+    setStep('select');
+  };
+
+  const setQty = (id: string, qty: number) =>
+    setReceivedQtys(prev => new Map(prev).set(id, qty));
+
+  const setAll = () => {
+    const next = new Map<string, number>();
+    for (const l of unreceivedLines) next.set(l.id, l.qty_ordered - l.qty_received);
+    setReceivedQtys(next);
+  };
+
+  const activeCount = Array.from(receivedQtys.values()).filter(q => q > 0).length;
+
+  const handleConfirm = () => {
+    const lines = unreceivedLines
+      .map(l => ({ id: l.id, qty: receivedQtys.get(l.id) ?? 0 }))
+      .filter(l => l.qty > 0);
+    const isAll = lines.length === unreceivedLines.length &&
+      lines.every(l => {
+        const orig = unreceivedLines.find(x => x.id === l.id)!;
+        return l.qty >= orig.qty_ordered - orig.qty_received;
+      });
+    onRecevoir(isAll ? null : lines);
+  };
+
   return (
     <Modal visible animationType="slide" presentationStyle="formSheet" onRequestClose={onClose}>
       <SafeAreaView style={styles.modalSafe} edges={['bottom']}>
         <View style={styles.mhdr}>
-          <Pressable onPress={onClose}><Text variant="body" color="secondary">Fermer</Text></Pressable>
-          <Text variant="h4">{commande.supplier_name}</Text>
+          {step === 'select' ? (
+            <Pressable onPress={() => setStep('detail')}><Text variant="body" color="secondary">‹ Retour</Text></Pressable>
+          ) : (
+            <Pressable onPress={onClose}><Text variant="body" color="secondary">Fermer</Text></Pressable>
+          )}
+          <Text variant="h4">{step === 'select' ? 'Quantités reçues' : commande.supplier_name}</Text>
           <View style={{ width: 60 }} />
         </View>
-        <ScrollView contentContainerStyle={styles.mpad}>
-          <Card style={{ gap: spacing[2] }}>
-            <View style={styles.dr}><Text variant="caption" color="secondary">Statut</Text><Text variant="label" style={{ color: STATUS_COLOR[commande.status] }}>{STATUS_LABEL[commande.status]}</Text></View>
-            <View style={styles.dr}><Text variant="caption" color="secondary">Date</Text><Text variant="label">{new Date(commande.ordered_at).toLocaleDateString('fr-FR')}</Text></View>
-            <View style={styles.dr}><Text variant="caption" color="secondary">Total</Text><Text variant="label">{fmt(commande.total_cost, currency)}</Text></View>
-          </Card>
-          {commande.lines?.map(l => (
-            <Card key={l.id} style={{ gap: 2 }}>
-              <Text variant="body">{l.product_name}</Text>
-              <View style={styles.dr}>
-                <Text variant="caption" color="secondary">×{l.qty_ordered} × {fmt(l.unit_cost, currency)}/u</Text>
-                <Text variant="label">{fmt(l.qty_ordered * l.unit_cost, currency)}</Text>
-              </View>
+
+        {step === 'detail' ? (
+          <ScrollView contentContainerStyle={styles.mpad}>
+            <Card style={{ gap: spacing[2] }}>
+              <View style={styles.dr}><Text variant="caption" color="secondary">Statut</Text><Text variant="label" style={{ color: getStatusColor(commande.status, palette) }}>{STATUS_LABEL[commande.status]}</Text></View>
+              <View style={styles.dr}><Text variant="caption" color="secondary">Date</Text><Text variant="label">{new Date(commande.ordered_at).toLocaleDateString('fr-FR')}</Text></View>
+              <View style={styles.dr}><Text variant="caption" color="secondary">Total</Text><Text variant="label">{fmt(commande.total_cost, currency)}</Text></View>
             </Card>
-          ))}
-          {commande.status === 'brouillon' && (
-            <Button label={saving ? '…' : 'Marquer comme reçu'} loading={saving} variant="primary" fullWidth onPress={onRecevoir} />
-          )}
-        </ScrollView>
+            {commande.lines?.map(l => (
+              <Card key={l.id} style={{ gap: 2 }}>
+                <Text variant="body">{l.product_name}</Text>
+                <View style={styles.dr}>
+                  <Text variant="caption" color="secondary">×{l.qty_ordered} · {fmt(l.unit_cost, currency)}/u</Text>
+                  <Text variant="label">{fmt(l.qty_ordered * l.unit_cost, currency)}</Text>
+                </View>
+                {l.qty_received > 0 && (
+                  <Text variant="caption" style={{ color: palette.success }}>
+                    Déjà reçu : {l.qty_received} / {l.qty_ordered}
+                  </Text>
+                )}
+              </Card>
+            ))}
+            {(commande.status === 'brouillon' || commande.status === 'recu_partiel') && (
+              <Button label="Confirmer la réception" variant="primary" fullWidth onPress={enterSelect} />
+            )}
+          </ScrollView>
+        ) : (
+          <>
+            <ScrollView contentContainerStyle={styles.mpad}>
+              <Pressable style={styles.selectAllRow} onPress={setAll}>
+                <Ionicons name="checkmark-done-outline" size={18} color={palette.primary} />
+                <Text variant="label" style={{ color: palette.primary }}>Tout recevoir</Text>
+              </Pressable>
+
+              {unreceivedLines.map(l => {
+                const maxQty = l.qty_ordered - l.qty_received;
+                const qty = receivedQtys.get(l.id) ?? maxQty;
+                const active = qty > 0;
+                return (
+                  <View key={l.id} style={[styles.selectRow, !active && { opacity: 0.4 }]}>
+                    <View style={{ flex: 1 }}>
+                      <Text variant="body">{l.product_name}</Text>
+                      <Text variant="caption" color="secondary">
+                        Commandé : {l.qty_ordered}{l.qty_received > 0 ? ` · Déjà reçu : ${l.qty_received}` : ''}
+                      </Text>
+                    </View>
+                    <View style={styles.stepper}>
+                      <Pressable onPress={() => setQty(l.id, Math.max(0, qty - 1))} style={styles.stepBtn} hitSlop={8}>
+                        <Ionicons name="remove" size={18} color={qty > 0 ? palette.textPrimary : palette.textDisabled} />
+                      </Pressable>
+                      <Text style={[styles.stepVal, !active && { color: palette.textDisabled }]}>{qty}</Text>
+                      <Pressable onPress={() => setQty(l.id, Math.min(maxQty, qty + 1))} style={styles.stepBtn} hitSlop={8}>
+                        <Ionicons name="add" size={18} color={qty < maxQty ? palette.textPrimary : palette.textDisabled} />
+                      </Pressable>
+                    </View>
+                  </View>
+                );
+              })}
+            </ScrollView>
+            <View style={styles.mfooter}>
+              <Button
+                label={saving ? '…' : `Confirmer${activeCount > 0 ? ` (${activeCount} produit${activeCount > 1 ? 's' : ''})` : ''}`}
+                loading={saving} variant="primary" fullWidth
+                disabled={activeCount === 0}
+                onPress={handleConfirm}
+              />
+            </View>
+          </>
+        )}
       </SafeAreaView>
     </Modal>
   );
@@ -526,6 +640,8 @@ function CommandeDetail({ commande, currency, onClose, onRecevoir, saving }: {
 // ─── Main Screen ──────────────────────────────────────────────────────────────
 
 export default function FournisseursScreen() {
+  const { palette } = useTheme();
+  const styles = useMemo(() => makeStyles(palette), [palette]);
   const session = useAuthStore(s => s.session);
   const businessId = session?.activeBusiness?.id ?? '';
   const currency = session?.activeBusiness?.currency ?? 'GNF';
@@ -550,6 +666,7 @@ export default function FournisseursScreen() {
   const [createdFournisseur, setCreatedFournisseur] = useState<Fournisseur | null>(null);
   const [showDebtModal, setShowDebtModal] = useState(false);
   const [debtTarget, setDebtTarget] = useState<Fournisseur | null>(null);
+  const [recuExpanded, setRecuExpanded] = useState(false);
 
   useEffect(() => {
     if (!businessId) return;
@@ -591,6 +708,41 @@ export default function FournisseursScreen() {
 
   const totalDebtsCount = useMemo(() => Object.keys(supplierDebtMap).length, [supplierDebtMap]);
 
+  const { activeGroups, doneGroups, doneCount } = useMemo(() => {
+    const isActive = (s: string) => !['recu', 'annule'].includes(s);
+    const RANK: Record<string, number> = { brouillon: 0, recu_partiel: 1, envoye: 2 };
+
+    const sortedActive = [...commandes]
+      .filter(c => isActive(c.status))
+      .sort((a, b) => {
+        const dd = b.ordered_at.localeCompare(a.ordered_at);
+        return dd !== 0 ? dd : (RANK[a.status] ?? 9) - (RANK[b.status] ?? 9);
+      });
+
+    const sortedDone = [...commandes]
+      .filter(c => !isActive(c.status))
+      .sort((a, b) => b.ordered_at.localeCompare(a.ordered_at));
+
+    const toGroups = (list: CommandeAchat[]) => {
+      const map = new Map<string, CommandeAchat[]>();
+      for (const c of list) {
+        const key = c.ordered_at.split('T')[0];
+        if (!map.has(key)) map.set(key, []);
+        map.get(key)!.push(c);
+      }
+      return Array.from(map.entries()).map(([key, items]) => {
+        const [y, m, d] = key.split('-').map(Number);
+        return {
+          key,
+          label: new Date(y, m - 1, d).toLocaleDateString('fr-FR', { day: 'numeric', month: 'long', year: 'numeric' }),
+          orders: items,
+        };
+      });
+    };
+
+    return { activeGroups: toGroups(sortedActive), doneGroups: toGroups(sortedDone), doneCount: sortedDone.length };
+  }, [commandes]);
+
   const openCommande = (f: Fournisseur) => {
     setCommandeTarget(f);
     setShowCommande(true);
@@ -605,14 +757,16 @@ export default function FournisseursScreen() {
     setDetailCommande(useFournisseursStore.getState().commandes.find(x => x.id === c.id) ?? c);
   };
 
-  const handleRecevoir = async () => {
+  const handleRecevoir = async (lines: { id: string; qty: number }[] | null) => {
     if (!detailCommande) return;
-    const ok = await recevoirCommande(detailCommande.id, businessId, userId);
+    const ok = await recevoirCommande(detailCommande.id, businessId, userId, lines ?? undefined);
     if (ok) {
-      Alert.alert('Commande reçue. Stock mis à jour.');
+      haptics.success();
+      Alert.alert(lines !== null ? 'Réception partielle enregistrée.' : 'Commande reçue. Stock mis à jour.');
       setDetailCommande(null);
       fetchProducts(businessId, userId);
     } else {
+      haptics.error();
       Alert.alert('La commande n\'est pas passée :)');
     }
   };
@@ -645,6 +799,7 @@ export default function FournisseursScreen() {
           created_by: userId,
         });
         if (sErr) {
+          haptics.error();
           Alert.alert('Erreur', translateError(sErr, 'Impossible de créer le fournisseur'));
           return;
         }
@@ -693,6 +848,7 @@ export default function FournisseursScreen() {
       }
 
       await fetchProducts(businessId, userId);
+      haptics.success();
       setShowForm(false);
       setEditF(null);
 
@@ -793,6 +949,7 @@ export default function FournisseursScreen() {
                       Alert.alert('Supprimer ?', 'Les produits liés seront dissociés.', [
                         { text: 'Annuler', style: 'cancel' },
                         { text: 'Supprimer', style: 'destructive', onPress: async () => {
+                          haptics.error();
                           const ok = await deleteFournisseur(item.id, businessId);
                           if (!ok) Alert.alert('Ce fournisseur a des commandes enregistrées — retirez-les d\'abord :)');
                         }},
@@ -801,7 +958,11 @@ export default function FournisseursScreen() {
                     { text: 'Annuler', style: 'cancel' },
                   ])}
                   onPress={() => router.push(`/fournisseurs/${item.id}`)}
-                  style={({ pressed }) => [styles.fRow, pressed && { opacity: 0.7 }]}>
+                  style={({ pressed }) => [
+                    styles.fRow,
+                    owedAmount > 0 && styles.fRowDebt,
+                    pressed && { opacity: 0.7 },
+                  ]}>
 
                   {/* Avatar + reorder badge */}
                   <View>
@@ -820,14 +981,16 @@ export default function FournisseursScreen() {
                     {item.phone
                       ? <Text variant="caption" color="secondary" numberOfLines={1}>{item.phone}</Text>
                       : null}
-                    {lastOrder
-                      ? <Text variant="caption" color="secondary">Commande {relativeTime(lastOrder)}</Text>
-                      : null}
+                  </View>
+
+                  <View style={{ alignItems: 'flex-end', gap: 4 }}>
+                    {lastOrder && (
+                      <Text variant="caption" color="secondary">{compactTime(lastOrder)}</Text>
+                    )}
                     {owedAmount > 0 && (
-                      <View style={styles.debtPill}>
-                        <Ionicons name="time-outline" size={11} color="#92400E" />
-                        <Text style={styles.debtPillText}>Doit {fmt(owedAmount, currency)}</Text>
-                      </View>
+                      <Text variant="label" style={{ color: palette.warning }}>
+                        − {fmt(owedAmount, currency)}
+                      </Text>
                     )}
                   </View>
 
@@ -843,26 +1006,76 @@ export default function FournisseursScreen() {
         ) : commandes.length === 0 ? (
           <View style={styles.empty}><Text variant="body" color="secondary">Pas encore de commande fournisseur.</Text></View>
         ) : (
-          <FlatList
-            data={commandes}
-            keyExtractor={c => c.id}
-            contentContainerStyle={styles.list}
-            renderItem={({ item }) => (
-              <Pressable onPress={() => openCommandeDetail(item)}
-                style={({ pressed }) => [styles.cRow, pressed && { opacity: 0.75 }]}>
-                <View style={{ flex: 1, gap: 2 }}>
-                  <Text variant="label">{item.supplier_name}</Text>
-                  <Text variant="caption" color="secondary">
-                    {new Date(item.ordered_at).toLocaleDateString('fr-FR')} · {fmt(item.total_cost, currency)}
-                  </Text>
-                </View>
-                <View style={[styles.statusPill, { backgroundColor: STATUS_COLOR[item.status] + '20' }]}>
-                  <Text variant="caption" style={{ color: STATUS_COLOR[item.status] }}>{STATUS_LABEL[item.status]}</Text>
-                </View>
-              </Pressable>
+          <ScrollView contentContainerStyle={styles.list}>
+            {activeGroups.length === 0 && (
+              <Text variant="caption" color="secondary" style={{ textAlign: 'center', paddingVertical: spacing[4] }}>
+                Aucune commande en attente
+              </Text>
             )}
-            ItemSeparatorComponent={() => <View style={{ height: 1, backgroundColor: palette.border }} />}
-          />
+
+            {activeGroups.map(group => (
+              <View key={group.key}>
+                <View style={styles.cDateHeader}>
+                  <Text variant="caption" style={styles.cDateLabel}>{group.label}</Text>
+                </View>
+                <View style={styles.cGroup}>
+                  {group.orders.map((item, idx) => (
+                    <Pressable key={item.id}
+                      onPress={() => openCommandeDetail(item)}
+                      style={({ pressed }) => [
+                        styles.cRow,
+                        idx < group.orders.length - 1 && styles.cRowBorder,
+                        pressed && { opacity: 0.75 },
+                      ]}>
+                      <View style={{ flex: 1, gap: 2 }}>
+                        <Text variant="label">{item.supplier_name}</Text>
+                        <Text variant="caption" color="secondary">{fmt(item.total_cost, currency)}</Text>
+                      </View>
+                      <View style={[styles.statusPill, { backgroundColor: getStatusColor(item.status, palette) + '20' }]}>
+                        <Text variant="caption" style={{ color: getStatusColor(item.status, palette) }}>{STATUS_LABEL[item.status]}</Text>
+                      </View>
+                    </Pressable>
+                  ))}
+                </View>
+              </View>
+            ))}
+
+            {doneCount > 0 && (
+              <>
+                <Pressable onPress={() => setRecuExpanded(e => !e)} style={styles.recuToggle}>
+                  <Text variant="label" color="secondary">Terminées · {doneCount}</Text>
+                  <Ionicons name={recuExpanded ? 'chevron-up' : 'chevron-down'} size={16} color={palette.textDisabled} />
+                </Pressable>
+
+                {recuExpanded && doneGroups.map(group => (
+                  <View key={group.key}>
+                    <View style={styles.cDateHeader}>
+                      <Text variant="caption" style={styles.cDateLabel}>{group.label}</Text>
+                    </View>
+                    <View style={styles.cGroup}>
+                      {group.orders.map((item, idx) => (
+                        <Pressable key={item.id}
+                          onPress={() => openCommandeDetail(item)}
+                          style={({ pressed }) => [
+                            styles.cRow,
+                            idx < group.orders.length - 1 && styles.cRowBorder,
+                            pressed && { opacity: 0.75 },
+                          ]}>
+                          <View style={{ flex: 1, gap: 2 }}>
+                            <Text variant="label">{item.supplier_name}</Text>
+                            <Text variant="caption" color="secondary">{fmt(item.total_cost, currency)}</Text>
+                          </View>
+                          <View style={[styles.statusPill, { backgroundColor: getStatusColor(item.status, palette) + '20' }]}>
+                            <Text variant="caption" style={{ color: getStatusColor(item.status, palette) }}>{STATUS_LABEL[item.status]}</Text>
+                          </View>
+                        </Pressable>
+                      ))}
+                    </View>
+                  </View>
+                ))}
+              </>
+            )}
+          </ScrollView>
         )
       )}
 
@@ -885,7 +1098,7 @@ export default function FournisseursScreen() {
         onSave={async (amount, description, date) => {
           if (!debtTarget) return;
           const ok = await createDebt(businessId, userId, { supplierId: debtTarget.id, amount, description, date });
-          if (ok) { setShowDebtModal(false); setDebtTarget(null); }
+          if (ok) { haptics.success(); setShowDebtModal(false); setDebtTarget(null); }
         }}
       />
 
@@ -895,7 +1108,7 @@ export default function FournisseursScreen() {
         onSave={async (lines) => {
           if (!commandeTarget) return;
           const ok = await createCommande(businessId, userId, { supplierId: commandeTarget.id, lines });
-          if (ok) { setShowCommande(false); setTab('commandes'); }
+          if (ok) { haptics.success(); setShowCommande(false); setTab('commandes'); }
         }}
       />
 
@@ -920,118 +1133,151 @@ export default function FournisseursScreen() {
   );
 }
 
-const styles = StyleSheet.create({
-  safe: { flex: 1, backgroundColor: palette.background },
-  hdr: { flexDirection: 'row', alignItems: 'center', justifyContent: 'space-between', padding: spacing[5], borderBottomWidth: 1, borderBottomColor: palette.border },
-  tabs: { flexDirection: 'row', padding: spacing[4], gap: spacing[2] },
-  tab: { flex: 1, paddingVertical: spacing[2], alignItems: 'center', borderRadius: radius.md, borderWidth: 1, borderColor: palette.border },
-  tabActive: { backgroundColor: palette.primary, borderColor: palette.primary },
-  list: { paddingTop: spacing[2], paddingBottom: spacing[10] },
-  fRow: {
-    flexDirection: 'row', alignItems: 'center', gap: spacing[3],
-    marginHorizontal: spacing[4], marginTop: spacing[3],
-    paddingHorizontal: spacing[4], paddingVertical: spacing[4],
-    backgroundColor: palette.surface,
-    borderRadius: 16,
-    borderWidth: StyleSheet.hairlineWidth, borderColor: palette.border,
-    shadowColor: '#000', shadowOffset: { width: 0, height: 2 },
-    shadowOpacity: 0.06, shadowRadius: 8, elevation: 3,
-  },
-  fAvatar: { width: 46, height: 46, borderRadius: 23, alignItems: 'center', justifyContent: 'center' },
-  fInitials: { fontSize: 17, fontWeight: '700' as const },
-  reorderBadge: {
-    position: 'absolute', top: -4, right: -4,
-    width: 18, height: 18, borderRadius: 9,
-    backgroundColor: palette.danger,
-    alignItems: 'center', justifyContent: 'center',
-    borderWidth: 2, borderColor: palette.background,
-  },
-  reorderBadgeText: { fontSize: 10, fontWeight: '700' as const, color: '#fff' },
-  debtPill: {
-    flexDirection: 'row', alignItems: 'center', gap: 4,
-    alignSelf: 'flex-start',
-    paddingHorizontal: 8, paddingVertical: 3,
-    borderRadius: 20, backgroundColor: '#FEF3C7',
-  },
-  debtPillText: { fontSize: 12, fontWeight: '600' as const, color: '#92400E' },
-  summaryBar: {
-    paddingHorizontal: spacing[5], paddingTop: spacing[3], paddingBottom: spacing[1],
-  },
-  emptyIconWrap: {
-    width: 72, height: 72, borderRadius: 36, backgroundColor: '#EEF2FF',
-    alignItems: 'center', justifyContent: 'center', marginBottom: spacing[4],
-  },
-  cRow: { flexDirection: 'row', alignItems: 'center', gap: spacing[3], paddingHorizontal: spacing[5], paddingVertical: spacing[3], backgroundColor: palette.surface },
-  statusPill: { paddingHorizontal: spacing[2], paddingVertical: 2, borderRadius: radius.sm },
-  offlineBanner: { alignItems: 'center', justifyContent: 'center', paddingVertical: spacing[1], borderBottomWidth: StyleSheet.hairlineWidth, borderBottomColor: palette.border },
-  empty: { flex: 1, alignItems: 'center', justifyContent: 'center', paddingHorizontal: spacing[4] },
-  center: { textAlign: 'center', marginTop: spacing[10] },
+function makeStyles(p: Palette) {
+  return StyleSheet.create({
+    safe: { flex: 1, backgroundColor: p.background },
+    hdr: { flexDirection: 'row', alignItems: 'center', justifyContent: 'space-between', padding: spacing[5], borderBottomWidth: 1, borderBottomColor: p.border },
+    tabs: { flexDirection: 'row', padding: spacing[4], gap: spacing[2] },
+    tab: { flex: 1, paddingVertical: spacing[2], alignItems: 'center', borderRadius: radius.md, borderWidth: 1, borderColor: p.border },
+    tabActive: { backgroundColor: p.primary, borderColor: p.primary },
+    list: { paddingTop: spacing[2], paddingBottom: spacing[10] },
+    fRow: {
+      flexDirection: 'row', alignItems: 'center', gap: spacing[3],
+      marginHorizontal: spacing[4], marginTop: spacing[3],
+      paddingHorizontal: spacing[4], paddingVertical: spacing[4],
+      backgroundColor: p.surface,
+      borderRadius: 16,
+      borderWidth: StyleSheet.hairlineWidth, borderColor: p.border,
+      shadowColor: '#000', shadowOffset: { width: 0, height: 2 },
+      shadowOpacity: 0.06, shadowRadius: 8, elevation: 3,
+    },
+    fRowDebt: {
+      borderLeftWidth: 3,
+      borderLeftColor: p.warning,
+    },
+    fAvatar: { width: 46, height: 46, borderRadius: 23, alignItems: 'center', justifyContent: 'center' },
+    fInitials: { fontSize: 17, fontWeight: '700' as const },
+    reorderBadge: {
+      position: 'absolute', top: -4, right: -4,
+      width: 18, height: 18, borderRadius: 9,
+      backgroundColor: p.danger,
+      alignItems: 'center', justifyContent: 'center',
+      borderWidth: 2, borderColor: p.background,
+    },
+    reorderBadgeText: { fontSize: 10, fontWeight: '700' as const, color: '#fff' },
+    debtPill: {
+      flexDirection: 'row', alignItems: 'center', gap: 4,
+      alignSelf: 'flex-start',
+      paddingHorizontal: 8, paddingVertical: 3,
+      borderRadius: 20, backgroundColor: p.warningLight,
+    },
+    debtPillText: { fontSize: 12, fontWeight: '600' as const, color: p.warning },
+    summaryBar: {
+      paddingHorizontal: spacing[5], paddingTop: spacing[3], paddingBottom: spacing[1],
+    },
+    emptyIconWrap: {
+      width: 72, height: 72, borderRadius: 36, backgroundColor: p.primaryLight,
+      alignItems: 'center', justifyContent: 'center', marginBottom: spacing[4],
+    },
+    cDateHeader: { paddingHorizontal: spacing[5], paddingTop: spacing[4], paddingBottom: spacing[2] },
+    cDateLabel: { fontSize: 12, fontWeight: '600' as const, color: p.textSecondary, textTransform: 'uppercase', letterSpacing: 0.6 },
+    cGroup: {
+      marginHorizontal: spacing[4],
+      backgroundColor: p.surface,
+      borderRadius: 14,
+      borderWidth: StyleSheet.hairlineWidth, borderColor: p.border,
+      shadowColor: '#000', shadowOffset: { width: 0, height: 2 },
+      shadowOpacity: 0.05, shadowRadius: 6, elevation: 2,
+      overflow: 'hidden',
+    },
+    cRow: { flexDirection: 'row', alignItems: 'center', gap: spacing[3], paddingHorizontal: spacing[4], paddingVertical: spacing[3] },
+    cRowBorder: { borderBottomWidth: StyleSheet.hairlineWidth, borderBottomColor: p.border },
+    recuToggle: {
+      flexDirection: 'row', alignItems: 'center', justifyContent: 'space-between',
+      marginHorizontal: spacing[4], marginTop: spacing[4],
+      paddingHorizontal: spacing[4], paddingVertical: spacing[3],
+      backgroundColor: p.surface,
+      borderRadius: 14,
+      borderWidth: StyleSheet.hairlineWidth, borderColor: p.border,
+    },
+    statusPill: { paddingHorizontal: spacing[2], paddingVertical: 2, borderRadius: radius.sm },
+    offlineBanner: { alignItems: 'center', justifyContent: 'center', paddingVertical: spacing[1], borderBottomWidth: StyleSheet.hairlineWidth, borderBottomColor: p.border },
+    empty: { flex: 1, alignItems: 'center', justifyContent: 'center', paddingHorizontal: spacing[4] },
+    center: { textAlign: 'center', marginTop: spacing[10] },
 
-  // Modals shared
-  modalSafe: { flex: 1, backgroundColor: palette.background },
-  mhdr: { flexDirection: 'row', alignItems: 'center', justifyContent: 'space-between', padding: spacing[5], borderBottomWidth: 1, borderBottomColor: palette.border },
-  mpad: { padding: spacing[5], gap: spacing[4], paddingBottom: spacing[10] },
-  mfooter: { padding: spacing[5], borderTopWidth: 1, borderTopColor: palette.border },
+    // Modals shared
+    modalSafe: { flex: 1, backgroundColor: p.background },
+    mhdr: { flexDirection: 'row', alignItems: 'center', justifyContent: 'space-between', padding: spacing[5], borderBottomWidth: 1, borderBottomColor: p.border },
+    mpad: { padding: spacing[5], gap: spacing[4], paddingBottom: spacing[10] },
+    mfooter: { padding: spacing[5], borderTopWidth: 1, borderTopColor: p.border },
 
-  // Form — product selector
-  dropdownTrigger: {
-    flex: 1, flexDirection: 'row', alignItems: 'center', gap: spacing[2],
-    paddingHorizontal: spacing[3], paddingVertical: spacing[2.5],
-    borderRadius: radius.md, borderWidth: 1, borderColor: palette.border,
-    backgroundColor: palette.surface,
-  },
-  prodDropdown: {
-    maxHeight: 150,
-    borderWidth: 1, borderColor: palette.border, borderRadius: radius.md,
-    backgroundColor: palette.surface,
-  },
-  prodDropdownItem: {
-    flexDirection: 'row', alignItems: 'center', gap: spacing[2],
-    paddingHorizontal: spacing[3], paddingVertical: spacing[3],
-    borderBottomWidth: StyleSheet.hairlineWidth, borderBottomColor: palette.border,
-  },
-  // FAB — main screen (mirrors catalogue.tsx)
-  fabContainer: { position: 'absolute', bottom: 194, right: spacing[4], zIndex: 10 },
-  fab: {
-    width: 56, height: 56, borderRadius: radius.full, backgroundColor: palette.primary,
-    alignItems: 'center', justifyContent: 'center',
-    shadowColor: '#000', shadowOffset: { width: 0, height: 4 }, shadowOpacity: 0.18, shadowRadius: 8, elevation: 8,
-  },
-  fabIcon: { fontSize: 28, lineHeight: 32, fontWeight: '300' as const, color: palette.textInverse, marginTop: -2 },
+    // Form — product selector
+    dropdownTrigger: {
+      flex: 1, flexDirection: 'row', alignItems: 'center', gap: spacing[2],
+      paddingHorizontal: spacing[3], paddingVertical: spacing[2.5],
+      borderRadius: radius.md, borderWidth: 1, borderColor: p.border,
+      backgroundColor: p.surface,
+    },
+    prodDropdown: {
+      maxHeight: 150,
+      borderWidth: 1, borderColor: p.border, borderRadius: radius.md,
+      backgroundColor: p.surface,
+    },
+    prodDropdownItem: {
+      flexDirection: 'row', alignItems: 'center', gap: spacing[2],
+      paddingHorizontal: spacing[3], paddingVertical: spacing[3],
+      borderBottomWidth: StyleSheet.hairlineWidth, borderBottomColor: p.border,
+    },
+    // FAB — main screen
+    fabContainer: { position: 'absolute', bottom: 194, right: spacing[4], zIndex: 10 },
+    fab: {
+      width: 56, height: 56, borderRadius: radius.full, backgroundColor: p.primary,
+      alignItems: 'center', justifyContent: 'center',
+      shadowColor: '#000', shadowOffset: { width: 0, height: 4 }, shadowOpacity: 0.18, shadowRadius: 8, elevation: 8,
+    },
+    fabIcon: { fontSize: 28, lineHeight: 32, fontWeight: '300' as const, color: p.textInverse, marginTop: -2 },
 
-  // Circular pulsing badge — inside the form product row
-  addBadge: { width: 44, height: 44, borderRadius: 22, backgroundColor: '#E0E7FF', justifyContent: 'center', alignItems: 'center' },
-  addBadgeActive: { backgroundColor: palette.primary },
-  addBadgePlus: { fontSize: 24, color: palette.primary, lineHeight: 28, fontWeight: '300' as const },
+    // Circular pulsing badge — inside the form product row
+    addBadge: { width: 44, height: 44, borderRadius: 22, backgroundColor: p.primaryLight, justifyContent: 'center', alignItems: 'center' },
+    addBadgeActive: { backgroundColor: p.primary },
+    addBadgePlus: { fontSize: 24, color: p.primary, lineHeight: 28, fontWeight: '300' as const },
 
-  newProdRow: {
-    flexDirection: 'row', alignItems: 'center', gap: spacing[2],
-    borderWidth: 1, borderColor: palette.border, borderRadius: radius.md,
-    paddingHorizontal: spacing[3], paddingVertical: spacing[2],
-    backgroundColor: palette.surface,
-  },
-  newProdInput: { flex: 1, fontSize: 15, color: palette.textPrimary, padding: 0 },
-  confirmBtn: { padding: spacing[1] },
+    newProdRow: {
+      flexDirection: 'row', alignItems: 'center', gap: spacing[2],
+      borderWidth: 1, borderColor: p.border, borderRadius: radius.md,
+      paddingHorizontal: spacing[3], paddingVertical: spacing[2],
+      backgroundColor: p.surface,
+    },
+    newProdInput: { flex: 1, fontSize: 15, color: p.textPrimary, padding: 0 },
+    confirmBtn: { padding: spacing[1] },
 
-  // Success sheet
-  successSheetSafe: { flex: 1 },
-  successTop: { alignItems: 'center', paddingTop: '15%' as unknown as number, paddingHorizontal: spacing[6] },
-  successBadge: { width: 64, height: 64, borderRadius: 32, backgroundColor: '#DCFCE7', alignItems: 'center', justifyContent: 'center', marginBottom: spacing[4] },
-  successActions: { marginTop: 'auto' as unknown as number, width: '100%', paddingHorizontal: spacing[6], paddingBottom: spacing[8] },
-  outlineBtn: { width: '100%', borderWidth: 1, borderColor: palette.primary, borderRadius: radius.md, paddingVertical: 14, alignItems: 'center', marginBottom: spacing[2] },
+    // Success sheet
+    successSheetSafe: { flex: 1 },
+    successTop: { alignItems: 'center', paddingTop: '15%' as unknown as number, paddingHorizontal: spacing[6] },
+    successBadge: { width: 64, height: 64, borderRadius: 32, backgroundColor: p.successLight, alignItems: 'center', justifyContent: 'center', marginBottom: spacing[4] },
+    successActions: { marginTop: 'auto' as unknown as number, width: '100%', paddingHorizontal: spacing[6], paddingBottom: spacing[8] },
+    outlineBtn: { width: '100%', borderWidth: 1, borderColor: p.primary, borderRadius: radius.md, paddingVertical: 14, alignItems: 'center', marginBottom: spacing[2] },
 
-  // Commande form — add-more row
-  addMoreBtn: { flexDirection: 'row', alignItems: 'center', paddingVertical: spacing[3], paddingHorizontal: spacing[1] },
+    // Commande form — add-more row
+    addMoreBtn: { flexDirection: 'row', alignItems: 'center', paddingVertical: spacing[3], paddingHorizontal: spacing[1] },
 
-  // Debt modal
-  debtCtx: { gap: spacing[1] },
+    // Debt modal
+    debtCtx: { gap: spacing[1] },
 
-  // Commande form
-  prodChip: { paddingHorizontal: spacing[3], paddingVertical: spacing[2], marginRight: spacing[2], borderRadius: radius.md, borderWidth: 1, borderColor: palette.border, backgroundColor: palette.surface, maxWidth: 140 },
-  prodChipLinked: { borderColor: palette.primary, backgroundColor: palette.primaryLight },
-  lineCard: { gap: spacing[2] },
-  lineTop: { flexDirection: 'row', alignItems: 'center', justifyContent: 'space-between' },
-  lineInputs: { flexDirection: 'row', gap: spacing[3] },
-  totalRow: { flexDirection: 'row', justifyContent: 'space-between', alignItems: 'center' },
-  dr: { flexDirection: 'row', justifyContent: 'space-between', alignItems: 'center' },
-});
+    // Commande form
+    prodChip: { paddingHorizontal: spacing[3], paddingVertical: spacing[2], marginRight: spacing[2], borderRadius: radius.md, borderWidth: 1, borderColor: p.border, backgroundColor: p.surface, maxWidth: 140 },
+    prodChipLinked: { borderColor: p.primary, backgroundColor: p.primaryLight },
+    lineCard: { gap: spacing[2] },
+    lineTop: { flexDirection: 'row', alignItems: 'center', justifyContent: 'space-between' },
+    lineInputs: { flexDirection: 'row', gap: spacing[3] },
+    totalRow: { flexDirection: 'row', justifyContent: 'space-between', alignItems: 'center' },
+    dr: { flexDirection: 'row', justifyContent: 'space-between', alignItems: 'center' },
+
+    // Receipt selection
+    selectAllRow: { flexDirection: 'row', alignItems: 'center', gap: spacing[3], paddingVertical: spacing[3], borderBottomWidth: 1, borderBottomColor: p.border, marginBottom: spacing[2] },
+    selectRow: { flexDirection: 'row', alignItems: 'center', gap: spacing[3], paddingVertical: spacing[3], borderBottomWidth: StyleSheet.hairlineWidth, borderBottomColor: p.border },
+    stepper: { flexDirection: 'row', alignItems: 'center', gap: spacing[1] },
+    stepBtn: { width: 32, height: 32, borderRadius: 8, borderWidth: 1, borderColor: p.border, alignItems: 'center', justifyContent: 'center', backgroundColor: p.surface },
+    stepVal: { width: 36, textAlign: 'center', fontSize: 16, fontWeight: '700' as const, color: p.textPrimary },
+  });
+}

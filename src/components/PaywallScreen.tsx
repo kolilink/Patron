@@ -1,9 +1,10 @@
-import React, { useState } from 'react';
+import React, { useState, useMemo } from 'react';
 import { Linking, ScrollView, StyleSheet, Pressable, View } from 'react-native';
 import { SafeAreaView } from 'react-native-safe-area-context';
 import { Text } from '@/src/components/ui/Text';
 import { Button } from '@/src/components/ui/Button';
-import { colors, palette, radius, spacing } from '@/src/theme';
+import { useTheme, colors, radius, spacing } from '@/src/theme';
+import type { Palette } from '@/src/theme';
 import type { Business } from '@/src/types';
 
 const STRIPE_ANNUAL_LINK  = 'https://buy.stripe.com/6oU6oH0Bedks9mU7n7d3i01';
@@ -16,6 +17,8 @@ interface Props {
 }
 
 export function PaywallScreen({ business }: Props) {
+  const { palette } = useTheme();
+  const styles = useMemo(() => makeStyles(palette), [palette]);
   const [selected, setSelected] = useState<Plan>('monthly');
 
   const openStripe = () => {
@@ -88,93 +91,95 @@ export function PaywallScreen({ business }: Props) {
   );
 }
 
-const styles = StyleSheet.create({
-  safe: {
-    flex: 1,
-    backgroundColor: palette.background,
-  },
-  container: {
-    flexGrow: 1,
-    paddingHorizontal: spacing[6],
-    paddingTop: spacing[12],
-    paddingBottom: spacing[10],
-    alignItems: 'stretch',
-  },
-  logo: {
-    color: palette.primary,
-    textAlign: 'center',
-    marginBottom: spacing[8],
-  },
-  headline: {
-    textAlign: 'center',
-    color: palette.textPrimary,
-    marginBottom: spacing[3],
-  },
-  sub: {
-    textAlign: 'center',
-    color: palette.textSecondary,
-    marginBottom: spacing[8],
-  },
-  planCard: {
-    backgroundColor: palette.surface,
-    borderRadius: radius.lg,
-    borderWidth: 2,
-    borderColor: palette.border,
-    padding: spacing[5],
-    marginBottom: spacing[4],
-  },
-  planCardSelected: {
-    borderColor: palette.primary,
-    backgroundColor: colors.primary[50],
-  },
-  planCardHeader: {
-    flexDirection: 'row',
-    alignItems: 'center',
-    marginBottom: spacing[2],
-    minHeight: 24,
-  },
-  popularBadge: { flex: 1 },
-  popularText: {
-    fontSize: 11,
-    fontWeight: '700',
-    color: palette.primary,
-    letterSpacing: 0.5,
-  },
-  selectedCheck: {
-    color: palette.primary,
-    fontSize: 18,
-    fontWeight: '700',
-  },
-  planPrice: {
-    color: palette.textPrimary,
-    marginBottom: spacing[1],
-  },
-  planPriceSelected: {
-    color: palette.primary,
-  },
-  planSub: {
-    color: palette.textSecondary,
-  },
-  planBonus: {
-    color: palette.success,
-    fontWeight: '700',
-    marginTop: spacing[1],
-  },
-  cta: {
-    marginTop: spacing[4],
-    marginBottom: spacing[5],
-  },
-  roiText: {
-    fontSize: 13,
-    color: palette.textSecondary,
-    textAlign: 'center',
-    lineHeight: 20,
-    fontStyle: 'italic',
-    marginBottom: spacing[3],
-  },
-  secureText: {
-    fontSize: 12,
-    color: palette.textSecondary,
-    textAlign: 'center',
-  },
-});
+function makeStyles(p: Palette) {
+  return StyleSheet.create({
+    safe: {
+      flex: 1,
+      backgroundColor: p.background,
+    },
+    container: {
+      flexGrow: 1,
+      paddingHorizontal: spacing[6],
+      paddingTop: spacing[12],
+      paddingBottom: spacing[10],
+      alignItems: 'stretch',
+    },
+    logo: {
+      color: p.primary,
+      textAlign: 'center',
+      marginBottom: spacing[8],
+    },
+    headline: {
+      textAlign: 'center',
+      color: p.textPrimary,
+      marginBottom: spacing[3],
+    },
+    sub: {
+      textAlign: 'center',
+      color: p.textSecondary,
+      marginBottom: spacing[8],
+    },
+    planCard: {
+      backgroundColor: p.surface,
+      borderRadius: radius.lg,
+      borderWidth: 2,
+      borderColor: p.border,
+      padding: spacing[5],
+      marginBottom: spacing[4],
+    },
+    planCardSelected: {
+      borderColor: p.primary,
+      backgroundColor: p.primaryLight,
+    },
+    planCardHeader: {
+      flexDirection: 'row',
+      alignItems: 'center',
+      marginBottom: spacing[2],
+      minHeight: 24,
+    },
+    popularBadge: { flex: 1 },
+    popularText: {
+      fontSize: 11,
+      fontWeight: '700',
+      color: p.primary,
+      letterSpacing: 0.5,
+    },
+    selectedCheck: {
+      color: p.primary,
+      fontSize: 18,
+      fontWeight: '700',
+    },
+    planPrice: {
+      color: p.textPrimary,
+      marginBottom: spacing[1],
+    },
+    planPriceSelected: {
+      color: p.primary,
+    },
+    planSub: {
+      color: p.textSecondary,
+    },
+    planBonus: {
+      color: p.success,
+      fontWeight: '700',
+      marginTop: spacing[1],
+    },
+    cta: {
+      marginTop: spacing[4],
+      marginBottom: spacing[5],
+    },
+    roiText: {
+      fontSize: 13,
+      color: p.textSecondary,
+      textAlign: 'center',
+      lineHeight: 20,
+      fontStyle: 'italic',
+      marginBottom: spacing[3],
+    },
+    secureText: {
+      fontSize: 12,
+      color: p.textSecondary,
+      textAlign: 'center',
+    },
+  });
+}

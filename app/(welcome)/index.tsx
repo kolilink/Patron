@@ -1,13 +1,16 @@
-import { useEffect } from 'react';
+import { useEffect, useMemo } from 'react';
 import { StyleSheet, View } from 'react-native';
 import { router } from 'expo-router';
 import { SafeAreaView } from 'react-native-safe-area-context';
 import { Button } from '@/src/components/ui/Button';
 import { Text } from '@/src/components/ui/Text';
-import { palette, spacing } from '@/src/theme';
+import { useTheme, spacing } from '@/src/theme';
+import type { Palette } from '@/src/theme';
 import { useAuthStore } from '@/stores/auth';
 
 export default function WelcomeScreen() {
+  const { palette } = useTheme();
+  const styles = useMemo(() => makeStyles(palette), [palette]);
   const session = useAuthStore(s => s.session);
   const loading = useAuthStore(s => s.loading);
 
@@ -55,20 +58,22 @@ export default function WelcomeScreen() {
   );
 }
 
-const styles = StyleSheet.create({
-  safe: { flex: 1, backgroundColor: palette.background },
-  content: {
-    flex: 1,
-    paddingHorizontal: spacing[8],
-    paddingVertical: spacing[10],
-    justifyContent: 'center',
-    gap: spacing[16],
-  },
-  hero: {
-    alignItems: 'center',
-    gap: spacing[5],
-  },
-  logo: { letterSpacing: -1 },
-  tagline: { textAlign: 'center', lineHeight: 30, color: palette.textSecondary },
-  actions: { gap: spacing[3] },
-});
+function makeStyles(p: Palette) {
+  return StyleSheet.create({
+    safe: { flex: 1, backgroundColor: p.background },
+    content: {
+      flex: 1,
+      paddingHorizontal: spacing[8],
+      paddingVertical: spacing[10],
+      justifyContent: 'center',
+      gap: spacing[16],
+    },
+    hero: {
+      alignItems: 'center',
+      gap: spacing[5],
+    },
+    logo: { letterSpacing: -1 },
+    tagline: { textAlign: 'center', lineHeight: 30, color: p.textSecondary },
+    actions: { gap: spacing[3] },
+  });
+}

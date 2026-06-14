@@ -28,6 +28,7 @@ serve(async (req) => {
       .select('status, phone, user_id')
       .eq('id', verificationId)
       .eq('status', 'verifie')
+      .gt('expires_at', new Date().toISOString())
       .maybeSingle();
 
     if (!verif || verif.phone !== phone.trim()) {
@@ -82,6 +83,12 @@ serve(async (req) => {
 
     const profile = { id: profileId };
 
+    // Consume the verification row now — before generating the magic link.
+    // If link generation fails the row is gone and the user must re-verify,
+    // which is correct: a verified-but-unconsumed row could otherwise be
+    // replayed indefinitely.
+    await serviceClient.from('phone_verifications').delete().eq('id', verificationId);
+
     const { data: { user }, error: userErr } = await serviceClient.auth.admin.getUserById(profile.id);
 
     if (!user) {
@@ -111,8 +118,6 @@ serve(async (req) => {
         status: 500, headers: { ...corsHeaders, 'Content-Type': 'application/json' },
       });
     }
-
-    await serviceClient.from('phone_verifications').delete().eq('id', verificationId);
 
     return new Response(
       JSON.stringify({ token_hash: linkData.properties.hashed_token }),

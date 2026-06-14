@@ -1,15 +1,19 @@
-import { useEffect, useRef, useState } from 'react';
+import { useEffect, useMemo, useRef, useState } from 'react';
 import { Alert, Animated, Easing, FlatList, Linking, Modal, Pressable, ScrollView, Share, StyleSheet, View } from 'react-native';
 import { Ionicons } from '@expo/vector-icons';
 import { SafeAreaView } from 'react-native-safe-area-context';
 import { router } from 'expo-router';
+import { AppSheet } from '@/src/components/ui/AppSheet';
+import { SkeletonList } from '@/src/components/ui/SkeletonPlaceholder';
 import { Button } from '@/src/components/ui/Button';
 import { Card } from '@/src/components/ui/Card';
 import { Text } from '@/src/components/ui/Text';
-import { colors, palette, spacing, radius } from '@/src/theme';
+import { colors, useTheme, spacing, radius } from '@/src/theme';
+import type { Palette } from '@/src/theme';
 import { useAuthStore } from '@/stores/auth';
 import { generateFallbackName } from '@/lib/id';
 import { useEquipeStore, type Membre } from '@/stores/equipe';
+import { haptics } from '@/lib/haptics';
 import type { Role } from '@/src/types';
 
 const ROLES: Role[] = ['manager', 'vendeur', 'investisseur'];
@@ -36,6 +40,8 @@ const ROLE_COLORS: Record<string, string> = {
 };
 
 function RoleBadge({ role }: { role: string }) {
+  const { palette } = useTheme();
+  const styles = useMemo(() => makeStyles(palette), [palette]);
   const c = ROLE_COLORS[role] ?? palette.primary;
   return (
     <View style={[styles.badge, { backgroundColor: c + '20' }]}>
@@ -54,6 +60,8 @@ interface NewCodeModalProps {
 }
 
 function NewCodeModal({ visible, onClose, onGenerate, saving, hasManager }: NewCodeModalProps) {
+  const { palette } = useTheme();
+  const styles = useMemo(() => makeStyles(palette), [palette]);
   const [role, setRole] = useState<Role>('vendeur');
   const [hasInteracted, setHasInteracted] = useState(false);
   const pulseAnim = useRef(new Animated.Value(1)).current;
@@ -175,6 +183,8 @@ interface CodeRevealModalProps {
 }
 
 function CodeRevealModal({ visible, code, role, businessName, onClose }: CodeRevealModalProps) {
+  const { palette } = useTheme();
+  const styles = useMemo(() => makeStyles(palette), [palette]);
   const roleColor = ROLE_COLORS[role] ?? palette.primary;
   const roleLabel = ROLE_LABELS[role];
   const shareMsg = `${businessName} vous invite à rejoindre son équipe sur Patron.\n\nCode d'accès : ${code}\n\nCe code est valable 24 heures.`;
@@ -227,6 +237,8 @@ function CodeRevealModal({ visible, code, role, businessName, onClose }: CodeRev
 }
 
 export default function EquipeScreen() {
+  const { palette } = useTheme();
+  const styles = useMemo(() => makeStyles(palette), [palette]);
   const session = useAuthStore(s => s.session);
   const businessId = session?.activeBusiness?.id ?? '';
   const userId = session?.user.id ?? '';
@@ -237,10 +249,11 @@ export default function EquipeScreen() {
     if (role && role !== 'administrateur') router.back();
   }, [role]);
 
-  const { membres, codes, loading, saving, error, fetchMembres, fetchCodes, createCode, revokeCode, removeMembre, changeRole } = useEquipeStore();
+  const { membres, codes, loading, saving, error, hasFetched, fetchMembres, fetchCodes, createCode, revokeCode, removeMembre, changeRole } = useEquipeStore();
   const [tab, setTab] = useState<'membres' | 'codes'>('membres');
   const [showNewCode, setShowNewCode] = useState(false);
   const [revealData, setRevealData] = useState<{ code: string; role: Role } | null>(null);
+  const [showManagerLimit, setShowManagerLimit] = useState(false);
 
   const hasManager = membres.some(m => m.role === 'manager');
 
@@ -254,11 +267,12 @@ export default function EquipeScreen() {
 
   const handleGenerateCode = async (role: Role) => {
     if (role === 'manager' && hasManager) {
-      Alert.alert('Un seul gérant pour l\'instant', 'Bientôt, vous pourrez avoir plusieurs gérants dans votre commerce.');
+      setShowManagerLimit(true);
       return;
     }
     const code = await createCode(businessId, userId, role);
-    if (!code) { Alert.alert('Le code n\'est pas passé. On réessaie :)'); return; }
+    if (!code) { haptics.error(); Alert.alert('Le code n\'est pas passé. On réessaie :)'); return; }
+    haptics.success();
     setShowNewCode(false);
     setRevealData({ code, role });
   };
@@ -275,7 +289,7 @@ export default function EquipeScreen() {
               text: ROLE_LABELS[r],
               onPress: () => {
                 if (r === 'manager' && hasManager) {
-                  Alert.alert('Un seul gérant pour l\'instant', 'Bientôt, vous pourrez avoir plusieurs gérants dans votre commerce.');
+                  setShowManagerLimit(true);
                   return;
                 }
                 changeRole(m.id, r);
@@ -290,7 +304,7 @@ export default function EquipeScreen() {
         style: 'destructive',
         onPress: () => Alert.alert('Retirer ' + (m.user_name || generateFallbackName(m.user_id)) + ' ?', '', [
           { text: 'Annuler', style: 'cancel' },
-          { text: 'Retirer', style: 'destructive', onPress: () => removeMembre(m.id) },
+          { text: 'Retirer', style: 'destructive', onPress: () => { haptics.error(); removeMembre(m.id); } },
         ]),
       },
       { text: 'Annuler', style: 'cancel' },
@@ -318,8 +332,8 @@ export default function EquipeScreen() {
       </View>
 
       {tab === 'membres' ? (
-        loading && membres.length === 0 ? (
-          <Text variant="body" color="secondary" style={styles.center}>Chargement…</Text>
+        (!hasFetched || loading) && membres.length === 0 ? (
+          <SkeletonList count={5} />
         ) : !loading && membres.length === 0 && error ? (
           <Text variant="body" color="secondary" style={styles.center}>Données non disponibles hors ligne</Text>
         ) : (
@@ -392,7 +406,7 @@ export default function EquipeScreen() {
                         : `Valide · expire ${item.expires_at ? new Date(item.expires_at).toLocaleDateString('fr-FR') : '—'}`}
                     </Text>
                   </View>
-                  <Pressable onPress={() => Alert.alert('Annuler ce code ?', '', [{ text: 'Non', style: 'cancel' }, { text: 'Oui, annuler', style: 'destructive', onPress: () => revokeCode(item.id) }])}>
+                  <Pressable onPress={() => Alert.alert('Annuler ce code ?', '', [{ text: 'Non', style: 'cancel' }, { text: 'Oui, annuler', style: 'destructive', onPress: () => { haptics.error(); revokeCode(item.id); } }])}>
                     <Text variant="caption" color="danger">Supprimer</Text>
                   </Pressable>
                 </View>
@@ -428,39 +442,49 @@ export default function EquipeScreen() {
           onClose={() => setRevealData(null)}
         />
       )}
+
+      <AppSheet
+        visible={showManagerLimit}
+        onClose={() => setShowManagerLimit(false)}
+        icon="people-outline"
+        title="Un seul gérant pour l'instant"
+        body="Bientôt, vous pourrez avoir plusieurs gérants dans votre commerce. Pour l'instant, invitez des vendeurs ou des observateurs."
+      />
     </SafeAreaView>
   );
 }
 
-const styles = StyleSheet.create({
-  safe: { flex: 1, backgroundColor: palette.background },
-  hdr: { flexDirection: 'row', alignItems: 'center', justifyContent: 'space-between', padding: spacing[5], borderBottomWidth: 1, borderBottomColor: palette.border },
-  tabs: { flexDirection: 'row', padding: spacing[4], gap: spacing[2] },
-  tab: { flex: 1, paddingVertical: spacing[2], alignItems: 'center', borderRadius: radius.md, borderWidth: 1, borderColor: palette.border },
-  tabActive: { backgroundColor: palette.primary, borderColor: palette.primary },
-  list: { paddingBottom: spacing[10] },
-  memberRow: { flexDirection: 'row', alignItems: 'center', gap: spacing[3], paddingHorizontal: spacing[5], paddingVertical: spacing[3], backgroundColor: palette.surface },
-  avatar: { width: 40, height: 40, borderRadius: 20, alignItems: 'center', justifyContent: 'center' },
-  nameRow: { flexDirection: 'row', alignItems: 'center', gap: spacing[2] },
-  badge: { paddingHorizontal: spacing[2], paddingVertical: 2, borderRadius: 6 },
-  codeCard: { marginHorizontal: spacing[5], marginVertical: spacing[2], gap: spacing[2] },
-  codeTop: { flexDirection: 'row', alignItems: 'center', justifyContent: 'space-between' },
-  codeMeta: { flexDirection: 'row', alignItems: 'center', justifyContent: 'space-between' },
-  codeStatus: { flexDirection: 'row', alignItems: 'center', gap: spacing[1] },
-  greenDot: { width: 8, height: 8, borderRadius: 4, backgroundColor: colors.success[500] },
-  shareRow: { flexDirection: 'row', alignItems: 'center', gap: spacing[1] },
-  empty: { flex: 1, alignItems: 'center', justifyContent: 'center', padding: spacing[10] },
-  center: { textAlign: 'center', marginTop: spacing[10] },
-  modalSafe: { flex: 1, backgroundColor: palette.background },
-  mhdr: { flexDirection: 'row', alignItems: 'center', justifyContent: 'space-between', padding: spacing[5], borderBottomWidth: 1, borderBottomColor: palette.border },
-  mpad: { padding: spacing[5], gap: spacing[4] },
-  mfooter: { padding: spacing[5], borderTopWidth: 1, borderTopColor: palette.border },
-  revealBody: { flex: 1, alignItems: 'center', justifyContent: 'center', padding: spacing[6], gap: spacing[8] },
-  revealCodeBlock: { alignItems: 'center', gap: spacing[3] },
-  revealCode: { fontSize: 36, lineHeight: 48, fontWeight: '700', color: palette.textPrimary, textAlign: 'center', width: '100%' },
-  revealActions: { width: '100%', gap: spacing[3] },
-  roleGrid: { gap: spacing[2] },
-  roleChip: { padding: spacing[4], borderRadius: radius.lg, borderWidth: 1.5, borderColor: palette.border, gap: 4 },
-  lockedNote: { flexDirection: 'row', alignItems: 'center', gap: spacing[3], backgroundColor: palette.warningLight, borderRadius: radius.md, borderWidth: 1.5, borderColor: palette.warning, padding: spacing[4] },
-  fullBadge: { backgroundColor: palette.border, borderRadius: radius.full, paddingHorizontal: spacing[2], paddingVertical: 2 },
-});
+function makeStyles(p: Palette) {
+  return StyleSheet.create({
+    safe: { flex: 1, backgroundColor: p.background },
+    hdr: { flexDirection: 'row', alignItems: 'center', justifyContent: 'space-between', padding: spacing[5], borderBottomWidth: 1, borderBottomColor: p.border },
+    tabs: { flexDirection: 'row', padding: spacing[4], gap: spacing[2] },
+    tab: { flex: 1, paddingVertical: spacing[2], alignItems: 'center', borderRadius: radius.md, borderWidth: 1, borderColor: p.border },
+    tabActive: { backgroundColor: p.primary, borderColor: p.primary },
+    list: { paddingBottom: spacing[10] },
+    memberRow: { flexDirection: 'row', alignItems: 'center', gap: spacing[3], paddingHorizontal: spacing[5], paddingVertical: spacing[3], backgroundColor: p.surface },
+    avatar: { width: 40, height: 40, borderRadius: 20, alignItems: 'center', justifyContent: 'center' },
+    nameRow: { flexDirection: 'row', alignItems: 'center', gap: spacing[2] },
+    badge: { paddingHorizontal: spacing[2], paddingVertical: 2, borderRadius: 6 },
+    codeCard: { marginHorizontal: spacing[5], marginVertical: spacing[2], gap: spacing[2] },
+    codeTop: { flexDirection: 'row', alignItems: 'center', justifyContent: 'space-between' },
+    codeMeta: { flexDirection: 'row', alignItems: 'center', justifyContent: 'space-between' },
+    codeStatus: { flexDirection: 'row', alignItems: 'center', gap: spacing[1] },
+    greenDot: { width: 8, height: 8, borderRadius: 4, backgroundColor: colors.success[500] },
+    shareRow: { flexDirection: 'row', alignItems: 'center', gap: spacing[1] },
+    empty: { flex: 1, alignItems: 'center', justifyContent: 'center', padding: spacing[10] },
+    center: { textAlign: 'center', marginTop: spacing[10] },
+    modalSafe: { flex: 1, backgroundColor: p.background },
+    mhdr: { flexDirection: 'row', alignItems: 'center', justifyContent: 'space-between', padding: spacing[5], borderBottomWidth: 1, borderBottomColor: p.border },
+    mpad: { padding: spacing[5], gap: spacing[4] },
+    mfooter: { padding: spacing[5], borderTopWidth: 1, borderTopColor: p.border },
+    revealBody: { flex: 1, alignItems: 'center', justifyContent: 'center', padding: spacing[6], gap: spacing[8] },
+    revealCodeBlock: { alignItems: 'center', gap: spacing[3] },
+    revealCode: { fontSize: 36, lineHeight: 48, fontWeight: '700', color: p.textPrimary, textAlign: 'center', width: '100%' },
+    revealActions: { width: '100%', gap: spacing[3] },
+    roleGrid: { gap: spacing[2] },
+    roleChip: { padding: spacing[4], borderRadius: radius.lg, borderWidth: 1.5, borderColor: p.border, gap: 4 },
+    lockedNote: { flexDirection: 'row', alignItems: 'center', gap: spacing[3], backgroundColor: p.warningLight, borderRadius: radius.md, borderWidth: 1.5, borderColor: p.warning, padding: spacing[4] },
+    fullBadge: { backgroundColor: p.border, borderRadius: radius.full, paddingHorizontal: spacing[2], paddingVertical: 2 },
+  });
+}

@@ -145,6 +145,7 @@ export interface SaleOrder extends Base {
   is_credit: boolean;
   paid_at: string | null;
   sale_date: string | null;
+  due_date?: string | null;
   total_amount: number;
   discount_amount: number;
   lines?: SOLine[];
@@ -265,6 +266,10 @@ export interface ChatMessage {
   sender_name: string;
   content: string;
   created_at: string;
+  edited_at?: string | null;
+  reply_to_id?: string | null;
+  reply_to_content?: string | null;
+  reply_to_sender_name?: string | null;
 }
 
 // ─── Forum (Le Marché) ────────────────────────────────────────────────────────
@@ -282,6 +287,7 @@ export interface MarketPost {
   comments_count: number;
   created_at: string;
   updated_at: string;
+  edited_at?: string | null;
 }
 
 export interface MarketComment {

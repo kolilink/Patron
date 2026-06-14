@@ -1,9 +1,10 @@
 import { View } from 'react-native';
 import { Redirect } from 'expo-router';
 import { useAuthStore } from '@/stores/auth';
-import { palette } from '@/src/theme';
+import { useTheme } from '@/src/theme';
 
 export default function Index() {
+  const { palette } = useTheme();
   const session = useAuthStore(s => s.session);
   const loading = useAuthStore(s => s.loading);
   const removedBusinessesOnLogin = useAuthStore(s => s.removedBusinessesOnLogin);

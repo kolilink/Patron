@@ -1,9 +1,6 @@
-import { useEffect, useRef, useState } from 'react';
+import { useEffect, useMemo, useRef, useState } from 'react';
 import {
-  ActivityIndicator,
-  AppState,
   KeyboardAvoidingView,
-  Linking,
   Platform,
   Pressable,
   ScrollView,
@@ -15,13 +12,12 @@ import { SafeAreaView } from 'react-native-safe-area-context';
 import { Ionicons } from '@expo/vector-icons';
 import { Button } from '@/src/components/ui/Button';
 import { Input } from '@/src/components/ui/Input';
+import { OtpInput } from '@/src/components/ui/OtpInput';
 import { Text } from '@/src/components/ui/Text';
 import { PhoneInput } from '@/src/components/ui/PhoneInput';
-import { colors, palette, radius, spacing } from '@/src/theme';
+import { useTheme, radius, spacing } from '@/src/theme';
+import type { Palette } from '@/src/theme';
 import { useAuthStore } from '@/stores/auth';
-import { supabase } from '@/lib/supabase';
-
-const TWILIO_WHATSAPP_NUMBER = '15559897763';
 
 const CURRENCY_LIST = [
   // West Africa
@@ -97,24 +93,24 @@ function inferCurrency(phone: string): string {
   return 'GNF';
 }
 
-type Step = 'phone' | 'attente' | 'details';
+type Step = 'phone' | 'otp' | 'details';
 
 export default function CreerScreen() {
-  const { createPhoneVerification, upgradePhone, createBusiness, loading, error, clearError } = useAuthStore();
+  const { palette } = useTheme();
+  const styles = useMemo(() => makeStyles(palette), [palette]);
+  const { createPhoneVerification, verifyPhoneCode, upgradePhone, createBusiness, loading, error, clearError } = useAuthStore();
   const hasPhone = Boolean(useAuthStore.getState().session?.user.phone);
   const [step, setStep] = useState<Step>(hasPhone ? 'details' : 'phone');
   const [phone, setPhone] = useState('');
   const [phoneComplete, setPhoneComplete] = useState(false);
   const [resetKey, setResetKey] = useState(0);
-  const [token, setToken] = useState('');
-  const [checking, setChecking] = useState(false);
+  const [otpKey, setOtpKey]     = useState(0);
   const [businessName, setBusinessName] = useState('');
   const [currency, setCurrency] = useState('GNF');
   const [pickerOpen, setPickerOpen] = useState(false);
 
   const verificationIdRef = useRef('');
   const phoneRef = useRef('');
-  const channelRef = useRef<ReturnType<typeof supabase.channel> | null>(null);
 
   // Pre-select currency as soon as we have a valid phone number
   useEffect(() => {
@@ -122,13 +118,6 @@ export default function CreerScreen() {
   }, [phone]);
 
   const selectedC = CURRENCY_LIST.find(c => c.code === currency) ?? CURRENCY_LIST[0];
-
-  const handleVerified = async (ph: string) => {
-    await upgradePhone(ph);
-    if (!useAuthStore.getState().error) {
-      setStep('details');
-    }
-  };
 
   const handleCreate = async () => {
     clearError();
@@ -140,49 +129,6 @@ export default function CreerScreen() {
     }
   };
 
-  const checkVerificationStatus = async () => {
-    const id = verificationIdRef.current;
-    const ph = phoneRef.current;
-    if (!id || !ph) return;
-    setChecking(true);
-    const { data } = await supabase
-      .from('phone_verifications')
-      .select('status')
-      .eq('id', id)
-      .single();
-    setChecking(false);
-    if (data?.status === 'verifie') {
-      handleVerified(ph);
-    }
-  };
-
-  useEffect(() => {
-    if (step !== 'attente' || !verificationIdRef.current) return;
-    const channel = supabase
-      .channel(`pv:${verificationIdRef.current}`)
-      .on('postgres_changes', {
-        event: 'UPDATE',
-        schema: 'public',
-        table: 'phone_verifications',
-        filter: `id=eq.${verificationIdRef.current}`,
-      }, (payload) => {
-        if ((payload.new as { status: string }).status === 'verifie') {
-          handleVerified(phoneRef.current);
-        }
-      })
-      .subscribe();
-    channelRef.current = channel;
-    return () => { supabase.removeChannel(channel); channelRef.current = null; };
-  }, [step]);
-
-  useEffect(() => {
-    if (step !== 'attente') return;
-    const sub = AppState.addEventListener('change', (s) => {
-      if (s === 'active') checkVerificationStatus();
-    });
-    return () => sub.remove();
-  }, [step]);
-
   useEffect(() => { clearError(); }, []);
 
   const handleContinuer = async () => {
@@ -191,29 +137,46 @@ export default function CreerScreen() {
     if (!normalized) return;
     const result = await createPhoneVerification(normalized);
     if (result) {
-      setToken(result.token);
       verificationIdRef.current = result.verificationId;
       phoneRef.current = normalized;
-      setStep('attente');
-      checkVerificationStatus();
+      setStep('otp');
     }
   };
 
+  const handleOtpComplete = async (code: string) => {
+    const ok = await verifyPhoneCode(phoneRef.current, code, verificationIdRef.current);
+    if (ok) {
+      await upgradePhone(phoneRef.current);
+      if (!useAuthStore.getState().error) {
+        setStep('details');
+      }
+    } else {
+      setOtpKey(k => k + 1);
+    }
+  };
+
+  const handleResendCreer = async () => {
+    clearError();
+    setOtpKey(k => k + 1);
+    const result = await createPhoneVerification(phoneRef.current);
+    if (result) verificationIdRef.current = result.verificationId;
+  };
+
   const TITLES: Record<Step, string> = {
-    phone: 'Votre numéro WhatsApp',
-    attente: 'Confirmez via WhatsApp',
+    phone: 'Votre numéro',
+    otp: 'Entrez votre code',
     details: 'Votre commerce',
   };
 
   const SUBS: Record<Step, string> = {
-    phone: 'Pas de mot de passe à retenir. Votre WhatsApp est votre identité.',
-    attente: 'Ouvrez WhatsApp et envoyez le code. On détecte automatiquement.',
+    phone: 'Pas de mot de passe à retenir. Votre numéro est votre identité.',
+    otp: 'Votre code Patron a été envoyé par SMS. Il est valable 30 min.',
     details: 'Pour commencer donnez un nom à votre commerce  :)',
   };
 
   return (
     <SafeAreaView style={styles.safe}>
-      <KeyboardAvoidingView behavior={Platform.OS === 'ios' ? 'padding' : undefined} style={styles.kav}>
+      <KeyboardAvoidingView behavior={Platform.OS === 'ios' ? 'padding' : 'height'} style={styles.kav}>
         <ScrollView
           contentContainerStyle={styles.scrollContent}
           keyboardShouldPersistTaps="handled"
@@ -226,8 +189,8 @@ export default function CreerScreen() {
                 label="← Retour"
                 variant="ghost"
                 onPress={() => {
-                  if (step === 'details') { clearError(); setStep('attente'); return; }
-                  if (step === 'attente') { clearError(); setStep('phone'); return; }
+                  if (step === 'details') { clearError(); setStep('otp'); return; }
+                  if (step === 'otp') { clearError(); setStep('phone'); setResetKey(k => k + 1); verificationIdRef.current = ''; phoneRef.current = ''; return; }
                   router.back();
                 }}
                 style={styles.back}
@@ -252,7 +215,7 @@ export default function CreerScreen() {
             {step === 'phone' && (
               <View style={styles.form}>
                 <PhoneInput
-                  label="Numéro WhatsApp"
+                  label="Votre numéro"
                   onChange={(e164, complete) => { setPhone(e164); setPhoneComplete(complete); }}
                   autoFocus
                   resetKey={resetKey}
@@ -261,34 +224,17 @@ export default function CreerScreen() {
               </View>
             )}
 
-            {step === 'attente' && (
-              <View style={styles.form}>
-                <View style={styles.tokenBox}>
-                  <Text variant="label" color="secondary" style={styles.tokenLabel}>Votre code de vérification</Text>
-                  <Text variant="h2" style={styles.tokenText}>{token}</Text>
-                </View>
-
+            {step === 'otp' && (
+              <View style={[styles.form, styles.formCentered]}>
+                <OtpInput key={otpKey} onComplete={handleOtpComplete} disabled={loading} />
+                <Button label="Renvoyer le code" variant="ghost" loading={loading} onPress={handleResendCreer} />
                 <Button
-                  label="Ouvrir WhatsApp"
-                  onPress={() => Linking.openURL(`https://wa.me/${TWILIO_WHATSAPP_NUMBER}?text=${encodeURIComponent(token)}`)}
-                  fullWidth
-                  size="lg"
-                />
-
-                <View style={styles.waitingRow}>
-                  <ActivityIndicator size="small" color={palette.primary} />
-                  <Text variant="body" color="secondary">
-                    {checking ? 'Vérification en cours…' : 'En attente de confirmation…'}
-                  </Text>
-                </View>
-
-                <Button
-                  label="Changer de numéro" variant="ghost"
+                  label="Changer de numéro"
+                  variant="ghost"
                   onPress={() => {
-                    clearError(); setStep('phone'); setToken('');
+                    clearError(); setStep('phone');
                     setResetKey(k => k + 1);
                     verificationIdRef.current = ''; phoneRef.current = '';
-                    if (channelRef.current) { supabase.removeChannel(channelRef.current); channelRef.current = null; }
                   }}
                 />
               </View>
@@ -300,7 +246,7 @@ export default function CreerScreen() {
                   label="Nom de votre commerce"
                   value={businessName}
                   onChangeText={setBusinessName}
-                  placeholder="Ex: Boutique Mamadou"
+                  placeholder="Boutique Mamadou"
                   autoCapitalize="words"
                   returnKeyType="done"
                   onSubmitEditing={handleCreate}
@@ -375,47 +321,34 @@ export default function CreerScreen() {
   );
 }
 
-const styles = StyleSheet.create({
-  safe:          { flex: 1, backgroundColor: palette.background },
-  kav:           { flex: 1 },
-  scrollContent: { flexGrow: 1 },
-  content:       { flex: 1, padding: spacing[6], gap: spacing[8], justifyContent: 'center' },
-  contentTop:    { justifyContent: 'flex-start', paddingBottom: spacing[10] },
-  header:        { gap: spacing[3] },
-  back:          { alignSelf: 'flex-start', marginBottom: spacing[1] },
-  sub:           { lineHeight: 22 },
-  form:          { gap: spacing[4] },
-  errorBox:      { backgroundColor: palette.dangerLight, borderRadius: radius.md, padding: spacing[3] },
+function makeStyles(p: Palette) {
+  return StyleSheet.create({
+    safe:          { flex: 1, backgroundColor: p.background },
+    kav:           { flex: 1 },
+    scrollContent: { flexGrow: 1 },
+    content:       { flex: 1, padding: spacing[6], gap: spacing[8], justifyContent: 'center' },
+    contentTop:    { justifyContent: 'flex-start', paddingBottom: spacing[10] },
+    header:        { gap: spacing[3] },
+    back:          { alignSelf: 'flex-start', marginBottom: spacing[1] },
+    sub:           { lineHeight: 22 },
+    form:          { gap: spacing[4] },
+    formCentered:  { alignItems: 'center' },
+    errorBox:      { backgroundColor: p.dangerLight, borderRadius: radius.md, padding: spacing[3] },
 
-  tokenBox: {
-    alignItems: 'center',
-    backgroundColor: palette.primaryLight,
-    borderRadius: radius.md,
-    borderWidth: 1.5,
-    borderColor: colors.primary[300],
-    paddingVertical: spacing[5],
-    paddingHorizontal: spacing[4],
-    gap: spacing[2],
-  },
-  tokenLabel:  { textTransform: 'uppercase', letterSpacing: 1 },
-  tokenText:   { letterSpacing: 2, color: palette.primary },
-  waitingRow:  { flexDirection: 'row', alignItems: 'center', justifyContent: 'center', gap: spacing[3] },
+    currencyTrigger: {
+      flexDirection: 'row', alignItems: 'center', gap: spacing[3],
+      paddingHorizontal: spacing[4], paddingVertical: spacing[3],
+      backgroundColor: p.primaryLight,
+      borderRadius: radius.md,
+      borderWidth: 1, borderColor: p.primary + '50',
+    },
 
-  // Currency trigger (collapsed state)
-  currencyTrigger: {
-    flexDirection: 'row', alignItems: 'center', gap: spacing[3],
-    paddingHorizontal: spacing[4], paddingVertical: spacing[3],
-    backgroundColor: '#EEF2FF',
-    borderRadius: radius.md,
-    borderWidth: 1, borderColor: palette.primary + '50',
-  },
+    currencyList:        { borderRadius: radius.md, borderWidth: 1, borderColor: p.border, overflow: 'hidden' },
+    currencyRow:         { flexDirection: 'row', alignItems: 'center', gap: spacing[3], paddingHorizontal: spacing[4], paddingVertical: spacing[3], backgroundColor: p.surface },
+    currencyRowSelected: { backgroundColor: p.primaryLight },
+    currencyRowBorder:   { borderBottomWidth: StyleSheet.hairlineWidth, borderBottomColor: p.border },
+    currencyFlag:        { fontSize: 22, width: 30, textAlign: 'center' as const },
 
-  // Currency dropdown list
-  currencyList:       { borderRadius: radius.md, borderWidth: 1, borderColor: palette.border, overflow: 'hidden' },
-  currencyRow:        { flexDirection: 'row', alignItems: 'center', gap: spacing[3], paddingHorizontal: spacing[4], paddingVertical: spacing[3], backgroundColor: palette.surface },
-  currencyRowSelected:{ backgroundColor: '#EEF2FF' },
-  currencyRowBorder:  { borderBottomWidth: StyleSheet.hairlineWidth, borderBottomColor: palette.border },
-  currencyFlag:       { fontSize: 22, width: 30, textAlign: 'center' as const },
-
-  lockNote: { flexDirection: 'row', alignItems: 'center', gap: spacing[2], paddingHorizontal: spacing[1] },
-});
+    lockNote: { flexDirection: 'row', alignItems: 'center', gap: spacing[2], paddingHorizontal: spacing[1] },
+  });
+}

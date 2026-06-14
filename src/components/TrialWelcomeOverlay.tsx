@@ -1,9 +1,10 @@
-import React, { useEffect, useRef } from 'react';
+import React, { useEffect, useRef, useMemo } from 'react';
 import { Animated, Modal, ScrollView, StyleSheet, View } from 'react-native';
 import { SafeAreaView } from 'react-native-safe-area-context';
 import { Text } from '@/src/components/ui/Text';
 import { Button } from '@/src/components/ui/Button';
-import { colors, palette, radius, spacing } from '@/src/theme';
+import { useTheme, colors, radius, spacing } from '@/src/theme';
+import type { Palette } from '@/src/theme';
 
 interface Props {
   businessName: string;
@@ -12,6 +13,8 @@ interface Props {
 }
 
 export function TrialWelcomeOverlay({ businessName, onStart }: Props) {
+  const { palette } = useTheme();
+  const styles = useMemo(() => makeStyles(palette), [palette]);
   const breathAnim = useRef(new Animated.Value(1)).current;
 
   useEffect(() => {
@@ -71,84 +74,86 @@ export function TrialWelcomeOverlay({ businessName, onStart }: Props) {
   );
 }
 
-const styles = StyleSheet.create({
-  safe: {
-    flex: 1,
-    backgroundColor: palette.background,
-  },
-  container: {
-    flexGrow: 1,
-    paddingHorizontal: spacing[7],
-    paddingTop: spacing[16],
-    paddingBottom: spacing[10],
-    alignItems: 'center',
-    justifyContent: 'center',
-    gap: spacing[4],
-  },
+function makeStyles(p: Palette) {
+  return StyleSheet.create({
+    safe: {
+      flex: 1,
+      backgroundColor: p.background,
+    },
+    container: {
+      flexGrow: 1,
+      paddingHorizontal: spacing[7],
+      paddingTop: spacing[16],
+      paddingBottom: spacing[10],
+      alignItems: 'center',
+      justifyContent: 'center',
+      gap: spacing[4],
+    },
 
-  checkCircle: {
-    width: 72,
-    height: 72,
-    borderRadius: 36,
-    borderWidth: 2.5,
-    borderColor: colors.success[600],
-    backgroundColor: colors.success[50],
-    alignItems: 'center',
-    justifyContent: 'center',
-    marginBottom: spacing[2],
-  },
-  checkMark: {
-    fontSize: 30,
-    color: colors.success[600],
-    fontWeight: '800',
-  },
+    checkCircle: {
+      width: 72,
+      height: 72,
+      borderRadius: 36,
+      borderWidth: 2.5,
+      borderColor: colors.success[600],
+      backgroundColor: colors.success[50],
+      alignItems: 'center',
+      justifyContent: 'center',
+      marginBottom: spacing[2],
+    },
+    checkMark: {
+      fontSize: 30,
+      color: colors.success[600],
+      fontWeight: '800',
+    },
 
-  bizName: {
-    fontSize: 24,
-    fontWeight: '800',
-    color: palette.textPrimary,
-    textAlign: 'center',
-    width: '100%',
-  },
-  bizSub: {
-    fontSize: 15,
-    color: palette.textSecondary,
-    marginTop: -spacing[2],
-    marginBottom: spacing[2],
-  },
+    bizName: {
+      fontSize: 24,
+      fontWeight: '800',
+      color: p.textPrimary,
+      textAlign: 'center',
+      width: '100%',
+    },
+    bizSub: {
+      fontSize: 15,
+      color: p.textSecondary,
+      marginTop: -spacing[2],
+      marginBottom: spacing[2],
+    },
 
-  giftCard: {
-    width: '100%',
-    backgroundColor: colors.success[50],
-    borderRadius: radius.xl,
-    borderWidth: 1,
-    borderColor: colors.success[100],
-    paddingVertical: spacing[5],
-    paddingHorizontal: spacing[6],
-    alignItems: 'center',
-  },
-  giftTitle: {
-    fontSize: 16,
-    fontWeight: '700',
-    color: colors.success[700],
-  },
+    giftCard: {
+      width: '100%',
+      backgroundColor: colors.success[50],
+      borderRadius: radius.xl,
+      borderWidth: 1,
+      borderColor: colors.success[100],
+      paddingVertical: spacing[5],
+      paddingHorizontal: spacing[6],
+      alignItems: 'center',
+    },
+    giftTitle: {
+      fontSize: 16,
+      fontWeight: '700',
+      color: colors.success[700],
+    },
 
-  ctaWrapper: {
-    width: '100%',
-    marginTop: spacing[2],
-  },
+    ctaWrapper: {
+      width: '100%',
+      marginTop: spacing[2],
+    },
 
-  roiText: {
-    fontSize: 13,
-    color: palette.textSecondary,
-    textAlign: 'center',
-    lineHeight: 20,
-    fontStyle: 'italic',
-  },
-  priceText: {
-    fontSize: 12,
-    color: palette.textSecondary,
-    textAlign: 'center',
-    marginTop: -spacing[2],
-  },
-});
+    roiText: {
+      fontSize: 13,
+      color: p.textSecondary,
+      textAlign: 'center',
+      lineHeight: 20,
+      fontStyle: 'italic',
+    },
+    priceText: {
+      fontSize: 12,
+      color: p.textSecondary,
+      textAlign: 'center',
+      marginTop: -spacing[2],
+    },
+  });
+}

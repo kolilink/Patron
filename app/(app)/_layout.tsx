@@ -1,12 +1,13 @@
 import { useEffect } from 'react';
-import { Alert, AppState, Pressable, StyleSheet, View } from 'react-native';
+import { Alert, AppState, Pressable, View } from 'react-native';
 import { Redirect, Stack, router } from 'expo-router';
 import { AppLockOverlay } from '@/src/components/AppLockOverlay';
 import { BusinessDrawer } from '@/src/components/BusinessDrawer';
 import { PaywallScreen } from '@/src/components/PaywallScreen';
 import { TrialWelcomeOverlay } from '@/src/components/TrialWelcomeOverlay';
+import { AppToastContainer } from '@/src/components/ui/AppToast';
 import { Text } from '@/src/components/ui/Text';
-import { palette, spacing } from '@/src/theme';
+import { useTheme, spacing } from '@/src/theme';
 import { useAuthStore } from '@/stores/auth';
 import { useChatStore } from '@/stores/chat';
 import { useProductStore } from '@/stores/products';
@@ -29,6 +30,7 @@ function TrialBanner({ business: _business }: { business: Business }) {
 }
 
 function SyncBanner() {
+  const { palette } = useTheme();
   const pendingCount = useSyncStore(s => s.pendingCount);
   const syncing = useSyncStore(s => s.syncing);
   const sync = useSyncStore(s => s.sync);
@@ -48,11 +50,14 @@ function SyncBanner() {
   };
 
   return (
-    <Pressable style={styles.syncBanner} onPress={syncing ? undefined : handleSync}>
-      <Text variant="caption" style={styles.syncText}>
+    <Pressable
+      style={{ backgroundColor: palette.warning, flexDirection: 'row', alignItems: 'center', paddingHorizontal: spacing[5], paddingVertical: spacing[2], gap: spacing[3] }}
+      onPress={syncing ? undefined : handleSync}
+    >
+      <Text variant="caption" style={{ color: '#1C1917', flex: 1 }}>
         {pendingCount} opération{pendingCount > 1 ? 's' : ''} à synchroniser
       </Text>
-      <Text variant="caption" style={[styles.syncAction, syncing && { opacity: 0.5 }]}>
+      <Text variant="caption" style={{ color: '#1C1917', fontWeight: '700', opacity: syncing ? 0.5 : 1 }}>
         {syncing ? 'Synchro…' : '↑ Sync'}
       </Text>
     </Pressable>
@@ -90,44 +95,60 @@ export default function AppLayout() {
     const userId = session?.user.id;
     const businessId = session?.activeBusiness?.id;
     const businessName = session?.activeBusiness?.name ?? '';
-    const currentRole = session?.activeMembership?.role;
 
     if (!userId || !businessId) return;
 
-    const channel = supabase
-      .channel(`membership:${userId}:${businessId}`)
-      .on(
-        'postgres_changes',
-        { event: 'DELETE', schema: 'public', table: 'memberships', filter: `user_id=eq.${userId}` },
-        (payload) => {
-          const removedId = (payload.old as { business_id?: string }).business_id;
-          if (removedId !== businessId) return;
-          const remaining = (session?.memberships ?? []).filter(m => m.business_id !== removedId);
-          if (remaining.length > 0) {
-            handleMembershipRemovedWithFallback(removedId, businessName, remaining);
-          } else {
-            handleMembershipRemoved(businessName);
-          }
-        },
-      )
-      .on(
-        'postgres_changes',
-        { event: 'UPDATE', schema: 'public', table: 'memberships', filter: `user_id=eq.${userId}` },
-        (payload) => {
-          const updated = payload.new as { business_id: string; role: Role };
-          if (updated.business_id === businessId && updated.role !== currentRole) {
-            handleRoleChanged(updated.role);
-            Alert.alert(
-              'Rôle modifié',
-              'Votre rôle a été modifié par le gérant. Vos accès ont été mis à jour.',
-              [{ text: 'OK' }],
-            );
-          }
-        },
-      )
-      .subscribe();
+    let ch: ReturnType<typeof supabase.channel> | null = null;
 
-    return () => { supabase.removeChannel(channel); };
+    const open = () => {
+      if (ch) return;
+      const currentRole = useAuthStore.getState().session?.activeMembership?.role;
+      ch = supabase
+        .channel(`membership:${userId}:${businessId}`)
+        .on(
+          'postgres_changes',
+          { event: 'DELETE', schema: 'public', table: 'memberships', filter: `user_id=eq.${userId}` },
+          (payload) => {
+            const removedId = (payload.old as { business_id?: string }).business_id;
+            if (removedId !== businessId) return;
+            const remaining = (useAuthStore.getState().session?.memberships ?? []).filter(m => m.business_id !== removedId);
+            if (remaining.length > 0) {
+              handleMembershipRemovedWithFallback(removedId, businessName, remaining);
+            } else {
+              handleMembershipRemoved(businessName);
+            }
+          },
+        )
+        .on(
+          'postgres_changes',
+          { event: 'UPDATE', schema: 'public', table: 'memberships', filter: `user_id=eq.${userId}` },
+          (payload) => {
+            const updated = payload.new as { business_id: string; role: Role };
+            if (updated.business_id === businessId && updated.role !== currentRole) {
+              handleRoleChanged(updated.role);
+              Alert.alert(
+                'Rôle modifié',
+                'Votre rôle a été modifié par le gérant. Vos accès ont été mis à jour.',
+                [{ text: 'OK' }],
+              );
+            }
+          },
+        )
+        .subscribe();
+    };
+
+    const close = () => {
+      if (ch) { supabase.removeChannel(ch); ch = null; }
+    };
+
+    open();
+
+    const appStateSub = AppState.addEventListener('change', (nextState) => {
+      if (nextState === 'background') close();
+      else if (nextState === 'active') open();
+    });
+
+    return () => { close(); appStateSub.remove(); };
   }, [session?.user.id, session?.activeBusiness?.id]);
 
   // Load chat rooms + unread counts whenever the active business changes
@@ -153,6 +174,8 @@ export default function AppLayout() {
         // Always refresh expenses on every foreground so the cache stays warm
         // even if the user never visits the dépenses screen.
         useExpensesStore.getState().fetchExpenses(s.activeBusiness.id);
+        // Refresh chat unread counts so the badge stays current without a persistent subscription.
+        void useChatStore.getState().load(s.activeBusiness.id, s.user.id);
 
         if (result.synced > 0) {
           useProductStore.getState().fetchProducts(s.activeBusiness.id, s.user.id);
@@ -185,10 +208,20 @@ export default function AppLayout() {
       }
     };
 
+    const refreshChat = () => {
+      const s = useAuthStore.getState().session;
+      if (s?.activeBusiness?.id && s?.user.id) {
+        void useChatStore.getState().load(s.activeBusiness.id, s.user.id);
+      }
+    };
+
     // Run immediately on mount (catches anything queued while app was closed/offline)
     // Also refresh subscription status so the paywall unlocks immediately after payment.
     void useAuthStore.getState().refreshActiveBusiness();
     trySync();
+
+    // Poll chat unread count every 30 seconds while app is open.
+    const chatInterval = setInterval(refreshChat, 30_000);
 
     const sub = AppState.addEventListener('change', (nextState) => {
       if (nextState === 'active') {
@@ -197,7 +230,7 @@ export default function AppLayout() {
       }
     });
 
-    return () => sub.remove();
+    return () => { clearInterval(chatInterval); sub.remove(); };
   }, [session?.user.id]);
 
   if (loading) return null;
@@ -216,27 +249,8 @@ export default function AppLayout() {
       <Stack screenOptions={{ headerShown: false, animation: 'slide_from_right' }} />
       <BusinessDrawer />
       {/* TrialWelcomeOverlay paused — app is free during early access */}
+      <AppToastContainer />
     </AppLockOverlay>
   );
 }
 
-const styles = StyleSheet.create({
-  root: { flex: 1 },
-  syncBanner: {
-    backgroundColor: '#D97706',
-    flexDirection: 'row',
-    alignItems: 'center',
-    paddingHorizontal: spacing[5],
-    paddingVertical: spacing[2],
-    gap: spacing[3],
-  },
-  syncText: { color: '#fff', flex: 1 },
-  syncAction: { color: '#fff', fontWeight: '700' },
-  trialBanner: {
-    backgroundColor: '#92400E',
-    paddingHorizontal: spacing[5],
-    paddingVertical: spacing[2],
-    alignItems: 'center',
-  },
-  trialText: { color: '#FEF3C7' },
-});

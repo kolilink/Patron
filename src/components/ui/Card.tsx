@@ -1,6 +1,8 @@
-import React from 'react';
+import React, { useMemo } from 'react';
 import { Pressable, StyleSheet, View, ViewProps } from 'react-native';
-import { palette, radius, shadow, spacing } from '../../theme';
+import { useTheme } from '../../theme';
+import { radius, shadow, spacing } from '../../theme';
+import type { Palette } from '../../theme';
 
 interface CardProps extends ViewProps {
   onPress?: () => void;
@@ -9,6 +11,9 @@ interface CardProps extends ViewProps {
 }
 
 export function Card({ onPress, padded = true, elevated = false, style, children, ...props }: CardProps) {
+  const { palette } = useTheme();
+  const styles = useMemo(() => makeStyles(palette), [palette]);
+
   const inner = (
     <View
       style={[
@@ -37,17 +42,19 @@ export function Card({ onPress, padded = true, elevated = false, style, children
   return inner;
 }
 
-const styles = StyleSheet.create({
-  card: {
-    backgroundColor: palette.surface,
-    borderRadius: radius.lg,
-    borderWidth: 1,
-    borderColor: palette.border,
-  },
-  padded: {
-    padding: spacing[4],
-  },
-  pressed: {
-    opacity: 0.88,
-  },
-});
+function makeStyles(p: Palette) {
+  return StyleSheet.create({
+    card: {
+      backgroundColor: p.surface,
+      borderRadius: radius.card,
+      borderWidth: 1,
+      borderColor: p.border,
+    },
+    padded: {
+      padding: spacing[5],
+    },
+    pressed: {
+      opacity: 0.88,
+    },
+  });
+}

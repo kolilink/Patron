@@ -37,6 +37,7 @@ export interface Vente {
   discount_amount: number;
   paid_at: string | null;
   sale_date: string | null;
+  due_date?: string | null;
   created_at: string;
   cancelled_at: string | null;
   cancellation_reason: string | null;
@@ -72,8 +73,19 @@ export const useVentesStore = create<VentesStore>((set, get) => ({
   offlineSince: null,
 
   fetchSales: async (businessId, sellerId, since) => {
-    set({ loading: true, error: null });
     const cacheKey = `${businessId}:${sellerId ?? 'all'}`;
+
+    // Seed from cache on first load so the list is visible while the network fetch runs
+    if (get().sales.length === 0) {
+      const cached = await getVentesCache(cacheKey) as Vente[] | null;
+      if (cached) {
+        set({ sales: cached, loading: false, error: null });
+      } else {
+        set({ loading: true, error: null });
+      }
+    } else {
+      set({ error: null });
+    }
 
     let query = supabase
       .from('sale_orders')
@@ -340,42 +352,36 @@ export const useVentesStore = create<VentesStore>((set, get) => ({
       }));
     };
 
+    let fullySettled = false;
     try {
-      const { error: payErr } = await supabase.from('payments').insert(paymentRows);
-      if (payErr) throw payErr;
-
-      if (fullyPaidIds.length > 0) {
-        await supabase
-          .from('sale_orders')
-          .update({ status: 'paye', paid_at: now })
-          .in('id', fullyPaidIds)
-          .eq('business_id', businessId);
-      }
-
+      // Online: server-side atomic allocation with row locks prevents double-payment
+      const { data: rpcData, error: rpcErr } = await supabase.rpc('record_client_payment', {
+        p_business_id:   businessId,
+        p_customer_name: customerName,
+        p_amount:        Math.round(amount * 100),
+        p_method:        method,
+        p_date:          date,
+      });
+      if (rpcErr) throw rpcErr;
       applyOptimistic();
+      fullySettled = (rpcData as { fully_settled: boolean }).fully_settled;
     } catch (err) {
       if (isNetworkError(err)) {
-        // Queue as record_payment — the drainQueue handler already handles arrays
-        // of payment rows and multiple fully_paid_ids.
         await enqueue('record_payment', { payments: paymentRows, fully_paid_ids: fullyPaidIds });
         const count = await getQueueCount();
         useSyncStore.setState({ pendingCount: count });
         applyOptimistic();
-        // Fall through to compute stillOwed from the now-updated in-memory state.
+        fullySettled = get().sales
+          .filter(s => s.customer_name === customerName && s.business_id === businessId && s.status === 'credit')
+          .reduce((sum, s) => sum + (s.total_amount - (s.discount_amount ?? 0) - (s.amount_paid ?? 0)), 0) < 0.01;
       } else {
         set({ saving: false, error: translateError(err, 'Paiement impossible') });
         return { ok: false, fullySettled: false };
       }
     }
 
-    const stillOwed = get().sales
-      .filter(s => s.customer_name === customerName && s.business_id === businessId && s.status === 'credit')
-      .reduce((sum, s) => sum + (s.total_amount - (s.discount_amount ?? 0) - (s.amount_paid ?? 0)), 0);
-
-    trackEvent('debt_payment_recorded', businessId, null, {
-      fully_settled: stillOwed < 0.01,
-    });
-    return { ok: true, fullySettled: stillOwed < 0.01 };
+    trackEvent('debt_payment_recorded', businessId, null, { fully_settled: fullySettled });
+    return { ok: true, fullySettled };
   },
 
   cancelSale: async (saleId, businessId, _userId, reason) => {

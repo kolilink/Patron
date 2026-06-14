@@ -1,4 +1,4 @@
-import { useEffect, useRef, useState } from 'react';
+import { useEffect, useMemo, useRef, useState } from 'react';
 import {
   Alert, KeyboardAvoidingView, Linking, Modal,
   Platform, Pressable, ScrollView, StyleSheet, View,
@@ -10,7 +10,8 @@ import { Button } from '@/src/components/ui/Button';
 import { Card } from '@/src/components/ui/Card';
 import { Input } from '@/src/components/ui/Input';
 import { Text } from '@/src/components/ui/Text';
-import { palette, spacing, radius } from '@/src/theme';
+import { useTheme, spacing, radius } from '@/src/theme';
+import type { Palette } from '@/src/theme';
 import { useAuthStore } from '@/stores/auth';
 import { useProductStore } from '@/stores/products';
 import {
@@ -28,10 +29,13 @@ const STATUS_LABEL: Record<string, string> = {
   brouillon: 'Non confirmé', envoye: 'Envoyé',
   recu_partiel: 'Partiel', recu: 'Reçu', annule: 'Annulé',
 };
-const STATUS_COLOR: Record<string, string> = {
-  brouillon: palette.textSecondary, envoye: palette.primary,
-  recu_partiel: palette.warning, recu: palette.success, annule: palette.danger,
-};
+function getStatusColor(status: string, p: Palette): string {
+  const map: Record<string, string> = {
+    brouillon: p.textSecondary, envoye: p.primary,
+    recu_partiel: p.warning, recu: p.success, annule: p.danger,
+  };
+  return map[status] ?? p.textSecondary;
+}
 
 // ── Commande Form ─────────────────────────────────────────────────────────────
 
@@ -42,7 +46,9 @@ function CommandeForm({
   currency: string; saving: boolean; onClose: () => void;
   onSave: (lines: { product_id: string; product_name: string; qty: number; unit_cost: number }[], amountPaid: number) => Promise<void>;
 }) {
-  const [lines, setLines] = useState<{ product_id: string; product_name: string; qty: string; unit_cost: string }[]>([]);
+  const { palette } = useTheme();
+  const styles = useMemo(() => makeStyles(palette), [palette]);
+  const [lines, setLines] = useState<{ product_id: string; product_name: string; qty: string; total_cost: string }[]>([]);
   const [showPicker, setShowPicker] = useState(false);
   const [paymentInput, setPaymentInput] = useState('');
   const seededRef = useRef<string | null>(null);
@@ -54,10 +60,10 @@ function CommandeForm({
     seededRef.current = fId;
     setShowPicker(false);
     const linked = products.filter(p => p.supplier_id === fId && !p.archived);
-    setLines(linked.map(p => ({ product_id: p.id, product_name: p.name, qty: '1', unit_cost: String(p.cost_price) })));
+    setLines(linked.map(p => ({ product_id: p.id, product_name: p.name, qty: '1', total_cost: p.cost_price > 0 ? String(p.cost_price) : '' })));
   }, [visible, products, fournisseur.id]);
 
-  const total = lines.reduce((s, l) => s + (parseInt(l.qty) || 0) * (parseFloat(l.unit_cost) || 0), 0);
+  const total = lines.reduce((s, l) => s + (parseFloat(l.total_cost) || 0), 0);
   const parsedPaid = paymentInput.trim() === ''
     ? total
     : (parseFloat(paymentInput.replace(/\s/g, '').replace(',', '.')) || 0);
@@ -87,7 +93,7 @@ function CommandeForm({
                     <Pressable
                       key={p.id}
                       onPress={() => {
-                        setLines(prev => [...prev, { product_id: p.id, product_name: p.name, qty: '1', unit_cost: String(p.cost_price) }]);
+                        setLines(prev => [...prev, { product_id: p.id, product_name: p.name, qty: '1', total_cost: p.cost_price > 0 ? String(p.cost_price) : '' }]);
                         setShowPicker(false);
                       }}
                       style={[styles.prodChip, p.supplier_id === fournisseur.id && styles.prodChipLinked]}>
@@ -119,11 +125,21 @@ function CommandeForm({
                     keyboardType="number-pad" />
                 </View>
                 <View style={{ flex: 2 }}>
-                  <Input label={`Coût (${currency})`} value={l.unit_cost}
-                    onChangeText={v => setLines(prev => prev.map((x, j) => j === i ? { ...x, unit_cost: v } : x))}
+                  <Input label={`Coût total (${currency})`} value={l.total_cost}
+                    onChangeText={v => setLines(prev => prev.map((x, j) => j === i ? { ...x, total_cost: v } : x))}
                     keyboardType="decimal-pad" />
                 </View>
               </View>
+              {(() => {
+                const qty = parseInt(l.qty) || 0;
+                const tc = parseFloat(l.total_cost) || 0;
+                const unit = qty > 0 && tc > 0 ? fmt(tc / qty, currency) : '—';
+                return (
+                  <Text variant="caption" color="secondary">
+                    Prix d'achat unitaire : {unit}
+                  </Text>
+                );
+              })()}
             </Card>
           ))}
 
@@ -171,10 +187,14 @@ function CommandeForm({
             label={saving ? '…' : 'Passer la commande'} loading={saving} fullWidth size="lg"
             disabled={lines.length === 0}
             onPress={() => {
-              const parsed = lines.map(l => ({
-                product_id: l.product_id, product_name: l.product_name,
-                qty: parseInt(l.qty) || 0, unit_cost: parseFloat(l.unit_cost) || 0,
-              }));
+              const parsed = lines.map(l => {
+                const qty = parseInt(l.qty) || 0;
+                const tc = parseFloat(l.total_cost) || 0;
+                return {
+                  product_id: l.product_id, product_name: l.product_name,
+                  qty, unit_cost: qty > 0 ? tc / qty : 0,
+                };
+              });
               const invalid = parsed.find(l => l.qty <= 0 || l.unit_cost <= 0);
               if (invalid) { Alert.alert(`Un petit contrôle sur la quantité et le coût :)`, `"${invalid.product_name}"`); return; }
               const effectivePaid = paymentInput.trim() === '' ? total : parsedPaid;
@@ -192,6 +212,8 @@ function CommandeForm({
 function OrderDetail({ order, currency, onClose }: {
   order: CommandeAchat; currency: string; onClose: () => void;
 }) {
+  const { palette } = useTheme();
+  const styles = useMemo(() => makeStyles(palette), [palette]);
   return (
     <Modal visible animationType="slide" presentationStyle="formSheet" onRequestClose={onClose}>
       <SafeAreaView style={styles.modalSafe} edges={['bottom']}>
@@ -203,7 +225,7 @@ function OrderDetail({ order, currency, onClose }: {
         <ScrollView contentContainerStyle={styles.mpad}>
           <Card style={{ gap: spacing[2] }}>
             <View style={styles.dr}><Text variant="caption" color="secondary">Statut</Text>
-              <Text variant="label" style={{ color: STATUS_COLOR[order.status] }}>{STATUS_LABEL[order.status]}</Text></View>
+              <Text variant="label" style={{ color: getStatusColor(order.status, palette) }}>{STATUS_LABEL[order.status]}</Text></View>
             <View style={styles.dr}><Text variant="caption" color="secondary">Date</Text>
               <Text variant="label">{new Date(order.ordered_at).toLocaleDateString('fr-FR')}</Text></View>
             <View style={styles.dr}><Text variant="caption" color="secondary">Total</Text>
@@ -227,6 +249,8 @@ function OrderDetail({ order, currency, onClose }: {
 // ── Profile screen ────────────────────────────────────────────────────────────
 
 export default function FournisseurProfile() {
+  const { palette } = useTheme();
+  const styles = useMemo(() => makeStyles(palette), [palette]);
   const { id } = useLocalSearchParams<{ id: string }>();
   const session    = useAuthStore(s => s.session);
   const businessId = session?.activeBusiness?.id ?? '';
@@ -236,7 +260,7 @@ export default function FournisseurProfile() {
   const { products, fetchProducts } = useProductStore();
   const {
     fournisseurs, commandes, debts, saving,
-    fetchFournisseurs, fetchCommandes, fetchDebts,
+    fetchFournisseurs, fetchCommandes,
     createCommande, loadCommandeLines, deleteFournisseur, payDebt,
   } = useFournisseursStore();
 
@@ -259,7 +283,6 @@ export default function FournisseurProfile() {
     if (!businessId) return;
     if (fournisseurs.length === 0) fetchFournisseurs(businessId);
     if (products.length === 0) fetchProducts(businessId, userId);
-    fetchDebts(businessId);
     fetchCommandes(businessId);
   }, [businessId]);
 
@@ -404,8 +427,8 @@ export default function FournisseurProfile() {
                 </Text>
                 <Text variant="caption" color="secondary">{fmt(order.total_cost, currency)}</Text>
               </View>
-              <View style={[styles.statusPill, { backgroundColor: STATUS_COLOR[order.status] + '22' }]}>
-                <Text style={[styles.statusText, { color: STATUS_COLOR[order.status] }]}>
+              <View style={[styles.statusPill, { backgroundColor: getStatusColor(order.status, palette) + '22' }]}>
+                <Text style={[styles.statusText, { color: getStatusColor(order.status, palette) }]}>
                   {STATUS_LABEL[order.status]}
                 </Text>
               </View>
@@ -448,7 +471,7 @@ export default function FournisseurProfile() {
             <Text variant="h4">Paiement fournisseur</Text>
             <View style={{ width: 60 }} />
           </View>
-          <KeyboardAvoidingView behavior={Platform.OS === 'ios' ? 'padding' : undefined} style={{ flex: 1 }}>
+          <KeyboardAvoidingView behavior={Platform.OS === 'ios' ? 'padding' : 'height'} style={{ flex: 1 }}>
             <ScrollView contentContainerStyle={styles.mpad} keyboardShouldPersistTaps="handled">
               <Card style={{ padding: spacing[4], gap: spacing[1] }}>
                 <Text variant="caption" color="secondary">Solde dû à {fournisseur.name}</Text>
@@ -459,7 +482,6 @@ export default function FournisseurProfile() {
                 value={payAmount}
                 onChangeText={setPayAmount}
                 keyboardType="decimal-pad"
-                placeholder="0"
               />
             </ScrollView>
             <View style={styles.mfooter}>
@@ -480,64 +502,66 @@ export default function FournisseurProfile() {
   );
 }
 
-const styles = StyleSheet.create({
-  safe:      { flex: 1, backgroundColor: palette.background },
-  header:    { flexDirection: 'row', alignItems: 'center', justifyContent: 'space-between', paddingHorizontal: spacing[5], paddingVertical: spacing[4], borderBottomWidth: StyleSheet.hairlineWidth, borderBottomColor: palette.border },
-  headerBtn: { padding: 4 },
-  scroll:    { paddingBottom: 120 },
+function makeStyles(p: Palette) {
+  return StyleSheet.create({
+    safe:      { flex: 1, backgroundColor: p.background },
+    header:    { flexDirection: 'row', alignItems: 'center', justifyContent: 'space-between', paddingHorizontal: spacing[5], paddingVertical: spacing[4], borderBottomWidth: StyleSheet.hairlineWidth, borderBottomColor: p.border },
+    headerBtn: { padding: 4 },
+    scroll:    { paddingBottom: 120 },
 
-  // Hero
-  hero:     { alignItems: 'center', paddingTop: spacing[8], paddingBottom: spacing[6], paddingHorizontal: spacing[5] },
-  avatar:   { width: 70, height: 70, borderRadius: 35, backgroundColor: '#EEF2FF', alignItems: 'center', justifyContent: 'center' },
-  initials: { fontSize: 26, fontWeight: '700' as const, color: '#4F46E5' },
-  heroName: { fontSize: 22, fontWeight: '700' as const, color: '#1F2937', marginTop: 12, textAlign: 'center' },
-  callBtn:  { flexDirection: 'row', alignItems: 'center', gap: 6, marginTop: 10, paddingHorizontal: 18, paddingVertical: 8, borderRadius: 20, borderWidth: 1.5, borderColor: palette.primary },
-  callText: { fontSize: 14, fontWeight: '600' as const, color: palette.primary },
+    // Hero
+    hero:     { alignItems: 'center', paddingTop: spacing[8], paddingBottom: spacing[6], paddingHorizontal: spacing[5] },
+    avatar:   { width: 70, height: 70, borderRadius: 35, backgroundColor: p.primaryLight, alignItems: 'center', justifyContent: 'center' },
+    initials: { fontSize: 26, lineHeight: 26, fontWeight: '700' as const, color: p.primary, includeFontPadding: false },
+    heroName: { fontSize: 22, fontWeight: '700' as const, color: p.textPrimary, marginTop: 12, textAlign: 'center' },
+    callBtn:  { flexDirection: 'row', alignItems: 'center', gap: 6, marginTop: 10, paddingHorizontal: 18, paddingVertical: 8, borderRadius: 20, borderWidth: 1.5, borderColor: p.primary },
+    callText: { fontSize: 14, fontWeight: '600' as const, color: p.primary },
 
-  // Sections
-  section: { paddingHorizontal: spacing[5], paddingTop: spacing[5], paddingBottom: spacing[2] },
+    // Sections
+    section: { paddingHorizontal: spacing[5], paddingTop: spacing[5], paddingBottom: spacing[2] },
 
-  // Products
-  chipWrap: { flexDirection: 'row', flexWrap: 'wrap', gap: spacing[2] },
-  chip:     { backgroundColor: '#EEF2FF', paddingHorizontal: 12, paddingVertical: 6, borderRadius: 16 },
-  chipText: { fontSize: 13, fontWeight: '500' as const, color: '#4F46E5' },
+    // Products
+    chipWrap: { flexDirection: 'row', flexWrap: 'wrap', gap: spacing[2] },
+    chip:     { backgroundColor: p.primaryLight, paddingHorizontal: 12, paddingVertical: 6, borderRadius: 16 },
+    chipText: { fontSize: 13, fontWeight: '500' as const, color: p.primary },
 
-  // Debt
-  debtCard: { flexDirection: 'row', alignItems: 'center', justifyContent: 'space-between' },
-  debtAmt:  { fontSize: 20, fontWeight: '700' as const, color: palette.danger, marginTop: 2 },
+    // Debt
+    debtCard: { flexDirection: 'row', alignItems: 'center', justifyContent: 'space-between' },
+    debtAmt:  { fontSize: 20, fontWeight: '700' as const, color: p.danger, marginTop: 2 },
 
-  // Orders
-  orderRow:   { flexDirection: 'row', alignItems: 'center', paddingVertical: spacing[3], borderBottomWidth: StyleSheet.hairlineWidth, borderBottomColor: palette.border },
-  statusPill: { paddingHorizontal: spacing[2], paddingVertical: 2, borderRadius: radius.sm },
-  statusText: { fontSize: 12, fontWeight: '500' as const },
+    // Orders
+    orderRow:   { flexDirection: 'row', alignItems: 'center', paddingVertical: spacing[3], borderBottomWidth: StyleSheet.hairlineWidth, borderBottomColor: p.border },
+    statusPill: { paddingHorizontal: spacing[2], paddingVertical: 2, borderRadius: radius.sm },
+    statusText: { fontSize: 12, fontWeight: '500' as const },
 
-  // Footer
-  footer: {
-    position: 'absolute', bottom: 0, left: 0, right: 0,
-    padding: spacing[5], paddingBottom: spacing[8],
-    backgroundColor: palette.background,
-    borderTopWidth: StyleSheet.hairlineWidth, borderTopColor: palette.border,
-  },
+    // Footer
+    footer: {
+      position: 'absolute', bottom: 0, left: 0, right: 0,
+      padding: spacing[5], paddingBottom: spacing[8],
+      backgroundColor: p.background,
+      borderTopWidth: StyleSheet.hairlineWidth, borderTopColor: p.border,
+    },
 
-  // Shared modal styles
-  modalSafe: { flex: 1, backgroundColor: palette.background },
-  mhdr:      { flexDirection: 'row', alignItems: 'center', justifyContent: 'space-between', padding: spacing[5], borderBottomWidth: 1, borderBottomColor: palette.border },
-  mpad:      { padding: spacing[5], gap: spacing[4], paddingBottom: spacing[10] },
-  mfooter:   { padding: spacing[5], borderTopWidth: 1, borderTopColor: palette.border },
+    // Shared modal styles
+    modalSafe: { flex: 1, backgroundColor: p.background },
+    mhdr:      { flexDirection: 'row', alignItems: 'center', justifyContent: 'space-between', padding: spacing[5], borderBottomWidth: 1, borderBottomColor: p.border },
+    mpad:      { padding: spacing[5], gap: spacing[4], paddingBottom: spacing[10] },
+    mfooter:   { padding: spacing[5], borderTopWidth: 1, borderTopColor: p.border },
 
-  // CommandeForm
-  prodChip:       { paddingHorizontal: spacing[3], paddingVertical: spacing[2], marginRight: spacing[2], borderRadius: radius.md, borderWidth: 1, borderColor: palette.border, backgroundColor: palette.surface, maxWidth: 140 },
-  prodChipLinked: { borderColor: palette.primary, backgroundColor: '#EEF2FF' },
-  lineCard:       { gap: spacing[2] },
-  lineTop:        { flexDirection: 'row', alignItems: 'center', justifyContent: 'space-between' },
-  lineInputs:     { flexDirection: 'row', gap: spacing[3] },
-  totalRow:       { flexDirection: 'row', justifyContent: 'space-between', alignItems: 'center' },
-  addMoreBtn:     { flexDirection: 'row', alignItems: 'center', paddingVertical: spacing[3] },
-  owedBanner:     { flexDirection: 'row', alignItems: 'center', gap: 8, backgroundColor: '#FEF3C7', borderColor: '#FCD34D', borderWidth: 1 },
-  owedText:       { flex: 1, fontSize: 13, color: '#92400E' },
-  paidBanner:     { flexDirection: 'row', alignItems: 'center', gap: 8, backgroundColor: '#D1FAE5', borderColor: '#6EE7B7', borderWidth: 1 },
-  paidText:       { flex: 1, fontSize: 13, color: '#065F46' },
+    // CommandeForm
+    prodChip:       { paddingHorizontal: spacing[3], paddingVertical: spacing[2], marginRight: spacing[2], borderRadius: radius.md, borderWidth: 1, borderColor: p.border, backgroundColor: p.surface, maxWidth: 140 },
+    prodChipLinked: { borderColor: p.primary, backgroundColor: p.primaryLight },
+    lineCard:       { gap: spacing[2] },
+    lineTop:        { flexDirection: 'row', alignItems: 'center', justifyContent: 'space-between' },
+    lineInputs:     { flexDirection: 'row', gap: spacing[3] },
+    totalRow:       { flexDirection: 'row', justifyContent: 'space-between', alignItems: 'center' },
+    addMoreBtn:     { flexDirection: 'row', alignItems: 'center', paddingVertical: spacing[3] },
+    owedBanner:     { flexDirection: 'row', alignItems: 'center', gap: 8, backgroundColor: p.warningLight, borderColor: p.warning, borderWidth: 1 },
+    owedText:       { flex: 1, fontSize: 13, color: p.warning },
+    paidBanner:     { flexDirection: 'row', alignItems: 'center', gap: 8, backgroundColor: p.successLight, borderColor: p.success, borderWidth: 1 },
+    paidText:       { flex: 1, fontSize: 13, color: p.success },
 
-  // OrderDetail
-  dr: { flexDirection: 'row', justifyContent: 'space-between', alignItems: 'center' },
-});
+    // OrderDetail
+    dr: { flexDirection: 'row', justifyContent: 'space-between', alignItems: 'center' },
+  });
+}

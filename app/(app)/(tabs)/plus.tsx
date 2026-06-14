@@ -1,23 +1,31 @@
 import { Alert, ScrollView, StyleSheet, View } from 'react-native';
-import { useEffect, useState } from 'react';
+import { useEffect, useMemo, useState } from 'react';
 import { router } from 'expo-router';
 import { SafeAreaView } from 'react-native-safe-area-context';
 import { Ionicons } from '@expo/vector-icons';
 import { Button } from '@/src/components/ui/Button';
 import { Card } from '@/src/components/ui/Card';
 import { Text } from '@/src/components/ui/Text';
-import { colors, palette, spacing } from '@/src/theme';
+import { colors, useTheme, spacing } from '@/src/theme';
+import type { Palette } from '@/src/theme';
 import { useAuthStore } from '@/stores/auth';
 import { generateFallbackName } from '@/lib/id';
 import { type KnownBusiness, getKnownBusinesses, dismissRemovedBusiness } from '@/lib/knownBusinesses';
 
 type IoniconName = React.ComponentProps<typeof Ionicons>['name'];
 
-const ROLE_COLORS: Record<string, string> = {
+const ROLE_COLORS_LIGHT: Record<string, string> = {
   administrateur: colors.role.administrateur,
   manager: colors.role.manager,
   vendeur: colors.role.vendeur,
   investisseur: colors.role.investisseur,
+};
+
+const ROLE_COLORS_DARK: Record<string, string> = {
+  administrateur: '#818CF8',
+  manager: '#38BDF8',
+  vendeur: '#4ADE80',
+  investisseur: '#FCD34D',
 };
 
 interface MenuRowProps {
@@ -28,6 +36,8 @@ interface MenuRowProps {
 }
 
 function MenuRow({ iconName, label, sub, onPress }: MenuRowProps) {
+  const { palette } = useTheme();
+  const styles = useMemo(() => makeStyles(palette), [palette]);
   return (
     <Card onPress={onPress} padded={false} style={styles.menuRow}>
       <View style={styles.menuIconWrap}>
@@ -43,6 +53,8 @@ function MenuRow({ iconName, label, sub, onPress }: MenuRowProps) {
 }
 
 export default function PlusScreen() {
+  const { palette, resolvedScheme } = useTheme();
+  const styles = useMemo(() => makeStyles(palette), [palette]);
   const session = useAuthStore(s => s.session);
   const logout = useAuthStore(s => s.logout);
   const [removedBusinesses, setRemovedBusinesses] = useState<KnownBusiness[]>([]);
@@ -57,7 +69,7 @@ export default function PlusScreen() {
   const user = session?.user;
   const business = session?.activeBusiness;
   const role = session?.activeMembership?.role ?? '';
-  const roleColor = ROLE_COLORS[role] ?? palette.primary;
+  const roleColor = (resolvedScheme === 'dark' ? ROLE_COLORS_DARK : ROLE_COLORS_LIGHT)[role] ?? palette.primary;
   const isAdmin = role === 'administrateur';
   const isManager = role === 'manager' || isAdmin;
   const isVendeur = role === 'vendeur';
@@ -76,8 +88,6 @@ export default function PlusScreen() {
   return (
     <SafeAreaView style={styles.safe} edges={['top']}>
       <ScrollView contentContainerStyle={styles.content} showsVerticalScrollIndicator={false}>
-        <Text variant="h3">Plus</Text>
-
         {/* User + business */}
         <Card style={styles.profileCard}>
           <View style={styles.profileRow}>
@@ -202,20 +212,22 @@ export default function PlusScreen() {
   );
 }
 
-const styles = StyleSheet.create({
-  safe: { flex: 1, backgroundColor: palette.background },
-  content: { padding: spacing[5], gap: spacing[4], paddingBottom: spacing[10] },
-  profileCard: { gap: spacing[3] },
-  profileRow: { flexDirection: 'row', alignItems: 'center', gap: spacing[3] },
-  avatar: { width: 44, height: 44, borderRadius: 22, alignItems: 'center', justifyContent: 'center' },
-  bizRow: { flexDirection: 'row', alignItems: 'center', justifyContent: 'space-between' },
-  badge: { paddingHorizontal: spacing[2], paddingVertical: 2, borderRadius: 6 },
-  section: { gap: spacing[2] },
-  menuRow: {
-    flexDirection: 'row', alignItems: 'center',
-    paddingHorizontal: spacing[4], paddingVertical: spacing[3], gap: spacing[3],
-  },
-  menuIconWrap: { width: 28, alignItems: 'center' },
-  switchCard: { gap: 2 },
-  switchCardActive: { borderWidth: 1.5, borderColor: palette.primary },
-});
+function makeStyles(p: Palette) {
+  return StyleSheet.create({
+    safe: { flex: 1, backgroundColor: p.background },
+    content: { padding: spacing[5], gap: spacing[4], paddingBottom: spacing[10] },
+    profileCard: { gap: spacing[3] },
+    profileRow: { flexDirection: 'row', alignItems: 'center', gap: spacing[3] },
+    avatar: { width: 44, height: 44, borderRadius: 22, alignItems: 'center', justifyContent: 'center' },
+    bizRow: { flexDirection: 'row', alignItems: 'center', justifyContent: 'space-between' },
+    badge: { paddingHorizontal: spacing[2], paddingVertical: 2, borderRadius: 6 },
+    section: { gap: spacing[2] },
+    menuRow: {
+      flexDirection: 'row', alignItems: 'center',
+      paddingHorizontal: spacing[4], paddingVertical: spacing[3], gap: spacing[3],
+    },
+    menuIconWrap: { width: 28, alignItems: 'center' },
+    switchCard: { gap: 2 },
+    switchCardActive: { borderWidth: 1.5, borderColor: p.primary },
+  });
+}

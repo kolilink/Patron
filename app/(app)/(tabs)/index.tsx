@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useRef, useState } from 'react';
+import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { Animated, Easing, Pressable, ScrollView, StyleSheet, View } from 'react-native';
 import { SafeAreaView } from 'react-native-safe-area-context';
 import { router, useFocusEffect } from 'expo-router';
@@ -6,14 +6,17 @@ import { Ionicons } from '@expo/vector-icons';
 import { Button } from '@/src/components/ui/Button';
 import { Card } from '@/src/components/ui/Card';
 import { Text } from '@/src/components/ui/Text';
-import { palette, radius, spacing } from '@/src/theme';
+import { useTheme, radius, spacing } from '@/src/theme';
+import type { Palette } from '@/src/theme';
 import { useAuthStore } from '@/stores/auth';
 import { useProductStore } from '@/stores/products';
 import { useVentesStore } from '@/stores/ventes';
 import { useChatStore } from '@/stores/chat';
+import { useRapportsStore } from '@/stores/rapports';
 import { supabase } from '@/lib/supabase';
 import { isNetworkError } from '@/lib/sync';
 import { saveDashboardKpiCache, getDashboardKpiCache, getKV, setKV } from '@/lib/db';
+import { SkeletonKpiGrid } from '@/src/components/ui/SkeletonPlaceholder';
 
 
 interface KPIs {
@@ -42,7 +45,7 @@ function KpiCard({ label, value, sub, onPress, accent }: {
   label: string; value: string; sub?: string; onPress?: () => void; accent?: string;
 }) {
   return (
-    <Card onPress={onPress} style={[styles.kpi, accent ? { borderLeftWidth: 3, borderLeftColor: accent } : null]}>
+    <Card onPress={onPress} style={[{ gap: spacing[1] }, accent ? { borderLeftWidth: 3, borderLeftColor: accent } : null]}>
       <Text variant="caption" color="secondary">{label}</Text>
       <Text variant="amountLarge" style={accent ? { color: accent } : undefined}>{value}</Text>
       {sub ? <Text variant="caption" color="secondary">{sub}</Text> : null}
@@ -53,6 +56,8 @@ function KpiCard({ label, value, sub, onPress, accent }: {
 function OnboardingStep({ number, label, done, active }: {
   number: number; label: string; done: boolean; active: boolean;
 }) {
+  const { palette } = useTheme();
+  const styles = useMemo(() => makeStyles(palette), [palette]);
   return (
     <View style={styles.onboardingStep}>
       <View style={[
@@ -76,6 +81,8 @@ function OnboardingStep({ number, label, done, active }: {
 }
 
 export default function AccueilScreen() {
+  const { palette } = useTheme();
+  const styles = useMemo(() => makeStyles(palette), [palette]);
   const session = useAuthStore(s => s.session);
   const openBusinessPicker = useAuthStore(s => s.openBusinessDrawer);
   const business = session?.activeBusiness;
@@ -89,6 +96,7 @@ export default function AccueilScreen() {
   const totalUnread = useChatStore(s => s.boutiqueUnread + s.marcheUnread);
 
   const { products, fetchProducts } = useProductStore();
+  const fetchPaymentsAndCogs = useRapportsStore(s => s.fetchPaymentsAndCogs);
   const [kpis, setKpis] = useState<KPIs | null>(null);
   const [bestSellers, setBestSellers] = useState<BestSeller[]>([]);
   const [loading, setLoading] = useState(true);
@@ -96,6 +104,7 @@ export default function AccueilScreen() {
 
   const welcomeBtnScale = useRef(new Animated.Value(1)).current;
   const welcomeBtnOpacity = useRef(new Animated.Value(1)).current;
+  const loadedForRef = useRef<string | null>(null);
 
   const isOwner = !isInvestisseur && !isVendeur;
 
@@ -155,7 +164,16 @@ export default function AccueilScreen() {
   const loadAll = useCallback(async () => {
     if (!businessId) return;
     setIsOffline(false);
-    setLoading(true);
+    if (loadedForRef.current !== businessId) {
+      const cachedKpis = await getDashboardKpiCache(businessId) as KPIs | null;
+      if (cachedKpis) {
+        setKpis(cachedKpis);
+        setLoading(false);
+      } else {
+        setLoading(true);
+      }
+    }
+    void fetchPaymentsAndCogs(businessId);
     try {
       if (isInvestisseur) {
         await Promise.all([loadKpis(), loadBestSellers()]);
@@ -166,6 +184,7 @@ export default function AccueilScreen() {
       if (isNetworkError(err)) setIsOffline(true);
     } finally {
       setLoading(false);
+      loadedForRef.current = businessId;
     }
   }, [businessId, userId, isInvestisseur]);
 
@@ -234,7 +253,7 @@ export default function AccueilScreen() {
         .gte('paid_at', monthStartISO),
       supabase
         .from('sale_orders')
-        .select('id, total_amount, customer_name')
+        .select('id, total_amount, discount_amount, customer_name')
         .eq('business_id', businessId)
         .eq('status', 'credit'),
       supabase
@@ -255,7 +274,7 @@ export default function AccueilScreen() {
         const todaySales = sales.filter(s => (s.sale_date ?? s.created_at.split('T')[0]) === today && s.status !== 'annule');
         const revenueToday = todaySales.filter(s => !s.is_credit).reduce((sum, s) => sum + s.total_amount, 0);
         const creditSales = sales.filter(s => s.status === 'credit');
-        const creditTotalOffline = creditSales.reduce((sum, s) => sum + (s.total_amount - (s.amount_paid ?? 0)), 0);
+        const creditTotalOffline = creditSales.reduce((sum, s) => sum + (s.total_amount - (s.discount_amount ?? 0) - (s.amount_paid ?? 0)), 0);
         const creditCountOffline = new Set(creditSales.map(s => s.customer_name).filter(Boolean)).size
           + creditSales.filter(s => !s.customer_name).length;
 
@@ -277,7 +296,7 @@ export default function AccueilScreen() {
     const sum = (rows: { total_amount?: number; amount?: number }[] | null, key: 'total_amount' | 'amount' = 'total_amount') =>
       (rows ?? []).reduce((s, r) => s + (r[key] ?? 0), 0) / 100;
 
-    type CreditOrder = { id: string; total_amount: number; customer_name: string | null };
+    type CreditOrder = { id: string; total_amount: number; discount_amount: number; customer_name: string | null };
     const creditOrders = (creditRes.data ?? []) as CreditOrder[];
     const creditIds = creditOrders.map(o => o.id);
 
@@ -298,7 +317,7 @@ export default function AccueilScreen() {
       const clientsOwing = new Set<string>();
       let anonCount = 0;
       for (const order of creditOrders) {
-        const remaining = (order.total_amount - (paidByOrder[order.id] ?? 0)) / 100;
+        const remaining = (order.total_amount - (order.discount_amount ?? 0) - (paidByOrder[order.id] ?? 0)) / 100;
         if (remaining > 0.01) {
           creditTotal += remaining;
           if (order.customer_name) clientsOwing.add(order.customer_name);
@@ -334,12 +353,14 @@ export default function AccueilScreen() {
     if (bsErr) throw bsErr;
 
     setBestSellers(
-      (data ?? []).map((r: BestSeller) => ({
-        product_id:    r.product_id,
-        product_name:  r.product_name,
-        total_qty:     Number(r.total_qty),
-        total_revenue: Number(r.total_revenue) / 100,
-      })),
+      (data ?? [])
+        .map((r: BestSeller) => ({
+          product_id:    r.product_id,
+          product_name:  r.product_name,
+          total_qty:     Number(r.total_qty),
+          total_revenue: Number(r.total_revenue) / 100,
+        }))
+        .filter((bs: BestSeller) => bs.total_qty >= 2),
     );
   };
 
@@ -347,10 +368,15 @@ export default function AccueilScreen() {
     p => p.stock_qty <= p.reorder_level && p.reorder_level > 0,
   ).length;
 
+  const visibleBestSellers = useMemo(() => {
+    const archivedIds = new Set(products.filter(p => p.archived).map(p => p.id));
+    return bestSellers.filter(bs => !archivedIds.has(bs.product_id));
+  }, [bestSellers, products]);
+
   const salesCount = kpis?.sales_today ?? 0;
   const delta = (kpis?.revenue_today ?? 0) - (kpis?.revenue_yesterday ?? 0);
   const deltaArrow = delta > 0 ? '↑' : delta < 0 ? '↓' : '—';
-  const deltaColor = delta > 0 ? palette.success : delta < 0 ? palette.danger : palette.textSecondary;
+  const deltaColor = delta > 0 ? palette.success : delta < 0 ? palette.warning : palette.textSecondary;
   const showAttentionCards = (kpis?.credit_count ?? 0) > 0 || lowStock > 0;
 
   return (
@@ -367,9 +393,9 @@ export default function AccueilScreen() {
         <View style={styles.header}>
           <View style={{ flexDirection: 'row', alignItems: 'center' }}>
             <Pressable onPress={openBusinessPicker} hitSlop={10} style={({ pressed }) => [{ opacity: pressed ? 0.5 : 1 }]}>
-              <Ionicons name="menu" size={24} color="#111827" />
+              <Ionicons name="menu" size={24} color={palette.textPrimary} />
             </Pressable>
-            <Text style={{ marginLeft: 12, fontSize: 18, fontWeight: '600', color: '#111827' }} numberOfLines={1}>
+            <Text variant="h4" style={{ marginLeft: 12 }} numberOfLines={1}>
               {business?.name}
             </Text>
           </View>
@@ -387,9 +413,7 @@ export default function AccueilScreen() {
         </View>
 
         {loading ? (
-          <Text variant="body" color="secondary" style={{ textAlign: 'center', marginTop: spacing[6] }}>
-            Chargement…
-          </Text>
+          <SkeletonKpiGrid />
         ) : showOnboarding ? (
           /* ── Onboarding tracker: persisted flag, never re-shows once dismissed ── */
           <Card style={styles.onboarding}>
@@ -422,7 +446,9 @@ export default function AccueilScreen() {
             {/* ── Zone 1: Hero — Today ── */}
             <Card onPress={isInvestisseur ? undefined : () => router.push('/ventes')} style={styles.heroCard}>
               <View style={styles.heroTop}>
-                <Text variant="caption" color="secondary">Aujourd'hui</Text>
+                <Text variant="caption" color="secondary">
+                  Aujourd'hui · {salesCount} vente{salesCount !== 1 ? 's' : ''}
+                </Text>
                 <Text
                   variant="amountLarge"
                   color={salesCount > 0 ? 'success' : undefined}
@@ -432,9 +458,6 @@ export default function AccueilScreen() {
                   minimumFontScale={0.5}
                 >
                   {fmt(kpis?.revenue_today ?? 0, currency)}
-                </Text>
-                <Text variant="caption" color="secondary" style={{ marginTop: spacing[1] }}>
-                  {salesCount} vente{salesCount !== 1 ? 's' : ''}
                 </Text>
               </View>
               <View style={styles.heroComparison}>
@@ -449,9 +472,8 @@ export default function AccueilScreen() {
               <View style={styles.attentionZone}>
                 {(kpis?.credit_count ?? 0) > 0 && (
                   <KpiCard
-                    label="Clients qui doivent"
+                    label={`${kpis?.credit_count} client${(kpis?.credit_count ?? 0) > 1 ? 's' : ''} qui doivent`}
                     value={fmt(kpis?.credit_total ?? 0, currency)}
-                    sub={`${kpis?.credit_count} client${(kpis?.credit_count ?? 0) > 1 ? 's' : ''}`}
                     onPress={isInvestisseur ? undefined : () => router.push('/credits')}
                     accent={palette.warning}
                   />
@@ -473,12 +495,12 @@ export default function AccueilScreen() {
             )}
 
             {/* ── Best sellers ── */}
-            {bestSellers.length > 0 && (
+            {visibleBestSellers.length > 0 && (
               <View style={styles.section}>
                 <Text variant="label" color="secondary" style={styles.sectionTitle}>
                   Produits qui marchent
                 </Text>
-                {bestSellers.map((bs, i) => (
+                {visibleBestSellers.map((bs, i) => (
                   <View key={bs.product_id} style={styles.bsRow}>
                     <Text variant="caption" style={{ width: 20, color: palette.textSecondary }}>#{i + 1}</Text>
                     <Text variant="body" style={{ flex: 1 }} numberOfLines={1}>{bs.product_name}</Text>
@@ -502,83 +524,72 @@ export default function AccueilScreen() {
   );
 }
 
-const styles = StyleSheet.create({
-  safe: { flex: 1, backgroundColor: palette.background },
-  content: { padding: spacing[5], gap: spacing[4], paddingBottom: spacing[10] },
-  header: { paddingBottom: spacing[2], flexDirection: 'row', alignItems: 'center', justifyContent: 'space-between' },
-  chatBtn: { padding: spacing[1] },
-  chatBadge: {
-    position: 'absolute', top: -2, right: -2,
-    minWidth: 16, height: 16, borderRadius: radius.full,
-    backgroundColor: palette.danger,
-    alignItems: 'center', justifyContent: 'center',
-    paddingHorizontal: 3,
-  },
-  chatBadgeText: { fontSize: 9, fontWeight: '700' as const, color: palette.textInverse, lineHeight: 12 },
+function makeStyles(p: Palette) {
+  return StyleSheet.create({
+    safe: { flex: 1, backgroundColor: p.background },
+    content: { padding: spacing[5], gap: spacing[4], paddingBottom: spacing[10] },
+    header: { paddingBottom: spacing[2], flexDirection: 'row', alignItems: 'center', justifyContent: 'space-between' },
+    chatBtn: { padding: spacing[1] },
+    chatBadge: {
+      position: 'absolute', top: -2, right: -2,
+      minWidth: 16, height: 16, borderRadius: radius.full,
+      backgroundColor: p.danger,
+      alignItems: 'center', justifyContent: 'center',
+      paddingHorizontal: 3,
+    },
+    chatBadgeText: { fontSize: 9, fontWeight: '700' as const, color: p.textInverse, lineHeight: 12 },
 
-  // Zone 1
-  heroCard: {},
-  heroTop: {
-    gap: spacing[1],
-  },
-  heroAmount: {
-    fontSize: 52,
-    lineHeight: 60,
-  },
-  heroComparison: {
-    flexDirection: 'row',
-    alignItems: 'center',
-    paddingTop: spacing[3],
-    borderTopWidth: StyleSheet.hairlineWidth,
-    borderTopColor: palette.border,
-  },
+    heroCard: {},
+    heroTop: { gap: spacing[1] },
+    heroAmount: { fontSize: 52, lineHeight: 64 },
+    heroComparison: {
+      flexDirection: 'row',
+      alignItems: 'center',
+      paddingTop: spacing[3],
+      borderTopWidth: StyleSheet.hairlineWidth,
+      borderTopColor: p.border,
+    },
 
-  // Zone 2
-  attentionZone: { gap: spacing[3] },
-  kpi: { gap: spacing[1] },
-  allGood: { textAlign: 'center', paddingVertical: spacing[3] },
+    attentionZone: { gap: spacing[3] },
+    allGood: { textAlign: 'center', paddingVertical: spacing[3] },
+    monthLine: { textAlign: 'center', paddingVertical: spacing[2] },
 
-  // Zone 3
-  monthLine: { textAlign: 'center', paddingVertical: spacing[2] },
+    offlineBanner: {
+      alignItems: 'center', justifyContent: 'center',
+      paddingVertical: spacing[1],
+      borderBottomWidth: StyleSheet.hairlineWidth,
+      borderBottomColor: p.border,
+    },
 
-  // Offline banner — slim ambient strip, Jony Ive: barely there, no action needed
-  offlineBanner: {
-    alignItems: 'center', justifyContent: 'center',
-    paddingVertical: spacing[1],
-    borderBottomWidth: StyleSheet.hairlineWidth,
-    borderBottomColor: palette.border,
-  },
+    welcome: { alignItems: 'center', gap: spacing[4], paddingVertical: spacing[8], paddingHorizontal: spacing[6] },
+    welcomeEmoji: { fontSize: 52, lineHeight: 72 },
+    onboarding: { gap: spacing[2], paddingVertical: spacing[6], paddingHorizontal: spacing[5] },
+    onboardingStep: { flexDirection: 'row', alignItems: 'center', gap: spacing[3], paddingVertical: spacing[2] },
+    onboardingBubble: { width: 32, height: 32, borderRadius: radius.full, borderWidth: 1.5, borderColor: p.border, alignItems: 'center', justifyContent: 'center' },
+    onboardingBubbleDone: { backgroundColor: p.success, borderColor: p.success },
+    onboardingBubbleActive: { backgroundColor: p.primary, borderColor: p.primary },
 
-  // Welcome state
-  welcome: { alignItems: 'center', gap: spacing[4], paddingVertical: spacing[8], paddingHorizontal: spacing[6] },
-  welcomeEmoji: { fontSize: 52, lineHeight: 72 },
-  onboarding: { gap: spacing[2], paddingVertical: spacing[6], paddingHorizontal: spacing[5] },
-  onboardingStep: { flexDirection: 'row', alignItems: 'center', gap: spacing[3], paddingVertical: spacing[2] },
-  onboardingBubble: { width: 32, height: 32, borderRadius: radius.full, borderWidth: 1.5, borderColor: palette.border, alignItems: 'center', justifyContent: 'center' },
-  onboardingBubbleDone: { backgroundColor: palette.success, borderColor: palette.success },
-  onboardingBubbleActive: { backgroundColor: palette.primary, borderColor: palette.primary },
-
-  // Best sellers
-  section: {
-    backgroundColor: palette.surface,
-    borderRadius: 12,
-    borderWidth: 1,
-    borderColor: palette.border,
-    overflow: 'hidden',
-  },
-  sectionTitle: {
-    paddingHorizontal: spacing[4],
-    paddingVertical: spacing[3],
-    borderBottomWidth: 1,
-    borderBottomColor: palette.border,
-  },
-  bsRow: {
-    flexDirection: 'row',
-    alignItems: 'center',
-    gap: spacing[3],
-    paddingHorizontal: spacing[4],
-    paddingVertical: spacing[3],
-    borderBottomWidth: 1,
-    borderBottomColor: palette.border,
-  },
-});
+    section: {
+      backgroundColor: p.surface,
+      borderRadius: radius.card,
+      borderWidth: 1,
+      borderColor: p.border,
+      overflow: 'hidden',
+    },
+    sectionTitle: {
+      paddingHorizontal: spacing[4],
+      paddingVertical: spacing[3],
+      borderBottomWidth: 1,
+      borderBottomColor: p.border,
+    },
+    bsRow: {
+      flexDirection: 'row',
+      alignItems: 'center',
+      gap: spacing[3],
+      paddingHorizontal: spacing[4],
+      paddingVertical: spacing[3],
+      borderBottomWidth: 1,
+      borderBottomColor: p.border,
+    },
+  });
+}

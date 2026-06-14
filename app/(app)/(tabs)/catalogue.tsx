@@ -21,12 +21,15 @@ import { Input } from '@/src/components/ui/Input';
 import { Text } from '@/src/components/ui/Text';
 import { PhoneInput } from '@/src/components/ui/PhoneInput';
 import { Ionicons } from '@expo/vector-icons';
-import { colors, palette, radius, spacing } from '@/src/theme';
+import { colors, useTheme, radius, spacing, fontFamily as FF } from '@/src/theme';
+import type { Palette } from '@/src/theme';
 import type { Product } from '@/src/types';
 import { useAuthStore } from '@/stores/auth';
 import { type CreateProductData, useProductStore } from '@/stores/products';
 import { useFournisseursStore, type Fournisseur } from '@/stores/fournisseurs';
+import { haptics } from '@/lib/haptics';
 import { OfflineNotice } from '@/src/components/ui/OfflineNotice';
+import { SkeletonList } from '@/src/components/ui/SkeletonPlaceholder';
 
 // ─── Helpers ─────────────────────────────────────────────────────────────────
 
@@ -55,6 +58,7 @@ interface FormState {
   other_costs: string;
   sale_price: string;
   initial_stock: string;
+  purchase_qty: string;
   reorder_level: string;
   supplier_id: string;
 }
@@ -66,6 +70,7 @@ const EMPTY_FORM: FormState = {
   other_costs: '',
   sale_price: '',
   initial_stock: '0',
+  purchase_qty: '1',
   reorder_level: '0',
   supplier_id: '',
 };
@@ -78,15 +83,17 @@ function productToForm(p: Product): FormState {
     other_costs: '',
     sale_price: String(p.sale_price),
     initial_stock: '0',
+    purchase_qty: '1',
     reorder_level: String(p.reorder_level),
     supplier_id: p.supplier_id ?? '',
   };
 }
 
 function totalCost(f: FormState): number {
-  return (parseFloat(f.purchase_price) || 0)
-    + (parseFloat(f.shipping_cost) || 0)
-    + (parseFloat(f.other_costs) || 0);
+  // On creation initial_stock is the batch qty; on edit purchase_qty is used.
+  const qty = Math.max(parseFloat(f.initial_stock) || parseFloat(f.purchase_qty) || 1, 1);
+  const fees = (parseFloat(f.shipping_cost) || 0) + (parseFloat(f.other_costs) || 0);
+  return (parseFloat(f.purchase_price) || 0) + fees / qty;
 }
 
 function validateForm(f: FormState): string | null {
@@ -119,6 +126,8 @@ interface SupplierPickerProps {
 }
 
 function SupplierPicker({ fournisseurs, selectedId, onSelect, businessId, userId }: SupplierPickerProps) {
+  const { palette } = useTheme();
+  const styles = useMemo(() => makeStyles(palette), [palette]);
   const { createFournisseur, saving: fSaving } = useFournisseursStore();
   const selected = fournisseurs.find(f => f.id === selectedId);
   const [open, setOpen] = useState(false);
@@ -130,6 +139,7 @@ function SupplierPicker({ fournisseurs, selectedId, onSelect, businessId, userId
     if (!newName.trim()) { Alert.alert('Ajoutez un nom :)'); return; }
     const ok = await createFournisseur(businessId, userId, { name: newName, phone: newPhone });
     if (ok) {
+      haptics.success();
       const latest = useFournisseursStore.getState().fournisseurs.find(f => f.name.trim() === newName.trim());
       if (latest) onSelect(latest.id);
       setShowNewForm(false);
@@ -143,7 +153,7 @@ function SupplierPicker({ fournisseurs, selectedId, onSelect, businessId, userId
       <Pressable onPress={() => setOpen(v => !v)} style={styles.fieldBlock}>
         <Text style={styles.fieldLabel}>Fournisseur</Text>
         <View style={{ flexDirection: 'row', alignItems: 'center' }}>
-          <Text style={[styles.fieldInput, { flex: 1, fontSize: 17, fontWeight: '500' as const }]} numberOfLines={1}>
+          <Text style={[styles.fieldInput, { flex: 1, fontFamily: FF.medium, fontSize: 17 }]} numberOfLines={1}>
             {selected ? selected.name : 'Aucun'}
           </Text>
           <Text style={{ color: palette.textSecondary, fontSize: 13 }}>{open ? '▲' : '▼'}</Text>
@@ -178,7 +188,7 @@ function SupplierPicker({ fournisseurs, selectedId, onSelect, businessId, userId
       )}
       {showNewForm && (
         <View style={styles.newSupplierForm}>
-          <Input label="Nom *" value={newName} onChangeText={setNewName} placeholder="Ex: Marché Central" />
+          <Input label="Nom *" value={newName} onChangeText={setNewName} placeholder="Alimentation, Électronique…" />
           <PhoneInput label="Téléphone (optionnel)" onChange={(e164) => setNewPhone(e164)} strict={false} />
           <View style={{ flexDirection: 'row', gap: spacing[2] }}>
             <Button label="Annuler" onPress={() => { setShowNewForm(false); setNewName(''); setNewPhone(''); }} variant="outline" style={{ flex: 1 }} />
@@ -205,6 +215,8 @@ interface ProductFormProps {
 }
 
 function ProductFormModal({ visible, editing, onClose, onSave, saving, currency, fournisseurs, businessId, userId }: ProductFormProps) {
+  const { palette } = useTheme();
+  const styles = useMemo(() => makeStyles(palette), [palette]);
   const [form, setForm] = useState<FormState>(EMPTY_FORM);
   const [formError, setFormError] = useState<string | null>(null);
   const [showDetails, setShowDetails] = useState(false);
@@ -242,14 +254,16 @@ function ProductFormModal({ visible, editing, onClose, onSave, saving, currency,
   const qty = parseFloat(form.initial_stock) || 0;
   const pp = parseFloat(form.purchase_price) || 0;
   const sp = parseFloat(form.sale_price) || 0;
-  const liveInvested = qty * pp;
+  const computedCost = totalCost(form);
+  const fees = (parseFloat(form.shipping_cost) || 0) + (parseFloat(form.other_costs) || 0);
+  const liveInvested = qty * pp + fees;
   const showLiveCalc = !editing && liveInvested > 0;
-  const showProfitHint = editing && pp > 0 && sp > 0;
+  const showProfitHint = (pp > 0 || computedCost > 0) && sp > 0;
 
   return (
     <Modal visible={visible} animationType="slide" presentationStyle="pageSheet" onRequestClose={onClose}>
         <KeyboardAvoidingView
-          behavior={Platform.OS === 'ios' ? 'padding' : undefined}
+          behavior={Platform.OS === 'ios' ? 'padding' : 'height'}
           keyboardVerticalOffset={Platform.OS === 'ios' ? 46 : 0}
           style={{ flex: 1 }}
         >
@@ -282,7 +296,7 @@ function ProductFormModal({ visible, editing, onClose, onSave, saving, currency,
                   style={styles.fieldInput}
                   value={form.name}
                   onChangeText={set('name')}
-                  placeholder="Ex: Sac de riz 25kg"
+                  placeholder="Huile Palme 5L, Sucre 1kg…"
                   placeholderTextColor={palette.textDisabled}
                 />
               </View>
@@ -297,7 +311,6 @@ function ProductFormModal({ visible, editing, onClose, onSave, saving, currency,
                       value={form.initial_stock}
                       onChangeText={set('initial_stock')}
                       keyboardType="number-pad"
-                      placeholder="0"
                       placeholderTextColor={palette.textDisabled}
                     />
                     <Text style={styles.unitTag}>pcs</Text>
@@ -313,7 +326,6 @@ function ProductFormModal({ visible, editing, onClose, onSave, saving, currency,
                   value={form.purchase_price}
                   onChangeText={set('purchase_price')}
                   keyboardType="decimal-pad"
-                  placeholder="0"
                   placeholderTextColor={palette.textDisabled}
                 />
               </View>
@@ -326,7 +338,6 @@ function ProductFormModal({ visible, editing, onClose, onSave, saving, currency,
                   value={form.sale_price}
                   onChangeText={set('sale_price')}
                   keyboardType="decimal-pad"
-                  placeholder="0"
                   placeholderTextColor={palette.textDisabled}
                 />
               </View>
@@ -341,21 +352,22 @@ function ProductFormModal({ visible, editing, onClose, onSave, saving, currency,
               )}
               {showProfitHint && (
                 <View style={styles.liveCalcBlock}>
-                  <Text style={[styles.liveCalcText, { color: sp > pp ? palette.success : palette.danger }]}>
-                    Gain : {(sp - pp).toLocaleString('fr-FR')} {currency} par unité
+                  <Text style={[styles.liveCalcText, { color: sp > computedCost ? palette.success : palette.danger }]}>
+                    Gain : {(sp - computedCost).toLocaleString('fr-FR')} {currency} par unité
                   </Text>
                 </View>
               )}
 
-              {/* More details toggle — inline accordion, no separate Modal */}
+              {/* Details accordion — edit only; create uses the post-save prompt */}
+              {!!editing && (
               <Pressable onPress={toggleDetails} style={styles.detailsBtn}>
                 <Text variant="body" style={{ color: palette.primary }}>
                   {showDetails ? '▲ Masquer les détails' : '▼ Plus de détails (Stock, Fournisseur…)'}
                 </Text>
               </Pressable>
+              )}
 
-              {/* Inline details accordion */}
-              {showDetails && (
+              {!!editing && showDetails && (
                 <>
                   <SupplierPicker
                     fournisseurs={fournisseurs}
@@ -365,6 +377,20 @@ function ProductFormModal({ visible, editing, onClose, onSave, saving, currency,
                     userId={userId}
                   />
 
+                  {editing && (
+                    <View style={styles.fieldBlock}>
+                      <Text style={styles.fieldLabel}>Quantité de la livraison</Text>
+                      <TextInput
+                        style={styles.fieldInput}
+                        value={form.purchase_qty}
+                        onChangeText={set('purchase_qty')}
+                        keyboardType="number-pad"
+                        placeholderTextColor={palette.textDisabled}
+                      />
+                      <Text variant="caption" color="secondary">Utilisé pour répartir les frais par unité</Text>
+                    </View>
+                  )}
+
                   <View style={styles.fieldBlock}>
                     <Text style={styles.fieldLabel}>Frais de livraison ({currency})</Text>
                     <TextInput
@@ -372,7 +398,6 @@ function ProductFormModal({ visible, editing, onClose, onSave, saving, currency,
                       value={form.shipping_cost}
                       onChangeText={set('shipping_cost')}
                       keyboardType="decimal-pad"
-                      placeholder="0 — optionnel"
                       placeholderTextColor={palette.textDisabled}
                     />
                   </View>
@@ -384,7 +409,6 @@ function ProductFormModal({ visible, editing, onClose, onSave, saving, currency,
                       value={form.other_costs}
                       onChangeText={set('other_costs')}
                       keyboardType="decimal-pad"
-                      placeholder="0 — optionnel"
                       placeholderTextColor={palette.textDisabled}
                     />
                     <Text variant="caption" color="secondary">Douanes, manutention, etc.</Text>
@@ -397,7 +421,6 @@ function ProductFormModal({ visible, editing, onClose, onSave, saving, currency,
                       value={form.reorder_level}
                       onChangeText={set('reorder_level')}
                       keyboardType="number-pad"
-                      placeholder="0"
                       placeholderTextColor={palette.textDisabled}
                     />
                     <Text variant="caption" color="secondary">Alerte quand le stock atteint ce niveau</Text>
@@ -429,6 +452,8 @@ interface StockAdjustProps {
 }
 
 function StockAdjustModal({ visible, product, onClose, onConfirm, saving, currency }: StockAdjustProps) {
+  const { palette } = useTheme();
+  const styles = useMemo(() => makeStyles(palette), [palette]);
   const [qty, setQty] = useState('1');
   const [type, setType] = useState<'entree' | 'perte'>('entree');
   const [note, setNote] = useState('');
@@ -472,9 +497,9 @@ function StockAdjustModal({ visible, product, onClose, onConfirm, saving, curren
             </Pressable>
           </View>
 
-          <Input label="Quantité" value={qty} onChangeText={setQty} keyboardType="number-pad" placeholder="1" />
+          <Input label="Quantité" value={qty} onChangeText={setQty} keyboardType="number-pad" />
           <Input label="Note (optionnel)" value={note} onChangeText={setNote}
-            placeholder="Ex: Livraison fournisseur, casse…" />
+            placeholder="Livraison, retour client, casse" />
         </ScrollView>
 
         <View style={styles.modalFooter}>
@@ -500,11 +525,13 @@ interface ProductRowProps {
   product: Product;
   currency: string;
   onPress: () => void;
+  onLongPress?: () => void;
   archived?: boolean;
-  onRestore?: () => void;
 }
 
 function StockStatus({ product }: { product: Product }) {
+  const { palette } = useTheme();
+  const styles = useMemo(() => makeStyles(palette), [palette]);
   const isOut = product.stock_qty === 0;
   const isLow = !isOut && product.reorder_level > 0 && product.stock_qty <= product.reorder_level;
 
@@ -537,13 +564,18 @@ function productBadgeColor(name: string) {
   return PRODUCT_BADGE_COLORS[sum % PRODUCT_BADGE_COLORS.length];
 }
 
-function ProductRow({ product, currency, onPress, archived, onRestore }: ProductRowProps) {
+function ProductRow({ product, currency, onPress, onLongPress, archived }: ProductRowProps) {
+  const { palette } = useTheme();
+  const styles = useMemo(() => makeStyles(palette), [palette]);
   const badgeBg = productBadgeColor(product.name);
   const initial = product.name.charAt(0).toUpperCase();
 
   if (archived) {
     return (
-      <View style={styles.productRow}>
+      <Pressable
+        onLongPress={onLongPress}
+        style={({ pressed }) => [styles.productRow, pressed && { opacity: 0.65 }]}
+      >
         <View style={[styles.productBadge, { backgroundColor: badgeBg, opacity: 0.5 }]}>
           <Text style={styles.productBadgeText}>{initial}</Text>
         </View>
@@ -552,16 +584,9 @@ function ProductRow({ product, currency, onPress, archived, onRestore }: Product
           <Text style={styles.productStockText}>{product.stock_qty} {product.unit}</Text>
         </View>
         <View style={styles.productRight}>
-          {onRestore && (
-            <Pressable
-              onPress={onRestore}
-              style={({ pressed }) => [styles.restoreBtn, pressed && { opacity: 0.7 }]}
-            >
-              <Text variant="caption" style={{ color: palette.primary, fontWeight: '700' }}>Restaurer</Text>
-            </Pressable>
-          )}
+          <Text style={{ fontSize: 18, color: palette.textDisabled, letterSpacing: 2 }}>···</Text>
         </View>
-      </View>
+      </Pressable>
     );
   }
 
@@ -591,6 +616,8 @@ function ProductRow({ product, currency, onPress, archived, onRestore }: Product
 // ─── Main Screen ──────────────────────────────────────────────────────────────
 
 export default function CatalogueScreen() {
+  const { palette } = useTheme();
+  const styles = useMemo(() => makeStyles(palette), [palette]);
   const session = useAuthStore(s => s.session);
   const business = session?.activeBusiness;
   const userId = session?.user.id ?? '';
@@ -619,6 +646,7 @@ export default function CatalogueScreen() {
   const [adjustTarget, setAdjustTarget] = useState<Product | null>(null);
   const [tab, setTab] = useState<'actifs' | 'archives'>('actifs');
   const [successMsg, setSuccessMsg] = useState('');
+  const [detailPromptProduct, setDetailPromptProduct] = useState<Product | null>(null);
 
   const fabScale   = useRef(new Animated.Value(1)).current;
   const fabOpacity = useRef(new Animated.Value(1)).current;
@@ -668,7 +696,12 @@ export default function CatalogueScreen() {
   const activeFiltered = useMemo(() => {
     const q = search.toLowerCase().trim();
     const base = q ? products.filter(p => p.name.toLowerCase().includes(q)) : products;
-    return [...base].sort((a, b) => (a.stock_qty === 0 ? 1 : 0) - (b.stock_qty === 0 ? 1 : 0));
+    return [...base].sort((a, b) => {
+      const tierA = a.stock_qty === 0 ? 2 : (a.reorder_level > 0 && a.stock_qty <= a.reorder_level ? 1 : 0);
+      const tierB = b.stock_qty === 0 ? 2 : (b.reorder_level > 0 && b.stock_qty <= b.reorder_level ? 1 : 0);
+      if (tierA !== tierB) return tierA - tierB;
+      return a.name.localeCompare(b.name, 'fr');
+    });
   }, [products, search]);
 
   const archivedFiltered = useMemo(() => {
@@ -701,7 +734,7 @@ export default function CatalogueScreen() {
               `"${product.name}" sera retiré du catalogue actif. Vous pourrez le réactiver depuis l'onglet Archivés.`,
               [
                 { text: 'Annuler', style: 'cancel' },
-                { text: 'Archiver', style: 'destructive', onPress: () => archiveProduct(product.id, businessId) },
+                { text: 'Archiver', style: 'destructive', onPress: () => { haptics.error(); archiveProduct(product.id, businessId); } },
               ],
             ),
         });
@@ -713,27 +746,6 @@ export default function CatalogueScreen() {
     [canEdit, archiveProduct],
   );
 
-  const openArchivedOptions = useCallback(
-    (product: Product) => {
-      Alert.alert(
-        product.name,
-        'Ce produit est archivé.',
-        [
-          {
-            text: 'Réactiver',
-            onPress: () =>
-              Alert.alert('Réactiver ce produit ?', '', [
-                { text: 'Annuler', style: 'cancel' },
-                { text: 'Réactiver', onPress: () => restoreProduct(product.id, businessId, userId) },
-              ]),
-          },
-          { text: 'Annuler', style: 'cancel' },
-        ],
-      );
-    },
-    [restoreProduct, businessId, userId],
-  );
-
   const handleSave = useCallback(
     async (data: CreateProductData) => {
       let ok: boolean;
@@ -743,9 +755,21 @@ export default function CatalogueScreen() {
         ok = await createProduct(businessId, userId, data);
       }
       if (ok) {
+        haptics.success();
         setShowForm(false);
         setEditingProduct(null);
-        showSuccess(editingProduct ? 'Produit mis à jour ✓' : 'Produit ajouté ✓');
+        if (editingProduct) {
+          showSuccess('Produit mis à jour ✓');
+        } else {
+          // fetchProducts already ran inside createProduct — find the new product
+          const nameLower = data.name.trim().toLowerCase();
+          const created = useProductStore.getState().products.find(
+            p => p.name.trim().toLowerCase() === nameLower,
+          ) ?? null;
+          setDetailPromptProduct(created);
+          if (!created) showSuccess('Produit ajouté ✓');
+          setTimeout(() => setDetailPromptProduct(null), 8000);
+        }
       }
     },
     [editingProduct, businessId, userId, createProduct, updateProduct, showSuccess],
@@ -766,8 +790,23 @@ export default function CatalogueScreen() {
 
   return (
     <SafeAreaView style={styles.safe} edges={['top']}>
-      {/* Success banner */}
-      {successMsg ? (
+      {/* Post-action banners */}
+      {detailPromptProduct ? (
+        <Pressable
+          style={styles.detailPromptBanner}
+          onPress={() => {
+            setEditingProduct(detailPromptProduct);
+            setShowForm(true);
+            setDetailPromptProduct(null);
+          }}
+        >
+          <View style={{ flex: 1 }}>
+            <Text variant="label" style={{ color: '#fff' }}>{detailPromptProduct.name} ajouté ✓</Text>
+            <Text variant="caption" style={{ color: 'rgba(255,255,255,0.75)' }}>Appuyer pour ajouter les détails</Text>
+          </View>
+          <Text style={{ color: '#fff', fontSize: 20, fontWeight: '300' }}>›</Text>
+        </Pressable>
+      ) : successMsg ? (
         <View style={styles.successBanner}>
           <Text variant="label" style={{ color: '#fff' }}>{successMsg}</Text>
         </View>
@@ -805,28 +844,33 @@ export default function CatalogueScreen() {
 
       {/* Stats row (actifs only) */}
       {products.length > 0 && tab === 'actifs' && (
-        <ScrollView horizontal showsHorizontalScrollIndicator={false} style={styles.statsScroll}
-          contentContainerStyle={styles.statsContent}>
-          <View style={styles.statChip}>
+        <View style={styles.statsCard}>
+          <View style={styles.statCol}>
             <Text variant="caption" color="secondary">Valeur du stock</Text>
-            <Text variant="label">
+            <Text style={styles.statValue}>
               {formatPrice(products.reduce((s, p) => s + p.cost_price * p.stock_qty, 0), currency)}
             </Text>
           </View>
-          <View style={styles.statChip}>
-            <Text variant="caption" color="secondary">En rupture</Text>
-            <Text variant="label" style={{ color: products.filter(p => p.stock_qty === 0).length > 0 ? palette.danger : palette.textPrimary }}>
-              {products.filter(p => p.stock_qty === 0).length}
-            </Text>
-          </View>
-        </ScrollView>
+          {(() => {
+            const outCount = products.filter(p => p.stock_qty === 0).length;
+            if (outCount === 0) return null;
+            return (
+              <>
+                <View style={styles.statDivider} />
+                <View style={styles.statCol}>
+                  <Text variant="caption" color="secondary">En rupture</Text>
+                  <Text style={[styles.statValue, { color: palette.danger }]}>{outCount}</Text>
+                  <Text variant="caption" style={{ color: palette.danger }}>À réapprovisionner</Text>
+                </View>
+              </>
+            );
+          })()}
+        </View>
       )}
 
       {/* Product list */}
       {loading && displayList.length === 0 ? (
-        <View style={styles.emptyState}>
-          <Text variant="body" color="secondary">Chargement…</Text>
-        </View>
+        <SkeletonList count={8} />
       ) : displayList.length === 0 ? (
         <View style={styles.emptyState}>
           {tab === 'archives' ? (
@@ -861,11 +905,20 @@ export default function CatalogueScreen() {
               currency={currency}
               archived={tab === 'archives'}
               onPress={() => tab === 'archives' ? undefined : openOptions(item)}
-              onRestore={tab === 'archives' ? () =>
-                Alert.alert('Restaurer ce produit ?', `"${item.name}" sera remis dans le catalogue actif.`, [
-                  { text: 'Annuler', style: 'cancel' },
-                  { text: 'Restaurer', onPress: () => restoreProduct(item.id, businessId, userId) },
-                ]) : undefined}
+              onLongPress={tab === 'archives' ? () =>
+                Alert.alert(
+                  item.name,
+                  'Ce produit est archivé.',
+                  [
+                    { text: 'Réactiver', onPress: () =>
+                      Alert.alert('Réactiver ce produit ?', `"${item.name}" sera remis dans le catalogue actif.`, [
+                        { text: 'Annuler', style: 'cancel' },
+                        { text: 'Réactiver', onPress: () => restoreProduct(item.id, businessId, userId) },
+                      ])
+                    },
+                    { text: 'Annuler', style: 'cancel' },
+                  ],
+                ) : undefined}
             />
           )}
           ItemSeparatorComponent={() => <View style={styles.separator} />}
@@ -916,189 +969,167 @@ export default function CatalogueScreen() {
 
 // ─── Styles ───────────────────────────────────────────────────────────────────
 
-const styles = StyleSheet.create({
-  safe: { flex: 1, backgroundColor: palette.background },
-  successBanner: {
-    backgroundColor: palette.success, paddingHorizontal: spacing[5], paddingVertical: spacing[3],
-    alignItems: 'center',
-  },
-  header: {
-    flexDirection: 'row', alignItems: 'center', justifyContent: 'space-between',
-    paddingHorizontal: spacing[5], paddingTop: spacing[4], paddingBottom: spacing[3],
-  },
-  tabRow: {
-    flexDirection: 'row', gap: spacing[2],
-    paddingHorizontal: spacing[5], paddingBottom: spacing[3],
-  },
-  tabChip: {
-    paddingHorizontal: spacing[4], paddingVertical: spacing[1.5],
-    borderRadius: radius.full, borderWidth: 1, borderColor: palette.border,
-    backgroundColor: palette.surface,
-  },
-  tabChipActive: { backgroundColor: palette.primary, borderColor: palette.primary },
-  alertBanner: {
-    backgroundColor: colors.warning[50], paddingHorizontal: spacing[5], paddingVertical: spacing[2],
-    borderBottomWidth: 1, borderBottomColor: colors.warning[100],
-  },
-  searchRow: { paddingHorizontal: spacing[5], paddingBottom: spacing[3] },
-  statsScroll: { flexGrow: 0 },
-  statsContent: {
-    paddingHorizontal: spacing[5], paddingBottom: spacing[3], gap: spacing[2], flexDirection: 'row',
-  },
-  statChip: {
-    backgroundColor: palette.surface, borderWidth: 1, borderColor: palette.border,
-    borderRadius: radius.md, paddingHorizontal: spacing[3], paddingVertical: spacing[2],
-    gap: 2, alignItems: 'center', minWidth: 100,
-  },
-  list: { paddingHorizontal: spacing[5], paddingBottom: spacing[10] },
-  separator: { height: 0 },
-  productRow: {
-    flexDirection: 'row', alignItems: 'center',
-    paddingVertical: 14,
-    borderBottomWidth: 1, borderBottomColor: '#F3F4F6',
-    backgroundColor: palette.surface,
-  },
-  productBadge: {
-    width: 40, height: 40, borderRadius: 8,
-    alignItems: 'center', justifyContent: 'center',
-    marginRight: 0,
-  },
-  productBadgeText: { fontSize: 16, fontWeight: '600', color: '#374151' },
-  productCenter: { flex: 1, paddingLeft: 12, gap: 3 },
-  productName: { fontSize: 16, fontWeight: '600', color: '#111827' },
-  productStockText: { fontSize: 13, color: '#6B7280' },
-  stockLowRow: {
-    flexDirection: 'row', alignItems: 'center', gap: 4,
-    alignSelf: 'flex-start',
-    backgroundColor: '#FFFBEB',
-    borderRadius: 99,
-    paddingHorizontal: 8, paddingVertical: 3,
-  },
-  stockLowText: { fontSize: 12, fontWeight: '500', color: '#B45309' },
-  stockOutRow: {
-    flexDirection: 'row', alignItems: 'center', gap: 4,
-    alignSelf: 'flex-start',
-    backgroundColor: colors.danger[50],
-    borderRadius: 99,
-    paddingHorizontal: 8, paddingVertical: 3,
-  },
-  stockOutText: { fontSize: 12, fontWeight: '600', color: colors.danger[600] },
-  productMeta: { flexDirection: 'row', gap: spacing[2], alignItems: 'center' },
-  categoryBadge: {
-    backgroundColor: palette.primaryLight, borderRadius: radius.sm,
-    paddingHorizontal: spacing[1.5], paddingVertical: 2,
-  },
-  bulkBadge: {
-    backgroundColor: colors.warning[50], borderRadius: radius.sm,
-    paddingHorizontal: spacing[1.5], paddingVertical: 2, borderWidth: 1, borderColor: colors.warning[100],
-  },
-  productRight: { alignItems: 'flex-end' },
-  priceText: { fontSize: 15, fontWeight: '600', color: '#4F46E5' },
-  restoreBtn: {
-    borderRadius: radius.sm, paddingHorizontal: spacing[3], paddingVertical: spacing[1.5],
-    borderWidth: 1.5, borderColor: palette.primary, backgroundColor: palette.primaryLight,
-  },
-  emptyState: { flex: 1, alignItems: 'center', justifyContent: 'center', padding: spacing[8], gap: spacing[3] },
-  emptyDesc: { textAlign: 'center', maxWidth: 260 },
+function makeStyles(p: Palette) {
+  return StyleSheet.create({
+    safe: { flex: 1, backgroundColor: p.background },
+    successBanner: {
+      backgroundColor: p.success, paddingHorizontal: spacing[5], paddingVertical: spacing[3],
+      alignItems: 'center',
+    },
+    detailPromptBanner: {
+      backgroundColor: p.success, paddingHorizontal: spacing[5], paddingVertical: spacing[3],
+      flexDirection: 'row', alignItems: 'center',
+    },
+    header: {
+      flexDirection: 'row', alignItems: 'center', justifyContent: 'space-between',
+      paddingHorizontal: spacing[5], paddingTop: spacing[4], paddingBottom: spacing[3],
+    },
+    tabRow: {
+      flexDirection: 'row', gap: spacing[2],
+      paddingHorizontal: spacing[5], paddingBottom: spacing[3],
+    },
+    tabChip: {
+      paddingHorizontal: spacing[4], paddingVertical: spacing[1.5],
+      borderRadius: radius.full, borderWidth: 1, borderColor: p.border,
+      backgroundColor: p.surface,
+    },
+    tabChipActive: { backgroundColor: p.primary, borderColor: p.primary },
+    alertBanner: {
+      backgroundColor: colors.warning[50], paddingHorizontal: spacing[5], paddingVertical: spacing[2],
+      borderBottomWidth: 1, borderBottomColor: colors.warning[100],
+    },
+    searchRow: { paddingHorizontal: spacing[5], paddingBottom: spacing[3] },
+    statsCard: {
+      flexDirection: 'row',
+      marginHorizontal: spacing[5],
+      marginBottom: spacing[3],
+      backgroundColor: p.surface,
+      borderWidth: 1,
+      borderColor: p.border,
+      borderRadius: radius.md,
+      paddingVertical: spacing[3],
+      paddingHorizontal: spacing[4],
+    },
+    statCol: { flex: 1, gap: 3 },
+    statDivider: { width: 1, backgroundColor: p.border, marginHorizontal: spacing[4] },
+    statValue: { fontFamily: FF.bold, fontSize: 18, color: p.textPrimary },
+    list: { paddingHorizontal: spacing[5], paddingBottom: spacing[10] },
+    separator: { height: 0 },
+    productRow: {
+      flexDirection: 'row', alignItems: 'center',
+      paddingVertical: spacing[4],
+      borderBottomWidth: 1, borderBottomColor: p.border,
+      backgroundColor: p.surface,
+    },
+    productBadge: {
+      width: 44, height: 44, borderRadius: radius.md,
+      alignItems: 'center', justifyContent: 'center',
+      marginRight: 0,
+    },
+    productBadgeText: { fontFamily: FF.semibold, fontSize: 16, color: p.textPrimary },
+    productCenter: { flex: 1, paddingLeft: 12, gap: 3 },
+    productName: { fontFamily: FF.semibold, fontSize: 16, color: p.textPrimary },
+    productStockText: { fontFamily: FF.regular, fontSize: 13, color: p.textSecondary },
+    stockLowRow: {
+      flexDirection: 'row', alignItems: 'center', gap: 4,
+      alignSelf: 'flex-start',
+      backgroundColor: p.warningLight,
+      borderRadius: radius.full,
+      paddingHorizontal: 8, paddingVertical: 3,
+    },
+    stockLowText: { fontFamily: FF.medium, fontSize: 12, color: p.warning },
+    stockOutRow: {
+      flexDirection: 'row', alignItems: 'center', gap: 4,
+      alignSelf: 'flex-start',
+      backgroundColor: p.dangerLight,
+      borderRadius: radius.full,
+      paddingHorizontal: 8, paddingVertical: 3,
+    },
+    stockOutText: { fontFamily: FF.semibold, fontSize: 12, color: p.danger },
+    productMeta: { flexDirection: 'row', gap: spacing[2], alignItems: 'center' },
+    categoryBadge: {
+      backgroundColor: p.primaryLight, borderRadius: radius.sm,
+      paddingHorizontal: spacing[1.5], paddingVertical: 2,
+    },
+    bulkBadge: {
+      backgroundColor: colors.warning[50], borderRadius: radius.sm,
+      paddingHorizontal: spacing[1.5], paddingVertical: 2, borderWidth: 1, borderColor: colors.warning[100],
+    },
+    productRight: { alignItems: 'flex-end' },
+    priceText: { fontFamily: FF.semibold, fontSize: 15, color: p.primary },
+    emptyState: { flex: 1, alignItems: 'center', justifyContent: 'center', padding: spacing[8], gap: spacing[3] },
+    emptyDesc: { textAlign: 'center', maxWidth: 260 },
 
-  // FAB
-  fabContainer: {
-    position: 'absolute',
-    bottom: 194,
-    right: spacing[4],
-    zIndex: 10,
-  },
-  fab: {
-    width: 56,
-    height: 56,
-    borderRadius: radius.full,
-    backgroundColor: palette.primary,
-    alignItems: 'center',
-    justifyContent: 'center',
-    shadowColor: colors.neutral[900],
-    shadowOffset: { width: 0, height: 4 },
-    shadowOpacity: 0.18,
-    shadowRadius: 8,
-    elevation: 8,
-  },
-  fabIcon: {
-    fontSize: 28,
-    lineHeight: 32,
-    fontWeight: '300' as const,
-    color: palette.textInverse,
-    marginTop: -2,
-  },
+    fabContainer: { position: 'absolute', bottom: 194, right: spacing[4], zIndex: 10 },
+    fab: {
+      width: 56, height: 56, borderRadius: radius.full,
+      backgroundColor: p.primary, alignItems: 'center', justifyContent: 'center',
+      shadowColor: colors.neutral[900], shadowOffset: { width: 0, height: 4 },
+      shadowOpacity: 0.18, shadowRadius: 8, elevation: 8,
+    },
+    fabIcon: { fontSize: 28, lineHeight: 32, fontWeight: '300' as const, color: p.textInverse, marginTop: -2 },
 
-  // Modal shared
-  modalSafe: { flex: 1, backgroundColor: palette.background },
-  modalHeader: {
-    flexDirection: 'row', alignItems: 'center', justifyContent: 'space-between',
-    paddingHorizontal: spacing[5], paddingVertical: spacing[4],
-    borderBottomWidth: 1, borderBottomColor: palette.border, backgroundColor: palette.surface,
-  },
-  modalCancel: { minWidth: 64 },
-  modalContent: { padding: spacing[5], gap: spacing[4] },
-  modalFooter: {
-    padding: spacing[5], borderTopWidth: 1, borderTopColor: palette.border, backgroundColor: palette.surface,
-  },
-  formError: { backgroundColor: palette.dangerLight, borderRadius: radius.md, padding: spacing[3] },
+    modalSafe: { flex: 1, backgroundColor: p.background },
+    modalHeader: {
+      flexDirection: 'row', alignItems: 'center', justifyContent: 'space-between',
+      paddingHorizontal: spacing[5], paddingVertical: spacing[4],
+      borderBottomWidth: 1, borderBottomColor: p.border, backgroundColor: p.surface,
+    },
+    modalCancel: { minWidth: 64 },
+    modalContent: { padding: spacing[5], gap: spacing[4] },
+    modalFooter: {
+      padding: spacing[5], borderTopWidth: 1, borderTopColor: p.border, backgroundColor: p.surface,
+    },
+    formError: { backgroundColor: p.dangerLight, borderRadius: radius.md, padding: spacing[3] },
 
-  // 4-field primary form — compact, zero-scroll layout
-  formStack: {},
-  fieldBlock: {
-    paddingHorizontal: spacing[5], paddingTop: spacing[2.5], paddingBottom: spacing[2.5],
-    borderBottomWidth: 1, borderBottomColor: palette.border, gap: spacing[1.5],
-  },
-  fieldLabel: {
-    fontSize: 11, fontWeight: '600' as const, color: palette.textSecondary,
-    letterSpacing: 0.6, textTransform: 'uppercase' as const,
-  },
-  fieldInput: {
-    fontSize: 22, fontWeight: '600' as const, color: palette.textPrimary,
-    paddingVertical: 0, minHeight: 36,
-  },
-  fieldRow: { flexDirection: 'row', alignItems: 'center', gap: spacing[3] },
-  unitTag: { fontSize: 15, fontWeight: '500' as const, color: palette.textSecondary },
-  liveCalcBlock: {
-    paddingHorizontal: spacing[5], paddingVertical: spacing[2.5],
-    borderBottomWidth: 1, borderBottomColor: palette.border,
-  },
-  liveCalcText: { fontSize: 14, color: palette.textSecondary, fontWeight: '500' as const },
-  detailsBtn: {
-    paddingHorizontal: spacing[5], paddingVertical: spacing[3],
-    alignItems: 'center' as const,
-    borderBottomWidth: 1, borderBottomColor: palette.border,
-  },
+    formStack: {},
+    fieldBlock: {
+      paddingHorizontal: spacing[5], paddingTop: spacing[2.5], paddingBottom: spacing[2.5],
+      borderBottomWidth: 1, borderBottomColor: p.border, gap: spacing[1.5],
+    },
+    fieldLabel: {
+      fontFamily: FF.semibold, fontSize: 11, color: p.textSecondary,
+      letterSpacing: 0.6, textTransform: 'uppercase' as const,
+    },
+    fieldInput: { fontFamily: FF.semibold, fontSize: 22, color: p.textPrimary, paddingVertical: 0, minHeight: 36 },
+    fieldRow: { flexDirection: 'row', alignItems: 'center', gap: spacing[3] },
+    unitTag: { fontFamily: FF.medium, fontSize: 15, color: p.textSecondary },
+    liveCalcBlock: {
+      paddingHorizontal: spacing[5], paddingVertical: spacing[2.5],
+      borderBottomWidth: 1, borderBottomColor: p.border,
+    },
+    liveCalcText: { fontFamily: FF.medium, fontSize: 14, color: p.textSecondary },
+    detailsBtn: {
+      paddingHorizontal: spacing[5], paddingVertical: spacing[3],
+      alignItems: 'center' as const,
+      borderBottomWidth: 1, borderBottomColor: p.border,
+    },
 
-  // Supplier picker
-  pickerField: {
-    flexDirection: 'row', alignItems: 'center', justifyContent: 'space-between',
-    paddingHorizontal: spacing[4], paddingVertical: spacing[3],
-    borderRadius: radius.md, borderWidth: 1, backgroundColor: palette.surface,
-  },
-  supplierDropdown: {
-    borderTopWidth: 1, borderTopColor: palette.border,
-    backgroundColor: palette.surface,
-  },
-  supplierRow: {
-    paddingHorizontal: spacing[5], paddingVertical: spacing[3],
-    borderBottomWidth: 1, borderBottomColor: palette.border, gap: 2,
-  },
-  supplierRowActive: { backgroundColor: palette.primaryLight },
-  newSupplierForm: {
-    paddingHorizontal: spacing[5], paddingVertical: spacing[4],
-    gap: spacing[3],
-    borderTopWidth: 1, borderTopColor: palette.border,
-    backgroundColor: palette.surface,
-  },
+    pickerField: {
+      flexDirection: 'row', alignItems: 'center', justifyContent: 'space-between',
+      paddingHorizontal: spacing[4], paddingVertical: spacing[3],
+      borderRadius: radius.md, borderWidth: 1, backgroundColor: p.surface,
+    },
+    supplierDropdown: { borderTopWidth: 1, borderTopColor: p.border, backgroundColor: p.surface },
+    supplierRow: {
+      paddingHorizontal: spacing[5], paddingVertical: spacing[3],
+      borderBottomWidth: 1, borderBottomColor: p.border, gap: 2,
+    },
+    supplierRowActive: { backgroundColor: p.primaryLight },
+    newSupplierForm: {
+      paddingHorizontal: spacing[5], paddingVertical: spacing[4],
+      gap: spacing[3],
+      borderTopWidth: 1, borderTopColor: p.border,
+      backgroundColor: p.surface,
+    },
 
-  // Stock adjust
-  stockPreview: { alignItems: 'center', gap: spacing[1] },
-  typeRow: { flexDirection: 'row', gap: spacing[3] },
-  typeChip: {
-    flex: 1, alignItems: 'center', paddingVertical: spacing[3],
-    borderRadius: radius.md, borderWidth: 1.5, borderColor: palette.border, backgroundColor: palette.surface,
-  },
-  typeChipEntree: { backgroundColor: colors.success[600], borderColor: colors.success[600] },
-  typeChipPerte: { backgroundColor: colors.danger[600], borderColor: colors.danger[600] },
-});
+    stockPreview: { alignItems: 'center', gap: spacing[1] },
+    typeRow: { flexDirection: 'row', gap: spacing[3] },
+    typeChip: {
+      flex: 1, alignItems: 'center', paddingVertical: spacing[3],
+      borderRadius: radius.md, borderWidth: 1.5, borderColor: p.border, backgroundColor: p.surface,
+    },
+    typeChipEntree: { backgroundColor: colors.success[600], borderColor: colors.success[600] },
+    typeChipPerte: { backgroundColor: colors.danger[600], borderColor: colors.danger[600] },
+  });
+}

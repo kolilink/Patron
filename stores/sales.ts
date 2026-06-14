@@ -44,6 +44,8 @@ interface SalesStore {
     saleDate?: string,
     discountAmount?: number,
     clientId?: string | null,
+    overrideTotalAmount?: number,
+    dueDate?: string | null,
   ) => Promise<boolean>;
   clearError: () => void;
   reset: () => void;
@@ -122,7 +124,7 @@ export const useSalesStore = create<SalesStore>((set, get) => ({
 
   clearCart: () => set({ cart: [] }),
 
-  submitSale: async (businessId, userId, payment, customerName, saleDate, discountAmount, clientId) => {
+  submitSale: async (businessId, userId, payment, customerName, saleDate, discountAmount, clientId, overrideTotalAmount, dueDate) => {
     const { cart } = get();
     if (cart.length === 0) return false;
 
@@ -131,10 +133,10 @@ export const useSalesStore = create<SalesStore>((set, get) => ({
     set({ submitting: true, error: null });
 
     try {
-      const totalAmount = cartSnapshot.reduce((sum, l) => sum + l.unit_price * l.qty, 0);
+      const totalAmount = overrideTotalAmount ?? cartSnapshot.reduce((sum, l) => sum + l.unit_price * l.qty, 0);
       const isFullCredit = payment === null;
       const discount = discountAmount ?? 0;
-      const isPartialCredit = !isFullCredit && discount === 0 && payment!.amount < totalAmount - 0.01;
+      const isPartialCredit = !isFullCredit && payment!.amount < (totalAmount - discount) - 0.01;
       const isCredit = isFullCredit || isPartialCredit;
       const today = new Date().toISOString().split('T')[0];
 
@@ -159,13 +161,14 @@ export const useSalesStore = create<SalesStore>((set, get) => ({
         p_pay_ref:          payment?.ref_external ?? null,
         p_idempotency_key:  idempotencyKey,
         p_client_id:        clientId ?? null,
+        ...(dueDate ? { p_due_date: dueDate } : {}),
       };
 
       const { error: rpcErr } = await supabase.rpc('submit_sale', rpcPayload);
       if (rpcErr) throw rpcErr;
 
       set({ cart: [], submitting: false, lastSubmitQueued: false });
-      haptics.success();
+      haptics.heavy();
       trackEvent('sale_submitted', businessId, userId, {
         is_credit: isCredit,
         items_count: cartSnapshot.length,
@@ -173,10 +176,10 @@ export const useSalesStore = create<SalesStore>((set, get) => ({
       return true;
     } catch (err) {
       if (isNetworkError(err)) {
-        const totalAmount = cartSnapshot.reduce((sum, l) => sum + l.unit_price * l.qty, 0);
+        const totalAmount = overrideTotalAmount ?? cartSnapshot.reduce((sum, l) => sum + l.unit_price * l.qty, 0);
         const isFullCredit = payment === null;
         const discount = discountAmount ?? 0;
-        const isPartialCredit = !isFullCredit && discount === 0 && payment!.amount < totalAmount - 0.01;
+        const isPartialCredit = !isFullCredit && payment!.amount < (totalAmount - discount) - 0.01;
         const isCredit = isFullCredit || isPartialCredit;
         const today = new Date().toISOString().split('T')[0];
 
@@ -199,6 +202,7 @@ export const useSalesStore = create<SalesStore>((set, get) => ({
           p_pay_ref:         payment?.ref_external ?? null,
           p_idempotency_key: idempotencyKey,
           p_client_id:       clientId ?? null,
+          ...(dueDate ? { p_due_date: dueDate } : {}),
         });
 
         const count = await getQueueCount();
@@ -244,6 +248,7 @@ export const useSalesStore = create<SalesStore>((set, get) => ({
             amount_paid: payment?.amount ?? 0,
             paid_at: isCredit ? null : now,
             sale_date: saleDate || today,
+            due_date: dueDate ?? null,
             created_at: now,
             cancelled_at: null,
             cancellation_reason: null,

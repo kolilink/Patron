@@ -67,31 +67,65 @@ export const colors = {
   transparent: 'transparent',
 } as const;
 
-export const palette = {
-  background: colors.neutral[50],
-  surface: colors.neutral[0],
-  surfaceElevated: colors.neutral[0],
-  border: colors.neutral[200],
-  borderStrong: colors.neutral[300],
+export const paletteLight = {
+  background:     colors.neutral[50],
+  surface:        colors.neutral[0],
+  surfaceElevated:colors.neutral[0],
+  border:         colors.neutral[200],
+  borderStrong:   colors.neutral[300],
 
-  textPrimary: colors.neutral[900],
-  textSecondary: colors.neutral[500],
-  textDisabled: colors.neutral[300],
-  textInverse: colors.neutral[0],
+  textPrimary:    colors.neutral[900],
+  textSecondary:  colors.neutral[500],
+  textDisabled:   colors.neutral[300],
+  textInverse:    colors.neutral[0],
 
-  primary: colors.primary[600],
-  primaryLight: colors.primary[50],
-  primaryDark: colors.primary[700],
+  primary:        colors.primary[600],
+  primaryLight:   colors.primary[50],
+  primaryDark:    colors.primary[700],
 
-  success: colors.success[600],
-  successLight: colors.success[50],
-  warning: colors.warning[600],
-  warningLight: colors.warning[50],
-  danger: colors.danger[600],
-  dangerLight: colors.danger[50],
+  success:        colors.success[600],
+  successLight:   colors.success[50],
+  warning:        colors.warning[600],
+  warningLight:   colors.warning[50],
+  danger:         colors.danger[600],
+  dangerLight:    colors.danger[50],
 
-  tabBar: colors.neutral[0],
-  tabBarBorder: colors.neutral[200],
-  tabBarActive: colors.primary[600],
+  tabBar:         colors.neutral[0],
+  tabBarBorder:   colors.neutral[200],
+  tabBarActive:   colors.primary[600],
   tabBarInactive: colors.neutral[400],
 } as const;
+
+export const paletteDark = {
+  background:     '#0F1117',
+  surface:        '#1A1D27',
+  surfaceElevated:'#242736',
+  border:         'rgba(255,255,255,0.08)',
+  borderStrong:   'rgba(255,255,255,0.15)',
+
+  textPrimary:    '#F1F5F9',
+  textSecondary:  '#94A3B8',
+  textDisabled:   '#475569',
+  textInverse:    '#0F1117',
+
+  primary:        '#818CF8',
+  primaryLight:   'rgba(129,140,248,0.14)',
+  primaryDark:    '#6366F1',
+
+  success:        '#4ADE80',
+  successLight:   'rgba(74,222,128,0.14)',
+  warning:        '#FCD34D',
+  warningLight:   'rgba(252,211,77,0.14)',
+  danger:         '#F87171',
+  dangerLight:    'rgba(248,113,113,0.14)',
+
+  tabBar:         '#1A1D27',
+  tabBarBorder:   'rgba(255,255,255,0.08)',
+  tabBarActive:   '#818CF8',
+  tabBarInactive: '#64748B',
+} as const;
+
+export type Palette = { readonly [K in keyof typeof paletteLight]: string };
+
+// Keep static export for legacy imports — always resolves to light; screens use useTheme() for dynamic palette
+export const palette = paletteLight;

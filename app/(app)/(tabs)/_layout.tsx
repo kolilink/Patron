@@ -1,12 +1,53 @@
 import { useEffect } from 'react';
+import { View } from 'react-native';
 import { Tabs } from 'expo-router';
 import { router } from 'expo-router';
 import { Ionicons } from '@expo/vector-icons';
+import { useSafeAreaInsets } from 'react-native-safe-area-context';
 import { useAuthStore } from '@/stores/auth';
 import { useChatStore } from '@/stores/chat';
-import { palette } from '@/src/theme';
+import { colors, useTheme } from '@/src/theme';
+import { Text } from '@/src/components/ui/Text';
+import { generateFallbackName } from '@/lib/id';
 
 type IoniconName = React.ComponentProps<typeof Ionicons>['name'];
+
+const ROLE_COLORS_LIGHT: Record<string, string> = {
+  administrateur: colors.role.administrateur,
+  manager:        colors.role.manager,
+  vendeur:        colors.role.vendeur,
+  investisseur:   colors.role.investisseur,
+};
+
+const ROLE_COLORS_DARK: Record<string, string> = {
+  administrateur: '#818CF8',
+  manager:        '#38BDF8',
+  vendeur:        '#4ADE80',
+  investisseur:   '#FCD34D',
+};
+
+function ProfileTabIcon({ focused, size }: { focused: boolean; size: number }) {
+  const session = useAuthStore(s => s.session);
+  const { palette, resolvedScheme } = useTheme();
+  const role = session?.activeMembership?.role ?? '';
+  const name = session?.user?.name || generateFallbackName(session?.user?.id ?? '');
+  const initial = name[0]?.toUpperCase() ?? '?';
+  const roleColor = (resolvedScheme === 'dark' ? ROLE_COLORS_DARK : ROLE_COLORS_LIGHT)[role] ?? palette.primary;
+
+  const sz = size + 10;
+  return (
+    <View style={{
+      width: sz, height: sz, borderRadius: sz / 2,
+      backgroundColor: roleColor + '25',
+      alignItems: 'center', justifyContent: 'center',
+      opacity: focused ? 1 : 0.55,
+    }}>
+      <Text style={{ fontSize: sz * 0.46, fontWeight: '700', color: roleColor, lineHeight: sz * 0.55 }}>
+        {initial}
+      </Text>
+    </View>
+  );
+}
 
 function tabIcon(name: IoniconName, activeName: IoniconName) {
   return ({ color, size, focused }: { color: string; size: number; focused: boolean }) => (
@@ -15,6 +56,8 @@ function tabIcon(name: IoniconName, activeName: IoniconName) {
 }
 
 export default function TabsLayout() {
+  const { palette } = useTheme();
+  const insets = useSafeAreaInsets();
   const session = useAuthStore(s => s.session);
   const loading = useAuthStore(s => s.loading);
   const removedBusinessName = useAuthStore(s => s.removedBusinessName);
@@ -58,8 +101,8 @@ export default function TabsLayout() {
           backgroundColor: palette.surface,
           borderTopColor: palette.border,
           borderTopWidth: 1,
-          height: 60,
-          paddingBottom: 8,
+          height: 60 + insets.bottom,
+          paddingBottom: insets.bottom || 8,
         },
       }}
     >
@@ -94,7 +137,8 @@ export default function TabsLayout() {
         name="plus"
         options={{
           title: 'Plus',
-          tabBarIcon: tabIcon('ellipsis-horizontal-outline', 'ellipsis-horizontal'),
+          tabBarIcon: ({ focused, size }) => <ProfileTabIcon focused={focused} size={size} />,
+          tabBarLabel: () => null,
         }}
       />
     </Tabs>

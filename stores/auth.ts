@@ -15,6 +15,7 @@ import { useSalesStore } from './sales';
 import { useSyncStore } from './sync';
 import { useChatStore } from './chat';
 import { useMarketStore } from './market';
+import { useRapportsStore } from './rapports';
 
 // ─── Session cache (offline restart resilience) ───────────────────────────────
 
@@ -78,11 +79,11 @@ function resetAllStores() {
   useSyncStore.getState().reset();
   useChatStore.getState().reset();
   useMarketStore.getState().reset();
+  useRapportsStore.getState().reset();
 }
 
 interface PendingPhoneVerification {
   verificationId: string;
-  token: string;
   phone: string;
 }
 
@@ -104,8 +105,9 @@ interface AuthStore {
   selectBusiness: (businessId: string) => void;
   createBusiness: (data: { name: string; type?: string; currency: string }) => Promise<void>;
   joinBusiness: (code: string) => Promise<void>;
-  createPhoneVerification: (phone: string) => Promise<{ token: string; verificationId: string } | null>;
-  loginWithPhone: (phone: string) => Promise<{ token: string; verificationId: string } | null>;
+  createPhoneVerification: (phone: string) => Promise<{ verificationId: string } | null>;
+  loginWithPhone: (phone: string) => Promise<{ verificationId: string } | null>;
+  verifyPhoneCode: (phone: string, code: string, verificationId: string) => Promise<boolean>;
   upgradePhone: (phone: string) => Promise<void>;
   restorePhoneSession: (phone: string, verificationId: string) => Promise<void>;
   businessDrawerOpen: boolean;
@@ -460,12 +462,12 @@ export const useAuthStore = create<AuthStore>((set, get) => ({
       }
       if (fnData?.error) throw new Error(fnData.error);
 
-      const { token, verificationId } = fnData as { token: string; verificationId: string };
+      const { verificationId } = fnData as { verificationId: string };
       set({
-        pendingPhoneVerification: { verificationId, token, phone: phone.trim() },
+        pendingPhoneVerification: { verificationId, phone: phone.trim() },
         loading: false,
       });
-      return { token, verificationId };
+      return { verificationId };
     } catch (err) {
       const raw = err instanceof Error ? err.message : String(err);
       set({ error: raw, loading: false });
@@ -499,13 +501,38 @@ export const useAuthStore = create<AuthStore>((set, get) => ({
       }
       if (fnData?.error) throw new Error(fnData.error);
 
-      const { token, verificationId } = fnData as { token: string; verificationId: string };
-      set({ pendingPhoneVerification: { verificationId, token, phone: phone.trim() }, loading: false });
-      return { token, verificationId };
+      const { verificationId } = fnData as { verificationId: string };
+      set({ pendingPhoneVerification: { verificationId, phone: phone.trim() }, loading: false });
+      return { verificationId };
     } catch (err) {
       const raw = err instanceof Error ? err.message : String(err);
       set({ error: raw, loading: false });
       return null;
+    }
+  },
+
+  verifyPhoneCode: async (phone, code, verificationId) => {
+    set({ loading: true, error: null });
+    try {
+      const { data: fnData, error: fnErr } = await supabase.functions.invoke('verify-phone-code', {
+        body: { phone: phone.trim(), code: code.trim(), verificationId },
+      });
+      if (fnErr) {
+        try {
+          const body = await (fnErr as { context?: { json?: () => Promise<{ error?: string }> } }).context?.json?.();
+          if (body?.error) throw new Error(body.error);
+        } catch (extractErr) {
+          if (extractErr !== fnErr) throw extractErr;
+        }
+        throw fnErr;
+      }
+      if (fnData?.error) throw new Error(fnData.error);
+      set({ loading: false });
+      return true;
+    } catch (err) {
+      const raw = err instanceof Error ? err.message : String(err);
+      set({ error: raw, loading: false });
+      return false;
     }
   },
 

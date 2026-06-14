@@ -1,4 +1,4 @@
-import { useEffect, useState } from 'react';
+import { useEffect, useState, useMemo } from 'react';
 import {
   KeyboardAvoidingView, Platform, Pressable,
   ScrollView, StyleSheet, View,
@@ -10,7 +10,8 @@ import { Ionicons } from '@expo/vector-icons';
 import { Button } from '@/src/components/ui/Button';
 import { Input } from '@/src/components/ui/Input';
 import { Text } from '@/src/components/ui/Text';
-import { palette, radius, spacing } from '@/src/theme';
+import { useTheme, radius, spacing } from '@/src/theme';
+import type { Palette } from '@/src/theme';
 import { useAuthStore } from '@/stores/auth';
 
 interface CreateForm { name: string }
@@ -71,6 +72,8 @@ function inferCurrency(phone: string | null | undefined): string {
 }
 
 export default function CreerCommerceScreen() {
+  const { palette } = useTheme();
+  const styles = useMemo(() => makeStyles(palette), [palette]);
   const { createBusiness, loading, error, clearError } = useAuthStore();
   const session     = useAuthStore(s => s.session);
   const memberships = session?.memberships ?? [];
@@ -93,7 +96,7 @@ export default function CreerCommerceScreen() {
 
   return (
     <SafeAreaView style={styles.safe}>
-      <KeyboardAvoidingView behavior={Platform.OS === 'ios' ? 'padding' : undefined} style={styles.kav}>
+      <KeyboardAvoidingView behavior={Platform.OS === 'ios' ? 'padding' : 'height'} style={styles.kav}>
         <ScrollView contentContainerStyle={styles.content} keyboardShouldPersistTaps="handled">
 
           <View style={styles.header}>
@@ -133,7 +136,7 @@ export default function CreerCommerceScreen() {
                     onChangeText={field.onChange}
                     onBlur={field.onBlur}
                     error={fieldState.error?.message}
-                    placeholder="Ex: Boutique Mamadou"
+                    placeholder="Boutique Mamadou"
                     autoCapitalize="words"
                     returnKeyType="done"
                     onSubmitEditing={handleSubmit(onSubmit)}
@@ -208,31 +211,33 @@ export default function CreerCommerceScreen() {
   );
 }
 
-const styles = StyleSheet.create({
-  safe:    { flex: 1, backgroundColor: palette.background },
-  kav:     { flex: 1 },
-  content: { flexGrow: 1, padding: spacing[6], gap: spacing[8] },
-  header:  { gap: spacing[2] },
-  backBtn: { alignSelf: 'flex-start', marginBottom: spacing[2] },
-  form:    { gap: spacing[5] },
-  section: { gap: spacing[3] },
+function makeStyles(p: Palette) {
+  return StyleSheet.create({
+    safe:    { flex: 1, backgroundColor: p.background },
+    kav:     { flex: 1 },
+    content: { flexGrow: 1, padding: spacing[6], gap: spacing[8] },
+    header:  { gap: spacing[2] },
+    backBtn: { alignSelf: 'flex-start', marginBottom: spacing[2] },
+    form:    { gap: spacing[5] },
+    section: { gap: spacing[3] },
 
-  errorBox:   { backgroundColor: palette.dangerLight, borderRadius: 8, padding: spacing[3] },
-  lockedBox:  { backgroundColor: palette.surface, borderRadius: radius.md, borderWidth: 1, borderColor: palette.border, padding: spacing[5], gap: spacing[2], alignItems: 'center' },
-  lockedText: { textAlign: 'center', fontWeight: '600' as const },
+    errorBox:   { backgroundColor: p.dangerLight, borderRadius: 8, padding: spacing[3] },
+    lockedBox:  { backgroundColor: p.surface, borderRadius: radius.md, borderWidth: 1, borderColor: p.border, padding: spacing[5], gap: spacing[2], alignItems: 'center' },
+    lockedText: { textAlign: 'center', fontWeight: '600' as const },
 
-  currencyTrigger: {
-    flexDirection: 'row', alignItems: 'center', gap: spacing[3],
-    paddingHorizontal: spacing[4], paddingVertical: spacing[3],
-    backgroundColor: '#EEF2FF',
-    borderRadius: radius.md,
-    borderWidth: 1, borderColor: palette.primary + '50',
-  },
-  currencyList:        { borderRadius: radius.md, borderWidth: 1, borderColor: palette.border, overflow: 'hidden' },
-  currencyRow:         { flexDirection: 'row', alignItems: 'center', gap: spacing[3], paddingHorizontal: spacing[4], paddingVertical: spacing[3], backgroundColor: palette.surface },
-  currencyRowSelected: { backgroundColor: '#EEF2FF' },
-  currencyRowBorder:   { borderBottomWidth: StyleSheet.hairlineWidth, borderBottomColor: palette.border },
-  currencyFlag:        { fontSize: 22, width: 30, textAlign: 'center' as const },
+    currencyTrigger: {
+      flexDirection: 'row', alignItems: 'center', gap: spacing[3],
+      paddingHorizontal: spacing[4], paddingVertical: spacing[3],
+      backgroundColor: p.primaryLight,
+      borderRadius: radius.md,
+      borderWidth: 1, borderColor: p.primary + '50',
+    },
+    currencyList:        { borderRadius: radius.md, borderWidth: 1, borderColor: p.border, overflow: 'hidden' },
+    currencyRow:         { flexDirection: 'row', alignItems: 'center', gap: spacing[3], paddingHorizontal: spacing[4], paddingVertical: spacing[3], backgroundColor: p.surface },
+    currencyRowSelected: { backgroundColor: p.primaryLight },
+    currencyRowBorder:   { borderBottomWidth: StyleSheet.hairlineWidth, borderBottomColor: p.border },
+    currencyFlag:        { fontSize: 22, width: 30, textAlign: 'center' as const },
 
-  lockNote: { flexDirection: 'row', alignItems: 'center', gap: spacing[2], paddingHorizontal: spacing[1] },
-});
+    lockNote: { flexDirection: 'row', alignItems: 'center', gap: spacing[2], paddingHorizontal: spacing[1] },
+  });
+}

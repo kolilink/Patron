@@ -3,7 +3,8 @@ import { FlatList, Pressable, StyleSheet, View } from 'react-native';
 import { SafeAreaView } from 'react-native-safe-area-context';
 import { router, useFocusEffect } from 'expo-router';
 import { Text } from '@/src/components/ui/Text';
-import { palette, spacing, radius } from '@/src/theme';
+import { useTheme, spacing, radius } from '@/src/theme';
+import type { Palette } from '@/src/theme';
 import { useAuthStore } from '@/stores/auth';
 import { useVentesStore } from '@/stores/ventes';
 
@@ -39,6 +40,8 @@ const FILTERS: { key: FilterType; label: string }[] = [
 ];
 
 export default function ClientsScreen() {
+  const { palette } = useTheme();
+  const styles = useMemo(() => makeStyles(palette), [palette]);
   const session = useAuthStore(s => s.session);
   const businessId = session?.activeBusiness?.id ?? '';
   const userId = session?.user.id ?? '';
@@ -190,27 +193,29 @@ export default function ClientsScreen() {
   );
 }
 
-const styles = StyleSheet.create({
-  safe: { flex: 1, backgroundColor: palette.background },
-  hdr: {
-    flexDirection: 'row', alignItems: 'center', justifyContent: 'space-between',
-    padding: spacing[5], borderBottomWidth: 1, borderBottomColor: palette.border,
-  },
-  filterRow: {
-    flexDirection: 'row', paddingHorizontal: spacing[5], paddingVertical: spacing[3], gap: spacing[2],
-  },
-  filterChip: {
-    paddingHorizontal: spacing[3], paddingVertical: spacing[1.5],
-    borderRadius: radius.full, borderWidth: 1, borderColor: palette.border, backgroundColor: palette.surface,
-  },
-  filterChipActive: { backgroundColor: palette.primary, borderColor: palette.primary },
-  list: { paddingBottom: spacing[10] },
-  clientRow: {
-    flexDirection: 'row', alignItems: 'center', justifyContent: 'space-between', gap: spacing[3],
-    paddingHorizontal: spacing[5], paddingVertical: spacing[3], backgroundColor: palette.surface,
-  },
-  avatar: { width: 40, height: 40, borderRadius: 20, alignItems: 'center', justifyContent: 'center' },
-  offlineBanner: { alignItems: 'center', justifyContent: 'center', paddingVertical: spacing[1], borderBottomWidth: StyleSheet.hairlineWidth, borderBottomColor: palette.border },
-  empty: { flex: 1, alignItems: 'center', justifyContent: 'center' },
-  center: { textAlign: 'center', marginTop: spacing[10] },
-});
+function makeStyles(p: Palette) {
+  return StyleSheet.create({
+    safe: { flex: 1, backgroundColor: p.background },
+    hdr: {
+      flexDirection: 'row', alignItems: 'center', justifyContent: 'space-between',
+      padding: spacing[5], borderBottomWidth: 1, borderBottomColor: p.border,
+    },
+    filterRow: {
+      flexDirection: 'row', paddingHorizontal: spacing[5], paddingVertical: spacing[3], gap: spacing[2],
+    },
+    filterChip: {
+      paddingHorizontal: spacing[3], paddingVertical: spacing[1.5],
+      borderRadius: radius.full, borderWidth: 1, borderColor: p.border, backgroundColor: p.surface,
+    },
+    filterChipActive: { backgroundColor: p.primary, borderColor: p.primary },
+    list: { paddingBottom: spacing[10] },
+    clientRow: {
+      flexDirection: 'row', alignItems: 'center', justifyContent: 'space-between', gap: spacing[3],
+      paddingHorizontal: spacing[5], paddingVertical: spacing[3], backgroundColor: p.surface,
+    },
+    avatar: { width: 40, height: 40, borderRadius: 20, alignItems: 'center', justifyContent: 'center' },
+    offlineBanner: { alignItems: 'center', justifyContent: 'center', paddingVertical: spacing[1], borderBottomWidth: StyleSheet.hairlineWidth, borderBottomColor: p.border },
+    empty: { flex: 1, alignItems: 'center', justifyContent: 'center' },
+    center: { textAlign: 'center', marginTop: spacing[10] },
+  });
+}

@@ -4,6 +4,7 @@ import { translateError } from '@/lib/errors';
 import { generateId } from '@/lib/id';
 import { saveFournisseurCache, getFournisseurCache, saveCommandeCache, getCommandeCache } from '@/lib/db';
 import { isNetworkError } from '@/lib/sync';
+import { useProductStore } from '@/stores/products';
 
 export interface Fournisseur {
   id: string;
@@ -74,7 +75,7 @@ interface FournisseursStore {
   fetchCommandes: (businessId: string) => Promise<void>;
   createCommande: (businessId: string, userId: string, input: CreateCommandeInput) => Promise<boolean>;
   loadCommandeLines: (commandeId: string) => Promise<void>;
-  recevoirCommande: (commandeId: string, businessId: string, userId: string) => Promise<boolean>;
+  recevoirCommande: (commandeId: string, businessId: string, userId: string, lines?: { id: string; qty: number }[]) => Promise<boolean>;
 
   fetchDebts: (businessId: string) => Promise<void>;
   createDebt: (businessId: string, userId: string, d: { supplierId: string; amount: number; description?: string | null; date: string }) => Promise<boolean>;
@@ -94,22 +95,31 @@ export const useFournisseursStore = create<FournisseursStore>((set, get) => ({
 
   fetchFournisseurs: async (businessId) => {
     set({ loading: true });
-    const { data, error } = await supabase
-      .from('suppliers')
-      .select('*')
-      .eq('business_id', businessId)
-      .order('name');
-    if (error) {
-      if (isNetworkError(error)) {
+    const [suppliersRes, debtsRes] = await Promise.all([
+      supabase.from('suppliers').select('*').eq('business_id', businessId).order('name'),
+      supabase.from('supplier_debts').select('*').eq('business_id', businessId).order('date', { ascending: false }),
+    ]);
+    if (suppliersRes.error) {
+      if (isNetworkError(suppliersRes.error)) {
         const cached = await getFournisseurCache(businessId) as Fournisseur[] | null;
         if (cached) { set({ fournisseurs: cached, loading: false, offline: true, error: null }); return; }
       }
-      set({ loading: false, error: translateError(error, 'Erreur de chargement') });
+      set({ loading: false, error: translateError(suppliersRes.error, 'Erreur de chargement') });
       return;
     }
-    const fournisseurs = (data ?? []) as Fournisseur[];
+    const fournisseurs = (suppliersRes.data ?? []) as Fournisseur[];
     void saveFournisseurCache(businessId, fournisseurs as unknown[]);
-    set({ fournisseurs, loading: false, offline: false });
+    const debts: SupplierDebt[] = (debtsRes.data ?? []).map((d: Record<string, unknown>) => ({
+      id: d.id as string,
+      business_id: d.business_id as string,
+      supplier_id: d.supplier_id as string,
+      amount: (d.amount as number) / 100,
+      amount_paid: (d.amount_paid as number) / 100,
+      description: (d.description as string | null) ?? null,
+      date: d.date as string,
+      created_at: d.created_at as string,
+    }));
+    set({ fournisseurs, debts, loading: false, offline: false });
   },
 
   createFournisseur: async (businessId, userId, d) => {
@@ -190,7 +200,7 @@ export const useFournisseursStore = create<FournisseursStore>((set, get) => ({
     set({ loading: true });
     const { data, error } = await supabase
       .from('purchase_orders')
-      .select('*')
+      .select('*, supplier:suppliers(name)')
       .eq('business_id', businessId)
       .order('ordered_at', { ascending: false });
 
@@ -203,13 +213,9 @@ export const useFournisseursStore = create<FournisseursStore>((set, get) => ({
       return;
     }
 
-    const { fournisseurs } = get();
-    const fm: Record<string, string> = {};
-    for (const f of fournisseurs) fm[f.id] = f.name;
-
     const commandes = (data ?? []).map((c: Record<string, unknown>) => ({
       ...c,
-      supplier_name: fm[c.supplier_id as string] ?? '—',
+      supplier_name: (c.supplier as { name: string } | null)?.name ?? '—',
     } as CommandeAchat));
     void saveCommandeCache(businessId, commandes as unknown[]);
     set({ commandes, loading: false, offline: false });
@@ -289,12 +295,14 @@ export const useFournisseursStore = create<FournisseursStore>((set, get) => ({
     }));
   },
 
-  recevoirCommande: async (commandeId, businessId, userId) => {
+  recevoirCommande: async (commandeId, businessId, userId, lines) => {
     set({ saving: true, error: null });
 
     const { error } = await supabase.rpc('receive_purchase_order', {
       p_po_id: commandeId,
       p_business_id: businessId,
+      p_line_ids: lines ? lines.map(l => l.id) : null,
+      p_line_qtys: lines ? lines.map(l => l.qty) : null,
     });
 
     if (error) {
@@ -302,12 +310,13 @@ export const useFournisseursStore = create<FournisseursStore>((set, get) => ({
       return false;
     }
 
-    set(state => ({
-      commandes: state.commandes.map(c =>
-        c.id === commandeId ? { ...c, status: 'recu', received_at: new Date().toISOString() } : c,
-      ),
-      saving: false,
-    }));
+    // Re-fetch to get accurate status (recu vs recu_partiel determined server-side)
+    await get().fetchCommandes(businessId);
+    set({ saving: false });
+
+    // Refresh products so the edit form pre-fills with the updated cost_price
+    void useProductStore.getState().fetchProducts(businessId, userId);
+
     return true;
   },
 

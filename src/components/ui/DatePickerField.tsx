@@ -1,8 +1,10 @@
-import React, { useState } from 'react';
+import React, { useMemo, useState } from 'react';
 import { Pressable, StyleSheet, View } from 'react-native';
 import DateTimePickerModal from 'react-native-modal-datetime-picker';
 import { Text } from './Text';
-import { palette, spacing, radius } from '@/src/theme';
+import { useTheme } from '@/src/theme';
+import { spacing, radius } from '@/src/theme';
+import type { Palette } from '@/src/theme';
 
 const MONTHS_FR = [
   'Janvier', 'Février', 'Mars', 'Avril', 'Mai', 'Juin',
@@ -37,6 +39,8 @@ interface DatePickerFieldProps {
 }
 
 export function DatePickerField({ label, value, onChange, maxToday = false, minDate }: DatePickerFieldProps) {
+  const { palette } = useTheme();
+  const styles = useMemo(() => makeStyles(palette), [palette]);
   const [open, setOpen] = useState(false);
 
   const maxDate = maxToday
@@ -51,7 +55,6 @@ export function DatePickerField({ label, value, onChange, maxToday = false, minD
         <Text variant="body">{formatDisplay(value)}</Text>
         <Text variant="caption" color="secondary">›</Text>
       </Pressable>
-
       <DateTimePickerModal
         isVisible={open}
         mode="date"
@@ -59,27 +62,26 @@ export function DatePickerField({ label, value, onChange, maxToday = false, minD
         maximumDate={maxDate}
         minimumDate={minDateObj}
         locale="fr_FR"
-        onConfirm={(date) => {
-          setOpen(false);
-          onChange(dateToIso(date));
-        }}
+        onConfirm={(date) => { setOpen(false); onChange(dateToIso(date)); }}
         onCancel={() => setOpen(false)}
       />
     </View>
   );
 }
 
-const styles = StyleSheet.create({
-  label: { marginBottom: spacing[1] },
-  field: {
-    flexDirection: 'row',
-    alignItems: 'center',
-    justifyContent: 'space-between',
-    paddingHorizontal: spacing[4],
-    paddingVertical: spacing[3],
-    borderRadius: radius.md,
-    borderWidth: 1,
-    borderColor: palette.border,
-    backgroundColor: palette.surface,
-  },
-});
+function makeStyles(p: Palette) {
+  return StyleSheet.create({
+    label: { marginBottom: spacing[1] },
+    field: {
+      flexDirection: 'row',
+      alignItems: 'center',
+      justifyContent: 'space-between',
+      paddingHorizontal: spacing[4],
+      paddingVertical: spacing[3],
+      borderRadius: radius.md,
+      borderWidth: 1,
+      borderColor: p.border,
+      backgroundColor: p.surface,
+    },
+  });
+}

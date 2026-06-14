@@ -6,7 +6,9 @@ import { SafeAreaView } from 'react-native-safe-area-context';
 import { Button } from '@/src/components/ui/Button';
 import { Input } from '@/src/components/ui/Input';
 import { Text } from '@/src/components/ui/Text';
-import { palette, spacing } from '@/src/theme';
+import { useMemo } from 'react';
+import { useTheme, spacing } from '@/src/theme';
+import type { Palette } from '@/src/theme';
 import { useAuthStore } from '@/stores/auth';
 
 interface JoinForm {
@@ -14,6 +16,8 @@ interface JoinForm {
 }
 
 export default function RejoindreScreen() {
+  const { palette } = useTheme();
+  const styles = useMemo(() => makeStyles(palette), [palette]);
   const { joinBusiness, loading, error, clearError } = useAuthStore();
   const { control, handleSubmit } = useForm<JoinForm>();
 
@@ -61,7 +65,7 @@ export default function RejoindreScreen() {
                 onChangeText={v => field.onChange(v.toUpperCase())}
                 onBlur={field.onBlur}
                 error={fieldState.error?.message}
-                placeholder="Ex: MANGO-47"
+                placeholder="MANGO-47"
                 autoCapitalize="characters"
                 autoCorrect={false}
                 style={styles.codeInput}
@@ -83,21 +87,23 @@ export default function RejoindreScreen() {
   );
 }
 
-const styles = StyleSheet.create({
-  safe: { flex: 1, backgroundColor: palette.background },
-  content: { flex: 1, padding: spacing[6], gap: spacing[8] },
-  header: { gap: spacing[2] },
-  backBtn: { alignSelf: 'flex-start', marginBottom: spacing[2] },
-  form: { gap: spacing[4] },
-  errorBox: {
-    backgroundColor: palette.dangerLight,
-    borderRadius: 8,
-    padding: spacing[3],
-  },
-  codeInput: {
-    fontSize: 20,
-    letterSpacing: 4,
-    textAlign: 'center',
-    fontWeight: '700',
-  },
-});
+function makeStyles(p: Palette) {
+  return StyleSheet.create({
+    safe: { flex: 1, backgroundColor: p.background },
+    content: { flex: 1, padding: spacing[6], gap: spacing[8] },
+    header: { gap: spacing[2] },
+    backBtn: { alignSelf: 'flex-start', marginBottom: spacing[2] },
+    form: { gap: spacing[4] },
+    errorBox: {
+      backgroundColor: p.dangerLight,
+      borderRadius: 8,
+      padding: spacing[3],
+    },
+    codeInput: {
+      fontSize: 20,
+      letterSpacing: 4,
+      textAlign: 'center',
+      fontWeight: '700',
+    },
+  });
+}

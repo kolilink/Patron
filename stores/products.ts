@@ -60,7 +60,16 @@ export const useProductStore = create<ProductStore>((set, get) => ({
   offlineSince: null,
 
   fetchProducts: async (businessId, userId) => {
-    set({ loading: true, error: null });
+    if (get().products.length === 0) {
+      const cached = await getProductCache(businessId);
+      if (cached) {
+        set({ products: cached, loading: false, error: null });
+      } else {
+        set({ loading: true, error: null });
+      }
+    } else {
+      set({ error: null });
+    }
     try {
       const { data, error } = await supabase
         .from('products')
@@ -153,11 +162,11 @@ export const useProductStore = create<ProductStore>((set, get) => ({
     } : null;
 
     try {
-      const { error: prodErr } = await supabase.from('products').insert(productRow);
+      const { error: prodErr } = await supabase.rpc('create_product_with_stock', {
+        p_product: productRow,
+        p_stock_move: stockMoveRow,
+      });
       if (prodErr) throw prodErr;
-      if (stockMoveRow) {
-        await supabase.from('stock_moves').insert(stockMoveRow);
-      }
       await get().fetchProducts(businessId, userId);
       set({ saving: false });
       return true;

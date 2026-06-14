@@ -1,6 +1,7 @@
 import { StyleSheet, View } from 'react-native';
 import { Text } from '@/src/components/ui/Text';
-import { palette, spacing } from '@/src/theme';
+import { useTheme } from '@/src/theme';
+import { spacing } from '@/src/theme';
 
 interface Props {
   offlineSince: number | null;
@@ -15,8 +16,9 @@ function fmtTs(ts: number): string {
 }
 
 export function OfflineNotice({ offlineSince }: Props) {
+  const { palette } = useTheme();
   return (
-    <View style={styles.bar}>
+    <View style={[styles.bar, { backgroundColor: palette.warning }]}>
       <Text variant="caption" style={styles.text}>
         {offlineSince
           ? `Hors ligne — données du ${fmtTs(offlineSince)}`
@@ -28,12 +30,9 @@ export function OfflineNotice({ offlineSince }: Props) {
 
 const styles = StyleSheet.create({
   bar: {
-    backgroundColor: palette.warning,
     paddingHorizontal: spacing[5],
     paddingVertical: spacing[1],
     alignItems: 'center',
   },
-  text: {
-    color: '#fff',
-  },
+  text: { color: '#fff' },
 });

@@ -140,6 +140,9 @@ describe('products store — offline cache fallback (Fix 2)', () => {
     (supabase.from as jest.Mock).mockReturnValueOnce(
       makeFromChain({ data: null, error: { message: 'Network request failed' } }),
     );
+    // First call: preload before Supabase fetch (products empty after reset)
+    mockGetProductCache.mockResolvedValueOnce(null);
+    // Second call: cache fallback in the network-error handler
     mockGetProductCache.mockResolvedValueOnce([AFTER_TRANSFORM]);
 
     await useProductStore.getState().fetchProducts(BUSINESS_ID, USER_ID);
@@ -181,10 +184,13 @@ describe('products store — offline cache fallback (Fix 2)', () => {
     (supabase.from as jest.Mock).mockReturnValueOnce(
       makeFromChain({ data: null, error: { message: 'permission denied for table products' } }),
     );
+    // Preload call fires when products is empty — consume it so it doesn't interfere
+    mockGetProductCache.mockResolvedValueOnce(null);
 
     await useProductStore.getState().fetchProducts(BUSINESS_ID, USER_ID);
 
-    expect(mockGetProductCache).not.toHaveBeenCalled();
+    // Only the preload call should have happened — the error-path cache fallback must NOT fire
+    expect(mockGetProductCache).toHaveBeenCalledTimes(1);
     expect(useProductStore.getState().error).not.toBeNull();
   });
 });

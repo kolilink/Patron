@@ -1,6 +1,5 @@
-import { useEffect, useRef, useState } from 'react';
+import { useEffect, useMemo, useRef, useState } from 'react';
 import {
-  Alert,
   Animated,
   Dimensions,
   Modal,
@@ -14,7 +13,8 @@ import { useSafeAreaInsets } from 'react-native-safe-area-context';
 import { router } from 'expo-router';
 import { Ionicons } from '@expo/vector-icons';
 import { Text } from '@/src/components/ui/Text';
-import { palette, spacing, radius } from '@/src/theme';
+import { useTheme, spacing, radius } from '@/src/theme';
+import type { Palette } from '@/src/theme';
 import { useAuthStore } from '@/stores/auth';
 import type { Role } from '@/src/types';
 
@@ -37,6 +37,9 @@ function avatarColor(id: string) {
 }
 
 export function BusinessDrawer() {
+  const { palette } = useTheme();
+  const styles = useMemo(() => makeStyles(palette), [palette]);
+
   const session = useAuthStore(s => s.session);
   const businessDrawerOpen = useAuthStore(s => s.businessDrawerOpen);
   const closeBusinessDrawer = useAuthStore(s => s.closeBusinessDrawer);
@@ -44,8 +47,19 @@ export function BusinessDrawer() {
   const insets = useSafeAreaInsets();
 
   const slideAnim = useRef(new Animated.Value(-DRAWER_WIDTH)).current;
+  const sheetAnim = useRef(new Animated.Value(300)).current;
   const [modalVisible, setModalVisible] = useState(false);
   const [search, setSearch] = useState('');
+  const [showComingSoon, setShowComingSoon] = useState(false);
+
+  const openSheet = () => {
+    setShowComingSoon(true);
+    Animated.spring(sheetAnim, { toValue: 0, useNativeDriver: true, tension: 65, friction: 11 }).start();
+  };
+  const closeSheet = () => {
+    Animated.timing(sheetAnim, { toValue: 300, duration: 220, useNativeDriver: true })
+      .start(() => setShowComingSoon(false));
+  };
 
   useEffect(() => {
     if (businessDrawerOpen) {
@@ -92,11 +106,7 @@ export function BusinessDrawer() {
 
   const handleCreate = () => {
     if (isAlreadyAdmin) {
-      Alert.alert(
-        'Bientôt disponible',
-        'La gestion de plusieurs commerces arrive prochainement sur Patron. Pour l\'instant, vous pouvez rejoindre un commerce existant avec un code.',
-        [{ text: 'OK' }],
-      );
+      openSheet();
     } else {
       closeBusinessDrawer();
       router.push('/(app)/onboarding/creer');
@@ -140,7 +150,7 @@ export function BusinessDrawer() {
             <TextInput
               value={search}
               onChangeText={setSearch}
-              placeholder="Rechercher un commerce..."
+              placeholder="Rechercher…"
               placeholderTextColor={palette.textDisabled}
               style={styles.searchInput}
               returnKeyType="search"
@@ -209,130 +219,211 @@ export function BusinessDrawer() {
           </View>
 
       </Animated.View>
+
+      {/* Inline "Bientôt disponible" sheet — avoids nested Modal on Android */}
+      {showComingSoon && (
+        <>
+          <Pressable style={styles.sheetBackdrop} onPress={closeSheet} />
+          <Animated.View style={[styles.sheet, { transform: [{ translateY: sheetAnim }] }]}>
+            <View style={styles.sheetHandle} />
+            <View style={styles.sheetIcon}>
+              <Ionicons name="rocket-outline" size={28} color={palette.primary} />
+            </View>
+            <Text style={styles.sheetTitle}>Bientôt disponible</Text>
+            <Text style={styles.sheetBody}>
+              La gestion de plusieurs commerces arrive prochainement sur Patron. Pour l'instant, vous pouvez rejoindre un commerce existant avec un code.
+            </Text>
+            <Pressable onPress={closeSheet} style={styles.sheetClose}>
+              <Text style={styles.sheetCloseLabel}>OK, compris</Text>
+            </Pressable>
+          </Animated.View>
+        </>
+      )}
     </Modal>
   );
 }
 
-const styles = StyleSheet.create({
-  backdrop: {
-    backgroundColor: 'rgba(0,0,0,0.45)',
-  },
-  drawer: {
-    position: 'absolute',
-    left: 0,
-    width: DRAWER_WIDTH,
-    backgroundColor: '#fff',
-    borderTopRightRadius: 16,
-    borderBottomRightRadius: 16,
-    overflow: 'hidden',
-    shadowColor: '#000',
-    shadowOffset: { width: 4, height: 0 },
-    shadowOpacity: 0.18,
-    shadowRadius: 16,
-    elevation: 12,
-  },
-  header: {
-    flexDirection: 'row',
-    alignItems: 'center',
-    justifyContent: 'space-between',
-    paddingHorizontal: spacing[5],
-    paddingTop: spacing[4],
-    paddingBottom: spacing[3],
-    borderBottomWidth: 1,
-    borderBottomColor: palette.border,
-  },
-  headerTitle: {
-    fontSize: 16,
-    fontWeight: '700',
-    color: palette.textPrimary,
-  },
-  searchRow: {
-    flexDirection: 'row',
-    alignItems: 'center',
-    gap: spacing[2],
-    marginHorizontal: spacing[4],
-    marginVertical: spacing[3],
-    paddingHorizontal: spacing[3],
-    paddingVertical: spacing[2],
-    backgroundColor: palette.background,
-    borderRadius: radius.md,
-    borderWidth: 1,
-    borderColor: palette.border,
-  },
-  searchInput: {
-    flex: 1,
-    fontSize: 14,
-    color: palette.textPrimary,
-    paddingVertical: 0,
-  },
-  row: {
-    flexDirection: 'row',
-    alignItems: 'center',
-    gap: spacing[3],
-    paddingHorizontal: spacing[4],
-    paddingVertical: spacing[3],
-  },
-  rowActive: {
-    backgroundColor: `${palette.primary}12`,
-    borderLeftWidth: 3,
-    borderLeftColor: palette.primary,
-    paddingLeft: spacing[4] - 3,
-  },
-  avatar: {
-    width: 40,
-    height: 40,
-    borderRadius: 10,
-    alignItems: 'center',
-    justifyContent: 'center',
-  },
-  avatarText: {
-    fontSize: 16,
-    fontWeight: '700',
-    color: '#fff',
-  },
-  bizName: {
-    fontSize: 14,
-    fontWeight: '600',
-    color: palette.textPrimary,
-    marginBottom: 2,
-  },
-  roleLabel: {
-    fontSize: 12,
-    color: palette.textSecondary,
-  },
-  emptySearch: {
-    padding: spacing[6],
-    alignItems: 'center',
-  },
-  emptySearchText: {
-    fontSize: 13,
-    color: palette.textSecondary,
-  },
-  footer: {
-    borderTopWidth: 1,
-    borderTopColor: palette.border,
-    paddingVertical: spacing[2],
-  },
-  footerRow: {
-    flexDirection: 'row',
-    alignItems: 'center',
-    gap: spacing[3],
-    paddingHorizontal: spacing[4],
-    paddingVertical: spacing[3],
-  },
-  footerIcon: {
-    width: 32,
-    height: 32,
-    borderRadius: 8,
-    backgroundColor: palette.background,
-    alignItems: 'center',
-    justifyContent: 'center',
-    borderWidth: 1,
-    borderColor: palette.border,
-  },
-  footerLabel: {
-    fontSize: 14,
-    fontWeight: '500',
-    color: palette.primary,
-  },
-});
+function makeStyles(p: Palette) {
+  return StyleSheet.create({
+    backdrop: {
+      backgroundColor: 'rgba(0,0,0,0.45)',
+    },
+    drawer: {
+      position: 'absolute',
+      left: 0,
+      width: DRAWER_WIDTH,
+      backgroundColor: p.surface,
+      borderTopRightRadius: 16,
+      borderBottomRightRadius: 16,
+      overflow: 'hidden',
+      shadowColor: '#000',
+      shadowOffset: { width: 4, height: 0 },
+      shadowOpacity: 0.18,
+      shadowRadius: 16,
+      elevation: 12,
+    },
+    header: {
+      flexDirection: 'row',
+      alignItems: 'center',
+      justifyContent: 'space-between',
+      paddingHorizontal: spacing[5],
+      paddingTop: spacing[4],
+      paddingBottom: spacing[3],
+      borderBottomWidth: 1,
+      borderBottomColor: p.border,
+    },
+    headerTitle: {
+      fontSize: 16,
+      fontWeight: '700',
+      color: p.textPrimary,
+    },
+    searchRow: {
+      flexDirection: 'row',
+      alignItems: 'center',
+      gap: spacing[2],
+      marginHorizontal: spacing[4],
+      marginVertical: spacing[3],
+      paddingHorizontal: spacing[3],
+      paddingVertical: spacing[2],
+      backgroundColor: p.background,
+      borderRadius: radius.md,
+      borderWidth: 1,
+      borderColor: p.border,
+    },
+    searchInput: {
+      flex: 1,
+      fontSize: 14,
+      color: p.textPrimary,
+      paddingVertical: 0,
+    },
+    row: {
+      flexDirection: 'row',
+      alignItems: 'center',
+      gap: spacing[3],
+      paddingHorizontal: spacing[4],
+      paddingVertical: spacing[3],
+    },
+    rowActive: {
+      backgroundColor: p.primaryLight,
+      borderLeftWidth: 3,
+      borderLeftColor: p.primary,
+      paddingLeft: spacing[4] - 3,
+    },
+    avatar: {
+      width: 40,
+      height: 40,
+      borderRadius: 10,
+      alignItems: 'center',
+      justifyContent: 'center',
+    },
+    avatarText: {
+      fontSize: 16,
+      fontWeight: '700',
+      color: '#fff',
+    },
+    bizName: {
+      fontSize: 14,
+      fontWeight: '600',
+      color: p.textPrimary,
+      marginBottom: 2,
+    },
+    roleLabel: {
+      fontSize: 12,
+      color: p.textSecondary,
+    },
+    emptySearch: {
+      padding: spacing[6],
+      alignItems: 'center',
+    },
+    emptySearchText: {
+      fontSize: 13,
+      color: p.textSecondary,
+    },
+    footer: {
+      borderTopWidth: 1,
+      borderTopColor: p.border,
+      paddingVertical: spacing[2],
+    },
+    footerRow: {
+      flexDirection: 'row',
+      alignItems: 'center',
+      gap: spacing[3],
+      paddingHorizontal: spacing[4],
+      paddingVertical: spacing[3],
+    },
+    footerIcon: {
+      width: 32,
+      height: 32,
+      borderRadius: 8,
+      backgroundColor: p.background,
+      alignItems: 'center',
+      justifyContent: 'center',
+      borderWidth: 1,
+      borderColor: p.border,
+    },
+    footerLabel: {
+      fontSize: 14,
+      fontWeight: '500',
+      color: p.primary,
+    },
+    sheetBackdrop: {
+      ...StyleSheet.absoluteFillObject,
+      backgroundColor: 'rgba(0,0,0,0.25)',
+    },
+    sheet: {
+      position: 'absolute',
+      left: 0,
+      right: 0,
+      bottom: 0,
+      backgroundColor: p.surface,
+      borderTopLeftRadius: 24,
+      borderTopRightRadius: 24,
+      paddingHorizontal: spacing[6],
+      paddingTop: spacing[3],
+      paddingBottom: spacing[10],
+      alignItems: 'center',
+      gap: spacing[3],
+    },
+    sheetHandle: {
+      width: 40,
+      height: 4,
+      borderRadius: 2,
+      backgroundColor: p.border,
+      marginBottom: spacing[2],
+    },
+    sheetIcon: {
+      width: 64,
+      height: 64,
+      borderRadius: 20,
+      backgroundColor: p.primaryLight,
+      alignItems: 'center',
+      justifyContent: 'center',
+    },
+    sheetTitle: {
+      fontSize: 18,
+      fontWeight: '700',
+      color: p.textPrimary,
+      textAlign: 'center',
+    },
+    sheetBody: {
+      fontSize: 14,
+      color: p.textSecondary,
+      textAlign: 'center',
+      lineHeight: 22,
+    },
+    sheetClose: {
+      marginTop: spacing[2],
+      backgroundColor: p.primary,
+      borderRadius: radius.lg,
+      paddingHorizontal: spacing[8],
+      paddingVertical: spacing[4],
+      width: '100%',
+      alignItems: 'center',
+    },
+    sheetCloseLabel: {
+      fontSize: 16,
+      fontWeight: '700',
+      color: '#fff',
+    },
+  });
+}

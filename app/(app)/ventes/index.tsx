@@ -8,16 +8,73 @@ import { router, useFocusEffect } from 'expo-router';
 import { Card } from '@/src/components/ui/Card';
 import { Text } from '@/src/components/ui/Text';
 import { Button } from '@/src/components/ui/Button';
-import { Input } from '@/src/components/ui/Input';
 import { DatePickerField } from '@/src/components/ui/DatePickerField';
 import { OfflineNotice } from '@/src/components/ui/OfflineNotice';
-import { palette, spacing, radius, colors } from '@/src/theme';
+import { useTheme, spacing, radius, colors } from '@/src/theme';
+import type { Palette } from '@/src/theme';
 import { formatAmount } from '@/src/utils/format';
 import { useAuthStore } from '@/stores/auth';
 import { useVentesStore, type Vente } from '@/stores/ventes';
 import { SaleReceiptView, type ReceiptData, type ReceiptItem } from '@/src/components/ui/SaleReceiptView';
+import { haptics } from '@/lib/haptics';
+import { SkeletonList } from '@/src/components/ui/SkeletonPlaceholder';
 
 function fmt(n: number, cur: string) { return formatAmount(n, cur); }
+
+function SkeletonLine({ width = '100%', height = 14 }: { width?: string | number; height?: number }) {
+  const { palette } = useTheme();
+  const pulse = useRef(new Animated.Value(0.4)).current;
+  useEffect(() => {
+    Animated.loop(
+      Animated.sequence([
+        Animated.timing(pulse, { toValue: 1, duration: 700, useNativeDriver: true, easing: Easing.inOut(Easing.ease) }),
+        Animated.timing(pulse, { toValue: 0.4, duration: 700, useNativeDriver: true, easing: Easing.inOut(Easing.ease) }),
+      ])
+    ).start();
+  }, [pulse]);
+  return (
+    <View style={{ height, width: width as any, overflow: 'hidden', borderRadius: 6 }}>
+      <Animated.View style={{ flex: 1, backgroundColor: palette.border, opacity: pulse }} />
+    </View>
+  );
+}
+
+function DetailSkeleton() {
+  return (
+    <>
+      <Card style={{ gap: spacing[3] }}>
+        <SkeletonLine width="40%" height={12} />
+        <View style={{ gap: spacing[2] }}>
+          <View style={{ flexDirection: 'row', justifyContent: 'space-between' }}>
+            <SkeletonLine width="55%" />
+            <SkeletonLine width="20%" />
+          </View>
+          <View style={{ flexDirection: 'row', justifyContent: 'space-between' }}>
+            <SkeletonLine width="45%" />
+            <SkeletonLine width="25%" />
+          </View>
+          <View style={{ flexDirection: 'row', justifyContent: 'space-between' }}>
+            <SkeletonLine width="50%" />
+            <SkeletonLine width="22%" />
+          </View>
+        </View>
+      </Card>
+      <Card style={{ gap: spacing[3] }}>
+        <SkeletonLine width="30%" height={12} />
+        <View style={{ gap: spacing[2] }}>
+          <View style={{ flexDirection: 'row', justifyContent: 'space-between' }}>
+            <SkeletonLine width="25%" />
+            <SkeletonLine width="35%" />
+          </View>
+          <View style={{ flexDirection: 'row', justifyContent: 'space-between' }}>
+            <SkeletonLine width="20%" />
+            <SkeletonLine width="40%" />
+          </View>
+        </View>
+      </Card>
+    </>
+  );
+}
 
 type SaleDisplayState = 'paye' | 'partiel' | 'credit' | 'annule';
 
@@ -59,7 +116,7 @@ const PAY_METHODS = [
 
 function buildSummaryLine(all: Vente[], filtered: Vente[], filter: string, currency: string): string {
   const active = all.filter(s => s.status !== 'annule');
-  const creditSales = active.filter(s => s.status === 'credit' && (s.total_amount - (s.amount_paid ?? 0)) > 0.01);
+  const creditSales = active.filter(s => s.status === 'credit' && (s.total_amount - (s.discount_amount ?? 0) - (s.amount_paid ?? 0)) > 0.01);
 
   switch (filter) {
     case 'all': {
@@ -75,7 +132,7 @@ function buildSummaryLine(all: Vente[], filtered: Vente[], filter: string, curre
       return `${n} vente${n !== 1 ? 's' : ''} payée${n !== 1 ? 's' : ''} · ${fmt(total, currency)}`;
     }
     case 'credit': {
-      const total = filtered.reduce((s, v) => s + (v.total_amount - (v.amount_paid ?? 0)), 0);
+      const total = filtered.reduce((s, v) => s + (v.total_amount - (v.discount_amount ?? 0) - (v.amount_paid ?? 0)), 0);
       const n = filtered.length;
       return `${n} vente${n !== 1 ? 's' : ''} à payer · ${fmt(total, currency)}`;
     }
@@ -163,23 +220,25 @@ interface PaymentSheetProps {
 }
 
 function PaymentSheet({ visible, sale, currency, onClose, onConfirm, saving }: PaymentSheetProps) {
+  const { palette } = useTheme();
+  const styles = useMemo(() => makeStyles(palette), [palette]);
   const amountPaid = sale.amount_paid ?? 0;
   const remaining = sale.total_amount - (sale.discount_amount ?? 0) - amountPaid;
 
-  const [amount, setAmount] = useState('');
+  const [amountStr, setAmountStr] = useState('');
   const [method, setMethod] = useState('especes');
   const [date, setDate] = useState(todayISO());
 
   useEffect(() => {
     if (visible) {
-      setAmount(String(Math.round(remaining)));
+      setAmountStr(String(Math.round(remaining)));
       setMethod('especes');
       setDate(todayISO());
     }
   }, [visible]);
 
   const handleConfirm = () => {
-    const amt = parseFloat(amount.replace(/\s/g, '').replace(',', '.'));
+    const amt = parseFloat(amountStr.replace(/\s/g, '').replace(',', '.'));
     if (!amt || amt <= 0) { Alert.alert('Vérifiez le montant :)'); return; }
     if (amt > remaining + 0.01) {
       Alert.alert('Le montant dépasse le total :)');
@@ -194,38 +253,46 @@ function PaymentSheet({ visible, sale, currency, onClose, onConfirm, saving }: P
     <Modal visible={visible} animationType="slide" presentationStyle="formSheet" onRequestClose={onClose}>
       <SafeAreaView style={styles.modalSafe} edges={['bottom']}>
         <View style={styles.sheetHeader}>
-          <View style={{ width: 60 }} />
-          <Text variant="h4">Paiement</Text>
-          <Pressable onPress={onClose} style={{ minWidth: 60, alignItems: 'flex-end' }}>
+          <Pressable onPress={onClose} style={{ minWidth: 60 }}>
             <Text variant="body" color="secondary">Annuler</Text>
           </Pressable>
+          <Text variant="h4" style={{ flex: 1, textAlign: 'center' }} numberOfLines={1}>
+            {clientName} a payé combien ?
+          </Text>
+          <View style={{ width: 60 }} />
         </View>
 
         <ScrollView style={{ flex: 1 }} contentContainerStyle={styles.sheetContent} keyboardShouldPersistTaps="handled">
-          <Text variant="h4" style={{ textAlign: 'center' }}>
-            Combien a payé {clientName} ?
-          </Text>
-          <Text variant="caption" color="secondary" style={{ textAlign: 'center' }}>
-            Reste à payer : {fmt(remaining, currency)}
-          </Text>
+          {/* Debt context card */}
+          <Card style={[styles.contextCard, { borderLeftColor: palette.warning, borderLeftWidth: 3 }]}>
+            <Text variant="caption" color="secondary">{clientName} vous doit</Text>
+            <Text variant="amountLarge" style={{ color: palette.warning }}>{fmt(remaining, currency)}</Text>
+          </Card>
 
+          {/* Amount */}
           <View style={{ gap: spacing[2] }}>
-            <Input
-              label="Montant"
-              value={amount}
-              onChangeText={setAmount}
-              keyboardType="decimal-pad"
-              placeholder={String(Math.round(remaining))}
-            />
-            <Pressable onPress={() => setAmount(String(Math.round(remaining)))}>
-              <Text variant="caption" style={{ color: palette.primary }}>
-                Solder tout ({fmt(remaining, currency)})
-              </Text>
-            </Pressable>
+            <Text variant="label">Combien {clientName} vous donne ?</Text>
+            <View style={styles.amountRow}>
+              <TextInput
+                style={styles.amountInput}
+                value={amountStr}
+                onChangeText={setAmountStr}
+                keyboardType="numeric"
+                placeholderTextColor={palette.textSecondary}
+                selectTextOnFocus
+              />
+              <Pressable
+                style={styles.solderBtn}
+                onPress={() => setAmountStr(String(Math.round(remaining)))}
+              >
+                <Text variant="label" style={{ color: palette.primary }}>Tout régler</Text>
+              </Pressable>
+            </View>
           </View>
 
-          <View>
-            <Text variant="label" style={{ marginBottom: spacing[2] }}>Mode de paiement</Text>
+          {/* Method */}
+          <View style={{ gap: spacing[2] }}>
+            <Text variant="label">Payé par :</Text>
             <View style={styles.methodRow}>
               {PAY_METHODS.map(m => (
                 <Pressable key={m.key} onPress={() => setMethod(m.key)}
@@ -243,7 +310,7 @@ function PaymentSheet({ visible, sale, currency, onClose, onConfirm, saving }: P
 
         <View style={styles.sheetFooter}>
           <Button
-            label={saving ? 'Enregistrement…' : 'Enregistrer'}
+            label={saving ? 'Enregistrement…' : 'Confirmer le paiement'}
             onPress={handleConfirm}
             loading={saving}
             fullWidth
@@ -271,6 +338,8 @@ interface DetailModalProps {
 }
 
 function DetailModal({ sale, currency, businessName, singleVendor, role, onClose, onRecordPayment, onCancel, onUpdateClient, saving }: DetailModalProps) {
+  const { palette } = useTheme();
+  const styles = useMemo(() => makeStyles(palette), [palette]);
   const [showPaymentSheet, setShowPaymentSheet] = useState(false);
   const [showCancelForm, setShowCancelForm] = useState(false);
   const [showEditClient, setShowEditClient] = useState(false);
@@ -301,9 +370,12 @@ function DetailModal({ sale, currency, businessName, singleVendor, role, onClose
           is_bulk: false,
         })),
         total: sale.total_amount,
+        discountAmount: sale.discount_amount ?? 0,
+        amountPaid: sale.amount_paid,
         payment: sale.is_credit ? null : (sale.payments?.[0] ? { method: sale.payments[0].method, amount: sale.payments[0].amount } : null),
         customerName: sale.customer_name ?? undefined,
         date: new Date(sale.created_at),
+        receiptId: sale.id.slice(0, 8).toUpperCase(),
       }
     : null;
 
@@ -321,7 +393,7 @@ function DetailModal({ sale, currency, businessName, singleVendor, role, onClose
 
   const amountPaid = sale.amount_paid ?? 0;
   const discount = sale.discount_amount ?? 0;
-  const remaining = sale.total_amount - amountPaid;
+  const remaining = sale.total_amount - discount - amountPaid;
   const displayState = getSaleDisplayState(sale);
 
   const saleIso = sale.sale_date ?? sale.created_at;
@@ -329,10 +401,12 @@ function DetailModal({ sale, currency, businessName, singleVendor, role, onClose
   const longDate = fmtDateLong(saleIso);
 
   const hasProfit = !!(sale.lines?.some(l => l.cost_price > 0));
-  const catalogRevenue = sale.lines?.reduce((s, l) => s + l.unit_price * l.qty, 0) ?? 0;
   const totalCost = sale.lines?.reduce((s, l) => s + l.cost_price * l.qty, 0) ?? 0;
-  // Bénéfice uses amount actually received, not catalog total
-  const effectiveRevenue = catalogRevenue - discount;
+  // For fully-paid sales with amount_paid set (discounted/credit), use the actual payment.
+  // Otherwise use sale.total_amount which reflects the actual sold price (including above-catalog overrides).
+  const effectiveRevenue = sale.status === 'paye' && sale.amount_paid != null
+    ? sale.amount_paid
+    : sale.total_amount - discount;
   const totalProfit = effectiveRevenue - totalCost;
   const margin = effectiveRevenue > 0 ? (totalProfit / effectiveRevenue) * 100 : 0;
 
@@ -344,9 +418,12 @@ function DetailModal({ sale, currency, businessName, singleVendor, role, onClose
   const handlePaymentSubmit = async (amount: number, method: string, date: string) => {
     const { ok, fullyPaid } = await onRecordPayment(amount, method, date);
     if (ok) {
+      haptics.success();
       setShowPaymentSheet(false);
       const clientName = sale.customer_name ?? 'Client';
       showToast(fullyPaid ? `${clientName} est soldé(e) ✓` : 'Paiement enregistré');
+    } else {
+      haptics.error();
     }
   };
 
@@ -360,7 +437,7 @@ function DetailModal({ sale, currency, businessName, singleVendor, role, onClose
       'Le stock sera restauré. Cette action est irréversible.',
       [
         { text: 'Retour', style: 'cancel' },
-        { text: 'Annuler la vente', style: 'destructive', onPress: () => onCancel(cancelReason) },
+        { text: 'Annuler la vente', style: 'destructive', onPress: () => { haptics.error(); onCancel(cancelReason); } },
       ],
     );
   };
@@ -388,9 +465,14 @@ function DetailModal({ sale, currency, businessName, singleVendor, role, onClose
             <Text variant="body" color="secondary">Fermer</Text>
           </Pressable>
           <Text variant="h4">Vente du {shortDate}</Text>
-          <Pressable onPress={showMenu} style={{ minWidth: 40, alignItems: 'flex-end' }}>
-            <Text variant="body" color="secondary">⋯</Text>
-          </Pressable>
+          {(role === 'administrateur' || role === 'manager') && (
+            <Pressable onPress={showMenu} style={{ minWidth: 40, alignItems: 'flex-end' }}>
+              <Text variant="body" color="secondary">⋯</Text>
+            </Pressable>
+          )}
+          {role !== 'administrateur' && role !== 'manager' && (
+            <View style={{ minWidth: 40 }} />
+          )}
         </View>
 
         <ScrollView contentContainerStyle={styles.pad}>
@@ -411,11 +493,11 @@ function DetailModal({ sale, currency, businessName, singleVendor, role, onClose
                   adjustsFontSizeToFit
                   numberOfLines={1}
                 >
-                  {fmt(displayState === 'partiel' ? remaining : sale.total_amount, currency)}
+                  {fmt(displayState === 'partiel' ? remaining : sale.total_amount - discount, currency)}
                 </Text>
                 {displayState === 'partiel' && (
                   <Text variant="caption" style={{ color: palette.warning }}>
-                    sur {fmt(sale.total_amount, currency)}
+                    sur {fmt(sale.total_amount - discount, currency)}
                   </Text>
                 )}
               </View>
@@ -439,6 +521,7 @@ function DetailModal({ sale, currency, businessName, singleVendor, role, onClose
             </View>
           )}
 
+          {!sale.lines ? <DetailSkeleton /> : (
           <View style={displayState === 'annule' ? { opacity: 0.5 } : undefined}>
             {/* Articles + rabais */}
             {sale.lines && sale.lines.length > 0 && (
@@ -531,27 +614,36 @@ function DetailModal({ sale, currency, businessName, singleVendor, role, onClose
               </Card>
             )}
 
-            {/* Bénéfice — always visible when cost data exists */}
+            {/* Bénéfice — shown only when cost data exists */}
             {hasProfit && (
-              <Card style={{ gap: spacing[2] }}>
-                <Text variant="label" color="secondary">Bénéfice</Text>
-                <View style={styles.row}>
-                  <Text variant="caption" color="secondary">Coût d'achat</Text>
-                  <Text variant="label">{fmt(totalCost, currency)}</Text>
-                </View>
-                {discount > 0 && (
-                  <View style={styles.row}>
-                    <Text variant="caption" color="secondary">Rabais accordé</Text>
-                    <Text variant="label" style={{ color: colors.warning[600] }}>− {fmt(discount, currency)}</Text>
-                  </View>
-                )}
-                <View style={[styles.row, { paddingTop: spacing[1], borderTopWidth: 1, borderTopColor: palette.border }]}>
-                  <Text variant="label">Bénéfice net</Text>
-                  <Text variant="label" style={{ color: totalProfit >= 0 ? palette.success : palette.danger }}>
-                    {totalProfit >= 0 ? '+' : ''}{fmt(totalProfit, currency)} ({margin.toFixed(0)}%)
+              (displayState === 'credit' || displayState === 'partiel') ? (
+                <Card style={{ gap: spacing[2] }}>
+                  <Text variant="label" color="secondary">Bénéfice</Text>
+                  <Text variant="caption" style={{ color: palette.warning }}>
+                    ⏳ En attente de paiement
                   </Text>
-                </View>
-              </Card>
+                </Card>
+              ) : (
+                <Card style={{ gap: spacing[2] }}>
+                  <Text variant="label" color="secondary">Bénéfice</Text>
+                  <View style={styles.row}>
+                    <Text variant="caption" color="secondary">Coût d'achat</Text>
+                    <Text variant="label">{fmt(totalCost, currency)}</Text>
+                  </View>
+                  {discount > 0 && (
+                    <View style={styles.row}>
+                      <Text variant="caption" color="secondary">Rabais accordé</Text>
+                      <Text variant="label" style={{ color: colors.warning[600] }}>− {fmt(discount, currency)}</Text>
+                    </View>
+                  )}
+                  <View style={[styles.row, { paddingTop: spacing[1], borderTopWidth: 1, borderTopColor: palette.border }]}>
+                    <Text variant="label">Bénéfice net</Text>
+                    <Text variant="label" style={{ color: totalProfit >= 0 ? palette.success : palette.danger }}>
+                      {totalProfit >= 0 ? '+' : ''}{fmt(totalProfit, currency)} ({margin.toFixed(0)}%)
+                    </Text>
+                  </View>
+                </Card>
+              )
             )}
 
             {/* Cancel — hidden for investisseurs who have no write access */}
@@ -565,7 +657,7 @@ function DetailModal({ sale, currency, businessName, singleVendor, role, onClose
                     style={styles.textInput}
                     value={cancelReason}
                     onChangeText={setCancelReason}
-                    placeholder="Précisez la raison…"
+                    placeholder="Raison de l'annulation"
                     placeholderTextColor={palette.textDisabled}
                     multiline
                   />
@@ -587,6 +679,7 @@ function DetailModal({ sale, currency, businessName, singleVendor, role, onClose
               )
             )}
           </View>
+          )}
 
           {/* Share receipt — only when lines are loaded */}
           {receiptData && (
@@ -595,7 +688,9 @@ function DetailModal({ sale, currency, businessName, singleVendor, role, onClose
               <View ref={receiptRef} collapsable={false}>
                 <SaleReceiptView data={receiptData} />
               </View>
-              <Button label="Partager le reçu" onPress={handleShareReceipt} fullWidth variant="outline" />
+              <View style={{ paddingHorizontal: spacing[5] }}>
+                <Button label="Partager le reçu" onPress={handleShareReceipt} fullWidth variant="outline" />
+              </View>
             </View>
           )}
         </ScrollView>
@@ -616,6 +711,8 @@ function DetailModal({ sale, currency, businessName, singleVendor, role, onClose
 // ─── Main screen ───────────────────────────────────────────────────────────────
 
 export default function VentesScreen() {
+  const { palette } = useTheme();
+  const styles = useMemo(() => makeStyles(palette), [palette]);
   const session = useAuthStore(s => s.session);
   const businessId = session?.activeBusiness?.id ?? '';
   const userId = session?.user.id ?? '';
@@ -765,7 +862,7 @@ export default function VentesScreen() {
       {offline && <OfflineNotice offlineSince={offlineSince} />}
 
       {loading && sales.length === 0 ? (
-        <Text variant="body" color="secondary" style={styles.center}>Chargement…</Text>
+        <SkeletonList count={7} />
       ) : !loading && sales.length === 0 && error ? (
         <View style={styles.emptyState}>
           <Text variant="body" color="secondary" style={{ textAlign: 'center' }}>Données non disponibles hors ligne</Text>
@@ -825,7 +922,7 @@ export default function VentesScreen() {
             const ds = getSaleDisplayState(sale);
             const rowColor = ds === 'paye' ? palette.success : ds === 'annule' ? palette.danger : palette.warning;
             const isCredit = ds === 'credit' || ds === 'partiel';
-            const remaining = sale.total_amount - (sale.amount_paid ?? 0);
+            const remaining = sale.total_amount - (sale.discount_amount ?? 0) - (sale.amount_paid ?? 0);
 
             return (
               <Pressable
@@ -848,16 +945,15 @@ export default function VentesScreen() {
                       adjustsFontSizeToFit
                       numberOfLines={1}
                     >
-                      {isCredit ? `Reste ${fmt(remaining, currency)}` : fmt(sale.total_amount, currency)}
+                      {isCredit ? `Reste ${fmt(remaining, currency)}` : fmt(sale.total_amount - (sale.discount_amount ?? 0), currency)}
                     </Text>
                   </View>
                   <Text variant="caption" color="secondary">
                     {isCredit
-                      ? `Crédit · sur ${fmt(sale.total_amount, currency)}`
+                      ? `Crédit · sur ${fmt(sale.total_amount - (sale.discount_amount ?? 0), currency)}`
                       : ds === 'annule'
                       ? 'Annulé'
-                      : 'Payé'}
-                    {sale.discount_amount > 0 && ds === 'paye' ? ' · rabais' : ''}
+                      : (sale.discount_amount ?? 0) > 0 ? 'Payé · rabais' : 'Payé'}
                   </Text>
                 </View>
               </Pressable>
@@ -900,13 +996,14 @@ export default function VentesScreen() {
 
 // ─── Styles ───────────────────────────────────────────────────────────────────
 
-const styles = StyleSheet.create({
-  safe: { flex: 1, backgroundColor: palette.background },
+function makeStyles(p: Palette) {
+  return StyleSheet.create({
+  safe: { flex: 1, backgroundColor: p.background },
   header: { flexDirection: 'row', alignItems: 'center', justifyContent: 'space-between', paddingHorizontal: spacing[5], paddingVertical: spacing[4] },
   summaryLine: { paddingHorizontal: spacing[5], paddingBottom: spacing[2] },
   filterRow: { flexDirection: 'row', paddingHorizontal: spacing[5], gap: spacing[2], marginBottom: spacing[3] },
-  filterTab: { flex: 1, alignItems: 'center', paddingHorizontal: spacing[2], paddingVertical: spacing[1.5], borderRadius: radius.full, backgroundColor: palette.surface, borderWidth: 1, borderColor: palette.border },
-  filterTabActive: { backgroundColor: palette.primary, borderColor: palette.primary },
+  filterTab: { flex: 1, alignItems: 'center', paddingHorizontal: spacing[2], paddingVertical: spacing[1.5], borderRadius: radius.full, backgroundColor: p.surface, borderWidth: 1, borderColor: p.border },
+  filterTabActive: { backgroundColor: p.primary, borderColor: p.primary },
   list: { paddingHorizontal: spacing[5], paddingBottom: spacing[10] },
   dayHeader: {
     flexDirection: 'row',
@@ -917,31 +1014,31 @@ const styles = StyleSheet.create({
     gap: spacing[2],
   },
   dayLabel: { marginBottom: 2 },
-  saleRow: { paddingVertical: spacing[3], backgroundColor: palette.surface },
+  saleRow: { paddingVertical: spacing[3], backgroundColor: p.surface },
   saleTop: { flexDirection: 'row', alignItems: 'center', gap: spacing[2] },
-  offlineBanner: { alignItems: 'center', justifyContent: 'center', paddingVertical: spacing[1], borderBottomWidth: StyleSheet.hairlineWidth, borderBottomColor: palette.border },
+  offlineBanner: { alignItems: 'center', justifyContent: 'center', paddingVertical: spacing[1], borderBottomWidth: StyleSheet.hairlineWidth, borderBottomColor: p.border },
   emptyState: { flex: 1, alignItems: 'center', justifyContent: 'center' },
   center: { textAlign: 'center', marginTop: spacing[10] },
   showAllBtn: { alignItems: 'center', paddingVertical: spacing[5] },
   fabContainer: { position: 'absolute', bottom: 194, right: spacing[4], zIndex: 10 },
   fab: {
     width: 56, height: 56, borderRadius: radius.full,
-    backgroundColor: palette.primary,
+    backgroundColor: p.primary,
     alignItems: 'center', justifyContent: 'center',
     shadowColor: colors.neutral[900],
     shadowOffset: { width: 0, height: 4 }, shadowOpacity: 0.18, shadowRadius: 8,
     elevation: 8,
   },
-  fabIcon: { fontSize: 28, lineHeight: 32, fontWeight: '300', color: palette.textInverse, marginTop: -2 },
+  fabIcon: { fontSize: 28, lineHeight: 32, fontWeight: '300', color: p.textInverse, marginTop: -2 },
 
   // Detail modal
-  modalSafe: { flex: 1, backgroundColor: palette.background },
-  receiptSection: { paddingHorizontal: spacing[5], paddingBottom: spacing[6], gap: spacing[3] },
-  receiptDivider: { height: 1, backgroundColor: palette.border },
+  modalSafe: { flex: 1, backgroundColor: p.background },
+  receiptSection: { marginHorizontal: -spacing[5], paddingBottom: spacing[6], gap: spacing[3] },
+  receiptDivider: { height: 1, backgroundColor: p.border },
   modalHeader: {
     flexDirection: 'row', alignItems: 'center', justifyContent: 'space-between',
     paddingHorizontal: spacing[5], paddingVertical: spacing[4],
-    borderBottomWidth: 1, borderBottomColor: palette.border,
+    borderBottomWidth: 1, borderBottomColor: p.border,
   },
   pad: { padding: spacing[5], gap: spacing[4], paddingBottom: spacing[10] },
 
@@ -949,37 +1046,50 @@ const styles = StyleSheet.create({
     borderRadius: radius.lg, padding: spacing[4], gap: spacing[3],
     flexDirection: 'row', alignItems: 'center', justifyContent: 'space-between',
   },
-  bannerGreen: { backgroundColor: palette.success + '20', borderWidth: 1, borderColor: palette.success + '40' },
-  bannerOrange: { backgroundColor: palette.warning + '15', borderWidth: 1, borderColor: palette.warning + '40' },
-  bannerRed: { backgroundColor: palette.danger + '15', borderWidth: 1, borderColor: palette.danger + '40', flexDirection: 'column', alignItems: 'flex-start' },
+  bannerGreen: { backgroundColor: p.success + '20', borderWidth: 1, borderColor: p.success + '40' },
+  bannerOrange: { backgroundColor: p.warning + '15', borderWidth: 1, borderColor: p.warning + '40' },
+  bannerRed: { backgroundColor: p.danger + '15', borderWidth: 1, borderColor: p.danger + '40', flexDirection: 'column', alignItems: 'flex-start' },
 
   toast: {
-    backgroundColor: palette.primary, paddingHorizontal: spacing[5], paddingVertical: spacing[3],
+    backgroundColor: p.primary, paddingHorizontal: spacing[5], paddingVertical: spacing[3],
     alignItems: 'center',
   },
 
   row: { flexDirection: 'row', alignItems: 'center', justifyContent: 'space-between' },
   lineRow: { flexDirection: 'row', alignItems: 'center', gap: spacing[3] },
-  divider: { height: 1, backgroundColor: palette.border, marginVertical: spacing[1] },
+  divider: { height: 1, backgroundColor: p.border, marginVertical: spacing[1] },
 
   textInput: {
     paddingHorizontal: spacing[4], paddingVertical: spacing[3],
-    borderRadius: radius.md, borderWidth: 1, borderColor: palette.border,
-    backgroundColor: palette.surface, color: palette.textPrimary, fontSize: 16,
+    borderRadius: radius.md, borderWidth: 1, borderColor: p.border,
+    backgroundColor: p.surface, color: p.textPrimary, fontSize: 16,
   },
 
   // Payment sheet
   sheetHeader: {
     flexDirection: 'row', alignItems: 'center', justifyContent: 'space-between',
     paddingHorizontal: spacing[5], paddingVertical: spacing[4],
-    borderBottomWidth: 1, borderBottomColor: palette.border,
+    borderBottomWidth: 1, borderBottomColor: p.border,
   },
   sheetContent: { padding: spacing[5], gap: spacing[4] },
   sheetFooter: {
-    padding: spacing[5], borderTopWidth: 1, borderTopColor: palette.border,
-    backgroundColor: palette.surface,
+    padding: spacing[5], borderTopWidth: 1, borderTopColor: p.border,
+    backgroundColor: p.surface,
+  },
+  contextCard: { gap: spacing[1] },
+  amountRow: { flexDirection: 'row', gap: spacing[3], alignItems: 'center' },
+  amountInput: {
+    flex: 1, paddingHorizontal: spacing[4], paddingVertical: spacing[3],
+    borderRadius: radius.md, borderWidth: 1, borderColor: p.border,
+    backgroundColor: p.surface, color: p.textPrimary,
+    fontSize: 28, fontWeight: '700',
+  },
+  solderBtn: {
+    paddingHorizontal: spacing[3], paddingVertical: spacing[3],
+    borderRadius: radius.md, borderWidth: 1, borderColor: p.primary,
   },
   methodRow: { flexDirection: 'row', flexWrap: 'wrap', gap: spacing[2] },
-  chip: { paddingHorizontal: spacing[3], paddingVertical: spacing[1.5], borderRadius: radius.full, borderWidth: 1, borderColor: palette.border, backgroundColor: palette.surface },
-  chipActive: { backgroundColor: palette.primary, borderColor: palette.primary },
-});
+  chip: { paddingHorizontal: spacing[3], paddingVertical: spacing[1.5], borderRadius: radius.full, borderWidth: 1, borderColor: p.border, backgroundColor: p.surface },
+  chipActive: { backgroundColor: p.primary, borderColor: p.primary },
+  });
+}

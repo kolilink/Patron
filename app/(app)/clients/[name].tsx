@@ -8,7 +8,8 @@ import { Card } from '@/src/components/ui/Card';
 import { Text } from '@/src/components/ui/Text';
 import { Button } from '@/src/components/ui/Button';
 import { Input } from '@/src/components/ui/Input';
-import { palette, spacing, colors, radius } from '@/src/theme';
+import { useTheme, spacing, colors, radius } from '@/src/theme';
+import type { Palette } from '@/src/theme';
 import { useAuthStore } from '@/stores/auth';
 import { useVentesStore, type Vente } from '@/stores/ventes';
 import { supabase } from '@/lib/supabase';
@@ -27,6 +28,15 @@ function dateLabel(iso: string) {
   return d.toLocaleDateString('fr-FR', { day: 'numeric', month: 'short', year: 'numeric' });
 }
 
+function fmtDueDate(iso: string): string {
+  const d = new Date(iso + 'T00:00:00');
+  const diff = Math.round((d.getTime() - Date.now()) / 86400000);
+  if (diff < 0) return `En retard de ${Math.abs(diff)} j`;
+  if (diff === 0) return "Prévu aujourd'hui";
+  if (diff <= 3) return `Dans ${diff} jour${diff > 1 ? 's' : ''}`;
+  return `Prévu le ${d.toLocaleDateString('fr-FR', { day: 'numeric', month: 'short' })}`;
+}
+
 function todayISO() {
   const d = new Date();
   return `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, '0')}-${String(d.getDate()).padStart(2, '0')}`;
@@ -41,9 +51,16 @@ const PAY_METHODS = [
 
 interface ClientRecord { id: string; name: string; phone: string | null; notes: string | null; }
 interface LedgerPayment { id: string; order_id: string; method: string; amount: number; date: string; }
-type HistoryItem =
-  | { type: 'sale'; date: string; sale: Vente }
-  | { type: 'payment'; date: string; payment: LedgerPayment };
+interface DayGroup {
+  dateKey: string;
+  label: string;
+  sales: Vente[];
+  payments: LedgerPayment[];
+  salesTotal: number;
+  paymentsTotal: number;
+  unpaidCount: number;
+  unpaidTotal: number;
+}
 
 // ─── Edit Client Modal ────────────────────────────────────────────────────────
 
@@ -54,6 +71,8 @@ function EditModal({
   businessId: string; userId: string;
   onClose: () => void; onSaved: (r: ClientRecord) => void;
 }) {
+  const { palette } = useTheme();
+  const styles = useMemo(() => makeStyles(palette), [palette]);
   const [phone, setPhone] = useState('');
   const [notes, setNotes] = useState('');
   const [saving, setSaving] = useState(false);
@@ -93,9 +112,9 @@ function EditModal({
         <ScrollView contentContainerStyle={styles.pad} keyboardShouldPersistTaps="handled">
           <Text variant="label">{displayName}</Text>
           <Input label="Téléphone" value={phone} onChangeText={setPhone}
-            placeholder="Ex: 620 00 00 00" keyboardType="phone-pad" />
+            placeholder="620 00 00 00" keyboardType="phone-pad" />
           <Input label="Notes" value={notes} onChangeText={setNotes}
-            placeholder="Informations supplémentaires…" multiline />
+            placeholder="Notes sur ce client" multiline />
         </ScrollView>
         <View style={styles.footer}>
           <Button label={saving ? 'Enregistrement…' : 'Enregistrer'}
@@ -117,6 +136,8 @@ function PayModal({
   onClose: () => void;
   onRecord: (amount: number, method: string, date: string, specificSaleId?: string) => void;
 }) {
+  const { palette } = useTheme();
+  const styles = useMemo(() => makeStyles(palette), [palette]);
   const [amountStr, setAmountStr] = useState('');
   const [method, setMethod] = useState('especes');
   const [date, setDate] = useState(todayISO());
@@ -138,7 +159,7 @@ function PayModal({
   const saleRemaining = (id: string) => {
     const sale = creditSales.find(s => s.id === id);
     if (!sale) return 0;
-    return sale.total_amount - (sale.amount_paid ?? 0);
+    return sale.total_amount - (sale.discount_amount ?? 0) - (sale.amount_paid ?? 0);
   };
 
   const handleRecord = () => {
@@ -163,9 +184,11 @@ function PayModal({
     <Modal visible={visible} animationType="slide" presentationStyle="formSheet" onRequestClose={onClose}>
       <SafeAreaView style={styles.modalSafe}>
         <View style={styles.hdr}>
-          <Pressable onPress={onClose}><Text variant="body" color="secondary">Annuler</Text></Pressable>
+          <Pressable onPress={onClose} style={{ minWidth: 60 }}>
+            <Text variant="body" color="secondary">Annuler</Text>
+          </Pressable>
           <Text variant="h4" style={{ flex: 1, textAlign: 'center' }} numberOfLines={1}>
-            {displayName} a payé combien?
+            {displayName} a payé combien ?
           </Text>
           <View style={{ width: 60 }} />
         </View>
@@ -185,7 +208,6 @@ function PayModal({
                 value={amountStr}
                 onChangeText={setAmountStr}
                 keyboardType="numeric"
-                placeholder="0"
                 placeholderTextColor={palette.textDisabled}
                 selectTextOnFocus
               />
@@ -233,7 +255,7 @@ function PayModal({
             {allocation === 'specific' && creditSales.length > 0 && (
               <View style={{ gap: spacing[1] }}>
                 {creditSales.map(s => {
-                  const rem = s.total_amount - (s.amount_paid ?? 0);
+                  const rem = s.total_amount - (s.discount_amount ?? 0) - (s.amount_paid ?? 0);
                   return (
                     <Pressable key={s.id} onPress={() => setSpecificSaleId(s.id)}
                       style={[styles.saleOption, specificSaleId === s.id && styles.saleOptionActive]}>
@@ -261,6 +283,8 @@ function PayModal({
 const UUID_RE = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
 
 export default function ClientLedgerScreen() {
+  const { palette } = useTheme();
+  const styles = useMemo(() => makeStyles(palette), [palette]);
   const { name: encodedName } = useLocalSearchParams<{ name: string }>();
   const routeParam = decodeURIComponent(encodedName ?? '');
   const isClientId = UUID_RE.test(routeParam);
@@ -357,21 +381,68 @@ export default function ClientLedgerScreen() {
     return Math.floor((Date.now() - new Date(oldest + 'T00:00:00').getTime()) / 86400000);
   }, [creditSales]);
 
-  const totalSold = clientSales.reduce((s, v) => s + v.total_amount, 0);
+  const totalSold = clientSales.reduce((s, v) => s + v.total_amount - (v.discount_amount ?? 0), 0);
   const totalPaid = ledgerPayments.reduce((s, p) => s + p.amount, 0);
   const totalOwed = Math.max(0, totalSold - totalPaid);
 
-  // Interleaved history — most recent first
-  const history = useMemo<HistoryItem[]>(() => {
-    const items: HistoryItem[] = [];
+  // Group all events by calendar day — newest day first
+  const dayGroups = useMemo<DayGroup[]>(() => {
+    const now = new Date();
+    const pad = (n: number) => String(n).padStart(2, '0');
+    const toKey = (d: Date) => `${d.getFullYear()}-${pad(d.getMonth() + 1)}-${pad(d.getDate())}`;
+    const todayKey = toKey(now);
+    const yest = new Date(now); yest.setDate(now.getDate() - 1);
+    const yestKey = toKey(yest);
+
+    const getLabel = (key: string) => {
+      if (key === todayKey) return "Aujourd'hui";
+      if (key === yestKey) return 'Hier';
+      const d = new Date(key + 'T00:00:00');
+      const opts: Intl.DateTimeFormatOptions = { day: 'numeric', month: 'long' };
+      if (d.getFullYear() !== now.getFullYear()) opts.year = 'numeric';
+      const s = d.toLocaleDateString('fr-FR', opts);
+      return s.charAt(0).toUpperCase() + s.slice(1);
+    };
+
+    const map = new Map<string, DayGroup>();
+    const ensure = (key: string) => {
+      if (!map.has(key)) map.set(key, { dateKey: key, label: getLabel(key), sales: [], payments: [], salesTotal: 0, paymentsTotal: 0, unpaidCount: 0, unpaidTotal: 0 });
+      return map.get(key)!;
+    };
+
     for (const s of clientSales) {
-      items.push({ type: 'sale', date: s.sale_date ?? s.created_at.split('T')[0], sale: s });
+      const key = s.sale_date ?? s.created_at.split('T')[0];
+      const g = ensure(key);
+      g.sales.push(s);
+      const net = s.total_amount - (s.discount_amount ?? 0);
+      g.salesTotal += net;
+      if (s.status === 'credit') {
+        g.unpaidCount++;
+        g.unpaidTotal += net;
+      }
     }
     for (const p of ledgerPayments) {
-      items.push({ type: 'payment', date: p.date, payment: p });
+      const g = ensure(p.date);
+      g.payments.push(p);
+      g.paymentsTotal += p.amount;
     }
-    return items.sort((a, b) => b.date.localeCompare(a.date) || (a.type === 'payment' ? -1 : 1));
+
+    return Array.from(map.values()).sort((a, b) => b.dateKey.localeCompare(a.dateKey));
   }, [clientSales, ledgerPayments]);
+
+  // Auto-expand today + yesterday; user can toggle any day
+  const [expandedDays, setExpandedDays] = useState<Set<string>>(() => {
+    const n = new Date();
+    const pad = (x: number) => String(x).padStart(2, '0');
+    const today = `${n.getFullYear()}-${pad(n.getMonth() + 1)}-${pad(n.getDate())}`;
+    return new Set([today]);
+  });
+
+  const toggleDay = (key: string) => setExpandedDays(prev => {
+    const next = new Set(prev);
+    if (next.has(key)) next.delete(key); else next.add(key);
+    return next;
+  });
 
   const handleRecord = useCallback(async (amount: number, method: string, date: string, specificSaleId?: string) => {
     let result: { ok: boolean; fullyPaid?: boolean; fullySettled?: boolean };
@@ -471,51 +542,106 @@ export default function ClientLedgerScreen() {
           </Card>
         )}
 
-        {/* Historique */}
-        {history.length > 0 && (
-          <View style={styles.section}>
-            <Text variant="label" color="secondary" style={styles.sectionTitle}>Historique</Text>
-            {history.map((item, idx) => {
-              if (item.type === 'sale') {
-                const s = item.sale;
-                const remaining = s.total_amount - (s.amount_paid ?? 0);
-                const isCredit = s.status === 'credit';
-                return (
-                  <View key={`s-${s.id}`} style={[styles.ledgerRow, idx < history.length - 1 && styles.rowBorder]}>
-                    <View style={[styles.rowIcon, { backgroundColor: isCredit ? '#FEF3C7' : '#F3F4F6' }]}>
-                      <Ionicons name="cart-outline" size={14} color={isCredit ? '#D97706' : '#9CA3AF'} />
-                    </View>
-                    <View style={{ flex: 1 }}>
-                      <Text variant="body" numberOfLines={1}>
-                        {s.lines?.map(l => l.product_name).join(', ') || 'Achat à crédit'}
-                      </Text>
-                      <Text variant="caption" color="secondary">{dateLabel(item.date)}</Text>
-                      {isCredit && (s.amount_paid ?? 0) > 0 && (
-                        <Text variant="caption" style={{ color: palette.warning }}>
-                          Payé: {fmt(s.amount_paid!, currency)} · Reste: {fmt(remaining, currency)}
+        {/* Historique par jour */}
+        {dayGroups.length > 0 && (
+          <View style={{ gap: spacing[3] }}>
+            <Text variant="label" color="secondary">Historique</Text>
+            {dayGroups.map(group => {
+              const expanded = expandedDays.has(group.dateKey);
+              const total = group.sales.length + group.payments.length;
+              return (
+                <View key={group.dateKey} style={styles.dayCard}>
+                  {/* Day header — tap to expand/collapse */}
+                  <Pressable
+                    style={styles.dayHeader}
+                    onPress={() => toggleDay(group.dateKey)}
+                  >
+                    <Text variant="label">{group.label}</Text>
+                    <Ionicons
+                      name={expanded ? 'chevron-up' : 'chevron-down'}
+                      size={16}
+                      color={palette.textSecondary}
+                    />
+                  </Pressable>
+
+                  {/* Day summary */}
+                  <View style={styles.daySummary}>
+                    {group.sales.length > 0 && (
+                      <View style={styles.summaryRow}>
+                        <View style={[styles.summaryIcon, { backgroundColor: '#F3F4F6' }]}>
+                          <Ionicons name="cart-outline" size={12} color="#6B7280" />
+                        </View>
+                        <Text style={[styles.summaryText, { color: palette.textSecondary }]}>
+                          {group.sales.length} vente{group.sales.length > 1 ? 's' : ''} · {fmt(group.salesTotal, currency)}
                         </Text>
-                      )}
-                    </View>
-                    <Text variant="label" style={{ color: isCredit ? palette.warning : palette.textSecondary }}>
-                      {fmt(s.total_amount, currency)}
-                    </Text>
+                      </View>
+                    )}
+                    {group.unpaidCount > 0 && (
+                      <View style={styles.summaryRow}>
+                        <View style={[styles.summaryIcon, { backgroundColor: '#FEF3C7' }]}>
+                          <Ionicons name="alert-circle-outline" size={12} color="#D97706" />
+                        </View>
+                        <Text style={[styles.summaryText, { color: '#B45309' }]}>
+                          {group.unpaidCount} impayé{group.unpaidCount > 1 ? 's' : ''} · {fmt(group.unpaidTotal, currency)}
+                        </Text>
+                      </View>
+                    )}
                   </View>
-                );
-              } else {
-                const p = item.payment;
-                return (
-                  <View key={`p-${p.id}`} style={[styles.ledgerRow, idx < history.length - 1 && styles.rowBorder]}>
-                    <View style={[styles.rowIcon, { backgroundColor: '#F0FDF4' }]}>
-                      <Ionicons name="arrow-down-circle-outline" size={14} color="#16A34A" />
+
+                  {/* "Voir le détail" toggle when collapsed */}
+                  {!expanded && total > 0 && (
+                    <Pressable style={styles.seeDetailBtn} onPress={() => toggleDay(group.dateKey)}>
+                      <Text style={styles.seeDetailText}>Voir les {total} transaction{total > 1 ? 's' : ''} ›</Text>
+                    </Pressable>
+                  )}
+
+                  {/* Expanded transaction rows */}
+                  {expanded && (
+                    <View style={styles.detailList}>
+                      {group.sales.map((s, idx) => {
+                        const isCredit = s.status === 'credit';
+                        const isLast = idx === group.sales.length - 1 && group.payments.length === 0;
+                        return (
+                          <View key={`s-${s.id}`} style={[styles.detailRow, !isLast && styles.detailBorder]}>
+                            <View style={[styles.rowIcon, { backgroundColor: isCredit ? '#FEF3C7' : '#F3F4F6' }]}>
+                              <Ionicons name="cart-outline" size={14} color={isCredit ? '#D97706' : '#9CA3AF'} />
+                            </View>
+                            <View style={{ flex: 1 }}>
+                              <Text variant="body" numberOfLines={1} style={!isCredit && { textDecorationLine: 'line-through', color: palette.textSecondary }}>
+                                {s.lines?.map(l => l.product_name).join(', ') || 'Achat à crédit'}
+                              </Text>
+                              {isCredit && s.due_date ? (
+                                <Text variant="caption" style={{
+                                  color: new Date(s.due_date + 'T00:00:00') < new Date() ? palette.warning : palette.textSecondary,
+                                }}>
+                                  {fmtDueDate(s.due_date)}
+                                </Text>
+                              ) : null}
+                            </View>
+                            <Text variant="label" style={{ color: isCredit ? palette.warning : palette.textSecondary, ...((!isCredit) && { textDecorationLine: 'line-through' }) }}>
+                              {fmt(s.total_amount - (s.discount_amount ?? 0), currency)}
+                            </Text>
+                          </View>
+                        );
+                      })}
+                      {group.payments.map((p, idx) => {
+                        const isLast = idx === group.payments.length - 1;
+                        return (
+                          <View key={`p-${p.id}`} style={[styles.detailRow, !isLast && styles.detailBorder]}>
+                            <View style={[styles.rowIcon, { backgroundColor: '#F0FDF4' }]}>
+                              <Ionicons name="arrow-down-circle-outline" size={14} color="#16A34A" />
+                            </View>
+                            <View style={{ flex: 1 }}>
+                              <Text variant="body">{methodLabel(p.method)}</Text>
+                            </View>
+                            <Text variant="label" style={{ color: '#16A34A' }}>+{fmt(p.amount, currency)}</Text>
+                          </View>
+                        );
+                      })}
                     </View>
-                    <View style={{ flex: 1 }}>
-                      <Text variant="body">{methodLabel(p.method)}</Text>
-                      <Text variant="caption" color="secondary">{dateLabel(p.date)}</Text>
-                    </View>
-                    <Text variant="label" style={{ color: '#16A34A' }}>+ {fmt(p.amount, currency)}</Text>
-                  </View>
-                );
-              }
+                  )}
+                </View>
+              );
             })}
           </View>
         )}
@@ -524,26 +650,6 @@ export default function ClientLedgerScreen() {
           <Text variant="body" color="secondary" style={{ textAlign: 'center', marginTop: spacing[6] }}>
             Aucune vente enregistrée.
           </Text>
-        )}
-
-        {/* Footer totals */}
-        {clientSales.length > 0 && (
-          <Card style={{ gap: spacing[3] }}>
-            <View style={styles.totalRow}>
-              <Text variant="body" color="secondary">Achats totaux</Text>
-              <Text variant="label">{fmt(totalSold, currency)}</Text>
-            </View>
-            <View style={styles.totalRow}>
-              <Text variant="body" color="secondary">Déjà payé</Text>
-              <Text variant="label" style={{ color: palette.success }}>{fmt(totalPaid, currency)}</Text>
-            </View>
-            <View style={[styles.totalRow, styles.totalRowBold]}>
-              <Text variant="label">Reste à payer</Text>
-              <Text variant="label" style={{ color: totalOwed > 0 ? palette.warning : palette.success }}>
-                {fmt(totalOwed, currency)}
-              </Text>
-            </View>
-          </Card>
         )}
       </ScrollView>
 
@@ -590,114 +696,126 @@ export default function ClientLedgerScreen() {
   );
 }
 
-const styles = StyleSheet.create({
-  safe: { flex: 1, backgroundColor: palette.background },
-  hdr: {
-    flexDirection: 'row', alignItems: 'center', justifyContent: 'space-between',
-    padding: spacing[5], borderBottomWidth: 1, borderBottomColor: palette.border,
-  },
-  content: { paddingHorizontal: spacing[5], paddingTop: 12, paddingBottom: spacing[10], gap: spacing[4] },
+function makeStyles(p: Palette) {
+  return StyleSheet.create({
+    safe: { flex: 1, backgroundColor: p.background },
+    hdr: {
+      flexDirection: 'row', alignItems: 'center', justifyContent: 'space-between',
+      padding: spacing[5], borderBottomWidth: 1, borderBottomColor: p.border,
+    },
+    content: { paddingHorizontal: spacing[5], paddingTop: 12, paddingBottom: spacing[10], gap: spacing[4] },
 
-  bannerOrange: {
-    backgroundColor: colors.warning[50], borderRadius: radius.lg,
-    borderWidth: 1, borderColor: colors.warning[100],
-    flexDirection: 'column', alignItems: 'center', justifyContent: 'flex-start',
-    paddingHorizontal: 16, paddingTop: 16, paddingBottom: 16,
-  },
-  bannerLabel: { fontSize: 14, color: '#6B7280', textAlign: 'center', fontWeight: '400' },
-  bannerAmount: { fontSize: 32, fontWeight: '700', lineHeight: 44, color: '#B45309', textAlign: 'center', marginVertical: 4 },
-  bannerBtn: {
-    width: '100%', backgroundColor: '#4F46E5', borderRadius: 12,
-    paddingVertical: 12, alignItems: 'center', justifyContent: 'center', marginTop: 12,
-  },
-  bannerBtnText: { fontSize: 16, fontWeight: '600', color: '#FFFFFF' },
-  bannerGreen: {
-    backgroundColor: colors.success[50], borderRadius: radius.lg,
-    borderWidth: 1, borderColor: colors.success[100],
-    padding: spacing[4], flexDirection: 'row', alignItems: 'center', justifyContent: 'flex-start', gap: 8,
-  },
-  bannerAge: { fontSize: 12, textAlign: 'center', marginBottom: 6 },
-  progressTrack: {
-    width: '100%', height: 4, backgroundColor: '#E5E7EB',
-    borderRadius: 2, overflow: 'hidden', marginBottom: 4,
-  },
-  progressFill: { height: '100%', backgroundColor: '#16A34A', borderRadius: 2 },
-  progressLabel: { fontSize: 12, color: '#6B7280', textAlign: 'center', marginBottom: 8 },
-  rowIcon: { width: 28, height: 28, borderRadius: 8, alignItems: 'center', justifyContent: 'center' },
-  contactRow: { flexDirection: 'row', alignItems: 'center', justifyContent: 'space-between' },
+    bannerOrange: {
+      backgroundColor: colors.warning[50], borderRadius: radius.lg,
+      borderWidth: 1, borderColor: colors.warning[100],
+      flexDirection: 'column', alignItems: 'center', justifyContent: 'flex-start',
+      paddingHorizontal: 16, paddingTop: 16, paddingBottom: 16,
+    },
+    bannerLabel: { fontSize: 14, color: p.textSecondary, textAlign: 'center', fontWeight: '400' },
+    bannerAmount: { fontSize: 32, fontWeight: '700', lineHeight: 44, color: p.warning, textAlign: 'center', marginVertical: 4 },
+    bannerBtn: {
+      width: '100%', backgroundColor: p.primary, borderRadius: 12,
+      paddingVertical: 12, alignItems: 'center', justifyContent: 'center', marginTop: 12,
+    },
+    bannerBtnText: { fontSize: 16, fontWeight: '600', color: p.textInverse },
+    bannerGreen: {
+      backgroundColor: colors.success[50], borderRadius: radius.lg,
+      borderWidth: 1, borderColor: colors.success[100],
+      padding: spacing[4], flexDirection: 'row', alignItems: 'center', justifyContent: 'flex-start', gap: 8,
+    },
+    bannerAge: { fontSize: 12, textAlign: 'center', marginBottom: 6 },
+    progressTrack: {
+      width: '100%', height: 4, backgroundColor: p.border,
+      borderRadius: 2, overflow: 'hidden', marginBottom: 4,
+    },
+    progressFill: { height: '100%', backgroundColor: p.success, borderRadius: 2 },
+    progressLabel: { fontSize: 12, color: p.textSecondary, textAlign: 'center', marginBottom: 8 },
+    rowIcon: { width: 28, height: 28, borderRadius: 8, alignItems: 'center', justifyContent: 'center' },
+    contactRow: { flexDirection: 'row', alignItems: 'center', justifyContent: 'space-between' },
 
-  section: {
-    backgroundColor: palette.surface, borderRadius: radius.lg,
-    borderWidth: 1, borderColor: palette.border, overflow: 'hidden',
-  },
-  sectionTitle: {
-    paddingHorizontal: spacing[4], paddingVertical: spacing[3],
-    borderBottomWidth: 1, borderBottomColor: palette.border,
-  },
-  ledgerRow: {
-    flexDirection: 'row', alignItems: 'center', gap: spacing[3],
-    paddingHorizontal: spacing[4], paddingVertical: spacing[3],
-  },
-  rowBorder: { borderBottomWidth: 1, borderBottomColor: palette.border },
+    // Day-grouped history
+    dayCard: {
+      backgroundColor: p.surface, borderRadius: radius.lg,
+      borderWidth: 1, borderColor: p.border, overflow: 'hidden',
+    },
+    dayHeader: {
+      flexDirection: 'row', alignItems: 'center', justifyContent: 'space-between',
+      paddingHorizontal: spacing[4], paddingVertical: spacing[3],
+      borderBottomWidth: 1, borderBottomColor: p.border,
+    },
+    daySummary: {
+      paddingHorizontal: spacing[4], paddingVertical: spacing[3], gap: spacing[2],
+    },
+    summaryRow: { flexDirection: 'row', alignItems: 'center', gap: spacing[2] },
+    summaryIcon: { width: 22, height: 22, borderRadius: 6, alignItems: 'center', justifyContent: 'center' },
+    summaryText: { fontSize: 13, fontWeight: '500' },
+    seeDetailBtn: {
+      paddingHorizontal: spacing[4], paddingBottom: spacing[3],
+    },
+    seeDetailText: { fontSize: 13, color: p.primary, fontWeight: '500' },
+    detailList: { borderTopWidth: 1, borderTopColor: p.border },
+    detailRow: {
+      flexDirection: 'row', alignItems: 'center', gap: spacing[3],
+      paddingHorizontal: spacing[4], paddingVertical: spacing[3],
+    },
+    detailBorder: { borderBottomWidth: 1, borderBottomColor: p.border },
 
-  totalRow: { flexDirection: 'row', alignItems: 'center', justifyContent: 'space-between' },
-  totalRowBold: { paddingTop: spacing[3], borderTopWidth: 1, borderTopColor: palette.border, marginTop: spacing[1] },
+    // Modals
+    modalSafe: { flex: 1, backgroundColor: p.background },
+    pad: { padding: spacing[5], gap: spacing[4], paddingBottom: spacing[10] },
+    footer: { padding: spacing[5], borderTopWidth: 1, borderTopColor: p.border, backgroundColor: p.surface },
 
-  // Modals
-  modalSafe: { flex: 1, backgroundColor: palette.background },
-  pad: { padding: spacing[5], gap: spacing[4], paddingBottom: spacing[10] },
-  footer: { padding: spacing[5], borderTopWidth: 1, borderTopColor: palette.border, backgroundColor: palette.surface },
-
-  contextCard: { gap: spacing[1] },
-  amountRow: { flexDirection: 'row', gap: spacing[3], alignItems: 'center' },
-  amountInput: {
-    flex: 1, paddingHorizontal: spacing[4], paddingVertical: spacing[3],
-    borderRadius: radius.md, borderWidth: 1, borderColor: palette.border,
-    backgroundColor: palette.surface, color: palette.textPrimary,
-    fontSize: 28, fontWeight: '700',
-  },
-  solderBtn: {
-    paddingHorizontal: spacing[3], paddingVertical: spacing[3],
-    borderRadius: radius.md, borderWidth: 1, borderColor: palette.primary,
-  },
-  chipRow: { flexDirection: 'row', flexWrap: 'wrap', gap: spacing[2] },
-  chip: {
-    paddingHorizontal: spacing[3], paddingVertical: spacing[1.5],
-    borderRadius: radius.full, borderWidth: 1, borderColor: palette.border,
-    backgroundColor: palette.surface,
-  },
-  chipActive: { backgroundColor: palette.primary, borderColor: palette.primary },
-  successOverlay: {
-    ...StyleSheet.absoluteFillObject,
-    backgroundColor: '#F0FDF4',
-    alignItems: 'center',
-    justifyContent: 'center',
-    padding: 32,
-    zIndex: 100,
-  },
-  successBadge: {
-    width: 80, height: 80, borderRadius: 40,
-    backgroundColor: '#DCFCE7',
-    alignItems: 'center', justifyContent: 'center',
-    marginBottom: 24,
-  },
-  successHeadline: {
-    fontSize: 28, fontWeight: '700', lineHeight: 40, color: '#16A34A',
-    textAlign: 'center', marginBottom: 8,
-  },
-  successSubtitle: {
-    fontSize: 18, color: '#374151',
-    textAlign: 'center', marginTop: 8, marginBottom: 40,
-  },
-  successBtn: {
-    width: '100%', backgroundColor: '#4F46E5', borderRadius: 14,
-    paddingVertical: 16, alignItems: 'center',
-  },
-  successBtnText: { fontSize: 16, fontWeight: '600', color: '#FFFFFF' },
-  saleOption: {
-    paddingHorizontal: spacing[3], paddingVertical: spacing[2],
-    borderRadius: radius.md, borderWidth: 1, borderColor: palette.border,
-    backgroundColor: palette.surface,
-  },
-  saleOptionActive: { backgroundColor: palette.primary, borderColor: palette.primary },
-});
+    contextCard: { gap: spacing[1] },
+    amountRow: { flexDirection: 'row', gap: spacing[3], alignItems: 'center' },
+    amountInput: {
+      flex: 1, paddingHorizontal: spacing[4], paddingVertical: spacing[3],
+      borderRadius: radius.md, borderWidth: 1, borderColor: p.border,
+      backgroundColor: p.surface, color: p.textPrimary,
+      fontSize: 28, fontWeight: '700',
+    },
+    solderBtn: {
+      paddingHorizontal: spacing[3], paddingVertical: spacing[3],
+      borderRadius: radius.md, borderWidth: 1, borderColor: p.primary,
+    },
+    chipRow: { flexDirection: 'row', flexWrap: 'wrap', gap: spacing[2] },
+    chip: {
+      paddingHorizontal: spacing[3], paddingVertical: spacing[1.5],
+      borderRadius: radius.full, borderWidth: 1, borderColor: p.border,
+      backgroundColor: p.surface,
+    },
+    chipActive: { backgroundColor: p.primary, borderColor: p.primary },
+    successOverlay: {
+      ...StyleSheet.absoluteFillObject,
+      backgroundColor: p.successLight,
+      alignItems: 'center',
+      justifyContent: 'center',
+      padding: 32,
+      zIndex: 100,
+    },
+    successBadge: {
+      width: 80, height: 80, borderRadius: 40,
+      backgroundColor: colors.success[100],
+      alignItems: 'center', justifyContent: 'center',
+      marginBottom: 24,
+    },
+    successHeadline: {
+      fontSize: 28, fontWeight: '700', lineHeight: 40, color: p.success,
+      textAlign: 'center', marginBottom: 8,
+    },
+    successSubtitle: {
+      fontSize: 18, color: p.textPrimary,
+      textAlign: 'center', marginTop: 8, marginBottom: 40,
+    },
+    successBtn: {
+      width: '100%', backgroundColor: p.primary, borderRadius: 14,
+      paddingVertical: 16, alignItems: 'center',
+    },
+    successBtnText: { fontSize: 16, fontWeight: '600', color: p.textInverse },
+    saleOption: {
+      paddingHorizontal: spacing[3], paddingVertical: spacing[2],
+      borderRadius: radius.md, borderWidth: 1, borderColor: p.border,
+      backgroundColor: p.surface,
+    },
+    saleOptionActive: { backgroundColor: p.primary, borderColor: p.primary },
+  });
+}

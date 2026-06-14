@@ -11,15 +11,25 @@ import {
   TextInput,
   View,
 } from 'react-native';
-import { SafeAreaView } from 'react-native-safe-area-context';
+import { Gesture, GestureDetector } from 'react-native-gesture-handler';
+import Animated, {
+  useSharedValue,
+  useAnimatedStyle,
+  withSpring,
+  withTiming,
+  runOnJS,
+} from 'react-native-reanimated';
+import { SafeAreaView, useSafeAreaInsets } from 'react-native-safe-area-context';
 import { router, useFocusEffect } from 'expo-router';
 import { Ionicons } from '@expo/vector-icons';
 import { Text } from '@/src/components/ui/Text';
 import { haptics } from '@/lib/haptics';
-import { colors, palette, radius, spacing } from '@/src/theme';
+import { colors, useTheme, fontFamily as FF, radius, spacing } from '@/src/theme';
+import type { Palette } from '@/src/theme';
 import { useAuthStore } from '@/stores/auth';
 import { useChatStore } from '@/stores/chat';
 import { useMarketStore } from '@/stores/market';
+import { SkeletonList } from '@/src/components/ui/SkeletonPlaceholder';
 import { supabase } from '@/lib/supabase';
 import { generateFallbackName } from '@/lib/id';
 import type { ChatMessage, MarketPost, MarketCategory } from '@/src/types';
@@ -73,37 +83,37 @@ function sameDay(a: Date, b: Date): boolean {
 
 // Relative time for forum post cards (device-locale calendar format).
 function relativeTime(iso: string): string {
-  const d   = new Date(iso);
-  const now = new Date();
-  const diffMin = Math.floor((now.getTime() - d.getTime()) / 60_000);
-  if (diffMin < 1) return "À l'instant";
-  if (diffMin < 60) return `Il y a ${diffMin} min`;
-  const diffH = Math.floor(diffMin / 60);
-  if (diffH < 24) return `Il y a ${diffH} h`;
-  const yesterday = new Date(now); yesterday.setDate(now.getDate() - 1);
-  if (sameDay(d, now)) return "Aujourd'hui";
-  if (sameDay(d, yesterday)) return 'Hier';
-  return new Intl.DateTimeFormat(LOCALE, { day: 'numeric', month: 'long' }).format(d);
+  const d      = new Date(iso);
+  const diffMs = Date.now() - d.getTime();
+  const diffH  = Math.floor(diffMs / 3_600_000);
+  const diffD  = Math.floor(diffMs / 86_400_000);
+  if (diffH < 1)  return '1h';
+  if (diffH < 24) return `${diffH}h`;
+  if (diffD <= 7) return `${diffD}j`;
+  return new Intl.DateTimeFormat('fr-FR', { day: 'numeric', month: 'short' }).format(d);
 }
 
 // ─── Message grouping ─────────────────────────────────────────────────────────
 
-const GROUP_GAP_MS = 5  * 60_000; // same group if < 5 min apart
-const SEP_GAP_MS   = 15 * 60_000; // show time chip if gap >= 15 min
+const GROUP_GAP_MS = 5 * 60_000; // same group if < 5 min apart
 
 function sameGroup(a: ChatMessage, b: ChatMessage): boolean {
   return a.sender_id === b.sender_id
     && Math.abs(new Date(a.created_at).getTime() - new Date(b.created_at).getTime()) < GROUP_GAP_MS;
 }
 
+const FR_DAYS   = ['Dimanche', 'Lundi', 'Mardi', 'Mercredi', 'Jeudi', 'Vendredi', 'Samedi'];
+const FR_MONTHS = ['jan', 'fév', 'mars', 'avr', 'mai', 'juin', 'juil', 'août', 'sept', 'oct', 'nov', 'déc'];
+
 function timeSepLabel(iso: string): string {
   const d         = new Date(iso);
   const today     = new Date();
   const yesterday = new Date(today); yesterday.setDate(today.getDate() - 1);
-  const time      = d.toLocaleTimeString(LOCALE, { hour: '2-digit', minute: '2-digit' });
-  if (sameDay(d, today))     return `Aujourd'hui ${time}`;
-  if (sameDay(d, yesterday)) return `Hier ${time}`;
-  return `${new Intl.DateTimeFormat(LOCALE, { day: 'numeric', month: 'short' }).format(d)} ${time}`;
+  if (sameDay(d, today))     return "Aujourd'hui";
+  if (sameDay(d, yesterday)) return 'Hier';
+  const daysDiff = Math.floor((today.getTime() - d.getTime()) / (24 * 60 * 60 * 1000));
+  if (daysDiff < 7) return FR_DAYS[d.getDay()];
+  return `${d.getDate()} ${FR_MONTHS[d.getMonth()]}`;
 }
 
 // msgs is newest-first; FlatList is inverted so index 0 renders at the bottom.
@@ -128,13 +138,14 @@ function buildGroupedItems(msgs: ChatMessage[]): ListItem[] {
   for (let i = 0; i < bubbles.length; i++) {
     out.push(bubbles[i]);
     const nextMsg = msgs[i + 1];
-    if (nextMsg) {
-      const gapMs = new Date(msgs[i].created_at).getTime() - new Date(nextMsg.created_at).getTime();
-      if (gapMs >= SEP_GAP_MS) {
-        out.push({ _sep: true, label: timeSepLabel(nextMsg.created_at), id: `tsep-${nextMsg.id}` });
-      }
+    // Insert one separator per calendar-day boundary.
+    // Label is msgs[i]'s day (the newer side) — separator marks the top of that day's section.
+    if (nextMsg && !sameDay(new Date(msgs[i].created_at), new Date(nextMsg.created_at))) {
+      out.push({ _sep: true, label: timeSepLabel(msgs[i].created_at), id: `tsep-${msgs[i].id}` });
     }
   }
+  // Always cap the top with a label for the oldest day group
+  out.push({ _sep: true, label: timeSepLabel(msgs[msgs.length - 1].created_at), id: 'tsep-oldest' });
   return out;
 }
 
@@ -167,46 +178,141 @@ function bubbleRadius(isOwn: boolean, pos: GroupPos) {
   };
 }
 
+// ─── Sender colour palette ────────────────────────────────────────────────────
+
+const SENDER_COLORS = ['#6366F1', '#10B981', '#F59E0B', '#8B5CF6', '#06B6D4', '#EC4899'];
+
+function senderColor(senderId: string): string {
+  let h = 0;
+  for (let i = 0; i < senderId.length; i++) h = (h * 31 + senderId.charCodeAt(i)) & 0xFFFFFF;
+  return SENDER_COLORS[Math.abs(h) % SENDER_COLORS.length];
+}
+
 // ─── MessageBubble ────────────────────────────────────────────────────────────
 
+const SWIPE_THRESHOLD = 52;
+
 function MessageBubble({
-  msg, isOwn, pos, showSender, isRead,
+  msg, isOwn, pos, isRead, onReply, onEdit,
 }: {
   msg: ChatMessage;
   isOwn: boolean;
   pos: GroupPos;
-  showSender: boolean;
   isRead: boolean | null;
+  onReply: () => void;
+  onEdit: (() => void) | null;
 }) {
-  const time     = new Date(msg.created_at).toLocaleTimeString(LOCALE, { hour: '2-digit', minute: '2-digit' });
-  const br       = bubbleRadius(isOwn, pos);
-  const margins  = bubbleMargins(pos);
-  // Show timestamp only on the bottom-most bubble of a group (or standalone) — keeps the stream clean
-  const showTime = pos === 'standalone' || pos === 'last';
+  const { palette } = useTheme();
+  const styles = useMemo(() => makeStyles(palette), [palette]);
+  const time       = new Date(msg.created_at).toLocaleTimeString(LOCALE, { hour: '2-digit', minute: '2-digit' });
+  const br         = bubbleRadius(isOwn, pos);
+  const margins    = bubbleMargins(pos);
+  const showAvatar = !isOwn && (pos === 'standalone' || pos === 'last');
+  const showName   = !isOwn && (pos === 'standalone' || pos === 'first');
+  const name       = msg.sender_name || generateFallbackName(msg.sender_id);
+  const initial    = name.charAt(0).toUpperCase();
+  const color      = senderColor(msg.sender_id);
+
+  const translateX = useSharedValue(0);
+
+  const pan = Gesture.Pan()
+    .activeOffsetX([6, 999])
+    .failOffsetY([-10, 10])
+    .onUpdate(e => {
+      if (e.translationX > 0) {
+        // 1:1 movement up to threshold, then resistance
+        translateX.value = e.translationX < SWIPE_THRESHOLD
+          ? e.translationX
+          : SWIPE_THRESHOLD + (e.translationX - SWIPE_THRESHOLD) * 0.2;
+      }
+    })
+    .onEnd(e => {
+      if (e.translationX >= SWIPE_THRESHOLD) {
+        runOnJS(onReply)();
+        runOnJS(haptics.tap)();
+      }
+      translateX.value = withSpring(0, { damping: 20, stiffness: 400 });
+    });
+
+
+  const slideAnim = useAnimatedStyle(() => ({
+    transform: [{ translateX: translateX.value }],
+  }));
+
+  const iconAnim = useAnimatedStyle(() => ({
+    opacity: Math.min(translateX.value / (SWIPE_THRESHOLD * 0.7), 1),
+    transform: [{ scale: 0.5 + Math.min(translateX.value / SWIPE_THRESHOLD, 1) * 0.5 }],
+  }));
 
   return (
-    <View style={[styles.row, isOwn && styles.rowOwn, margins]}>
-      {showSender && (
-        <View style={styles.senderRow}>
-          <Text variant="caption" style={styles.senderName}>
-            {msg.sender_name || generateFallbackName(msg.sender_id)}
-          </Text>
-        </View>
-      )}
-      <View style={[styles.bubble, isOwn ? styles.bubbleOwn : styles.bubbleOther, br]}>
-        <Text style={[styles.bubbleText, isOwn && styles.bubbleTextOwn]}>{msg.content}</Text>
-      </View>
-      {showTime && (
-        <View style={styles.metaRow}>
-          <Text variant="caption" style={[styles.ts, isOwn && styles.tsOwn]}>{time}</Text>
-          {isOwn && isRead !== null && (
-            <Text variant="caption" style={[styles.receipt, isRead && styles.receiptRead]}>
-              {isRead ? '✓✓ Vu' : '✓'}
-            </Text>
+    // Outer detector: pan only — type is always Pan, never changes between renders
+    <GestureDetector gesture={pan}>
+      <View style={[margins, { overflow: 'visible' }]}>
+
+        {/* Reply icon — absolute, revealed as row slides right */}
+        <Animated.View style={[styles.swipeIcon, { position: 'absolute', left: 8, top: '50%', marginTop: -16 }, iconAnim]}>
+          <Ionicons name="arrow-undo-outline" size={18} color={palette.primary} />
+        </Animated.View>
+
+        {/* The entire row slides right on swipe */}
+        <Animated.View style={[isOwn ? styles.rowOwn : styles.rowOther, slideAnim]}>
+
+          {/* Avatar — incoming only, no width consumed by icon */}
+          {!isOwn && (
+            <View style={styles.avatarCol}>
+              {showAvatar ? (
+                <View style={[styles.avatar, { backgroundColor: color }]}>
+                  <Text style={styles.avatarText}>{initial}</Text>
+                </View>
+              ) : (
+                <View style={styles.avatarSpacer} />
+              )}
+            </View>
           )}
-        </View>
-      )}
-    </View>
+
+          {/* Bubble — tap the pencil icon to edit (onPress works inside GestureDetector; onLongPress doesn't) */}
+          <View style={[styles.bubble, isOwn ? styles.bubbleOwn : styles.bubbleOther, br]}>
+            {showName && (
+              <Text style={[styles.senderName, { color }]}>{name}</Text>
+            )}
+
+            {msg.reply_to_id ? (
+              <View style={[styles.replyPill, isOwn ? styles.replyPillOwn : styles.replyPillOther]}>
+                <View style={[styles.replyAccent, { backgroundColor: isOwn ? 'rgba(255,255,255,0.6)' : color }]} />
+                <View style={styles.replyPillContent}>
+                  <Text style={[styles.replyPillName, isOwn ? styles.replyPillNameOwn : { color }]} numberOfLines={1}>
+                    {msg.reply_to_sender_name || '—'}
+                  </Text>
+                  <Text style={[styles.replyPillText, isOwn && styles.replyPillTextOwn]} numberOfLines={2}>
+                    {msg.reply_to_content}
+                  </Text>
+                </View>
+              </View>
+            ) : null}
+
+            <Text style={[styles.bubbleText, isOwn && styles.bubbleTextOwn]}>{msg.content}</Text>
+
+            <View style={styles.bubbleMeta}>
+              {msg.edited_at ? (
+                <Text style={[styles.ts, isOwn ? styles.tsOwn : styles.tsOther]}>modifié · </Text>
+              ) : null}
+              <Text style={[styles.ts, isOwn ? styles.tsOwn : styles.tsOther]}>{time}</Text>
+              {onEdit && (
+                <Pressable onPress={onEdit} hitSlop={10} style={{ marginLeft: 4 }}>
+                  <Ionicons name="pencil-outline" size={11} color="rgba(255,255,255,0.55)" />
+                </Pressable>
+              )}
+              {isOwn && isRead !== null && (
+                <Text style={[styles.receipt, isRead && styles.receiptRead]}>
+                  {isRead ? ' ✓✓' : ' ✓'}
+                </Text>
+              )}
+            </View>
+          </View>
+
+        </Animated.View>
+      </View>
+    </GestureDetector>
   );
 }
 
@@ -228,6 +334,8 @@ function PostCard({ post, isNew, isLiked, isOwnPost, onPress, onLike }: {
   onPress: () => void;
   onLike: () => void;
 }) {
+  const { palette } = useTheme();
+  const styles = useMemo(() => makeStyles(palette), [palette]);
   const authorName  = post.author_name || generateFallbackName(post.author_id);
   const initial     = authorName.charAt(0).toUpperCase();
   const avatarColor = AVATAR_PALETTE[post.author_id.charCodeAt(0) % AVATAR_PALETTE.length];
@@ -235,24 +343,22 @@ function PostCard({ post, isNew, isLiked, isOwnPost, onPress, onLike }: {
   return (
     <Pressable onPress={onPress} style={({ pressed }) => [styles.pcCard, pressed && { opacity: 0.88 }]}>
 
-      {/* Top row: avatar+author (left) | category+timestamp (right) */}
+      {/* Top row: avatar + author name · time · category (all inline left) */}
       <View style={styles.pcTopRow}>
-        <View style={styles.pcAuthorBlock}>
-          <View style={[styles.pcAvatar, { backgroundColor: avatarColor }]}>
-            <Text style={styles.pcAvatarText}>{initial}</Text>
-          </View>
-          <View style={styles.pcAuthorInfo}>
-            <Text style={styles.pcAuthorName}>{authorName}</Text>
-            <Text style={styles.pcAuthorRank}>Commerçant</Text>
-          </View>
+        <View style={[styles.pcAvatar, { backgroundColor: avatarColor }]}>
+          <Text style={styles.pcAvatarText}>{initial}</Text>
         </View>
-        <View style={styles.pcMetaBlock}>
-          <View style={[styles.catBadge, { backgroundColor: CAT_BG[post.category] ?? '#F3F4F6' }]}>
-            <Text style={[styles.catBadgeText, { color: CAT_FG[post.category] ?? '#374151' }]}>
-              {CAT_LABEL[post.category] ?? post.category}
-            </Text>
+        <View style={styles.pcAuthorInfo}>
+          <Text style={styles.pcAuthorName} numberOfLines={1}>{authorName}</Text>
+          <View style={styles.pcMeta}>
+            <Text style={styles.pcTimestamp}>{relativeTime(post.created_at)}</Text>
+            <Text style={styles.pcMetaDot}>·</Text>
+            <View style={[styles.catBadge, { backgroundColor: CAT_BG[post.category] ?? '#F3F4F6' }]}>
+              <Text style={[styles.catBadgeText, { color: CAT_FG[post.category] ?? '#374151' }]}>
+                {CAT_LABEL[post.category] ?? post.category}
+              </Text>
+            </View>
           </View>
-          <Text style={styles.pcTimestamp}>{relativeTime(post.created_at)}</Text>
         </View>
       </View>
 
@@ -270,26 +376,25 @@ function PostCard({ post, isNew, isLiked, isOwnPost, onPress, onLike }: {
           </View>
         )}
 
-        {/* Like toggle — optimistic update in store; disabled for own posts */}
         <Pressable
           onPress={e => { e.stopPropagation(); if (!isOwnPost) onLike(); }}
           hitSlop={8}
           disabled={isOwnPost}
-          style={({ pressed }) => [
-            styles.pcLikeBtn,
-            {
-              borderColor: isLiked ? palette.primary : palette.border,
-              backgroundColor: isLiked ? `${palette.primary}10` : 'transparent',
-              opacity: isOwnPost ? 0.3 : pressed ? 0.6 : 1,
-            },
-          ]}
+          style={({ pressed }) => ({
+            flexDirection: 'row' as const,
+            alignItems: 'center' as const,
+            gap: 5,
+            opacity: isOwnPost ? 0.3 : pressed ? 0.55 : 1,
+          })}
         >
           <Ionicons
-            name={isLiked ? 'thumbs-up' : 'thumbs-up-outline'}
+            name={isLiked ? 'heart' : 'heart-outline'}
             size={16}
             color={isLiked ? palette.primary : palette.textSecondary}
           />
-          <Text style={[styles.pcStat, isLiked && styles.pcStatLiked]}>{post.likes_count}</Text>
+          {post.likes_count > 0 && (
+            <Text style={[styles.pcStat, isLiked && styles.pcStatLiked]}>{post.likes_count}</Text>
+          )}
         </Pressable>
 
         <View style={styles.pcStatRow}>
@@ -315,6 +420,9 @@ function PostCard({ post, isNew, isLiked, isOwnPost, onPress, onLike }: {
 // ─── Screen ───────────────────────────────────────────────────────────────────
 
 export default function DiscussionsScreen() {
+  const { palette } = useTheme();
+  const styles = useMemo(() => makeStyles(palette), [palette]);
+  const insets      = useSafeAreaInsets();
   const session     = useAuthStore(s => s.session);
   const businessId  = session?.activeBusiness?.id ?? '';
   const userId      = session?.user.id ?? '';
@@ -326,7 +434,7 @@ export default function DiscussionsScreen() {
     boutiqueRoom, globalRoom, messages,
     loading, sending, error,
     boutiqueUnread,
-    load, sendMessage, appendMessage, markRead,
+    load, sendMessage, editMessage, appendMessage, updateMessage, markRead,
   } = useChatStore();
 
   // ─── Market store (Le Marché forum — independent) ─────────────────────────
@@ -342,6 +450,8 @@ export default function DiscussionsScreen() {
 
   // ─── Boutique state ───────────────────────────────────────────────────────
   const [text, setText] = useState('');
+  const [replyingTo, setReplyingTo] = useState<ChatMessage | null>(null);
+  const [editingMsg, setEditingMsg] = useState<ChatMessage | null>(null);
   const [partnerLastRead, setPartnerLastRead] = useState<Date | null>(null);
   const boutiqueChannelRef = useRef<ReturnType<typeof supabase.channel> | null>(null);
   const marcheChannelRef   = useRef<ReturnType<typeof supabase.channel> | null>(null);
@@ -351,29 +461,26 @@ export default function DiscussionsScreen() {
   const [showNewPost, setShowNewPost] = useState(false);
   const [newTitle, setNewTitle] = useState('');
   const [newContent, setNewContent] = useState('');
-  const [newCategory, setNewCategory] = useState<MarketCategory>('general');
+  const [newCategory, setNewCategory] = useState<MarketCategory | null>(null);
+  const [postError, setPostError] = useState('');
   const marketChannelRef = useRef<ReturnType<typeof supabase.channel> | null>(null);
 
-  // ─── Load on focus (chat always, forum posts if marche tab is active) ────
+  // ─── Fade transition between tabs ─────────────────────────────────────────
+  const contentAlpha = useSharedValue(1);
+  const contentStyle = useAnimatedStyle(() => ({ opacity: contentAlpha.value }));
+
+  // ─── Load chat on screen focus only — not on every tab switch ───────────
   useFocusEffect(useCallback(() => {
     if (!businessId || !userId) return;
     load(businessId, userId);
-    if (activeTab === 'marche') {
-      fetchPosts(userId, selectedCat !== 'tout' ? selectedCat : undefined);
-    }
-  }, [businessId, userId, activeTab, selectedCat]));
+  }, [businessId, userId]));
 
-  // ─── Load forum posts when marche tab is active ───────────────────────────
+  // ─── Load forum posts when marche tab becomes active or category changes ──
   useEffect(() => {
     if (activeTab !== 'marche' || !userId) return;
     fetchPosts(userId, selectedCat !== 'tout' ? selectedCat : undefined);
     markVisited();
-  }, [activeTab, userId]);
-
-  useEffect(() => {
-    if (activeTab !== 'marche' || !userId) return;
-    fetchPosts(userId, selectedCat !== 'tout' ? selectedCat : undefined);
-  }, [selectedCat]);
+  }, [activeTab, userId, selectedCat]);
 
   // ─── Mark chat read when rooms load ──────────────────────────────────────
   useEffect(() => {
@@ -390,6 +497,9 @@ export default function DiscussionsScreen() {
       .on('postgres_changes',
         { event: 'INSERT', schema: 'public', table: 'chat_messages', filter: `room_id=eq.${boutiqueRoom.id}` },
         p => appendMessage(p.new as ChatMessage))
+      .on('postgres_changes',
+        { event: 'UPDATE', schema: 'public', table: 'chat_messages', filter: `room_id=eq.${boutiqueRoom.id}` },
+        p => updateMessage(p.new as ChatMessage))
       .subscribe();
 
     const mCh = supabase
@@ -527,33 +637,72 @@ export default function DiscussionsScreen() {
   }, [lastVisitedAt]);
 
   // ─── Handlers ─────────────────────────────────────────────────────────────
-  const handleTabChange = useCallback(async (tab: Tab) => {
+  const switchTabAndFadeIn = useCallback((tab: Tab) => {
     setActiveTab(tab);
-    if (businessId) await markRead(tab, businessId);
+    if (businessId) markRead(tab, businessId);
+    contentAlpha.value = withTiming(1, { duration: 140 });
   }, [businessId]);
+
+  const handleTabChange = useCallback((tab: Tab) => {
+    contentAlpha.value = withTiming(0, { duration: 80 }, (finished) => {
+      if (finished) runOnJS(switchTabAndFadeIn)(tab);
+    });
+  }, [switchTabAndFadeIn]);
+
+  const cancelEdit = () => {
+    setEditingMsg(null);
+    setText('');
+  };
 
   const handleSend = async () => {
     const trimmed = text.trim();
-    if (!trimmed || !boutiqueRoom?.id || sending) return;
+    if (!trimmed || sending) return;
+
+    if (editingMsg) {
+      const msg = editingMsg;
+      setText('');
+      setEditingMsg(null);
+      Keyboard.dismiss();
+      try {
+        await editMessage(msg.id, trimmed);
+        haptics.success();
+      } catch {
+        haptics.error();
+      }
+      return;
+    }
+
+    if (!boutiqueRoom?.id) return;
+    const reply = replyingTo;
     setText('');
+    setReplyingTo(null);
     Keyboard.dismiss();
     await sendMessage({
       roomId: boutiqueRoom.id,
       senderId: userId,
       senderName: userName,
       content: trimmed,
+      replyTo: reply ? { id: reply.id, content: reply.content, senderName: reply.sender_name || generateFallbackName(reply.sender_id) } : null,
     });
   };
 
+  const closeNewPost = () => {
+    setShowNewPost(false);
+    setNewTitle('');
+    setNewContent('');
+    setNewCategory(null);
+    setPostError('');
+  };
+
   const handleCreatePost = async () => {
-    if (!newTitle.trim() || !newContent.trim()) return;
+    if (!newCategory) { setPostError('Veuillez sélectionner une catégorie'); return; }
+    if (!newTitle.trim()) { setPostError('Veuillez ajouter un titre'); return; }
+    if (!newContent.trim()) { setPostError('Veuillez écrire votre message'); return; }
+    setPostError('');
     try {
       await createPost(newTitle.trim(), newContent.trim(), newCategory);
       haptics.success();
-      setShowNewPost(false);
-      setNewTitle('');
-      setNewContent('');
-      setNewCategory('general');
+      closeNewPost();
     } catch {
       haptics.error();
     }
@@ -562,10 +711,8 @@ export default function DiscussionsScreen() {
   const isAdmin = role === 'administrateur';
   const canPost = isAdmin || userLevel >= 2;
 
-  const boutiqueLabel = boutiqueUnread > 0 ? `Ma Boutique (${boutiqueUnread})` : 'Ma Boutique';
-
   return (
-    <SafeAreaView style={styles.safe} edges={['top', 'bottom']}>
+    <SafeAreaView style={styles.safe} edges={['top']}>
 
       <View style={styles.header}>
         <Pressable onPress={() => router.back()}>
@@ -576,19 +723,30 @@ export default function DiscussionsScreen() {
       </View>
 
       <View style={styles.tabRow}>
-        {(['boutique', 'marche'] as Tab[]).map(t => (
+        <View style={styles.tabTrack}>
           <Pressable
-            key={t}
-            onPress={() => handleTabChange(t)}
-            style={[styles.tabChip, activeTab === t && styles.tabChipActive]}
+            onPress={() => handleTabChange('boutique')}
+            style={[styles.tabSeg, activeTab === 'boutique' && styles.tabSegActive]}
           >
-            <Text variant="caption" style={{ color: activeTab === t ? palette.textInverse : palette.textSecondary }}>
-              {t === 'boutique' ? boutiqueLabel : 'Le Marché'}
+            <View style={styles.tabLabelRow}>
+              <Text style={[styles.tabSegText, activeTab === 'boutique' && styles.tabSegTextActive]}>
+                Ma Boutique
+              </Text>
+              {boutiqueUnread > 0 && <View style={styles.unreadDot} />}
+            </View>
+          </Pressable>
+          <Pressable
+            onPress={() => handleTabChange('marche')}
+            style={[styles.tabSeg, activeTab === 'marche' && styles.tabSegActive]}
+          >
+            <Text style={[styles.tabSegText, activeTab === 'marche' && styles.tabSegTextActive]}>
+              Le Marché
             </Text>
           </Pressable>
-        ))}
+        </View>
       </View>
 
+      <Animated.View style={[{ flex: 1 }, contentStyle]}>
       {/* Category chips — outside KAV so they sit flush under the tab row */}
       {activeTab === 'marche' && (
         <View style={styles.catScrollWrap}>
@@ -616,19 +774,22 @@ export default function DiscussionsScreen() {
         </View>
       )}
 
-      <KeyboardAvoidingView style={{ flex: 1 }} behavior={Platform.OS === 'ios' ? 'padding' : undefined}>
+      <KeyboardAvoidingView style={{ flex: 1 }} behavior={Platform.OS === 'ios' ? 'padding' : 'height'}>
 
         {activeTab === 'boutique' ? (
           /* ── Ma Boutique (chat — completely unchanged) ── */
           <>
-            {loading && boutiqueMessages.length === 0 ? (
+            {loading && !boutiqueRoom ? (
+              <SkeletonList count={6} />
+            ) : !boutiqueRoom ? (
               <View style={styles.empty}>
                 <Text variant="body" color="secondary">Chargement…</Text>
               </View>
             ) : listItems.length === 0 ? (
               <View style={styles.empty}>
-                <Text variant="body" color="secondary" style={{ textAlign: 'center' }}>
-                  Pas encore de message.{'\n'}Écrivez le premier à votre équipe.
+                <Text variant="h4" style={{ textAlign: 'center', marginBottom: 8 }}>Votre espace privé</Text>
+                <Text variant="body" color="secondary" style={{ textAlign: 'center', lineHeight: 22 }}>
+                  Ce que vous écrivez ici reste entre vous et votre équipe uniquement.
                 </Text>
               </View>
             ) : (
@@ -646,9 +807,8 @@ export default function DiscussionsScreen() {
                       </View>
                     );
                   }
-                  const msg        = item as ChatBubbleItem;
-                  const isOwn      = msg.sender_id === userId;
-                  const showSender = !isOwn && (msg._pos === 'first' || msg._pos === 'standalone');
+                  const msg    = item as ChatBubbleItem;
+                  const isOwn  = msg.sender_id === userId;
 
                   let isRead: boolean | null = null;
                   if (isOwn && msg.id === lastOwnMsgId && !partnerRepliedAfterLastOwn) {
@@ -656,13 +816,22 @@ export default function DiscussionsScreen() {
                       && new Date(msg.created_at) <= partnerLastRead;
                   }
 
+                  // Editable if own message AND sent within the last 15 minutes (WhatsApp rule)
+                  const canEdit = isOwn &&
+                    Date.now() - new Date(msg.created_at).getTime() < 15 * 60 * 1000;
+
                   return (
                     <MessageBubble
                       msg={msg}
                       isOwn={isOwn}
                       pos={msg._pos}
-                      showSender={showSender}
                       isRead={isRead}
+                      onReply={() => setReplyingTo(msg)}
+                      onEdit={canEdit ? () => {
+                        setReplyingTo(null);
+                        setEditingMsg(msg);
+                        setText(msg.content);
+                      } : null}
                     />
                   );
                 }}
@@ -675,28 +844,56 @@ export default function DiscussionsScreen() {
               </View>
             ) : null}
 
-            <View style={styles.inputRow}>
+            {/* Docked edit preview */}
+            {editingMsg ? (
+              <View style={styles.editDock}>
+                <Ionicons name="pencil" size={15} color={palette.primary} />
+                <View style={styles.replyDockBody}>
+                  <Text style={styles.editDockLabel}>Modifier le message</Text>
+                  <Text style={styles.replyDockText} numberOfLines={1}>{editingMsg.content}</Text>
+                </View>
+                <Pressable onPress={cancelEdit} hitSlop={12}>
+                  <Ionicons name="close" size={18} color={palette.textSecondary} />
+                </Pressable>
+              </View>
+            ) : replyingTo ? (
+              <View style={styles.replyDock}>
+                <View style={[styles.replyDockAccent, { backgroundColor: senderColor(replyingTo.sender_id) }]} />
+                <View style={styles.replyDockBody}>
+                  <Text style={[styles.replyDockName, { color: senderColor(replyingTo.sender_id) }]}>
+                    {replyingTo.sender_name || generateFallbackName(replyingTo.sender_id)}
+                  </Text>
+                  <Text style={styles.replyDockText} numberOfLines={1}>{replyingTo.content}</Text>
+                </View>
+                <Pressable onPress={() => setReplyingTo(null)} hitSlop={12}>
+                  <Ionicons name="close" size={18} color={palette.textSecondary} />
+                </Pressable>
+              </View>
+            ) : null}
+
+            <View style={[styles.inputRow, { paddingBottom: Math.max(insets.bottom, spacing[3]) }]}>
               <TextInput
                 style={styles.input}
                 value={text}
                 onChangeText={setText}
-                placeholder="Écrire un message…"
+                placeholder="Écrire à l'équipe…"
                 placeholderTextColor={palette.textSecondary}
                 multiline
                 maxLength={1000}
                 returnKeyType="default"
               />
-              <Pressable
-                onPress={handleSend}
-                disabled={!text.trim() || sending}
-                style={({ pressed }) => [
-                  styles.sendBtn,
-                  (!text.trim() || sending) && styles.sendBtnDisabled,
-                  pressed && { opacity: 0.75 },
-                ]}
-              >
-                <Text style={styles.sendIcon}>↑</Text>
-              </Pressable>
+              {(!!text.trim() || !!editingMsg) && (
+                <Pressable
+                  onPress={handleSend}
+                  disabled={sending}
+                  style={({ pressed }) => [
+                    styles.sendBtn,
+                    pressed && { opacity: 0.75 },
+                  ]}
+                >
+                  <Ionicons name={editingMsg ? 'checkmark' : 'arrow-forward'} size={20} color={palette.textInverse} />
+                </Pressable>
+              )}
             </View>
           </>
         ) : (
@@ -704,9 +901,7 @@ export default function DiscussionsScreen() {
           <>
             {/* Post list */}
             {marketLoading && posts.length === 0 ? (
-              <View style={styles.empty}>
-                <Text variant="body" color="secondary">Chargement…</Text>
-              </View>
+              <SkeletonList count={5} />
             ) : filteredPosts.length === 0 ? (
               <View style={styles.empty}>
                 <Text variant="body" color="secondary" style={{ textAlign: 'center' }}>
@@ -754,82 +949,88 @@ export default function DiscussionsScreen() {
           </>
         )}
       </KeyboardAvoidingView>
+      </Animated.View>
 
       {/* ── New post modal ── */}
-      <Modal visible={showNewPost} animationType="slide" onRequestClose={() => setShowNewPost(false)}>
-        <SafeAreaView style={styles.modalSafe} edges={['top', 'bottom']}>
-          <View style={styles.modalHeader}>
-            <Pressable onPress={() => { setShowNewPost(false); setNewTitle(''); setNewContent(''); setNewCategory('general'); }} hitSlop={8}>
-              <Text variant="body" color="secondary">Annuler</Text>
-            </Pressable>
-            <Text variant="h4">Nouveau post</Text>
-            <View style={{ width: 60 }} />
-          </View>
-
-          <ScrollView contentContainerStyle={styles.modalContent} keyboardShouldPersistTaps="handled">
-            <Text variant="label" style={styles.fieldLabel}>Catégorie</Text>
-            <View style={styles.modalCatRow}>
-              {MARKET_CATS.map(cat => (
-                <Pressable
-                  key={cat}
-                  onPress={() => setNewCategory(cat)}
-                  style={[styles.modalCatChip, newCategory === cat && styles.modalCatChipActive]}
-                >
-                  <Text
-                    variant="caption"
-                    style={{ color: newCategory === cat ? palette.textInverse : palette.textSecondary }}
-                  >
-                    {CAT_LABEL[cat]}
-                  </Text>
-                </Pressable>
-              ))}
+      <Modal visible={showNewPost} animationType="slide" onRequestClose={closeNewPost}>
+        <KeyboardAvoidingView style={{ flex: 1 }} behavior={Platform.OS === 'ios' ? 'padding' : 'height'}>
+          <SafeAreaView style={styles.modalSafe} edges={['bottom']}>
+            <View style={[styles.modalHeader, { paddingTop: insets.top + spacing[4] }]}>
+              <Pressable onPress={closeNewPost} hitSlop={8}>
+                <Text variant="body" color="secondary">Annuler</Text>
+              </Pressable>
+              <Text variant="h4">Nouveau post</Text>
+              {(() => {
+                const hasContent = newTitle.trim().length > 0 || newContent.trim().length > 0;
+                return (
+                  <Pressable onPress={handleCreatePost} disabled={creating || !hasContent} hitSlop={8}>
+                    <Text variant="body" style={{ color: (creating || !hasContent) ? palette.textDisabled : palette.primary, fontWeight: '600' }}>
+                      {creating ? '…' : 'Publier'}
+                    </Text>
+                  </Pressable>
+                );
+              })()}
             </View>
 
-            <Text variant="label" style={styles.fieldLabel}>Titre</Text>
-            <TextInput
-              style={styles.modalInput}
-              value={newTitle}
-              onChangeText={setNewTitle}
-              placeholder="Titre de votre post…"
-              placeholderTextColor={palette.textSecondary}
-              maxLength={100}
-              returnKeyType="next"
-            />
-
-            <Text variant="label" style={styles.fieldLabel}>Message</Text>
-            <TextInput
-              style={[styles.modalInput, styles.modalInputMulti]}
-              value={newContent}
-              onChangeText={setNewContent}
-              placeholder="Partagez votre idée, question ou annonce…"
-              placeholderTextColor={palette.textSecondary}
-              multiline
-              maxLength={1000}
-            />
-
-            <Pressable
-              onPress={handleCreatePost}
-              disabled={creating || !newTitle.trim() || !newContent.trim()}
-              style={[
-                styles.newPostBtn,
-                { marginTop: spacing[2] },
-                (creating || !newTitle.trim() || !newContent.trim()) && { backgroundColor: palette.border },
-              ]}
-            >
-              <Text style={styles.newPostBtnText}>
-                {creating ? 'Publication…' : 'Publier'}
+            <ScrollView style={{ flex: 1 }} contentContainerStyle={styles.modalContent} keyboardShouldPersistTaps="handled">
+              <View style={styles.composerCard}>
+                <TextInput
+                  style={styles.composerTitle}
+                  value={newTitle}
+                  onChangeText={t => { setNewTitle(t); setPostError(''); }}
+                  placeholder="Titre"
+                  placeholderTextColor={palette.textSecondary}
+                  maxLength={100}
+                  returnKeyType="next"
+                  autoFocus
+                />
+                <View style={styles.composerDivider} />
+                <TextInput
+                  style={styles.composerBody}
+                  value={newContent}
+                  onChangeText={t => { setNewContent(t); setPostError(''); }}
+                  placeholder="Partagez votre expérience"
+                  placeholderTextColor={palette.textSecondary}
+                  multiline
+                  scrollEnabled={false}
+                  maxLength={1000}
+                  textAlignVertical="top"
+                />
+              <Text variant="caption" color="secondary" style={styles.charCount}>
+                {newContent.length}/1000
               </Text>
-            </Pressable>
-          </ScrollView>
-        </SafeAreaView>
+              <View style={styles.composerDivider} />
+              <View style={styles.composerBottom}>
+                <ScrollView horizontal showsHorizontalScrollIndicator={false} contentContainerStyle={styles.composerCatRow}>
+                  {MARKET_CATS.map(cat => (
+                    <Pressable
+                      key={cat}
+                      onPress={() => { setNewCategory(cat); setPostError(''); }}
+                      style={[styles.modalCatChip, newCategory === cat && styles.modalCatChipActive]}
+                    >
+                      <Text variant="caption" style={{ color: newCategory === cat ? palette.textInverse : palette.textSecondary }}>
+                        {CAT_LABEL[cat]}
+                      </Text>
+                    </Pressable>
+                  ))}
+                </ScrollView>
+                <Text variant="caption" style={[styles.composerError, { opacity: postError ? 1 : 0 }]}>
+                  {postError || ' '}
+                </Text>
+              </View>
+            </View>
+            </ScrollView>
+          </SafeAreaView>
+        </KeyboardAvoidingView>
       </Modal>
 
     </SafeAreaView>
   );
 }
 
-const styles = StyleSheet.create({
-  safe: { flex: 1, backgroundColor: palette.background },
+function makeStyles(p: Palette) {
+  return StyleSheet.create({
+  safe: { flex: 1, backgroundColor: p.background },
 
   header: {
     flexDirection: 'row',
@@ -837,83 +1038,159 @@ const styles = StyleSheet.create({
     justifyContent: 'space-between',
     padding: spacing[5],
     borderBottomWidth: 1,
-    borderBottomColor: palette.border,
+    borderBottomColor: p.border,
   },
 
   tabRow: {
-    flexDirection: 'row',
-    gap: spacing[2],
     paddingHorizontal: spacing[5],
     paddingTop: spacing[3],
     paddingBottom: spacing[2],
   },
-  tabChip: {
-    flex: 1,
-    paddingHorizontal: spacing[4],
-    paddingVertical: spacing[1.5],
+  tabTrack: {
+    flexDirection: 'row' as const,
+    backgroundColor: p.surface,
     borderRadius: radius.full,
     borderWidth: 1,
-    borderColor: palette.border,
-    backgroundColor: palette.surface,
-    alignItems: 'center',
+    borderColor: p.border,
+    padding: 3,
   },
-  tabChipActive: { backgroundColor: palette.primary, borderColor: palette.primary },
+  tabSeg: {
+    flex: 1,
+    paddingVertical: 7,
+    borderRadius: radius.full,
+    alignItems: 'center' as const,
+    justifyContent: 'center' as const,
+  },
+  tabSegActive: { backgroundColor: p.primary },
+  tabLabelRow: { flexDirection: 'row' as const, alignItems: 'center' as const, gap: 5 },
+  tabSegText: { fontSize: 13, color: p.textSecondary, fontWeight: '500' as const },
+  tabSegTextActive: { color: p.textInverse, fontWeight: '600' as const },
+  unreadDot: {
+    width: 6,
+    height: 6,
+    borderRadius: 3,
+    backgroundColor: colors.warning[500],
+  },
 
-  listContent: { paddingHorizontal: spacing[4], paddingVertical: spacing[3] },
+  listContent: { paddingHorizontal: 6, paddingVertical: spacing[3] },
   empty: { flex: 1, alignItems: 'center', justifyContent: 'center', padding: spacing[6] },
 
   // Boutique chat
   dateSep: { alignItems: 'center', marginVertical: 12 },
-  dateSepText: { color: palette.textSecondary },
+  dateSepText: { color: p.textSecondary },
 
-  row: {},
-  rowOwn: { alignItems: 'flex-end' },
+  rowOther: { flexDirection: 'row', alignItems: 'flex-end', paddingLeft: 2 },
+  rowOwn:   { flexDirection: 'row', alignItems: 'flex-end', justifyContent: 'flex-end', paddingRight: 4 },
 
-  senderRow: { flexDirection: 'row', alignItems: 'center', gap: spacing[2], marginBottom: 2, marginLeft: 12 },
-  senderName: { color: palette.textSecondary, fontWeight: '600' },
+  // Avatar
+  avatarCol: { width: 36, alignItems: 'center', justifyContent: 'flex-end' },
+  avatar: { width: 28, height: 28, borderRadius: 14, alignItems: 'center', justifyContent: 'center' },
+  avatarText: { fontSize: 12, fontWeight: '700' as const, color: '#fff' },
+  avatarSpacer: { width: 28 },
 
-  bubble: { maxWidth: '75%', borderRadius: 16, paddingVertical: 8, paddingHorizontal: 12 },
-  bubbleOwn: { alignSelf: 'flex-end', marginRight: 12, backgroundColor: palette.primary },
+  senderName: { fontSize: 12, fontWeight: '700' as const, marginBottom: 3 },
+
+  // Bubble
+  bubble: { borderRadius: 16, paddingVertical: 8, paddingHorizontal: 10, marginHorizontal: 4 },
+  bubbleOwn: { backgroundColor: p.primary, maxWidth: '72%' },
   bubbleOther: {
-    alignSelf: 'flex-start',
-    marginLeft: 12,
-    backgroundColor: palette.surface,
+    backgroundColor: p.surface,
     borderWidth: 1,
-    borderColor: palette.border,
+    borderColor: p.border,
+    maxWidth: '82%',
   },
-  bubbleText:    { fontSize: 15, lineHeight: 22, color: palette.textPrimary },
-  bubbleTextOwn: { color: palette.textInverse },
+  bubbleText:    { fontSize: 15, lineHeight: 21, color: p.textPrimary },
+  bubbleTextOwn: { color: '#fff' },
 
-  metaRow: { flexDirection: 'row', alignItems: 'center', gap: spacing[2], marginTop: 2 },
-  ts:      { fontSize: 11, color: palette.textSecondary },
-  tsOwn:   { alignSelf: 'flex-end' },
-  receipt:     { fontSize: 11, color: palette.textSecondary },
-  receiptRead: { color: palette.primary, fontWeight: '600' },
+  // Timestamp inside bubble
+  bubbleMeta: { flexDirection: 'row' as const, justifyContent: 'flex-end' as const, marginTop: 4, gap: 2 },
+  ts:      { fontSize: 11 },
+  tsOther: { color: p.textSecondary },
+  tsOwn:   { color: 'rgba(255,255,255,0.7)' },
+  receipt:     { fontSize: 11, color: 'rgba(255,255,255,0.7)' },
+  receiptRead: { color: '#fff', fontWeight: '600' as const },
+
+  // Reply pill inside bubble
+  replyPill: {
+    flexDirection: 'row' as const,
+    borderRadius: 8,
+    marginBottom: 6,
+    overflow: 'hidden' as const,
+    minWidth: 180,
+  },
+  replyPillOwn:   { backgroundColor: 'rgba(255,255,255,0.15)' },
+  replyPillOther: { backgroundColor: p.border },
+  replyAccent: { width: 4 },
+  replyPillContent: { flex: 1, paddingVertical: 4, paddingHorizontal: 8 },
+  replyPillName: { fontSize: 12, fontWeight: '700' as const, marginBottom: 1 },
+  replyPillNameOwn: { color: 'rgba(255,255,255,0.9)' },
+  replyPillText: { fontSize: 12, color: p.textSecondary },
+  replyPillTextOwn: { color: 'rgba(255,255,255,0.7)' },
+
+  // Docked edit preview above input
+  editDock: {
+    flexDirection: 'row' as const,
+    alignItems: 'center' as const,
+    paddingHorizontal: spacing[4],
+    paddingVertical: spacing[2],
+    backgroundColor: `${p.primary}0C`,
+    borderTopWidth: 1,
+    borderTopColor: `${p.primary}40`,
+    gap: spacing[2],
+  },
+  editDockLabel: { fontSize: 12, fontWeight: '700' as const, color: p.primary },
+
+  // Docked reply preview above input
+  replyDock: {
+    flexDirection: 'row' as const,
+    alignItems: 'center' as const,
+    paddingHorizontal: spacing[4],
+    paddingVertical: spacing[2],
+    backgroundColor: p.surface,
+    borderTopWidth: 1,
+    borderTopColor: p.border,
+    gap: spacing[2],
+  },
+  replyDockAccent: { width: 3, height: 36, borderRadius: 2 },
+  replyDockBody: { flex: 1 },
+  replyDockName: { fontSize: 12, fontWeight: '700' as const },
+  replyDockText: { fontSize: 13, color: p.textSecondary },
+
+  // Swipe-to-reply icon
+  swipeIcon: {
+    width: 32,
+    height: 32,
+    borderRadius: 16,
+    backgroundColor: `${p.primary}18`,
+    alignItems: 'center' as const,
+    justifyContent: 'center' as const,
+    marginRight: 4,
+  },
 
   errorStrip: {
     paddingHorizontal: spacing[4],
     paddingVertical: spacing[2],
-    backgroundColor: '#FFF1F2',
+    backgroundColor: p.warningLight,
   },
 
   readOnlyBar: {
     paddingHorizontal: spacing[5],
     paddingVertical: spacing[4],
     borderTopWidth: 1,
-    borderTopColor: palette.border,
-    backgroundColor: palette.surface,
+    borderTopColor: p.border,
+    backgroundColor: p.surface,
   },
   minimalUnlockBanner: {
     borderTopWidth: 1,
-    borderTopColor: palette.border,
-    backgroundColor: palette.surface,
+    borderTopColor: p.border,
+    backgroundColor: p.surface,
     paddingHorizontal: spacing[5],
     paddingVertical: 14,
     alignItems: 'center' as const,
   },
   minimalUnlockText: {
     fontSize: 13,
-    color: palette.textSecondary,
+    color: p.textSecondary,
     textAlign: 'center' as const,
     lineHeight: 18,
   },
@@ -925,39 +1202,37 @@ const styles = StyleSheet.create({
     paddingHorizontal: spacing[4],
     paddingVertical: spacing[3],
     borderTopWidth: 1,
-    borderTopColor: palette.border,
-    backgroundColor: palette.surface,
+    borderTopColor: p.border,
+    backgroundColor: p.surface,
   },
   input: {
     flex: 1,
     minHeight: 40,
     maxHeight: 120,
     borderWidth: 1,
-    borderColor: palette.border,
+    borderColor: p.border,
     borderRadius: radius.lg,
     paddingHorizontal: spacing[3],
     paddingVertical: spacing[2],
     fontSize: 15,
-    color: palette.textPrimary,
-    backgroundColor: palette.background,
+    color: p.textPrimary,
+    backgroundColor: p.background,
   },
   sendBtn: {
     width: 40, height: 40,
     borderRadius: radius.full,
-    backgroundColor: palette.primary,
+    backgroundColor: p.primary,
     alignItems: 'center',
     justifyContent: 'center',
   },
-  sendBtnDisabled: { backgroundColor: palette.border },
-  sendIcon: { fontSize: 20, color: palette.textInverse, lineHeight: 24 },
 
   // Forum: category filter wrapper
   catScrollWrap: {
     height: 48,
     justifyContent: 'center' as const,
-    backgroundColor: palette.background,
+    backgroundColor: p.background,
     borderBottomWidth: 1,
-    borderBottomColor: palette.border,
+    borderBottomColor: p.border,
     marginBottom: 8,
   },
   catScroll: { flexGrow: 0 },
@@ -973,10 +1248,10 @@ const styles = StyleSheet.create({
     paddingVertical: spacing[1.5],
     borderRadius: radius.full,
     borderWidth: 1,
-    borderColor: palette.border,
-    backgroundColor: palette.surface,
+    borderColor: p.border,
+    backgroundColor: p.surface,
   },
-  catChipActive: { backgroundColor: palette.primary, borderColor: palette.primary },
+  catChipActive: { backgroundColor: p.primary, borderColor: p.primary },
 
   // Forum: shared badge styles
   newBadge: {
@@ -989,112 +1264,110 @@ const styles = StyleSheet.create({
   catBadge: { borderRadius: radius.full, paddingHorizontal: spacing[2], paddingVertical: 2 },
   catBadgeText: { fontSize: 11, fontWeight: '600' as const },
 
-  // Forum: compact high-density card
+  // Forum: flat surface — hairline separator, no card chrome
   pcCard: {
-    backgroundColor: palette.surface,
-    borderRadius: 12,
-    padding: 12,
-    marginHorizontal: 16,
-    marginVertical: 6,
-    borderWidth: 1,
-    borderColor: palette.border,
-    shadowColor: '#000',
-    shadowOffset: { width: 0, height: 2 },
-    shadowOpacity: 0.05,
-    shadowRadius: 4,
-    elevation: 2,
+    backgroundColor: p.background,
+    paddingHorizontal: spacing[5],
+    paddingTop: spacing[4],
+    paddingBottom: spacing[3],
+    borderBottomWidth: StyleSheet.hairlineWidth,
+    borderBottomColor: p.border,
   },
   pcTopRow: {
     flexDirection: 'row' as const,
-    justifyContent: 'space-between' as const,
     alignItems: 'center' as const,
-  },
-  pcAuthorBlock: {
-    flexDirection: 'row' as const,
-    alignItems: 'center' as const,
-    flex: 1,
-  },
-  pcMetaBlock: {
-    alignItems: 'flex-end' as const,
-    gap: 2,
+    gap: 8,
   },
   pcAvatar: {
-    width: 32,
-    height: 32,
-    borderRadius: 16,
+    width: 36,
+    height: 36,
+    borderRadius: 18,
     alignItems: 'center' as const,
     justifyContent: 'center' as const,
+    flexShrink: 0,
   },
-  pcAvatarText: { fontSize: 13, fontWeight: '700' as const, color: '#fff' },
-  pcAuthorInfo: { marginLeft: 8 },
-  pcAuthorName: { fontSize: 14, fontWeight: '600' as const, color: palette.textPrimary },
-  pcAuthorRank: { fontSize: 12, color: colors.primary[600], fontWeight: '500' as const },
-  pcTimestamp: { fontSize: 11, color: palette.textSecondary, marginTop: 2 },
-  pcTitle: { fontSize: 15, fontWeight: '700' as const, color: palette.textPrimary, marginTop: 8 },
-  pcExcerpt: { fontSize: 13, color: palette.textSecondary, lineHeight: 18, marginTop: 2, marginBottom: 8 },
+  pcAvatarText: { fontSize: 14, fontWeight: '700' as const, color: '#fff' },
+  pcAuthorInfo: { flex: 1, minWidth: 0 },
+  pcAuthorName: { fontSize: 14, fontWeight: '600' as const, color: p.textPrimary },
+  pcMeta: { flexDirection: 'row' as const, alignItems: 'center' as const, gap: 4, marginTop: 1, flexWrap: 'wrap' as const },
+  pcMetaDot: { fontSize: 11, color: p.textSecondary },
+  pcTimestamp: { fontSize: 11, color: p.textSecondary },
+  pcTitle: { fontFamily: FF.bold, fontSize: 15, color: p.textPrimary, marginTop: 8 },
+  pcExcerpt: { fontSize: 13, color: p.textSecondary, lineHeight: 18, marginTop: 2, marginBottom: 8 },
   pcFooter: {
     flexDirection: 'row' as const,
     justifyContent: 'flex-start' as const,
     alignItems: 'center' as const,
     gap: 16,
   },
-  pcLikeBtn: {
-    flexDirection: 'row' as const,
-    alignItems: 'center' as const,
-    gap: 6,
-    borderWidth: 1,
-    borderRadius: 6,
-    paddingHorizontal: 12,
-    paddingVertical: 6,
-  },
   pcStatRow: { flexDirection: 'row' as const, alignItems: 'center' as const, gap: 6 },
-  pcStat: { fontSize: 13, color: palette.textSecondary, fontWeight: '500' as const },
-  pcStatLiked: { color: palette.primary },
-  pcActionVerified: { fontSize: 13, color: palette.primary, fontWeight: '600' as const },
-  pcActionSave: { fontSize: 13, color: palette.textSecondary, fontWeight: '500' as const },
+  pcStat: { fontSize: 13, color: p.textSecondary, fontWeight: '500' as const },
+  pcStatLiked: { color: p.primary },
+  pcActionVerified: { fontSize: 13, color: p.primary, fontWeight: '600' as const },
+  pcActionSave: { fontSize: 13, color: p.textSecondary, fontWeight: '500' as const },
   marketListContent: { paddingBottom: spacing[6] },
 
   // Forum: new post button
   newPostBtn: {
     margin: spacing[4],
     borderRadius: radius.md,
-    backgroundColor: palette.primary,
+    backgroundColor: p.primary,
     paddingVertical: spacing[3],
     alignItems: 'center',
   },
-  newPostBtnText: { color: palette.textInverse, fontWeight: '600', fontSize: 15 },
+  newPostBtnText: { color: p.textInverse, fontWeight: '600', fontSize: 15 },
 
   // Modal
-  modalSafe: { flex: 1, backgroundColor: palette.background },
+  modalSafe: { flex: 1, backgroundColor: p.background },
   modalHeader: {
     flexDirection: 'row',
     alignItems: 'center',
     justifyContent: 'space-between',
     padding: spacing[5],
     borderBottomWidth: 1,
-    borderBottomColor: palette.border,
+    borderBottomColor: p.border,
   },
   modalContent: { padding: spacing[5], gap: spacing[3] },
-  fieldLabel: { marginBottom: spacing[1] },
-  modalCatRow: { flexDirection: 'row', flexWrap: 'wrap', gap: spacing[2], marginBottom: spacing[2] },
+  composerCard: {
+    borderWidth: 1,
+    borderColor: p.border,
+    borderRadius: radius.lg,
+    backgroundColor: p.surface,
+    overflow: 'hidden',
+  },
+  composerTitle: {
+    paddingHorizontal: spacing[4],
+    paddingTop: spacing[4],
+    paddingBottom: spacing[3],
+    fontSize: 18,
+    fontWeight: '600',
+    color: p.textPrimary,
+  },
+  composerDivider: {
+    height: StyleSheet.hairlineWidth,
+    backgroundColor: p.border,
+    marginHorizontal: spacing[4],
+  },
+  composerBody: {
+    paddingHorizontal: spacing[4],
+    paddingTop: spacing[3],
+    paddingBottom: spacing[4],
+    fontSize: 15,
+    color: p.textPrimary,
+    minHeight: 180,
+  },
+  charCount: { textAlign: 'right', paddingHorizontal: spacing[4], paddingBottom: spacing[2] },
+  composerBottom: { flexDirection: 'row', alignItems: 'center', justifyContent: 'space-between', paddingRight: spacing[4] },
+  composerCatRow: { flexDirection: 'row', gap: spacing[2], paddingHorizontal: spacing[4], paddingVertical: spacing[3] },
+  composerError: { color: p.warning, flexShrink: 1, textAlign: 'right', paddingLeft: spacing[2] },
   modalCatChip: {
     paddingHorizontal: spacing[3],
     paddingVertical: spacing[1.5],
     borderRadius: radius.full,
     borderWidth: 1,
-    borderColor: palette.border,
-    backgroundColor: palette.surface,
+    borderColor: p.border,
+    backgroundColor: p.surface,
   },
-  modalCatChipActive: { backgroundColor: palette.primary, borderColor: palette.primary },
-  modalInput: {
-    borderWidth: 1,
-    borderColor: palette.border,
-    borderRadius: radius.md,
-    paddingHorizontal: spacing[3],
-    paddingVertical: spacing[2.5],
-    fontSize: 15,
-    color: palette.textPrimary,
-    backgroundColor: palette.background,
-  },
-  modalInputMulti: { minHeight: 140, textAlignVertical: 'top' },
-});
+  modalCatChipActive: { backgroundColor: p.primary, borderColor: p.primary },
+  });
+}

@@ -38,6 +38,7 @@ interface EquipeStore {
   loading: boolean;
   saving: boolean;
   error: string | null;
+  hasFetched: boolean;
 
   fetchMembres: (businessId: string) => Promise<void>;
   fetchCodes: (businessId: string) => Promise<void>;
@@ -55,6 +56,7 @@ export const useEquipeStore = create<EquipeStore>((set, get) => ({
   loading: false,
   saving: false,
   error: null,
+  hasFetched: false,
 
   fetchMembres: async (businessId) => {
     set({ loading: true });
@@ -67,7 +69,7 @@ export const useEquipeStore = create<EquipeStore>((set, get) => ({
 
     if (mErr) {
       console.error('[fetchMembres memberships]', mErr instanceof Error ? mErr.message : (mErr as { message?: string })?.message ?? JSON.stringify(mErr));
-      set({ loading: false, error: translateError(mErr, 'Erreur de chargement') });
+      set({ loading: false, error: translateError(mErr, 'Erreur de chargement'), hasFetched: true });
       return;
     }
 
@@ -98,6 +100,7 @@ export const useEquipeStore = create<EquipeStore>((set, get) => ({
         user_phone: profilesMap[m.user_id as string]?.phone ?? null,
       })),
       loading: false,
+      hasFetched: true,
     });
   },
 
@@ -183,5 +186,5 @@ export const useEquipeStore = create<EquipeStore>((set, get) => ({
   },
 
   clearError: () => set({ error: null }),
-  reset: () => set({ membres: [], codes: [], loading: false, saving: false, error: null }),
+  reset: () => set({ membres: [], codes: [], loading: false, saving: false, error: null, hasFetched: false }),
 }));

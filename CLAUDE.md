@@ -59,7 +59,9 @@ app/
 
 `stores/auth.ts` (`useAuthStore`) is a Zustand store initialized in the root `_layout.tsx` via `initialize()`. It calls `supabase.auth.getSession()` and loads the user's profile + memberships into `AppSession`. If the user has exactly one business it auto-selects it; otherwise `(app)/onboarding` prompts selection. The `(app)/_layout.tsx` redirects to `/(welcome)/` when no session.
 
-Authentication is **WhatsApp OTP only** — no email/password. Flow: anonymous Supabase session → `create-phone-verification` Edge Function → user sends token via WhatsApp → `whatsapp-inbound-webhook` marks verification as `verifie` → `restore-phone-session` Edge Function generates a magic link → client calls `verifyOtp`.
+Authentication is **WhatsApp OTP only** — no email/password. Flow: anonymous Supabase session → `create-phone-verification` Edge Function (sends 6-digit code via WhatsApp Twilio, returns only `verificationId`) → user types code in-app via `OtpInput` → `verify-phone-code` Edge Function verifies code and marks row `verifie` → for login: `restore-phone-session` generates magic link → client calls `verifyOtp`; for register: `upgradePhone` sets profile phone + lifts anonymous flag.
+
+iOS AutoFill: `textContentType="oneTimeCode"` on the hidden `OtpInput` TextInput causes iOS to suggest the OTP from recent WhatsApp notifications above the keyboard.
 
 Creating a business generates the UUID client-side first, then inserts — this avoids an RLS race where `SELECT` after `INSERT ... RETURNING` fires before the `handle_business_created` trigger creates the membership row.
 
@@ -67,7 +69,7 @@ Joining a business uses invite codes (`equipe` store generates/revokes them) via
 
 ### App Store review demo account
 
-`supabase/functions/create-phone-verification/index.ts` checks for a `DEMO_PHONE` environment variable (set in Supabase Edge Function secrets). If the phone matches, the verification row is inserted already-verified with a fixed token `PATRON-000000` — no WhatsApp message is sent. This lets Apple reviewers log in without WhatsApp access. The `DEMO_PHONE` value is `+15555555555`.
+`supabase/functions/create-phone-verification/index.ts` checks for a `DEMO_PHONE` environment variable (set in Supabase Edge Function secrets). If the phone matches, the row is inserted with token `000000` and status `en_attente` — no WhatsApp message is sent. The reviewer enters `000000` in the OTP input to proceed. This lets Apple reviewers log in without WhatsApp access. The `DEMO_PHONE` value is `+15555555555`.
 
 ### App lock overlay (`src/components/AppLockOverlay.tsx`)
 

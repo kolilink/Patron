@@ -26,6 +26,7 @@ interface MarketStore {
   fetchPosts: (userId: string, category?: MarketCategory) => Promise<void>;
   prependPost: (post: MarketPost) => void;
   createPost: (title: string, content: string, category: MarketCategory) => Promise<void>;
+  editPost: (postId: string, title: string, content: string) => Promise<void>;
 
   fetchPostDetail: (postId: string, userId: string) => Promise<void>;
   addComment: (postId: string, parentId: string | null, content: string) => Promise<void>;
@@ -57,7 +58,16 @@ export const useMarketStore = create<MarketStore>((set, get) => ({
   ...initialState,
 
   fetchPosts: async (userId, category) => {
-    set({ loading: true, error: null });
+    if (get().posts.length === 0) {
+      const cached = await getMarketCache() as MarketPost[] | null;
+      if (cached) {
+        set({ posts: cached, loading: false, error: null });
+      } else {
+        set({ loading: true, error: null });
+      }
+    } else {
+      set({ error: null });
+    }
     try {
       let q = supabase
         .from('market_posts')
@@ -128,6 +138,24 @@ export const useMarketStore = create<MarketStore>((set, get) => ({
       set({ creating: false });
     } catch (err) {
       set({ creating: false, error: translateError(err, 'Erreur de création') });
+      throw err;
+    }
+  },
+
+  editPost: async (postId, title, content) => {
+    // Optimistic update
+    const update = (p: MarketPost) => p.id === postId ? { ...p, title, content } : p;
+    set(state => ({
+      posts: state.posts.map(update),
+      activePost: state.activePost?.id === postId ? update(state.activePost) : state.activePost,
+    }));
+    try {
+      const { error } = await supabase
+        .from('market_posts')
+        .update({ title, content })
+        .eq('id', postId);
+      if (error) throw error;
+    } catch (err) {
       throw err;
     }
   },
