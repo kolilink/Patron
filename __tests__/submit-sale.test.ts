@@ -27,9 +27,10 @@ jest.mock('@/lib/analytics', () => ({ trackEvent: jest.fn() }));
 jest.mock('@/lib/posthog', () => ({ posthog: null }));
 
 import { useSalesStore } from '@/stores/sales';
+import { useVentesStore } from '@/stores/ventes';
 import { supabase } from '@/lib/supabase';
 import { enqueue } from '@/lib/db';
-import type { Product } from '@/src/types';
+import type { Product, ProductVariant } from '@/src/types';
 
 const mockProduct: Product = {
   id: 'prod-1',
@@ -137,5 +138,41 @@ describe('submit_sale — offline queue', () => {
     expect(enqueue).not.toHaveBeenCalled();
     expect(useSalesStore.getState().lastSubmitQueued).toBe(false);
     expect(useSalesStore.getState().error).toBeTruthy();
+  });
+
+  it('uses variant cost_price (not parent) in optimistic offline sale lines', async () => {
+    (supabase.rpc as jest.Mock).mockRejectedValueOnce(new Error('Failed to fetch'));
+
+    const variantParent: Product = {
+      ...mockProduct,
+      id: 'prod-v',
+      cost_price: 400,
+      has_variants: true,
+      stock_qty: 0,
+    };
+    const variant: ProductVariant = {
+      id: 'var-1',
+      product_id: 'prod-v',
+      business_id: 'biz-1',
+      name: 'Taille M',
+      sale_price: 1500,
+      cost_price: 900,
+      stock_qty: 50,
+      reorder_level: 5,
+      archived: false,
+      created_at: '2026-01-01T00:00:00Z',
+      updated_at: '2026-01-01T00:00:00Z',
+    };
+
+    useVentesStore.setState({ sales: [] });
+    useSalesStore.getState().addToCartVariant(variantParent, variant);
+
+    await useSalesStore.getState().submitSale(
+      'biz-1', 'user-1', { method: 'especes', amount: 1500 },
+    );
+
+    const { sales } = useVentesStore.getState() as any;
+    expect(sales).toHaveLength(1);
+    expect(sales[0].lines[0].cost_price).toBe(900);
   });
 });
