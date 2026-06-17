@@ -48,6 +48,7 @@ export interface Business {
   name: string;
   type: string | null;
   currency: string;
+  phone: string | null;
   logo_url: string | null;
   status: 'actif' | 'suspendu' | 'archive';
   subscription_tier: SubscriptionTier;
@@ -86,10 +87,29 @@ export interface Product extends Base {
   reorder_level: number;
   stock_qty: number;
   archived: boolean;
+  is_system?: boolean;
   supplier_id: string | null;
   purchase_date: string | null;
   bulk_price: number | null;
   bulk_min_qty: number | null;
+  has_variants: boolean;
+  variants?: ProductVariant[];
+}
+
+// ─── Product Variant ──────────────────────────────────────────────────────────
+
+export interface ProductVariant {
+  id: string;
+  product_id: string;
+  business_id: string;
+  name: string;
+  sale_price: number;
+  cost_price: number;
+  stock_qty: number;
+  reorder_level: number;
+  archived: boolean;
+  created_at: string;
+  updated_at: string;
 }
 
 // ─── Stock Move ───────────────────────────────────────────────────────────────
@@ -133,7 +153,9 @@ export interface POLine {
   qty_ordered: number;
   qty_received: number;
   unit_cost: number;
+  variant_id?: string | null;
   product?: Product;
+  variant?: ProductVariant;
 }
 
 // ─── Sale Order ───────────────────────────────────────────────────────────────
@@ -159,6 +181,8 @@ export interface SOLine {
   qty: number;
   unit_price: number;
   is_bulk: boolean;
+  variant_id?: string | null;
+  variant_name?: string | null;
   product?: Product;
 }
 

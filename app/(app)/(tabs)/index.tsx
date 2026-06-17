@@ -1,5 +1,5 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
-import { Animated, Easing, Pressable, ScrollView, StyleSheet, View } from 'react-native';
+import { Animated, Easing, Modal, Pressable, ScrollView, StyleSheet, View } from 'react-native';
 import { SafeAreaView } from 'react-native-safe-area-context';
 import { router, useFocusEffect } from 'expo-router';
 import { Ionicons } from '@expo/vector-icons';
@@ -39,6 +39,16 @@ interface BestSeller {
 
 function fmt(n: number, cur: string) {
   return `${n.toLocaleString('fr-FR')} ${cur}`;
+}
+
+type DayPart = 'morning' | 'active' | 'evening' | 'night';
+
+function getDayPart(): DayPart {
+  const h = new Date().getHours();
+  if (h >= 5 && h < 12) return 'morning';
+  if (h >= 12 && h < 17) return 'active';
+  if (h >= 17 && h < 21) return 'evening';
+  return 'night';
 }
 
 function KpiCard({ label, value, sub, onPress, accent }: {
@@ -110,6 +120,7 @@ export default function AccueilScreen() {
 
   // null = not yet checked, true = dismissed, false = active
   const [onboardingDismissed, setOnboardingDismissed] = useState<boolean | null>(null);
+  const [showCarnetSheet, setShowCarnetSheet] = useState(false);
 
   useEffect(() => {
     if (!userId || !businessId || !isOwner) { setOnboardingDismissed(true); return; }
@@ -126,6 +137,21 @@ export default function AccueilScreen() {
       }
     }).catch(() => setOnboardingDismissed(true));
   }, [userId, businessId, isOwner, business?.created_at]);
+
+  // Show carnet import sheet once — but only AFTER the onboarding steps card is gone.
+  // Showing both simultaneously creates visual clutter and confuses new users.
+  useEffect(() => {
+    if (!userId || !businessId || !isOwner) return;
+    if (onboardingDismissed !== true) return; // wait until step card is fully done
+    const ageMs = business?.created_at ? Date.now() - new Date(business.created_at).getTime() : Infinity;
+    if (ageMs > 7 * 24 * 60 * 60 * 1000) return;
+    const key = `carnet_prompt_seen_${userId}_${businessId}`;
+    getKV(key).then(val => {
+      if (val !== null) return;
+      void setKV(key, '1');
+      setShowCarnetSheet(true);
+    }).catch(() => {});
+  }, [userId, businessId, isOwner, business?.created_at, onboardingDismissed]);
 
   const step2Done = products.length > 0;
   const step3Done = (kpis?.revenue_month ?? 0) > 0;
@@ -223,10 +249,6 @@ export default function AccueilScreen() {
     const yesterday = `${yestD.getFullYear()}-${String(yestD.getMonth() + 1).padStart(2, '0')}-${String(yestD.getDate()).padStart(2, '0')}`;
     const monthStart = `${y}-${m}-01`;
 
-    const lowStock = useProductStore.getState().products.filter(
-      p => p.stock_qty <= p.reorder_level && p.reorder_level > 0,
-    ).length;
-
     const todayStart = `${today}T00:00:00.000Z`;
     const monthStartISO = `${monthStart}T00:00:00.000Z`;
     const yestStart = `${yesterday}T00:00:00.000Z`;
@@ -234,20 +256,20 @@ export default function AccueilScreen() {
     const [todayRes, yestRes, monthRes, creditRes, expensesRes] = await Promise.all([
       supabase
         .from('sale_orders')
-        .select('total_amount')
+        .select('total_amount, discount_amount')
         .eq('business_id', businessId)
         .eq('status', 'paye')
         .gte('paid_at', todayStart),
       supabase
         .from('sale_orders')
-        .select('total_amount')
+        .select('total_amount, discount_amount')
         .eq('business_id', businessId)
         .eq('status', 'paye')
         .gte('paid_at', yestStart)
         .lt('paid_at', todayStart),
       supabase
         .from('sale_orders')
-        .select('total_amount')
+        .select('total_amount, discount_amount')
         .eq('business_id', businessId)
         .eq('status', 'paye')
         .gte('paid_at', monthStartISO),
@@ -272,12 +294,15 @@ export default function AccueilScreen() {
         // Derive today's live numbers from ventes store (includes offline queued sales)
         const sales = useVentesStore.getState().sales;
         const todaySales = sales.filter(s => (s.sale_date ?? s.created_at.split('T')[0]) === today && s.status !== 'annule');
-        const revenueToday = todaySales.filter(s => !s.is_credit).reduce((sum, s) => sum + s.total_amount, 0);
+        const revenueToday = todaySales.filter(s => !s.is_credit).reduce((sum, s) => sum + s.total_amount - (s.discount_amount ?? 0), 0);
         const creditSales = sales.filter(s => s.status === 'credit');
         const creditTotalOffline = creditSales.reduce((sum, s) => sum + (s.total_amount - (s.discount_amount ?? 0) - (s.amount_paid ?? 0)), 0);
         const creditCountOffline = new Set(creditSales.map(s => s.customer_name).filter(Boolean)).size
           + creditSales.filter(s => !s.customer_name).length;
 
+        const { products: pOffline, variantsByProduct: vOffline } = useProductStore.getState();
+        const offlineLowStock = pOffline.filter(p => !p.has_variants && p.reorder_level > 0 && p.stock_qty <= p.reorder_level).length
+          + Object.values(vOffline).flat().filter(v => v.reorder_level > 0 && v.stock_qty <= v.reorder_level).length;
         setKpis({
           revenue_today: revenueToday,
           revenue_yesterday: cached?.revenue_yesterday ?? 0,
@@ -285,7 +310,7 @@ export default function AccueilScreen() {
           sales_today: todaySales.length,
           credit_total: creditTotalOffline,
           credit_count: creditCountOffline,
-          low_stock: lowStock,
+          low_stock: offlineLowStock,
           expenses_month: cached?.expenses_month ?? 0,
         });
         return;
@@ -293,8 +318,10 @@ export default function AccueilScreen() {
       throw firstErr.error;
     }
 
-    const sum = (rows: { total_amount?: number; amount?: number }[] | null, key: 'total_amount' | 'amount' = 'total_amount') =>
-      (rows ?? []).reduce((s, r) => s + (r[key] ?? 0), 0) / 100;
+    // Revenue = total_amount − discount_amount (discount reduces actual cash received)
+    type SaleAmounts = { total_amount: number; discount_amount: number | null };
+    const sumRevenue = (rows: SaleAmounts[] | null) =>
+      (rows ?? []).reduce((s, r) => s + (r.total_amount - (r.discount_amount ?? 0)), 0) / 100;
 
     type CreditOrder = { id: string; total_amount: number; discount_amount: number; customer_name: string | null };
     const creditOrders = (creditRes.data ?? []) as CreditOrder[];
@@ -327,15 +354,24 @@ export default function AccueilScreen() {
       creditCount = clientsOwing.size + anonCount;
     }
 
+    const { products: allProducts, variantsByProduct } = useProductStore.getState();
+    const plainLowStock = allProducts.filter(
+      p => !p.has_variants && p.stock_qty <= p.reorder_level && p.reorder_level > 0,
+    ).length;
+    const variantLowStock = Object.values(variantsByProduct).flat().filter(
+      v => v.stock_qty <= v.reorder_level && v.reorder_level > 0,
+    ).length;
+    const computedLowStock = plainLowStock + variantLowStock;
+
     const freshKpis: KPIs = {
-      revenue_today: sum(todayRes.data as { total_amount: number }[] | null),
-      revenue_yesterday: sum(yestRes.data as { total_amount: number }[] | null),
-      revenue_month: sum(monthRes.data as { total_amount: number }[] | null),
+      revenue_today:    sumRevenue(todayRes.data as SaleAmounts[] | null),
+      revenue_yesterday:sumRevenue(yestRes.data as SaleAmounts[] | null),
+      revenue_month:    sumRevenue(monthRes.data as SaleAmounts[] | null),
       sales_today: todayRes.data?.length ?? 0,
       credit_total: creditTotal,
       credit_count: creditCount,
-      low_stock: lowStock,
-      expenses_month: sum(expensesRes.data as { amount: number }[] | null, 'amount'),
+      low_stock: computedLowStock,
+      expenses_month: ((expensesRes.data ?? []) as { amount: number }[]).reduce((s, r) => s + r.amount, 0) / 100,
     };
     setKpis(freshKpis);
     void saveDashboardKpiCache(businessId, freshKpis);
@@ -364,9 +400,7 @@ export default function AccueilScreen() {
     );
   };
 
-  const lowStock = useProductStore.getState().products.filter(
-    p => p.stock_qty <= p.reorder_level && p.reorder_level > 0,
-  ).length;
+  const lowStock = kpis?.low_stock ?? 0;
 
   const visibleBestSellers = useMemo(() => {
     const archivedIds = new Set(products.filter(p => p.archived).map(p => p.id));
@@ -379,8 +413,51 @@ export default function AccueilScreen() {
   const deltaColor = delta > 0 ? palette.success : delta < 0 ? palette.warning : palette.textSecondary;
   const showAttentionCards = (kpis?.credit_count ?? 0) > 0 || lowStock > 0;
 
+  const dayPart = getDayPart();
+  const dayGreeting = dayPart === 'morning' ? 'Bonne journée'
+    : dayPart === 'evening' ? 'Voici votre journée'
+    : null;
+  const heroCaption = dayPart === 'morning'
+    ? `Bonjour · ${salesCount} vente${salesCount !== 1 ? 's' : ''}`
+    : dayPart === 'evening'
+    ? `Ce soir · ${salesCount} vente${salesCount !== 1 ? 's' : ''}`
+    : `Aujourd'hui · ${salesCount} vente${salesCount !== 1 ? 's' : ''}`;
+  const comparisonText = (dayPart === 'evening' || dayPart === 'night')
+    ? `Ce mois : ${fmt(kpis?.revenue_month ?? 0, currency)}`
+    : `Hier : ${fmt(kpis?.revenue_yesterday ?? 0, currency)}`;
+
   return (
     <SafeAreaView style={styles.safe} edges={['top']}>
+      {/* One-time carnet import sheet shown after business creation */}
+      <Modal visible={showCarnetSheet} transparent animationType="slide" onRequestClose={() => setShowCarnetSheet(false)}>
+        <View style={styles.sheetBackdrop}>
+          <Pressable style={StyleSheet.absoluteFill} onPress={() => setShowCarnetSheet(false)} />
+          <View style={[styles.sheetPanel, { backgroundColor: palette.surface }]}>
+            <View style={[styles.sheetHandle, { backgroundColor: palette.border }]} />
+            <Text variant="h3" style={styles.sheetTitle}>Votre commerce est créé !</Text>
+            <Text variant="body" color="secondary" style={styles.sheetBody}>
+              Des gens vous doivent de l'argent ?
+            </Text>
+            <Button
+              label="Oui, les noter →"
+              size="lg"
+              fullWidth
+              onPress={() => {
+                setShowCarnetSheet(false);
+                router.push('/(app)/onboarding/carnet');
+              }}
+              style={{ marginTop: spacing[2] }}
+            />
+            <Button
+              label="Pas maintenant"
+              variant="ghost"
+              fullWidth
+              onPress={() => setShowCarnetSheet(false)}
+            />
+          </View>
+        </View>
+      </Modal>
+
       {isOffline && (
         <View style={styles.offlineBanner}>
           <Text variant="caption" color="secondary">Pas de réseau · Informations non actualisées</Text>
@@ -417,6 +494,18 @@ export default function AccueilScreen() {
         ) : showOnboarding ? (
           /* ── Onboarding tracker: persisted flag, never re-shows once dismissed ── */
           <Card style={styles.onboarding}>
+            <View style={{ flexDirection: 'row', alignItems: 'center', justifyContent: 'space-between', marginBottom: spacing[2] }}>
+              <Text variant="label" color="secondary">Pour commencer</Text>
+              <Pressable
+                hitSlop={12}
+                onPress={() => {
+                  setKV(`onboarding_done_${userId}_${businessId}`, '1').catch(() => {});
+                  setOnboardingDismissed(true);
+                }}
+              >
+                <Text variant="caption" color="secondary">Passer</Text>
+              </Pressable>
+            </View>
             <OnboardingStep number={1} label="Votre commerce a été créé" done                      active={false} />
             <OnboardingStep number={2} label="Ajouter un produit"        done={step2Done}            active={!step2Done} />
             <OnboardingStep number={3} label="Faire une vente"           done={step3Done}            active={step2Done && !step3Done} />
@@ -444,25 +533,34 @@ export default function AccueilScreen() {
         ) : (
           <>
             {/* ── Zone 1: Hero — Today ── */}
+            {dayGreeting ? (
+              <Text variant="caption" color="secondary">{dayGreeting}</Text>
+            ) : null}
             <Card onPress={isInvestisseur ? undefined : () => router.push('/ventes')} style={styles.heroCard}>
               <View style={styles.heroTop}>
                 <Text variant="caption" color="secondary">
-                  Aujourd'hui · {salesCount} vente{salesCount !== 1 ? 's' : ''}
+                  {heroCaption}
                 </Text>
-                <Text
-                  variant="amountLarge"
-                  color={salesCount > 0 ? 'success' : undefined}
-                  style={styles.heroAmount}
-                  adjustsFontSizeToFit
-                  numberOfLines={1}
-                  minimumFontScale={0.5}
-                >
-                  {fmt(kpis?.revenue_today ?? 0, currency)}
-                </Text>
+                <View style={styles.heroAmountRow}>
+                  <Text
+                    variant="amountLarge"
+                    color={salesCount > 0 ? 'success' : undefined}
+                    style={styles.heroAmount}
+                  >
+                    {(kpis?.revenue_today ?? 0).toLocaleString('fr-FR')}
+                  </Text>
+                  <Text
+                    variant="amountLarge"
+                    color={salesCount > 0 ? 'success' : undefined}
+                    style={styles.heroCurrency}
+                  >
+                    {currency}
+                  </Text>
+                </View>
               </View>
               <View style={styles.heroComparison}>
                 <Text variant="caption" color="secondary">
-                  Hier vous avez fait {fmt(kpis?.revenue_yesterday ?? 0, currency)}
+                  {comparisonText}
                 </Text>
               </View>
             </Card>
@@ -513,10 +611,12 @@ export default function AccueilScreen() {
               </View>
             )}
 
-            {/* ── Zone 3: Month context ── */}
-            <Text variant="caption" color="secondary" style={styles.monthLine}>
-              Ce mois: {fmt(kpis?.revenue_month ?? 0, currency)}
-            </Text>
+            {/* ── Zone 3: Month context — hidden in evening/night (already in comparison) ── */}
+            {dayPart !== 'evening' && dayPart !== 'night' ? (
+              <Text variant="caption" color="secondary" style={styles.monthLine}>
+                Ce mois: {fmt(kpis?.revenue_month ?? 0, currency)}
+              </Text>
+            ) : null}
           </>
         )}
       </ScrollView>
@@ -541,7 +641,9 @@ function makeStyles(p: Palette) {
 
     heroCard: {},
     heroTop: { gap: spacing[1] },
+    heroAmountRow: { position: 'relative' },
     heroAmount: { fontSize: 52, lineHeight: 64 },
+    heroCurrency: { fontSize: 18, lineHeight: 24, position: 'absolute', top: 4, right: 0 },
     heroComparison: {
       flexDirection: 'row',
       alignItems: 'center',
@@ -560,6 +662,24 @@ function makeStyles(p: Palette) {
       borderBottomWidth: StyleSheet.hairlineWidth,
       borderBottomColor: p.border,
     },
+    sheetBackdrop: {
+      flex: 1, justifyContent: 'flex-end',
+      backgroundColor: 'rgba(0,0,0,0.5)',
+    },
+    sheetPanel: {
+      borderTopLeftRadius: 24, borderTopRightRadius: 24,
+      paddingHorizontal: spacing[6],
+      paddingTop: spacing[3],
+      paddingBottom: spacing[10],
+      alignItems: 'center',
+      gap: spacing[3],
+    },
+    sheetHandle: {
+      width: 40, height: 4, borderRadius: 2,
+      marginBottom: spacing[2],
+    },
+    sheetTitle: { textAlign: 'center' },
+    sheetBody:  { textAlign: 'center', lineHeight: 24 },
 
     welcome: { alignItems: 'center', gap: spacing[4], paddingVertical: spacing[8], paddingHorizontal: spacing[6] },
     welcomeEmoji: { fontSize: 52, lineHeight: 72 },

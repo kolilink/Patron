@@ -9,7 +9,7 @@
     "userInterfaceStyle": "automatic",
     "newArchEnabled": true,
     "splash": {
-      "image": "./assets/splash.PNG",
+      "image": "./assets/splash.png",
       "resizeMode": "cover",
       "backgroundColor": "#F5F7FA"
     },
@@ -46,7 +46,7 @@
     },
     "android": {
       "package": "com.awall.patron",
-      "versionCode": 1,
+      "versionCode": 4,
       "adaptiveIcon": {
         "foregroundImage": "./assets/adaptive-icon.png",
         "backgroundColor": "#ffffff"
@@ -74,7 +74,8 @@
       "expo-font",
       "@react-native-community/datetimepicker",
       "expo-updates",
-      "@sentry/react-native"
+      "@sentry/react-native",
+      "expo-localization"
     ],
     "extra": {
       "router": {},

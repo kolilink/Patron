@@ -6,7 +6,7 @@ import {
   StyleSheet,
   View,
 } from 'react-native';
-import { router } from 'expo-router';
+import { router, useLocalSearchParams } from 'expo-router';
 import { SafeAreaView } from 'react-native-safe-area-context';
 import { Button } from '@/src/components/ui/Button';
 import { OtpInput } from '@/src/components/ui/OtpInput';
@@ -15,6 +15,7 @@ import { PhoneInput } from '@/src/components/ui/PhoneInput';
 import { useTheme, radius, spacing } from '@/src/theme';
 import type { Palette } from '@/src/theme';
 import { useAuthStore } from '@/stores/auth';
+import { trackEvent } from '@/lib/analytics';
 
 export default function ConnexionScreen() {
   const { palette } = useTheme();
@@ -28,7 +29,23 @@ export default function ConnexionScreen() {
   const verificationIdRef         = useRef('');
   const normalizedPhoneRef        = useRef('');
 
-  useEffect(() => { clearError(); }, []);
+  const { autoOtp } = useLocalSearchParams<{ autoOtp?: string }>();
+
+  useEffect(() => {
+    clearError();
+    trackEvent('auth_login_screen_viewed', null, null);
+  }, []);
+
+  // When arriving from the biometric quick-login fallback, the OTP has already
+  // been sent and pendingPhoneVerification is set — jump straight to code entry.
+  useEffect(() => {
+    if (autoOtp !== '1') return;
+    const pv = useAuthStore.getState().pendingPhoneVerification;
+    if (!pv) return;
+    normalizedPhoneRef.current = pv.phone;
+    verificationIdRef.current  = pv.verificationId;
+    setStep('otp');
+  }, [autoOtp]);
 
   useEffect(() => {
     if (!session) return;
@@ -44,9 +61,11 @@ export default function ConnexionScreen() {
     const normalized = phone.trim().replace(/\s/g, '');
     if (!normalized) return;
     normalizedPhoneRef.current = normalized;
+    trackEvent('auth_phone_submitted', null, null);
     const result = await loginWithPhone(normalized);
     if (result) {
       verificationIdRef.current = result.verificationId;
+      trackEvent('auth_otp_screen_shown', null, null);
       setStep('otp');
     }
   };
@@ -58,8 +77,10 @@ export default function ConnexionScreen() {
       verificationIdRef.current,
     );
     if (ok) {
+      trackEvent('auth_otp_verified', null, null);
       await restorePhoneSession(normalizedPhoneRef.current, verificationIdRef.current);
     } else {
+      trackEvent('auth_failed', null, null, { reason: 'invalid_otp' });
       setOtpKey(k => k + 1);
     }
   };

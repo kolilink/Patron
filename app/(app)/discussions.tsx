@@ -712,6 +712,10 @@ export default function DiscussionsScreen() {
   const canPost = isAdmin || userLevel >= 2;
 
   return (
+    <KeyboardAvoidingView
+      style={{ flex: 1, backgroundColor: palette.background }}
+      behavior={Platform.OS === 'ios' ? 'padding' : 'height'}
+    >
     <SafeAreaView style={styles.safe} edges={['top']}>
 
       <View style={styles.header}>
@@ -774,8 +778,6 @@ export default function DiscussionsScreen() {
         </View>
       )}
 
-      <KeyboardAvoidingView style={{ flex: 1 }} behavior={Platform.OS === 'ios' ? 'padding' : 'height'}>
-
         {activeTab === 'boutique' ? (
           /* ── Ma Boutique (chat — completely unchanged) ── */
           <>
@@ -797,6 +799,7 @@ export default function DiscussionsScreen() {
                 data={listItems}
                 keyExtractor={item => item.id}
                 inverted
+                style={{ flex: 1 }}
                 contentContainerStyle={styles.listContent}
                 keyboardShouldPersistTaps="handled"
                 renderItem={({ item }) => {
@@ -948,7 +951,6 @@ export default function DiscussionsScreen() {
             )}
           </>
         )}
-      </KeyboardAvoidingView>
       </Animated.View>
 
       {/* ── New post modal ── */}
@@ -1025,6 +1027,7 @@ export default function DiscussionsScreen() {
       </Modal>
 
     </SafeAreaView>
+    </KeyboardAvoidingView>
   );
 }
 

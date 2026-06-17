@@ -137,12 +137,19 @@ export default function CreditsScreen() {
         </View>
       ) : debtors.length === 0 ? (
         <View style={styles.empty}>
-          <View style={{ flexDirection: 'row', alignItems: 'center', gap: 6 }}>
-            <Ionicons name="checkmark-circle" size={18} color={palette.success} />
-            <Text variant="label" style={{ color: palette.success }}>
-              Félicitations, aucun client ne vous doit !
-            </Text>
+          <View style={styles.emptyBadge}>
+            <Ionicons name="checkmark-circle" size={36} color={palette.success} />
           </View>
+          <Text variant="h4" style={{ textAlign: 'center', marginBottom: spacing[2] }}>Comptes soldés</Text>
+          <Text variant="body" color="secondary" style={{ textAlign: 'center' }}>
+            Des gens vous doivent de l'argent ?{'\n'}Notez-le ici — sans créer de produits.
+          </Text>
+          <Pressable
+            onPress={() => router.push('/(app)/onboarding/carnet')}
+            style={({ pressed }) => [styles.carnetCta, { opacity: pressed ? 0.7 : 1, borderColor: palette.primary }]}
+          >
+            <Text variant="label" style={{ color: palette.primary }}>Ajouter une dette</Text>
+          </Pressable>
         </View>
       ) : (
         <FlatList
@@ -216,7 +223,13 @@ function makeStyles(p: Palette) {
     backgroundColor: p.surface,
   },
   avatar: { width: 40, height: 40, borderRadius: 20, alignItems: 'center', justifyContent: 'center' },
-  empty: { flex: 1, alignItems: 'center', justifyContent: 'center', padding: spacing[8] },
+  empty: { flex: 1, alignItems: 'center', justifyContent: 'center', paddingHorizontal: spacing[8] },
+  emptyBadge: { width: 88, height: 88, borderRadius: 44, backgroundColor: p.successLight, alignItems: 'center', justifyContent: 'center', marginBottom: spacing[5] },
+  carnetCta: {
+    marginTop: spacing[4],
+    paddingVertical: spacing[3], paddingHorizontal: spacing[6],
+    borderWidth: 1, borderRadius: radius.md,
+  },
   center: { textAlign: 'center', marginTop: spacing[10] },
   });
 }

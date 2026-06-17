@@ -10,13 +10,17 @@ import { useAuthStore } from '@/stores/auth';
 import { useProductStore } from '@/stores/products';
 import { trackEvent } from '@/lib/analytics';
 import { haptics } from '@/lib/haptics';
-import type { PaymentMethod, Product } from '@/src/types';
+import { useToastStore } from '@/stores/toast';
+import type { PaymentMethod, Product, ProductVariant } from '@/src/types';
 
 export interface CartLine {
   product: Product;
   qty: number;
   unit_price: number;
   is_bulk: boolean;
+  variant_id?: string;
+  variant_name?: string;
+  variant_cost_price?: number;
 }
 
 export interface SalePayment {
@@ -32,10 +36,12 @@ interface SalesStore {
   lastSubmitQueued: boolean;
 
   addToCart: (product: Product, bulk?: boolean) => void;
-  removeFromCart: (productId: string, isBulk?: boolean) => void;
-  setQty: (productId: string, qty: number, isBulk?: boolean) => void;
+  addToCartVariant: (product: Product, variant: ProductVariant) => void;
+  removeFromCart: (productId: string, isBulk?: boolean, variantId?: string) => void;
+  setQty: (productId: string, qty: number, isBulk?: boolean, variantId?: string) => void;
   toggleBulk: (productId: string, isBulk?: boolean) => void;
   clearCart: () => void;
+  submitCarnetDebt: (businessId: string, userId: string, customerName: string, amountCents: number) => Promise<boolean>;
   submitSale: (
     businessId: string,
     userId: string,
@@ -59,11 +65,11 @@ export const useSalesStore = create<SalesStore>((set, get) => ({
 
   addToCart: (product, bulk = false) => {
     const { cart } = get();
-    const existing = cart.find(l => l.product.id === product.id && l.is_bulk === bulk);
+    const existing = cart.find(l => l.product.id === product.id && l.is_bulk === bulk && !l.variant_id);
     if (existing) {
       set({
         cart: cart.map(l =>
-          l.product.id === product.id && l.is_bulk === bulk ? { ...l, qty: l.qty + 1 } : l,
+          l.product.id === product.id && l.is_bulk === bulk && !l.variant_id ? { ...l, qty: l.qty + 1 } : l,
         ),
       });
     } else {
@@ -72,25 +78,45 @@ export const useSalesStore = create<SalesStore>((set, get) => ({
     }
   },
 
-  removeFromCart: (productId, isBulk) => {
+  addToCartVariant: (product, variant) => {
+    const { cart } = get();
+    const existing = cart.find(l => l.variant_id === variant.id);
+    if (existing) {
+      set({ cart: cart.map(l => l.variant_id === variant.id ? { ...l, qty: l.qty + 1 } : l) });
+    } else {
+      set({ cart: [...cart, {
+        product,
+        qty: 1,
+        unit_price: variant.sale_price,
+        is_bulk: false,
+        variant_id: variant.id,
+        variant_name: variant.name,
+        variant_cost_price: variant.cost_price,
+      }] });
+    }
+  },
+
+  removeFromCart: (productId, isBulk, variantId) => {
     set(state => ({
-      cart: state.cart.filter(l =>
-        !(l.product.id === productId && (isBulk === undefined || l.is_bulk === isBulk))
-      ),
+      cart: state.cart.filter(l => {
+        if (variantId !== undefined) return l.variant_id !== variantId;
+        return !(l.product.id === productId && (isBulk === undefined || l.is_bulk === isBulk));
+      }),
     }));
   },
 
-  setQty: (productId, qty, isBulk) => {
+  setQty: (productId, qty, isBulk, variantId) => {
     if (qty <= 0) {
-      get().removeFromCart(productId, isBulk);
+      get().removeFromCart(productId, isBulk, variantId);
       return;
     }
     set(state => ({
-      cart: state.cart.map(l =>
-        l.product.id === productId && (isBulk === undefined || l.is_bulk === isBulk)
+      cart: state.cart.map(l => {
+        if (variantId !== undefined) return l.variant_id === variantId ? { ...l, qty } : l;
+        return l.product.id === productId && (isBulk === undefined || l.is_bulk === isBulk)
           ? { ...l, qty }
-          : l
-      ),
+          : l;
+      }),
     }));
   },
 
@@ -124,6 +150,23 @@ export const useSalesStore = create<SalesStore>((set, get) => ({
 
   clearCart: () => set({ cart: [] }),
 
+  submitCarnetDebt: async (businessId, userId, customerName, amountCents) => {
+    const { error } = await supabase.rpc('submit_carnet_debt', {
+      p_business_id:   businessId,
+      p_seller_id:     userId,
+      p_customer_name: customerName.trim(),
+      p_amount:        amountCents,
+    });
+    if (error) {
+      console.error('[submitCarnetDebt]', error.code, error.message, error.details);
+      useToastStore.getState().show(error.message ?? translateError(error, 'Erreur inconnue'), 'warning');
+      haptics.error();
+      return false;
+    }
+    haptics.heavy();
+    return true;
+  },
+
   submitSale: async (businessId, userId, payment, customerName, saleDate, discountAmount, clientId, overrideTotalAmount, dueDate) => {
     const { cart } = get();
     if (cart.length === 0) return false;
@@ -141,10 +184,13 @@ export const useSalesStore = create<SalesStore>((set, get) => ({
       const today = new Date().toISOString().split('T')[0];
 
       const cartJson = cartSnapshot.map(l => ({
-        product_id: l.product.id,
-        qty: l.qty,
-        unit_price: Math.round(l.unit_price * 100),
-        is_bulk: l.is_bulk,
+        product_id:   l.product.id,
+        qty:          l.qty,
+        unit_price:   Math.round(l.unit_price * 100),
+        is_bulk:      l.is_bulk,
+        product_name: l.product.name,
+        variant_id:   l.variant_id ?? null,
+        variant_name: l.variant_name ?? null,
       }));
 
       const rpcPayload = {
@@ -170,8 +216,11 @@ export const useSalesStore = create<SalesStore>((set, get) => ({
       set({ cart: [], submitting: false, lastSubmitQueued: false });
       haptics.heavy();
       trackEvent('sale_submitted', businessId, userId, {
-        is_credit: isCredit,
-        items_count: cartSnapshot.length,
+        is_credit:      isCredit,
+        items_count:    cartSnapshot.length,
+        has_discount:   (discountAmount ?? 0) > 0,
+        payment_method: payment?.method ?? (isCredit ? 'credit' : null),
+        currency:       useAuthStore.getState().session?.activeBusiness?.currency,
       });
       return true;
     } catch (err) {
@@ -192,10 +241,13 @@ export const useSalesStore = create<SalesStore>((set, get) => ({
           p_discount_amount: Math.round(discount * 100),
           p_is_credit:       isCredit,
           p_cart:            cartSnapshot.map(l => ({
-            product_id: l.product.id,
-            qty: l.qty,
-            unit_price: Math.round(l.unit_price * 100),
-            is_bulk: l.is_bulk,
+            product_id:   l.product.id,
+            qty:          l.qty,
+            unit_price:   Math.round(l.unit_price * 100),
+            is_bulk:      l.is_bulk,
+            product_name: l.product.name,
+            variant_id:   l.variant_id ?? null,
+            variant_name: l.variant_name ?? null,
           })),
           p_pay_method:      payment?.method  ?? null,
           p_pay_amount:      payment?.amount  != null ? Math.round(payment.amount * 100) : null,
@@ -221,7 +273,8 @@ export const useSalesStore = create<SalesStore>((set, get) => ({
           const base = cached ?? useProductStore.getState().products;
           if (!base.length) return;
           const updated = base.map(p => {
-            const line = cartSnapshot.find(l => l.product.id === p.id);
+            // Only decrement plain-product lines (variant stock isn't cached locally)
+            const line = cartSnapshot.find(l => l.product.id === p.id && !l.variant_id);
             if (!line) return p;
             return { ...p, stock_qty: Math.max(0, p.stock_qty - line.qty) };
           });
@@ -255,12 +308,14 @@ export const useSalesStore = create<SalesStore>((set, get) => ({
             profit: null,
             lines: cartSnapshot.map(l => ({
               id: generateId(),
-              product_id: l.product.id,
+              product_id:   l.product.id,
               product_name: l.product.name,
-              qty: l.qty,
-              unit_price: l.unit_price,
-              is_bulk: l.is_bulk,
-              cost_price: l.product.cost_price ?? 0,
+              qty:          l.qty,
+              unit_price:   l.unit_price,
+              is_bulk:      l.is_bulk,
+              cost_price:   l.variant_cost_price ?? l.product.cost_price ?? 0,
+              variant_id:   l.variant_id ?? null,
+              variant_name: l.variant_name ?? null,
             })),
             payments: payment ? [{
               id: generateId(),

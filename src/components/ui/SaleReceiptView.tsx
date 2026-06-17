@@ -18,6 +18,7 @@ export interface ReceiptPayment {
 
 export interface ReceiptData {
   businessName: string;
+  businessPhone?: string | null;
   currency: string;
   items: ReceiptItem[];
   total: number;
@@ -47,7 +48,7 @@ function formatReceiptDate(d: Date): string {
 }
 
 export function SaleReceiptView({ data }: { data: ReceiptData }) {
-  const { businessName, currency, items, total, discountAmount, amountPaid, payment, customerName, date, receiptId } = data;
+  const { businessName, businessPhone, currency, items, total, discountAmount, amountPaid, payment, customerName, date, receiptId } = data;
   const discount   = discountAmount ?? 0;
   const netTotal   = total - discount;
   const paid       = amountPaid ?? (payment ? payment.amount : 0);
@@ -59,6 +60,12 @@ export function SaleReceiptView({ data }: { data: ReceiptData }) {
       {/* Business + date */}
       <View style={styles.header}>
         <Text variant="h3" style={styles.bizName}>{businessName}</Text>
+        {businessPhone ? (
+          <View style={styles.phoneBlock}>
+            <Text variant="caption" style={styles.phoneLabel}>Commandez ici</Text>
+            <Text variant="caption" style={styles.phoneNumber}>{businessPhone}</Text>
+          </View>
+        ) : null}
         <Text variant="caption" style={styles.dateText}>{formatReceiptDate(date)}</Text>
         {receiptId && (
           <Text variant="caption" style={styles.receiptId}>#{receiptId}</Text>
@@ -169,6 +176,22 @@ const styles = StyleSheet.create({
   },
   dateText: {
     color: palette.textSecondary,
+  },
+  phoneBlock: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 4,
+  },
+  phoneLabel: {
+    color: palette.primary,
+    fontWeight: '600',
+    textTransform: 'uppercase',
+    letterSpacing: 0.5,
+    fontSize: 10,
+  },
+  phoneNumber: {
+    color: palette.textSecondary,
+    fontWeight: '600',
   },
   receiptId: {
     color: colors.neutral[400],

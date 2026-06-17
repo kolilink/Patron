@@ -78,7 +78,7 @@ export default function RapportsScreen() {
   useEffect(() => { if (role === 'vendeur') router.back(); }, [role]);
 
   const { sales, loading: salesLoading, fetchSales } = useVentesStore();
-  const { products, fetchProducts }                  = useProductStore();
+  const { products, variantsByProduct, fetchProducts } = useProductStore();
   const { expenses, fetchExpenses }                  = useExpensesStore();
 
   const [period, setPeriod] = useState<Period>('mois');
@@ -158,8 +158,27 @@ export default function RapportsScreen() {
   const creditCount   = new Set(creditSales.map(s => s.client_id ?? s.customer_name ?? s.id)).size;
 
   // ── Stock ─────────────────────────────────────────────────────────────────────
-  const stockValue = products.reduce((s, p) => s + p.cost_price * p.stock_qty, 0);
-  const lowStock   = products.filter(p => p.reorder_level > 0 && p.stock_qty <= p.reorder_level);
+  // Plain products contribute their own stock; variant products store stock per-variant.
+  const stockValue = useMemo(() => {
+    const plain   = products.filter(p => !p.has_variants).reduce((s, p) => s + p.cost_price * p.stock_qty, 0);
+    const variant = products.filter(p => p.has_variants)
+      .flatMap(p => variantsByProduct[p.id] ?? [])
+      .reduce((s, v) => s + v.cost_price * v.stock_qty, 0);
+    return plain + variant;
+  }, [products, variantsByProduct]);
+
+  // Low-stock: plain products + individual variants that breach their reorder level
+  const lowStock = useMemo(() => {
+    const plain = products.filter(
+      p => !p.has_variants && p.reorder_level > 0 && p.stock_qty <= p.reorder_level,
+    );
+    const variantLow = products.filter(p => p.has_variants).flatMap(p =>
+      (variantsByProduct[p.id] ?? [])
+        .filter(v => !v.archived && v.reorder_level > 0 && v.stock_qty <= v.reorder_level)
+        .map(v => ({ ...v, name: `${p.name} · ${v.name}` })),
+    );
+    return [...plain, ...variantLow];
+  }, [products, variantsByProduct]);
 
   // ── Top sellers ───────────────────────────────────────────────────────────────
   // Use actual payments (same basis as overall revenue) so percentages stay ≤ 100%.

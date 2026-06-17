@@ -340,6 +340,7 @@ interface DetailModalProps {
 function DetailModal({ sale, currency, businessName, singleVendor, role, onClose, onRecordPayment, onCancel, onUpdateClient, saving }: DetailModalProps) {
   const { palette } = useTheme();
   const styles = useMemo(() => makeStyles(palette), [palette]);
+  const businessPhone = useAuthStore(s => s.session?.activeBusiness?.phone ?? null);
   const [showPaymentSheet, setShowPaymentSheet] = useState(false);
   const [showCancelForm, setShowCancelForm] = useState(false);
   const [showEditClient, setShowEditClient] = useState(false);
@@ -362,9 +363,10 @@ function DetailModal({ sale, currency, businessName, singleVendor, role, onClose
   const receiptData: ReceiptData | null = sale?.lines?.length
     ? {
         businessName,
+        businessPhone: businessPhone,
         currency,
         items: sale.lines.map((l): ReceiptItem => ({
-          name: l.product_name,
+          name: l.variant_name ? `${l.product_name} · ${l.variant_name}` : l.product_name,
           qty: l.qty,
           unit_price: l.unit_price,
           is_bulk: false,
@@ -513,8 +515,13 @@ function DetailModal({ sale, currency, businessName, singleVendor, role, onClose
           {displayState === 'annule' && (
             <View style={[styles.banner, styles.bannerRed]}>
               <Text variant="label" style={{ color: palette.danger }}>✕ Vente annulée</Text>
+              {sale.cancelled_by_name ? (
+                <Text variant="caption" style={{ color: palette.danger, opacity: 0.9 }}>
+                  Annulée par : {sale.cancelled_by_name}
+                </Text>
+              ) : null}
               {sale.cancellation_reason ? (
-                <Text variant="caption" style={{ color: palette.danger, opacity: 0.8 }}>
+                <Text variant="caption" style={{ color: palette.danger, opacity: 0.7 }}>
                   {sale.cancellation_reason}
                 </Text>
               ) : null}
@@ -529,7 +536,7 @@ function DetailModal({ sale, currency, businessName, singleVendor, role, onClose
                 <Text variant="label" color="secondary">Articles</Text>
                 {sale.lines.map(l => (
                   <View key={l.id} style={styles.lineRow}>
-                    <Text variant="body" style={{ flex: 1 }}>{l.product_name}</Text>
+                    <Text variant="body" style={{ flex: 1 }}>{l.product_name}{l.variant_name ? ` · ${l.variant_name}` : ''}</Text>
                     <Text variant="caption" color="secondary">×{l.qty}</Text>
                     <Text variant="label">{fmt(l.unit_price * l.qty, currency)}</Text>
                   </View>

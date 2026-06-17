@@ -11,6 +11,7 @@ import { PhoneInput } from '@/src/components/ui/PhoneInput';
 import { DatePickerField } from '@/src/components/ui/DatePickerField';
 import { useTheme, spacing, radius } from '@/src/theme';
 import type { Palette } from '@/src/theme';
+import type { Product, ProductVariant } from '@/src/types';
 import { useAuthStore } from '@/stores/auth';
 import { useProductStore } from '@/stores/products';
 import { useFournisseursStore, type CommandeAchat, type Fournisseur } from '@/stores/fournisseurs';
@@ -18,7 +19,6 @@ import { haptics } from '@/lib/haptics';
 import { translateError } from '@/lib/errors';
 import { generateId } from '@/lib/id';
 import { supabase } from '@/lib/supabase';
-import type { Product } from '@/src/types';
 
 function fmt(n: number, cur: string) { return `${Math.round(n).toLocaleString('fr-FR')} ${cur}`; }
 function todayISO() {
@@ -365,16 +365,18 @@ function DebtModal({ visible, fournisseur, currency, saving, onClose, onSave }: 
 
 // ─── Commande Form ────────────────────────────────────────────────────────────
 
+type CommandeLine = { product_id: string; product_name: string; variant_id: string | null; variant_name: string | null; qty: string; total_cost: string };
+
 function CommandeForm({ visible, fournisseur, currency, onClose, onSave, saving }: {
   visible: boolean; fournisseur: Fournisseur | null; currency: string;
   onClose: () => void;
-  onSave: (lines: { product_id: string; product_name: string; qty: number; unit_cost: number }[]) => Promise<void>;
+  onSave: (lines: { product_id: string; product_name: string; variant_id?: string | null; qty: number; unit_cost: number }[]) => Promise<void>;
   saving: boolean;
 }) {
   const { palette } = useTheme();
   const styles = useMemo(() => makeStyles(palette), [palette]);
-  const { products } = useProductStore();
-  const [lines, setLines] = useState<{ product_id: string; product_name: string; qty: string; total_cost: string }[]>([]);
+  const { products, variantsByProduct, fetchVariants } = useProductStore();
+  const [lines, setLines] = useState<CommandeLine[]>([]);
   const [showPicker, setShowPicker] = useState(false);
   const seededForRef = useRef<string | null>(null);
 
@@ -390,11 +392,17 @@ function CommandeForm({ visible, fournisseur, currency, onClose, onSave, saving 
     const linked = fId
       ? products.filter(p => p.supplier_id === fId && !p.archived)
       : [];
-    setLines(linked.map(p => ({ product_id: p.id, product_name: p.name, qty: '1', total_cost: p.cost_price > 0 ? String(p.cost_price) : '' })));
+    setLines(linked.map(p => ({ product_id: p.id, product_name: p.name, variant_id: null, variant_name: null, qty: '1', total_cost: p.cost_price > 0 && !p.has_variants ? String(p.cost_price) : '' })));
+    // Pre-fetch variants for all linked variant products
+    linked.filter(p => p.has_variants && !variantsByProduct[p.id]).forEach(p => fetchVariants(p.id, fId ?? ''));
   }, [visible, products, fournisseur?.id]);
 
-  const addLine = (p: Product) =>
-    setLines(prev => [...prev, { product_id: p.id, product_name: p.name, qty: '1', total_cost: p.cost_price > 0 ? String(p.cost_price) : '' }]);
+  const addLine = (p: Product) => {
+    setLines(prev => [...prev, { product_id: p.id, product_name: p.name, variant_id: null, variant_name: null, qty: '1', total_cost: p.cost_price > 0 && !p.has_variants ? String(p.cost_price) : '' }]);
+    if (p.has_variants && !variantsByProduct[p.id]) {
+      fetchVariants(p.id, fournisseur?.id ?? '');
+    }
+  };
 
   const total = lines.reduce((s, l) => s + (parseFloat(l.total_cost) || 0), 0);
 
@@ -439,38 +447,63 @@ function CommandeForm({ visible, fournisseur, currency, onClose, onSave, saving 
             </>
           )}
 
-          {lines.map((l, i) => (
-            <Card key={i} style={styles.lineCard}>
-              <View style={styles.lineTop}>
-                <Text variant="label" style={{ flex: 1 }} numberOfLines={1}>{l.product_name}</Text>
-                <Pressable onPress={() => setLines(prev => prev.filter((_, j) => j !== i))}>
-                  <Text variant="caption" color="danger">Retirer</Text>
-                </Pressable>
-              </View>
-              <View style={styles.lineInputs}>
-                <View style={{ flex: 1, minWidth: 80 }}>
-                  <Input label="Qté" value={l.qty}
-                    onChangeText={v => setLines(prev => prev.map((x, j) => j === i ? { ...x, qty: v } : x))}
-                    keyboardType="number-pad" />
-                </View>
-                <View style={{ flex: 2 }}>
-                  <Input label={`Coût total (${currency})`} value={l.total_cost}
-                    onChangeText={v => setLines(prev => prev.map((x, j) => j === i ? { ...x, total_cost: v } : x))}
-                    keyboardType="decimal-pad" />
-                </View>
-              </View>
-              {(() => {
-                const qty = parseInt(l.qty) || 0;
-                const tc = parseFloat(l.total_cost) || 0;
-                const unit = qty > 0 && tc > 0 ? fmt(tc / qty, currency) : '—';
-                return (
-                  <Text variant="caption" color="secondary">
-                    Prix d'achat unitaire : {unit}
+          {lines.map((l, i) => {
+            const prod = products.find(p => p.id === l.product_id);
+            const variants = variantsByProduct[l.product_id] ?? [];
+            const needsVariant = prod?.has_variants && !l.variant_id;
+            return (
+              <Card key={i} style={styles.lineCard}>
+                <View style={styles.lineTop}>
+                  <Text variant="label" style={{ flex: 1 }} numberOfLines={1}>
+                    {l.product_name}{l.variant_name ? ` · ${l.variant_name}` : ''}
                   </Text>
-                );
-              })()}
-            </Card>
-          ))}
+                  <Pressable onPress={() => setLines(prev => prev.filter((_, j) => j !== i))}>
+                    <Text variant="caption" color="danger">Retirer</Text>
+                  </Pressable>
+                </View>
+                {prod?.has_variants && (
+                  <ScrollView horizontal showsHorizontalScrollIndicator={false} style={{ flexGrow: 0, marginBottom: 4 }}>
+                    {variants.map(v => (
+                      <Pressable
+                        key={v.id}
+                        onPress={() => setLines(prev => prev.map((x, j) => j === i ? { ...x, variant_id: v.id, variant_name: v.name, total_cost: v.cost_price > 0 ? String(v.cost_price) : x.total_cost } : x))}
+                        style={[styles.prodChip, l.variant_id === v.id && styles.prodChipLinked]}
+                      >
+                        <Text variant="caption" style={{ color: l.variant_id === v.id ? palette.primary : palette.textPrimary }}>{v.name}</Text>
+                      </Pressable>
+                    ))}
+                  </ScrollView>
+                )}
+                {needsVariant && (
+                  <Text variant="caption" style={{ color: palette.warning }}>
+                    Choisissez une version pour bien suivre le stock.
+                  </Text>
+                )}
+                <View style={styles.lineInputs}>
+                  <View style={{ flex: 1, minWidth: 80 }}>
+                    <Input label="Qté" value={l.qty}
+                      onChangeText={v => setLines(prev => prev.map((x, j) => j === i ? { ...x, qty: v } : x))}
+                      keyboardType="number-pad" />
+                  </View>
+                  <View style={{ flex: 2 }}>
+                    <Input label={`Coût total (${currency})`} value={l.total_cost}
+                      onChangeText={v => setLines(prev => prev.map((x, j) => j === i ? { ...x, total_cost: v } : x))}
+                      keyboardType="decimal-pad" />
+                  </View>
+                </View>
+                {(() => {
+                  const qty = parseInt(l.qty) || 0;
+                  const tc = parseFloat(l.total_cost) || 0;
+                  const unit = qty > 0 && tc > 0 ? fmt(tc / qty, currency) : '—';
+                  return (
+                    <Text variant="caption" color="secondary">
+                      Prix d'achat unitaire : {unit}
+                    </Text>
+                  );
+                })()}
+              </Card>
+            );
+          })}
           {lines.length > 0 && !showPicker && (
             <Pressable onPress={() => setShowPicker(true)} style={styles.addMoreBtn}>
               <Ionicons name="add-circle-outline" size={18} color={palette.primary} />
@@ -494,7 +527,7 @@ function CommandeForm({ visible, fournisseur, currency, onClose, onSave, saving 
               const parsed = lines.map(l => {
                 const qty = parseInt(l.qty) || 0;
                 const tc = parseFloat(l.total_cost) || 0;
-                return { product_id: l.product_id, product_name: l.product_name, qty, unit_cost: qty > 0 ? tc / qty : 0 };
+                return { product_id: l.product_id, product_name: l.product_name, variant_id: l.variant_id ?? null, qty, unit_cost: qty > 0 ? tc / qty : 0 };
               });
               const invalid = parsed.find(l => l.qty <= 0 || l.unit_cost <= 0);
               if (invalid) { Alert.alert(`Un petit contrôle sur la quantité et le coût :)`, `"${invalid.product_name}"`); return; }
@@ -688,7 +721,7 @@ export default function FournisseursScreen() {
   const reorderMap = useMemo(() => {
     const map: Record<string, number> = {};
     for (const p of products) {
-      if (!p.supplier_id) continue;
+      if (!p.supplier_id || p.has_variants) continue;
       if (p.stock_qty === 0 || (p.reorder_level > 0 && p.stock_qty <= p.reorder_level)) {
         map[p.supplier_id] = (map[p.supplier_id] ?? 0) + 1;
       }
@@ -922,12 +955,13 @@ export default function FournisseursScreen() {
         ) : fournisseurs.length === 0 ? (
           <View style={styles.empty}>
             <View style={styles.emptyIconWrap}>
-              <Ionicons name="storefront-outline" size={40} color={palette.primary} />
+              <Ionicons name="storefront-outline" size={36} color={palette.primary} />
             </View>
-            <Text variant="h4" style={{ textAlign: 'center', marginBottom: spacing[2] }}>Vos partenaires</Text>
-            <Text variant="body" color="secondary" style={{ textAlign: 'center', lineHeight: 22, paddingHorizontal: spacing[6] }}>
-              Ajoutez vos fournisseurs pour suivre commandes, dettes et réapprovisionnements en un seul endroit.
+            <Text variant="h4" style={{ textAlign: 'center', marginBottom: spacing[2] }}>Vos fournisseurs</Text>
+            <Text variant="body" color="secondary" style={{ textAlign: 'center', marginBottom: spacing[6] }}>
+              Commandes, dettes, stocks — tout au même endroit.
             </Text>
+            <Button label="Ajouter un fournisseur" onPress={() => { setEditF(null); setShowForm(true); }} size="md" />
           </View>
         ) : (
           <FlatList
@@ -1004,7 +1038,15 @@ export default function FournisseursScreen() {
         loading && commandes.length === 0 ? (
           <Text variant="body" color="secondary" style={styles.center}>Chargement…</Text>
         ) : commandes.length === 0 ? (
-          <View style={styles.empty}><Text variant="body" color="secondary">Pas encore de commande fournisseur.</Text></View>
+          <View style={styles.empty}>
+            <View style={styles.emptyIconWrap}>
+              <Ionicons name="cube-outline" size={36} color={palette.primary} />
+            </View>
+            <Text variant="h4" style={{ textAlign: 'center', marginBottom: spacing[2] }}>Rien en cours</Text>
+            <Text variant="body" color="secondary" style={{ textAlign: 'center' }}>
+              Commandez depuis la fiche d'un fournisseur.
+            </Text>
+          </View>
         ) : (
           <ScrollView contentContainerStyle={styles.list}>
             {activeGroups.length === 0 && (
@@ -1179,6 +1221,7 @@ function makeStyles(p: Palette) {
       width: 72, height: 72, borderRadius: 36, backgroundColor: p.primaryLight,
       alignItems: 'center', justifyContent: 'center', marginBottom: spacing[4],
     },
+    emptyHint: { textAlign: 'center' as const },
     cDateHeader: { paddingHorizontal: spacing[5], paddingTop: spacing[4], paddingBottom: spacing[2] },
     cDateLabel: { fontSize: 12, fontWeight: '600' as const, color: p.textSecondary, textTransform: 'uppercase', letterSpacing: 0.6 },
     cGroup: {

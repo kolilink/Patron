@@ -5,7 +5,14 @@ import { generateId } from '@/lib/id';
 import { saveProductCache, getProductCache, enqueue, getQueueCount, getCacheTimestamp } from '@/lib/db';
 import { isNetworkError } from '@/lib/sync';
 import { useSyncStore } from '@/stores/sync';
-import type { Product } from '@/src/types';
+import { trackEvent } from '@/lib/analytics';
+import type { Product, ProductVariant } from '@/src/types';
+
+export interface ProductStats {
+  revenue: number;
+  capital: number;
+  profit: number;
+}
 
 export interface CreateProductData {
   name: string;
@@ -22,9 +29,18 @@ export interface CreateProductData {
   bulk_min_qty?: number | null;
 }
 
+export interface DraftVariant {
+  name: string;
+  sale_price: number;
+  cost_price: number;
+  stock_qty: number;
+  reorder_level: number;
+}
+
 interface ProductStore {
   products: Product[];
   archivedProducts: Product[];
+  variantsByProduct: Record<string, ProductVariant[]>;
   loading: boolean;
   saving: boolean;
   error: string | null;
@@ -33,6 +49,8 @@ interface ProductStore {
 
   fetchProducts: (businessId: string, userId: string) => Promise<void>;
   fetchArchivedProducts: (businessId: string) => Promise<void>;
+  fetchVariants: (productId: string, businessId: string) => Promise<ProductVariant[]>;
+  upsertVariants: (businessId: string, productId: string, userId: string, variants: DraftVariant[]) => Promise<boolean>;
   createProduct: (businessId: string, userId: string, data: CreateProductData) => Promise<boolean>;
   updateProduct: (businessId: string, userId: string, id: string, data: Partial<CreateProductData>) => Promise<boolean>;
   archiveProduct: (id: string, businessId: string) => Promise<void>;
@@ -45,6 +63,7 @@ interface ProductStore {
     type: 'entree' | 'perte',
     note?: string,
   ) => Promise<void>;
+  fetchProductStats: (productId: string, businessId: string, since?: string) => Promise<ProductStats | null>;
   clearError: () => void;
   reset: () => void;
 }
@@ -53,6 +72,7 @@ interface ProductStore {
 export const useProductStore = create<ProductStore>((set, get) => ({
   products: [],
   archivedProducts: [],
+  variantsByProduct: {},
   loading: false,
   saving: false,
   error: null,
@@ -61,11 +81,10 @@ export const useProductStore = create<ProductStore>((set, get) => ({
 
   fetchProducts: async (businessId, userId) => {
     if (get().products.length === 0) {
+      set({ loading: true, error: null });
       const cached = await getProductCache(businessId);
       if (cached) {
-        set({ products: cached, loading: false, error: null });
-      } else {
-        set({ loading: true, error: null });
+        set({ products: cached, loading: false });
       }
     } else {
       set({ error: null });
@@ -76,6 +95,7 @@ export const useProductStore = create<ProductStore>((set, get) => ({
         .select('*')
         .eq('business_id', businessId)
         .eq('archived', false)
+        .eq('is_system', false)
         .order('name');
 
       if (error) throw error;
@@ -113,6 +133,7 @@ export const useProductStore = create<ProductStore>((set, get) => ({
         .select('*')
         .eq('business_id', businessId)
         .eq('archived', true)
+        .eq('is_system', false)
         .order('name');
 
       if (error) throw error;
@@ -168,6 +189,11 @@ export const useProductStore = create<ProductStore>((set, get) => ({
       });
       if (prodErr) throw prodErr;
       await get().fetchProducts(businessId, userId);
+      trackEvent('product_created', businessId, userId, {
+        has_bulk_price: !!(data.bulk_price),
+        initial_stock: data.initial_stock,
+        has_category: !!(data.category),
+      });
       set({ saving: false });
       return true;
     } catch (err) {
@@ -182,6 +208,7 @@ export const useProductStore = create<ProductStore>((set, get) => ({
           cost_price: data.cost_price,
           sale_price: data.sale_price,
           bulk_price: data.bulk_price ?? null,
+          has_variants: false,
           created_at: new Date().toISOString(),
           updated_at: new Date().toISOString(),
         };
@@ -309,6 +336,64 @@ export const useProductStore = create<ProductStore>((set, get) => ({
     }
   },
 
+  fetchVariants: async (productId, businessId) => {
+    const { data, error } = await supabase
+      .from('product_variants')
+      .select('*')
+      .eq('product_id', productId)
+      .eq('business_id', businessId)
+      .eq('archived', false)
+      .order('name');
+    if (error || !data) return [];
+    const variants: ProductVariant[] = (data as ProductVariant[]).map(v => ({
+      ...v,
+      sale_price: v.sale_price / 100,
+      cost_price: v.cost_price / 100,
+    }));
+    set(state => ({ variantsByProduct: { ...state.variantsByProduct, [productId]: variants } }));
+    return variants;
+  },
+
+  upsertVariants: async (businessId, productId, userId, variants) => {
+    set({ saving: true, error: null });
+    try {
+      const payload = variants.map(v => ({
+        name: v.name.trim(),
+        sale_price: Math.round(v.sale_price * 100),
+        cost_price: Math.round(v.cost_price * 100),
+        stock_qty: v.stock_qty,
+        reorder_level: v.reorder_level,
+      }));
+      const { error } = await supabase.rpc('upsert_product_variants', {
+        p_business_id: businessId,
+        p_product_id:  productId,
+        p_variants:    payload,
+      });
+      if (error) throw error;
+      await get().fetchProducts(businessId, userId);
+      await get().fetchVariants(productId, businessId);
+      set({ saving: false });
+      return true;
+    } catch (err) {
+      set({ error: translateError(err, 'Erreur de mise à jour'), saving: false });
+      return false;
+    }
+  },
+
+  fetchProductStats: async (productId, businessId, since) => {
+    const { data, error } = await supabase.rpc('get_product_stats', {
+      p_product_id: productId,
+      p_business_id: businessId,
+      p_since: since ?? null,
+    });
+    if (error || !data) return null;
+    return {
+      revenue: (data as any).revenue / 100,
+      capital: (data as any).capital / 100,
+      profit:  (data as any).profit  / 100,
+    };
+  },
+
   clearError: () => set({ error: null }),
-  reset: () => set({ products: [], archivedProducts: [], loading: false, error: null, offline: false, offlineSince: null }),
+  reset: () => set({ products: [], archivedProducts: [], variantsByProduct: {}, loading: false, error: null, offline: false, offlineSince: null }),
 }));

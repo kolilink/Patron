@@ -19,6 +19,9 @@ npx expo start --android
 # Type-check (no test suite, no linter)
 npx tsc --noEmit
 
+# OTA update (JS-only changes — no native rebuild needed)
+npx eas update --channel production --message "description"
+
 # EAS build + submit to App Store / Play Store
 eas build --platform ios --profile production
 eas build --platform android --profile production
@@ -103,7 +106,11 @@ Do not conflate them. The POS flow lives entirely in `sales.ts`; post-sale mutat
 
 All domain stores use Zustand with direct Supabase calls — no local write-through cache. Stores hold arrays of fetched records and expose `loading`/`saving` flags. Call each store's `reset()` on logout (handled in `useAuthStore.logout()`).
 
-Stores: `auth`, `chat`, `clients`, `equipe`, `expenses`, `fournisseurs`, `market`, `products`, `sales` (POS), `sync`, `ventes` (history).
+Stores: `auth`, `chat`, `clients`, `equipe`, `expenses`, `fournisseurs`, `market`, `products`, `rapports`, `sales` (POS), `sync`, `toast`, `ventes` (history).
+
+`useRapportsStore` (`stores/rapports.ts`) — fetches the last 180 days of payments + COGS from `so_lines` for the reports screen. Called from the dashboard on every focus via `fetchPaymentsAndCogs(businessId)`.
+
+`useToastStore` (`stores/toast.ts`) — global in-app toast notifications. Use the `toast` helper (not the store directly): `toast.success(msg)`, `toast.warning(msg)`, `toast.info(msg)`. Mount `<AppToastContainer />` once at the app root; it renders the animated banner automatically.
 
 ### Chat system (`stores/chat.ts`)
 
@@ -175,13 +182,30 @@ Contains three critical flows:
 
 ### Theme (`src/theme/`)
 
-Import from `@/src/theme` — `palette` for semantic tokens, `colors` for the full scale, `typography` for text styles, `spacing` for layout values. Primary color is indigo (`#6366F1` / `colors.primary[500]`). Role colors: administrateur=indigo, manager=cyan, vendeur=green, investisseur=amber.
+`src/theme/ThemeContext.tsx` provides a `ThemeProvider` (mounted in root `_layout.tsx`) and the `useTheme()` hook. The hook returns `{ palette, colorScheme, resolvedScheme, setColorScheme }`. User preference (`light | dark | system`) is persisted via `getKV/setKV`.
+
+Always get `palette` via `useTheme()` — never import `paletteLight` or `paletteDark` directly in screens. Import spacing/radius/typography from `@/src/theme`.
+
+Primary color is indigo (`#6366F1` / `colors.primary[500]`). Role colors: administrateur=indigo, manager=cyan, vendeur=green, investisseur=amber.
 
 **Never use hardcoded hex values in screens** — always reference `palette` tokens.
 
 ### UI components (`src/components/ui/`)
 
-Use the shared components before building ad-hoc ones: `Button`, `Card`, `Text`, `Input`, `DatePickerField`, `PhoneInput`, `SaleReceiptView`, `SaleSuccessOverlay`. Import via `@/src/components/ui`. The `Text` component accepts semantic variants (h1–h4, body, label, caption, amount) that map to `typography` tokens.
+Use the shared components before building ad-hoc ones. Import via `@/src/components/ui`.
+
+| Component | Notes |
+|---|---|
+| `Button` | Primary/secondary/ghost variants, size sm/md/lg, fullWidth |
+| `Card` | Surface container with border + shadow; pass `onPress` to make it tappable |
+| `Text` | Semantic variants: h1–h4, body, bodySmall, label, caption, amount, amountLarge — map to `typography` tokens. **`amountLarge` has `lineHeight: 40` baked in — always override with a larger `lineHeight` when using a larger `fontSize`.** |
+| `Input` / `DatePickerField` / `PhoneInput` | Form primitives |
+| `AppSheet` | Animated bottom sheet (spring in/out). Props: `visible`, `onClose`, `title`, `body`, `icon?`, `action?`. |
+| `AppToast` / `AppToastContainer` | Top-banner toast; use `toast.success/warning/info()` helper from `stores/toast.ts`, not the component directly |
+| `OtpInput` | 6-digit OTP entry with iOS AutoFill (`textContentType="oneTimeCode"`) |
+| `SkeletonPlaceholder` / `SkeletonKpiGrid` | Loading skeletons for the dashboard KPI grid |
+| `SaleReceiptView` | PNG receipt capture + share (see critical rendering constraint in architecture notes) |
+| `SaleSuccessOverlay` | Post-sale confirmation with receipt action |
 
 ### Types (`src/types/index.ts`)
 
@@ -232,6 +256,17 @@ Run Supabase migrations in order in the SQL Editor. Never skip versions.
 | `db/migration_v44.sql` | Fix: `author_name` in `create_market_post` / `create_market_comment` derived from DB, not caller-supplied |
 | `db/migration_v45.sql` | Fix: `receive_purchase_order` adds admin/manager role gate; uses `auth.uid()` instead of caller-supplied `p_user_id` |
 | `db/migration_v46.sql` | Fix: `join_business` returns specific error messages for expired vs used vs invalid codes (instead of generic NULL) |
+| `db/migration_v47.sql` | `businesses` gets `subscription_status` (trialing/active/cancelled/expired), `trial_ends_at`, `stripe_customer_id` |
+| `db/migration_v48.sql` | `receive_purchase_order` auto-updates `products.cost_price` from PO unit cost on receipt |
+| `db/migration_v49.sql` | Partial receipt support: `p_line_ids` param; PO status → `recu_partiel` when some lines remain |
+| `db/migration_v50.sql` | Per-line received quantities (`p_line_ids` / `p_line_qtys` parallel arrays); `qty_received` is additive |
+| `db/migration_v51.sql` | Fix: `submit_sale` stock deduction now rolls back the whole sale on failure (was silently swallowed); sole-admin cannot leave their own business |
+| `db/migration_v52.sql` | Fix: `submit_sale` idempotency race — catches `unique_violation` (23505) and returns existing order instead of error |
+| `db/migration_v53.sql` | Fix: `join_business` no longer burns rate-limit on non-existent codes |
+| `db/migration_v54.sql` | Fix: adds `so_lines.product_name` column (missing since v51); reverts non-credit sale status back to `paye` (v51 had incorrectly set `confirme`) |
+| `db/migration_v55.sql` | Chat reply threading: `chat_messages` gets `reply_to_id`, `reply_to_content`, `reply_to_sender_name` (denormalised — no JOIN needed to render reply preview) |
+| `db/migration_v56.sql` | Message + post editing: `chat_messages` and `market_posts`/`market_comments` get `edited_at` timestamp |
+| `db/migration_v57.sql` | `sale_orders.due_date` (DATE) — optional payment deadline for credit sales |
 
 `discount_amount` convention: `total_amount` always stores catalog total; `discount_amount + amount_paid = total_amount` for a closed discounted sale.
 
@@ -271,4 +306,5 @@ Uses `expo-secure-store` for session storage with custom 2 KB chunking (SecureSt
 | `whatsapp-inbound-webhook` | Marks verification row as `verifie` when user sends token back via WhatsApp |
 | `restore-phone-session` | Generates magic link for verified phone, returns `token_hash` for `verifyOtp` |
 | `send-whatsapp-otp` | Twilio WhatsApp message dispatch |
+| `verify-phone-code` | Verifies 6-digit code entered in-app against `phone_verifications` row; marks `verifie` on match |
 | `verify-phone-otp` | OTP verification helper |

@@ -10,6 +10,7 @@ import { useMemo } from 'react';
 import { useTheme, spacing } from '@/src/theme';
 import type { Palette } from '@/src/theme';
 import { useAuthStore } from '@/stores/auth';
+import { trackEvent } from '@/lib/analytics';
 
 interface JoinForm {
   code: string;
@@ -23,9 +24,12 @@ export default function RejoindreScreen() {
 
   const onSubmit = async ({ code }: JoinForm) => {
     clearError();
+    trackEvent('business_join_started', null, useAuthStore.getState().session?.user.id ?? null);
     await joinBusiness(code);
     const state = useAuthStore.getState();
     if (!state.error) {
+      const s = state.session;
+      trackEvent('business_joined', s?.activeBusiness?.id ?? null, s?.user.id ?? null);
       router.replace('/(app)/(tabs)/');
     }
     // If there's an error, it shows in the errorBox below

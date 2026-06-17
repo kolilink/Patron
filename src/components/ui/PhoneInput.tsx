@@ -15,7 +15,7 @@ import { Input } from './Input';
 import { useTheme } from '@/src/theme';
 import { spacing, radius } from '@/src/theme';
 import type { Palette } from '@/src/theme';
-import { ALL_COUNTRIES, PINNED_CODES, detectCountryCode, type Country } from '@/src/lib/countries';
+import { ALL_COUNTRIES, PINNED_CODES, detectCountryCode, detectCountryCodeAsync, type Country } from '@/src/lib/countries';
 
 interface PhoneInputProps {
   onChange: (e164: string, isComplete: boolean) => void;
@@ -23,6 +23,18 @@ interface PhoneInputProps {
   autoFocus?: boolean;
   resetKey?: number;
   strict?: boolean;
+  initialValue?: string; // E.164 number to pre-fill (e.g. "+224620000000")
+}
+
+function parseE164(e164: string): { country: Country; local: string } | null {
+  if (!e164?.startsWith('+')) return null;
+  const sorted = [...ALL_COUNTRIES].sort((a, b) => b.dial.length - a.dial.length);
+  for (const c of sorted) {
+    if (e164.startsWith(c.dial)) {
+      return { country: c, local: e164.slice(c.dial.length) };
+    }
+  }
+  return null;
 }
 
 const PINNED = PINNED_CODES.map(c => ALL_COUNTRIES.find(x => x.code === c)!).filter(Boolean);
@@ -43,20 +55,32 @@ function buildList(search: string): ListItem[] {
   return [...PINNED, { divider: true }, ...REST];
 }
 
-export function PhoneInput({ onChange, label, autoFocus, resetKey, strict = true }: PhoneInputProps) {
+export function PhoneInput({ onChange, label, autoFocus, resetKey, strict = true, initialValue }: PhoneInputProps) {
   const { palette } = useTheme();
   const styles = useMemo(() => makeStyles(palette), [palette]);
 
   const defaultCode    = detectCountryCode();
   const defaultCountry = ALL_COUNTRIES.find(c => c.code === defaultCode) ?? PINNED[0];
 
-  const [country, setCountry]         = useState<Country>(defaultCountry);
-  const [localNumber, setLocalNumber] = useState('');
+  const parsed = initialValue ? parseE164(initialValue) : null;
+  const [country, setCountry]         = useState<Country>(parsed?.country ?? defaultCountry);
+  const [localNumber, setLocalNumber] = useState(parsed?.local ?? '');
   const [pickerOpen, setPickerOpen]   = useState(false);
   const [search, setSearch]           = useState('');
 
-  const inputRef = useRef<TextInput>(null);
-  const blink    = useRef(new Animated.Value(1)).current;
+  const inputRef      = useRef<TextInput>(null);
+  const blink         = useRef(new Animated.Value(1)).current;
+  const userTouched   = useRef(false);
+
+  // IP-based country detection — only fires when no initialValue and user hasn't picked manually
+  useEffect(() => {
+    if (initialValue) return;
+    detectCountryCodeAsync().then(code => {
+      if (userTouched.current) return;
+      const c = ALL_COUNTRIES.find(x => x.code === code);
+      if (c) setCountry(c);
+    });
+  }, []);
 
   useEffect(() => { setLocalNumber(''); }, [resetKey]);
 
@@ -95,6 +119,7 @@ export function PhoneInput({ onChange, label, autoFocus, resetKey, strict = true
   };
 
   const handleSelectCountry = (c: Country) => {
+    userTouched.current = true;
     setCountry(c);
     setLocalNumber('');
     setPickerOpen(false);
@@ -145,16 +170,19 @@ export function PhoneInput({ onChange, label, autoFocus, resetKey, strict = true
           <Text style={styles.chevron}>▾</Text>
         </Pressable>
         <View style={styles.vertDivider} />
-        <View style={styles.digitRow}>{renderSlots()}</View>
-        <TextInput
-          ref={inputRef}
-          value={localNumber}
-          onChangeText={handleChangeText}
-          keyboardType="phone-pad"
-          maxLength={country.digits + 1}
-          style={styles.hiddenInput}
-          caretHidden
-        />
+        <View style={styles.digitRow}>
+          {renderSlots()}
+          <TextInput
+            ref={inputRef}
+            value={localNumber}
+            onChangeText={handleChangeText}
+            keyboardType="number-pad"
+            maxLength={country.digits + 1}
+            style={styles.hiddenInput}
+            caretHidden
+            selectionColor="transparent"
+          />
+        </View>
       </Pressable>
       <Modal visible={pickerOpen} animationType="slide" presentationStyle="pageSheet" onRequestClose={() => setPickerOpen(false)}>
         <SafeAreaView style={styles.modal} edges={['top']}>
@@ -211,7 +239,7 @@ function makeStyles(p: Palette) {
     filledDigit: { fontSize: 18, fontWeight: '500', color: p.textPrimary },
     emptyDigit:  { fontSize: 18, fontWeight: '400', color: p.textSecondary },
     sep:         { fontSize: 18, color: p.textSecondary, width: 7, textAlign: 'center' },
-    hiddenInput: { position: 'absolute', opacity: 0, width: 1, height: 1, left: -999 },
+    hiddenInput: { position: 'absolute', top: 0, left: 0, right: 0, bottom: 0, color: 'transparent', backgroundColor: 'transparent' },
     modal:       { flex: 1, backgroundColor: p.background },
     modalHeader: {
       flexDirection: 'row', alignItems: 'center', justifyContent: 'space-between',

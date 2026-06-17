@@ -20,6 +20,28 @@ export function detectCountryCode(): string {
   return 'GN';
 }
 
+// Cached promise — only one fetch per app session regardless of how many PhoneInputs mount
+let _ipPromise: Promise<string> | null = null;
+
+export function detectCountryCodeAsync(): Promise<string> {
+  if (!_ipPromise) {
+    _ipPromise = (async () => {
+      try {
+        const controller = new AbortController();
+        const timer = setTimeout(() => controller.abort(), 3000);
+        const res = await fetch('https://ipinfo.io/country', { signal: controller.signal });
+        clearTimeout(timer);
+        if (res.ok) {
+          const code = (await res.text()).trim().toUpperCase();
+          if (/^[A-Z]{2}$/.test(code)) return code;
+        }
+      } catch {}
+      return detectCountryCode(); // locale fallback
+    })();
+  }
+  return _ipPromise;
+}
+
 export const ALL_COUNTRIES: Country[] = [
   // ── West Africa (pinned) ─────────────────────────────────────────────────
   { code: 'GN', name: 'Guinée',               flag: '🇬🇳', dial: '+224', digits: 9  },

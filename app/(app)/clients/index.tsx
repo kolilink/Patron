@@ -2,7 +2,9 @@ import { useCallback, useMemo, useState } from 'react';
 import { FlatList, Pressable, StyleSheet, View } from 'react-native';
 import { SafeAreaView } from 'react-native-safe-area-context';
 import { router, useFocusEffect } from 'expo-router';
+import { Ionicons } from '@expo/vector-icons';
 import { Text } from '@/src/components/ui/Text';
+import { Input } from '@/src/components/ui/Input';
 import { useTheme, spacing, radius } from '@/src/theme';
 import type { Palette } from '@/src/theme';
 import { useAuthStore } from '@/stores/auth';
@@ -51,6 +53,7 @@ export default function ClientsScreen() {
 
   const { sales, loading, error, offline, fetchSales } = useVentesStore();
   const [filter, setFilter] = useState<FilterType>('tous');
+  const [search, setSearch] = useState('');
 
   useFocusEffect(
     useCallback(() => {
@@ -67,7 +70,7 @@ export default function ClientsScreen() {
       const key = s.client_id ?? name;
       const existing = map.get(key) ?? { name, clientId: s.client_id ?? undefined, totalAchats: 0, totalCredit: 0, nbCommandes: 0, lastSaleDate: '', sellers: [] };
       if (s.status !== 'annule') {
-        existing.totalAchats += s.total_amount;
+        existing.totalAchats += s.total_amount - (s.discount_amount ?? 0);
         const sDate = s.sale_date ?? s.created_at.split('T')[0];
         if (!existing.lastSaleDate || sDate > existing.lastSaleDate) {
           existing.lastSaleDate = sDate;
@@ -87,10 +90,13 @@ export default function ClientsScreen() {
   }, [sales]);
 
   const displayedClients = useMemo<Client[]>(() => {
-    if (filter === 'doivent') return allClients.filter(c => c.totalCredit > 0);
-    if (filter === 'recents') return [...allClients].sort((a, b) => b.lastSaleDate.localeCompare(a.lastSaleDate));
-    return allClients;
-  }, [allClients, filter]);
+    let list = allClients;
+    if (filter === 'doivent') list = list.filter(c => c.totalCredit > 0);
+    if (filter === 'recents') list = [...list].sort((a, b) => b.lastSaleDate.localeCompare(a.lastSaleDate));
+    const q = search.trim().toLowerCase();
+    if (q) list = list.filter(c => c.name.toLowerCase().includes(q));
+    return list;
+  }, [allClients, filter, search]);
 
   const totalOwedClients = allClients.filter(c => c.totalCredit > 0).length;
   const totalOwedAmount = allClients.reduce((s, c) => s + c.totalCredit, 0);
@@ -125,6 +131,12 @@ export default function ClientsScreen() {
         ))}
       </View>
 
+      {allClients.length >= 3 && (
+        <View style={styles.searchRow}>
+          <Input placeholder="Rechercher un client…" value={search} onChangeText={setSearch} />
+        </View>
+      )}
+
       {offline && (
         <View style={styles.offlineBanner}>
           <Text variant="caption" color="secondary">Pas de réseau · Informations non actualisées</Text>
@@ -138,15 +150,27 @@ export default function ClientsScreen() {
           <Text variant="body" color="secondary" style={{ textAlign: 'center' }}>Données non disponibles hors ligne</Text>
         </View>
       ) : displayedClients.length === 0 ? (
-        <View style={styles.empty}>
-          <Text variant="body" color="secondary">
-            {filter === 'doivent'
-              ? 'Aucun crédit en cours — tout est à jour.'
-              : isVendeur
-                ? 'Vos clients apparaîtront ici dès la première vente.'
-                : 'Vos clients s\'afficheront ici automatiquement.'}
-          </Text>
-        </View>
+        filter === 'doivent' ? (
+          <View style={styles.empty}>
+            <View style={[styles.emptyIconWrap, { backgroundColor: palette.successLight }]}>
+              <Ionicons name="checkmark-circle" size={32} color={palette.success} />
+            </View>
+            <Text variant="h4" style={styles.emptyTitle}>Tout est à jour</Text>
+            <Text variant="body" color="secondary" style={styles.emptyHint}>Aucun client ne vous doit.</Text>
+          </View>
+        ) : (
+          <View style={styles.empty}>
+            <View style={[styles.emptyIconWrap, { backgroundColor: palette.primaryLight }]}>
+              <Ionicons name="people-outline" size={32} color={palette.primary} />
+            </View>
+            <Text variant="h4" style={styles.emptyTitle}>
+              {isVendeur ? 'Vos clients arrivent' : 'Personne encore'}
+            </Text>
+            <Text variant="body" color="secondary" style={styles.emptyHint}>
+              {isVendeur ? 'Faites votre première vente.' : 'Chaque vente crée un client.'}
+            </Text>
+          </View>
+        )
       ) : (
         <FlatList
           data={displayedClients}
@@ -203,6 +227,7 @@ function makeStyles(p: Palette) {
     filterRow: {
       flexDirection: 'row', paddingHorizontal: spacing[5], paddingVertical: spacing[3], gap: spacing[2],
     },
+    searchRow: { paddingHorizontal: spacing[5], paddingBottom: spacing[2] },
     filterChip: {
       paddingHorizontal: spacing[3], paddingVertical: spacing[1.5],
       borderRadius: radius.full, borderWidth: 1, borderColor: p.border, backgroundColor: p.surface,
@@ -215,7 +240,10 @@ function makeStyles(p: Palette) {
     },
     avatar: { width: 40, height: 40, borderRadius: 20, alignItems: 'center', justifyContent: 'center' },
     offlineBanner: { alignItems: 'center', justifyContent: 'center', paddingVertical: spacing[1], borderBottomWidth: StyleSheet.hairlineWidth, borderBottomColor: p.border },
-    empty: { flex: 1, alignItems: 'center', justifyContent: 'center' },
+    empty: { flex: 1, alignItems: 'center', justifyContent: 'center', paddingHorizontal: spacing[8] },
+    emptyIconWrap: { width: 72, height: 72, borderRadius: 36, alignItems: 'center', justifyContent: 'center', marginBottom: spacing[4] },
+    emptyTitle: { textAlign: 'center' as const, marginBottom: spacing[2] },
+    emptyHint: { textAlign: 'center' as const },
     center: { textAlign: 'center', marginTop: spacing[10] },
   });
 }

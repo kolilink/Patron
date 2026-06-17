@@ -16,6 +16,32 @@ import { useSyncStore } from './sync';
 import { useChatStore } from './chat';
 import { useMarketStore } from './market';
 import { useRapportsStore } from './rapports';
+import { trackEvent, identifyUser, resetAnalytics } from '@/lib/analytics';
+
+// ─── Last phone + biometric refresh token (quick-login) ──────────────────────
+
+const LAST_PHONE_KEY      = 'patron_last_phone';
+const BIO_REFRESH_KEY     = 'patron_bio_refresh_token';
+
+async function saveLastPhone(phone: string): Promise<void> {
+  try { await SecureStore.setItemAsync(LAST_PHONE_KEY, phone); } catch {}
+}
+
+export async function getLastPhone(): Promise<string | null> {
+  try { return await SecureStore.getItemAsync(LAST_PHONE_KEY); } catch { return null; }
+}
+
+async function saveBioRefreshToken(token: string): Promise<void> {
+  try { await SecureStore.setItemAsync(BIO_REFRESH_KEY, token); } catch {}
+}
+
+async function getBioRefreshToken(): Promise<string | null> {
+  try { return await SecureStore.getItemAsync(BIO_REFRESH_KEY); } catch { return null; }
+}
+
+async function clearBioRefreshToken(): Promise<void> {
+  try { await SecureStore.deleteItemAsync(BIO_REFRESH_KEY); } catch {}
+}
 
 // ─── Session cache (offline restart resilience) ───────────────────────────────
 
@@ -105,6 +131,7 @@ interface AuthStore {
   selectBusiness: (businessId: string) => void;
   createBusiness: (data: { name: string; type?: string; currency: string }) => Promise<void>;
   joinBusiness: (code: string) => Promise<void>;
+  loginWithBiometric: () => Promise<boolean>;
   createPhoneVerification: (phone: string) => Promise<{ verificationId: string } | null>;
   loginWithPhone: (phone: string) => Promise<{ verificationId: string } | null>;
   verifyPhoneCode: (phone: string, code: string, verificationId: string) => Promise<boolean>;
@@ -177,12 +204,35 @@ export const useAuthStore = create<AuthStore>((set, get) => ({
   businessDrawerOpen: false,
 
   initialize: async () => {
+    // Register BEFORE getSession() so we never miss a TOKEN_REFRESHED event.
+    // getSession() auto-refreshes expired access tokens; if the listener is
+    // registered after, the rotation happens silently and our stored token
+    // goes stale on the very first open after login.
+    supabase.auth.onAuthStateChange(async (event, session) => {
+      if (event === 'TOKEN_REFRESHED' && session) {
+        void saveBioRefreshToken(session.refresh_token);
+      }
+      if (event === 'SIGNED_OUT' || !session) {
+        if (_explicitLogout) {
+          // Deliberate logout — clear everything.
+          set({ session: null });
+          resetAllStores();
+        }
+        // If not explicit: token refresh failed (device is offline). Keep the
+        // current session so the user can still access cached data.
+      }
+    });
+
     try {
       const { data: { session } } = await supabase.auth.getSession();
 
       if (!session) {
         set({ session: null, loading: false });
       } else {
+        // Belt-and-suspenders: save the token we got from getSession() directly,
+        // in case the TOKEN_REFRESHED event fired before the listener was ready.
+        void saveBioRefreshToken(session.refresh_token);
+
         const appSession = await loadSession(session.user.id);
         // Anonymous user with no phone = still in the verification flow.
         // Don't set session — keep them on the welcome screen.
@@ -210,18 +260,6 @@ export const useAuthStore = create<AuthStore>((set, get) => ({
       const cached = await restoreSessionCache();
       set({ session: cached, loading: false });
     }
-
-    supabase.auth.onAuthStateChange(async (event, session) => {
-      if (event === 'SIGNED_OUT' || !session) {
-        if (_explicitLogout) {
-          // Deliberate logout — clear everything.
-          set({ session: null });
-          resetAllStores();
-        }
-        // If not explicit: token refresh failed (device is offline). Keep the
-        // current session so the user can still access cached data.
-      }
-    });
   },
 
   signInAnonymously: async () => {
@@ -305,6 +343,8 @@ export const useAuthStore = create<AuthStore>((set, get) => ({
   },
 
   logout: async () => {
+    trackEvent('user_logged_out', get().session?.activeBusiness?.id ?? null, get().session?.user.id ?? null);
+    resetAnalytics();
     _explicitLogout = true;
     try {
       await supabase.auth.signOut();
@@ -312,6 +352,7 @@ export const useAuthStore = create<AuthStore>((set, get) => ({
       _explicitLogout = false;
     }
     void clearSessionCache();
+    void clearBioRefreshToken();
     resetAllStores();
     set({ session: null, error: null, pendingPhoneVerification: null });
   },
@@ -351,7 +392,7 @@ export const useAuthStore = create<AuthStore>((set, get) => ({
 
     const { error: bizErr } = await supabase
       .from('businesses')
-      .insert({ id: businessId, name, type: type ?? null, currency, created_by: session.user.id });
+      .insert({ id: businessId, name, type: type ?? null, currency, phone: session.user.phone ?? null, created_by: session.user.id });
     if (bizErr) {
       set({ error: translateError(bizErr, 'Impossible de créer le commerce'), loading: false });
       return;
@@ -431,6 +472,45 @@ export const useAuthStore = create<AuthStore>((set, get) => ({
     } catch (err) {
       const raw = err instanceof Error ? err.message : (err as Record<string, unknown>)?.message as string | undefined;
       set({ error: translateError(err, raw ?? 'Erreur lors de la jonction'), loading: false });
+    }
+  },
+
+  loginWithBiometric: async () => {
+    set({ loading: true, error: null });
+    try {
+      // First try Supabase's own stored session.
+      let result = await supabase.auth.refreshSession();
+
+      // If that failed (Supabase storage was cleared/expired), fall back to our
+      // separately stored refresh token — it survives Supabase storage resets.
+      if (result.error || !result.data.session) {
+        const storedToken = await getBioRefreshToken();
+        if (storedToken) {
+          result = await supabase.auth.refreshSession({ refresh_token: storedToken });
+        }
+      }
+
+      if (result.error || !result.data.session) {
+        set({ loading: false });
+        return false;
+      }
+
+      // Keep our stored token up to date with the newly rotated one.
+      void saveBioRefreshToken(result.data.session.refresh_token);
+
+      const appSession = await loadSession(result.data.session.user.id);
+      const removed = await syncKnownBusinesses(result.data.session.user.id, appSession.memberships);
+      if (removed.length > 0 && appSession.memberships.length === 0) {
+        set({ session: appSession, removedBusinessesOnLogin: removed, loading: false });
+      } else if (removed.length > 0 && appSession.memberships.length > 0) {
+        set({ session: appSession, dismissedFromBusiness: { name: removed[0].name }, loading: false });
+      } else {
+        set({ session: appSession, loading: false });
+      }
+      return true;
+    } catch {
+      set({ loading: false });
+      return false;
     }
   },
 
@@ -550,9 +630,15 @@ export const useAuthStore = create<AuthStore>((set, get) => ({
       // Lift anonymous flag so RLS policies that block anonymous users allow this user through.
       await supabase.rpc('upgrade_anonymous_user');
       // Refresh the JWT so the new is_anonymous=false claim takes effect immediately.
-      await supabase.auth.refreshSession();
+      const { data: refreshData } = await supabase.auth.refreshSession();
+      if (refreshData.session) void saveBioRefreshToken(refreshData.session.refresh_token);
 
+      void saveLastPhone(phone.trim());
       const appSession = await loadSession(user.id);
+      identifyUser(appSession);
+      trackEvent('user_signed_up', appSession.activeBusiness?.id ?? null, appSession.user.id, {
+        has_business: appSession.memberships.length > 0,
+      });
       const removed = await syncKnownBusinesses(user.id, appSession.memberships);
       if (removed.length > 0 && appSession.memberships.length === 0) {
         set({ session: appSession, removedBusinessesOnLogin: removed, loading: false, pendingPhoneVerification: null });
@@ -592,7 +678,14 @@ export const useAuthStore = create<AuthStore>((set, get) => ({
       if (otpErr) throw otpErr;
       if (!session) throw new Error('Session introuvable');
 
+      void saveLastPhone(phone.trim());
+      void saveBioRefreshToken(session.refresh_token);
       const appSession = await loadSession(session.user.id);
+      identifyUser(appSession);
+      trackEvent('user_logged_in', appSession.activeBusiness?.id ?? null, appSession.user.id, {
+        method: 'phone_otp',
+        has_business: appSession.memberships.length > 0,
+      });
       const removed = await syncKnownBusinesses(session.user.id, appSession.memberships);
       if (removed.length > 0 && appSession.memberships.length === 0) {
         set({ session: appSession, removedBusinessesOnLogin: removed, loading: false, pendingPhoneVerification: null });

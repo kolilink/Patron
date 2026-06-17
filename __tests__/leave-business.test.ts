@@ -22,6 +22,9 @@ jest.mock('@/lib/db', () => ({
   openDb: jest.fn(),
 }));
 
+jest.mock('@/lib/analytics', () => ({ trackEvent: jest.fn() }));
+jest.mock('@/lib/posthog', () => ({ posthog: null }));
+
 import { useAuthStore } from '@/stores/auth';
 import type { Business, Membership } from '@/src/types';
 
@@ -29,7 +32,7 @@ const biz1: Business = {
   id: 'biz-1', name: 'SOL Chips', type: null, currency: 'GNF',
   logo_url: null, status: 'actif', subscription_tier: 'gratuit',
   subscription_status: 'trialing', trial_ends_at: null,
-  stripe_customer_id: null, subscription_expires_at: null,
+  stripe_customer_id: null, subscription_expires_at: null, phone: null,
   created_at: '2026-01-01T00:00:00Z', updated_at: '2026-01-01T00:00:00Z', created_by: 'user-1',
 };
 
@@ -37,7 +40,7 @@ const biz2: Business = {
   id: 'biz-2', name: 'SOL Commerce', type: null, currency: 'GNF',
   logo_url: null, status: 'actif', subscription_tier: 'gratuit',
   subscription_status: 'trialing', trial_ends_at: null,
-  stripe_customer_id: null, subscription_expires_at: null,
+  stripe_customer_id: null, subscription_expires_at: null, phone: null,
   created_at: '2026-01-01T00:00:00Z', updated_at: '2026-01-01T00:00:00Z', created_by: 'user-1',
 };
 

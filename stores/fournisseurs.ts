@@ -23,6 +23,8 @@ export interface CommandeLigne {
   po_id: string;
   product_id: string;
   product_name: string;
+  variant_id?: string | null;
+  variant_name?: string | null;
   qty_ordered: number;
   qty_received: number;
   unit_cost: number;
@@ -42,7 +44,7 @@ export interface CommandeAchat {
 
 export interface CreateCommandeInput {
   supplierId: string;
-  lines: { product_id: string; product_name: string; qty: number; unit_cost: number }[];
+  lines: { product_id: string; product_name: string; variant_id?: string | null; qty: number; unit_cost: number }[];
   amountPaid?: number; // display units; undefined or >= total means fully paid
 }
 
@@ -241,6 +243,7 @@ export const useFournisseursStore = create<FournisseursStore>((set, get) => ({
       id: generateId(),
       po_id: poId,
       product_id: l.product_id,
+      variant_id: l.variant_id ?? null,
       qty_ordered: l.qty,
       qty_received: 0,
       unit_cost: l.unit_cost,

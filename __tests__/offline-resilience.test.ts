@@ -47,7 +47,7 @@ const USER_ID     = 'user-1';
 const BASE_FIELDS = {
   business_id: BUSINESS_ID, created_at: '', updated_at: '', created_by: '',
   sku: null, category: null, unit: 'unité', reorder_level: 0,
-  supplier_id: null, purchase_date: null, bulk_min_qty: null,
+  supplier_id: null, purchase_date: null, bulk_min_qty: null, has_variants: false,
 };
 
 const RAW_FROM_DB = {

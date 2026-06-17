@@ -9,6 +9,7 @@ import { useChatStore } from '@/stores/chat';
 import { colors, useTheme } from '@/src/theme';
 import { Text } from '@/src/components/ui/Text';
 import { generateFallbackName } from '@/lib/id';
+import { trackEvent } from '@/lib/analytics';
 
 type IoniconName = React.ComponentProps<typeof Ionicons>['name'];
 
@@ -34,17 +35,26 @@ function ProfileTabIcon({ focused, size }: { focused: boolean; size: number }) {
   const initial = name[0]?.toUpperCase() ?? '?';
   const roleColor = (resolvedScheme === 'dark' ? ROLE_COLORS_DARK : ROLE_COLORS_LIGHT)[role] ?? palette.primary;
 
-  const sz = size + 16;
+  const circleSize = size + 6;
   return (
-    <View style={{
-      width: sz, height: sz, borderRadius: sz / 2,
-      backgroundColor: roleColor + '25',
-      alignItems: 'center', justifyContent: 'center',
-      opacity: focused ? 1 : 0.55,
-    }}>
-      <Text style={{ fontSize: sz * 0.46, fontWeight: '700', color: roleColor, lineHeight: sz * 0.55 }}>
-        {initial}
-      </Text>
+    // Outer anchor locked to the same bounding box as Ionicons so flex row treats all tabs equally
+    <View style={{ width: size, height: size, alignItems: 'center', justifyContent: 'center' }}>
+      <View style={{
+        width: circleSize, height: circleSize, borderRadius: circleSize / 2,
+        backgroundColor: roleColor + '25',
+        alignItems: 'center', justifyContent: 'center',
+        opacity: focused ? 1 : 0.55,
+      }}>
+        <Text style={{
+          fontSize: circleSize * 0.46,
+          fontWeight: '700',
+          color: roleColor,
+          includeFontPadding: false,
+          textAlignVertical: 'center',
+        }}>
+          {initial}
+        </Text>
+      </View>
     </View>
   );
 }
@@ -85,9 +95,18 @@ export default function TabsLayout() {
     loadChat(bId, uId);
   }, [session.activeBusiness?.id, session.user.id]);
 
+  const bId = session.activeBusiness?.id ?? null;
+  const uId = session.user.id;
+
   return (
     <Tabs
       initialRouteName={isVendeur ? 'vendre' : 'index'}
+      screenListeners={{
+        focus: (e) => {
+          const tab = e.target?.split('-')[0] ?? 'unknown';
+          trackEvent('tab_viewed', bId, uId, { tab });
+        },
+      }}
       screenOptions={{
         headerShown: false,
         tabBarActiveTintColor: palette.primary,
@@ -136,9 +155,8 @@ export default function TabsLayout() {
       <Tabs.Screen
         name="plus"
         options={{
-          title: 'Plus',
+          title: 'Moi',
           tabBarIcon: ({ focused, size }) => <ProfileTabIcon focused={focused} size={size} />,
-          tabBarLabel: () => <View style={{ height: 13, marginTop: 4 }} />,
         }}
       />
     </Tabs>

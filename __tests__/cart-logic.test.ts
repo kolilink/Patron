@@ -19,6 +19,9 @@ jest.mock('@/lib/db', () => ({
   openDb: jest.fn(),
 }));
 
+jest.mock('@/lib/analytics', () => ({ trackEvent: jest.fn() }));
+jest.mock('@/lib/posthog', () => ({ posthog: null }));
+
 import { useSalesStore } from '@/stores/sales';
 import { supabase } from '@/lib/supabase';
 import type { Product } from '@/src/types';
@@ -43,6 +46,7 @@ function makeProduct(id: string, price: number, bulkPrice?: number): Product {
     created_at: '2026-01-01T00:00:00Z',
     updated_at: '2026-01-01T00:00:00Z',
     created_by: 'user-1',
+    has_variants: false,
   };
 }
 

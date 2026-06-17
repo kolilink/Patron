@@ -11,6 +11,8 @@ export interface VenteLigne {
   id: string;
   product_id: string;
   product_name: string;
+  variant_id?: string | null;
+  variant_name?: string | null;
   qty: number;
   unit_price: number;
   is_bulk: boolean;
@@ -41,6 +43,8 @@ export interface Vente {
   created_at: string;
   cancelled_at: string | null;
   cancellation_reason: string | null;
+  cancelled_by_id?: string | null;
+  cancelled_by_name?: string;
   profit: number | null;
   amount_paid?: number;
   lines?: VenteLigne[];
@@ -119,12 +123,18 @@ export const useVentesStore = create<VentesStore>((set, get) => ({
 
     const orderIds = data.map((s: Record<string, unknown>) => s.id as string);
     const sellerIds = [...new Set(data.map((s: Record<string, unknown>) => s.seller_id as string))];
+    const cancellerIds = [...new Set(
+      data
+        .map((s: Record<string, unknown>) => s.cancelled_by_id as string | null)
+        .filter((id): id is string => !!id)
+    )];
+    const allProfileIds = [...new Set([...sellerIds, ...cancellerIds])];
 
     const [profilesRes, linesRes, paysRes] = await Promise.all([
-      supabase.from('profiles').select('id, name').in('id', sellerIds),
+      supabase.from('profiles').select('id, name').in('id', allProfileIds),
       supabase
         .from('so_lines')
-        .select('order_id, qty, unit_price, product:products(cost_price)')
+        .select('order_id, qty, unit_price, product:products(cost_price), variant:product_variants(cost_price)')
         .in('order_id', orderIds),
       orderIds.length > 0
         ? supabase.from('payments').select('order_id, amount').in('order_id', orderIds)
@@ -139,8 +149,9 @@ export const useVentesStore = create<VentesStore>((set, get) => ({
     const profitByOrder: Record<string, number> = {};
     const hasCostByOrder: Record<string, boolean> = {};
     for (const l of (linesRes.data ?? [])) {
-      const line = l as unknown as { order_id: string; qty: number; unit_price: number; product: { cost_price: number } | null };
-      const costPrice = (line.product?.cost_price ?? 0) / 100;
+      const line = l as unknown as { order_id: string; qty: number; unit_price: number; product: { cost_price: number } | null; variant: { cost_price: number } | null };
+      // Use variant cost_price when available — variant products price per-variant not on the parent
+      const costPrice = (line.variant?.cost_price ?? line.product?.cost_price ?? 0) / 100;
       const unitPrice = line.unit_price / 100;
       if (costPrice > 0) hasCostByOrder[line.order_id] = true;
       profitByOrder[line.order_id] = (profitByOrder[line.order_id] ?? 0)
@@ -167,6 +178,10 @@ export const useVentesStore = create<VentesStore>((set, get) => ({
         client_id: (s.client_id as string | null) ?? null,
         cancelled_at: (s.cancelled_at as string | null) ?? null,
         cancellation_reason: (s.cancellation_reason as string | null) ?? null,
+        cancelled_by_id: (s.cancelled_by_id as string | null) ?? null,
+        cancelled_by_name: s.cancelled_by_id
+          ? (pm[s.cancelled_by_id as string] || generateFallbackName(s.cancelled_by_id as string))
+          : undefined,
         profit: hasCostByOrder[s.id as string] ? (profitByOrder[s.id as string] ?? null) : null,
         amount_paid: (isCreditStatus || hasDiscount) ? (paidByOrder[s.id as string] ?? 0) : undefined,
       } as Vente;
@@ -177,7 +192,7 @@ export const useVentesStore = create<VentesStore>((set, get) => ({
 
   loadDetail: async (saleId) => {
     const [linesRes, paysRes] = await Promise.all([
-      supabase.from('so_lines').select('*, product:products(name, cost_price)').eq('order_id', saleId),
+      supabase.from('so_lines').select('*, product:products(name, cost_price), variant:product_variants(cost_price)').eq('order_id', saleId),
       supabase
         .from('payments')
         .select('id, method, amount, date')
@@ -188,14 +203,19 @@ export const useVentesStore = create<VentesStore>((set, get) => ({
     if (linesRes.error || paysRes.error) return;
 
     type ProductJoin = { name: string; cost_price: number } | null;
+    type VariantJoin = { cost_price: number } | null;
     const lines: VenteLigne[] = (linesRes.data ?? []).map((l: Record<string, unknown>) => ({
       id: l.id as string,
       product_id: l.product_id as string,
-      product_name: (l.product as ProductJoin)?.name ?? '—',
+      // Prefer the snapshot name stored at sale time; fall back to current product name
+      product_name: (l.product_name as string | null) ?? (l.product as ProductJoin)?.name ?? '—',
+      variant_id: (l.variant_id as string | null) ?? null,
+      variant_name: (l.variant_name as string | null) ?? null,
       qty: l.qty as number,
       unit_price: (l.unit_price as number) / 100,
       is_bulk: (l.is_bulk as boolean) ?? false,
-      cost_price: ((l.product as ProductJoin)?.cost_price ?? 0) / 100,
+      // Prefer variant cost_price when present (variant products store cost per variant)
+      cost_price: ((l.variant as VariantJoin)?.cost_price ?? (l.product as ProductJoin)?.cost_price ?? 0) / 100,
     }));
 
     const payments: VentePayment[] = (paysRes.data ?? []).map((p: Record<string, unknown>) => ({
@@ -384,9 +404,18 @@ export const useVentesStore = create<VentesStore>((set, get) => ({
     return { ok: true, fullySettled };
   },
 
-  cancelSale: async (saleId, businessId, _userId, reason) => {
+  cancelSale: async (saleId, businessId, userId, reason) => {
     set({ saving: true, error: null });
     const now = new Date().toISOString();
+    const { data: profileData } = await supabase.from('profiles').select('name').eq('id', userId).single();
+    const cancellerName = profileData?.name || generateFallbackName(userId);
+    const cancelPatch = {
+      status: 'annule' as const,
+      cancelled_at: now,
+      cancellation_reason: reason,
+      cancelled_by_id: userId,
+      cancelled_by_name: cancellerName,
+    };
     try {
       const { error } = await supabase.rpc('cancel_sale', {
         p_sale_id:     saleId,
@@ -395,9 +424,7 @@ export const useVentesStore = create<VentesStore>((set, get) => ({
       });
       if (error) throw error;
       set(state => ({
-        sales: state.sales.map(s =>
-          s.id === saleId ? { ...s, status: 'annule', cancelled_at: now, cancellation_reason: reason } : s,
-        ),
+        sales: state.sales.map(s => s.id === saleId ? { ...s, ...cancelPatch } : s),
         saving: false,
       }));
       return true;
@@ -407,7 +434,7 @@ export const useVentesStore = create<VentesStore>((set, get) => ({
         const count = await getQueueCount();
         useSyncStore.setState({ pendingCount: count });
         const updatedSales = get().sales.map(s =>
-          s.id === saleId ? { ...s, status: 'annule', cancelled_at: now, cancellation_reason: reason } : s,
+          s.id === saleId ? { ...s, ...cancelPatch } : s,
         );
         set({ sales: updatedSales, saving: false });
         const sale = get().sales.find(s => s.id === saleId);

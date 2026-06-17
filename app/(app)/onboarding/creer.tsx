@@ -13,6 +13,7 @@ import { Text } from '@/src/components/ui/Text';
 import { useTheme, radius, spacing } from '@/src/theme';
 import type { Palette } from '@/src/theme';
 import { useAuthStore } from '@/stores/auth';
+import { trackEvent } from '@/lib/analytics';
 
 interface CreateForm { name: string }
 
@@ -89,9 +90,13 @@ export default function CreerCommerceScreen() {
 
   const onSubmit = async ({ name }: CreateForm) => {
     clearError();
+    trackEvent('business_create_started', null, session?.user.id ?? null);
     await createBusiness({ name: name.trim(), currency });
     const { session: s } = useAuthStore.getState();
-    if (s?.activeBusiness) router.replace('/(app)/(tabs)/');
+    if (s?.activeBusiness) {
+      trackEvent('business_created', s.activeBusiness.id, s.user.id, { currency, business_type: s.activeBusiness.type });
+      router.replace('/(app)/(tabs)/');
+    }
   };
 
   return (

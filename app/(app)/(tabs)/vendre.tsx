@@ -31,7 +31,7 @@ import { colors, useTheme, radius, spacing } from '@/src/theme';
 import type { Palette } from '@/src/theme';
 import { formatAmount } from '@/src/utils/format';
 import { todayIso } from '@/src/utils/dates';
-import type { Product } from '@/src/types';
+import type { Product, ProductVariant } from '@/src/types';
 import { useAuthStore } from '@/stores/auth';
 import { useProductStore } from '@/stores/products';
 import type { CartLine, SalePayment } from '@/stores/sales';
@@ -39,6 +39,31 @@ import { useSalesStore } from '@/stores/sales';
 import { supabase } from '@/lib/supabase';
 import { haptics } from '@/lib/haptics';
 import { SkeletonList } from '@/src/components/ui/SkeletonPlaceholder';
+import { trackEvent } from '@/lib/analytics';
+
+function useCountUp(target: number, duration = 150): number {
+  const [display, setDisplay] = useState(target);
+  const displayRef = useRef(target);
+
+  useEffect(() => {
+    if (displayRef.current === target) return;
+    const from = displayRef.current;
+    const start = Date.now();
+    let rafId: number;
+    const tick = () => {
+      const t = Math.min((Date.now() - start) / duration, 1);
+      const eased = 1 - (1 - t) * (1 - t);
+      const val = Math.round(from + (target - from) * eased);
+      displayRef.current = val;
+      setDisplay(val);
+      if (t < 1) rafId = requestAnimationFrame(tick);
+    };
+    rafId = requestAnimationFrame(tick);
+    return () => cancelAnimationFrame(rafId);
+  }, [target]);
+
+  return display;
+}
 
 function toISO(d: Date): string {
   return `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, '0')}-${String(d.getDate()).padStart(2, '0')}`;
@@ -89,14 +114,14 @@ function CartRow({ line, currency, onInc, onDec, onRemove, onToggleBulk, onSetQt
 
   const commitEdit = () => {
     const n = parseInt(inputVal, 10);
-    if (!isNaN(n) && n > 0) onSetQty(n);
+    if (!isNaN(n) && n > 0) onSetQty(line.variant_id ? n : Math.min(n, line.product.stock_qty));
     setEditing(false);
   };
 
   return (
     <View style={styles.cartRow}>
       <View style={{ flex: 1 }}>
-        <Text variant="label" numberOfLines={1}>{line.product.name}</Text>
+        <Text variant="label" numberOfLines={1}>{line.product.name}{line.variant_name ? ` · ${line.variant_name}` : ''}</Text>
         <View style={{ flexDirection: 'row', alignItems: 'center', gap: spacing[2] }}>
           <Text variant="caption" color="secondary">
             {formatAmount(line.unit_price, currency)} / {line.is_bulk ? 'lot' : line.product.unit}
@@ -111,7 +136,7 @@ function CartRow({ line, currency, onInc, onDec, onRemove, onToggleBulk, onSetQt
         </View>
       </View>
       <View style={styles.qtyControl}>
-        <Pressable onPress={() => { haptics.tap(); onDec(); }} style={styles.qtyBtn}>
+        <Pressable onPress={() => { haptics.selection(); onDec(); }} style={styles.qtyBtn}>
           <Text variant="label" style={{ color: line.qty === 1 ? palette.danger : palette.textPrimary }}>−</Text>
         </Pressable>
         {editing ? (
@@ -131,9 +156,17 @@ function CartRow({ line, currency, onInc, onDec, onRemove, onToggleBulk, onSetQt
             <Text variant="label" style={styles.qtyNum}>{line.qty}</Text>
           </Pressable>
         )}
-        <Pressable onPress={() => { haptics.tap(); onInc(); }} style={styles.qtyBtn}>
-          <Text variant="label" style={{ color: palette.primary }}>+</Text>
-        </Pressable>
+        {(() => {
+          const atMax = !line.variant_id && line.qty >= line.product.stock_qty;
+          return (
+            <Pressable
+              onPress={() => { if (atMax) return; haptics.selection(); onInc(); }}
+              style={[styles.qtyBtn, atMax && { opacity: 0.3 }]}
+            >
+              <Text variant="label" style={{ color: atMax ? palette.textDisabled : palette.primary }}>+</Text>
+            </Pressable>
+          );
+        })()}
       </View>
     </View>
   );
@@ -731,9 +764,16 @@ interface ProductTileProps {
 function ProductTile({ product, currency, onAdd, onAddBulk, cartQty, cartBulkQty }: ProductTileProps) {
   const { palette } = useTheme();
   const styles = useMemo(() => makeStyles(palette), [palette]);
-  const outOfStock = product.stock_qty === 0;
+  // Variant products always have stock_qty=0 on the parent — never treat them as out-of-stock
+  const outOfStock = !product.has_variants && product.stock_qty === 0;
   const totalInCart = cartQty + cartBulkQty;
   const hasBulk = !!(product.bulk_price && product.bulk_min_qty);
+
+  function stockLabel() {
+    if (product.has_variants) return 'Variétés disponibles';
+    if (outOfStock) return 'Épuisé';
+    return `${product.stock_qty} ${product.unit}`;
+  }
 
   return (
     <Pressable
@@ -756,12 +796,15 @@ function ProductTile({ product, currency, onAdd, onAddBulk, cartQty, cartBulkQty
         </View>
       )}
       <Text variant="label" numberOfLines={2} style={styles.tileName}>{product.name}</Text>
-      <Text variant="caption" color="secondary" numberOfLines={1}>
-        {outOfStock ? 'Ce produit est fini' : `${product.stock_qty} ${product.unit}`}
-      </Text>
-      <Text variant="label" style={{ color: outOfStock ? palette.textDisabled : palette.primary }}>
-        {formatAmount(product.sale_price, currency)}
-      </Text>
+      <Text variant="caption" color="secondary" numberOfLines={1}>{stockLabel()}</Text>
+      <View style={{ flexDirection: 'row', alignItems: 'center', justifyContent: 'space-between' }}>
+        <Text variant="label" style={{ color: outOfStock ? palette.textDisabled : palette.primary }}>
+          {formatAmount(product.sale_price, currency)}
+        </Text>
+        {product.has_variants && (
+          <Text style={{ color: palette.primary, fontSize: 16 }}>›</Text>
+        )}
+      </View>
       {hasBulk && product.bulk_price ? (
         <Text variant="caption" style={{ color: colors.warning[700] }}>
           Gros: {formatAmount(product.bulk_price, currency)}
@@ -777,6 +820,71 @@ function pairUp<T>(arr: T[]): T[][] {
   const result: T[][] = [];
   for (let i = 0; i < arr.length; i += 2) result.push(arr.slice(i, i + 2));
   return result;
+}
+
+// ─── Variant Picker Sheet ─────────────────────────────────────────────────────
+
+interface VariantPickerSheetProps {
+  visible: boolean;
+  product: Product | null;
+  variants: ProductVariant[];
+  currency: string;
+  onClose: () => void;
+  onPick: (variant: ProductVariant) => void;
+}
+
+function VariantPickerSheet({ visible, product, variants, currency, onClose, onPick }: VariantPickerSheetProps) {
+  const { palette } = useTheme();
+  const styles = useMemo(() => makeStyles(palette), [palette]);
+  const translateY = useRef(new Animated.Value(400)).current;
+
+  useEffect(() => {
+    if (visible) {
+      Animated.spring(translateY, { toValue: 0, useNativeDriver: true, bounciness: 4 }).start();
+    } else {
+      translateY.setValue(400);
+    }
+  }, [visible]);
+
+  if (!product) return null;
+
+  return (
+    <Modal visible={visible} transparent animationType="none" onRequestClose={onClose}>
+      <Pressable style={StyleSheet.absoluteFill} onPress={onClose}>
+        <View style={{ flex: 1, backgroundColor: 'rgba(0,0,0,0.45)' }} />
+      </Pressable>
+      <Animated.View style={[styles.variantSheet, { transform: [{ translateY }] }]}>
+        <View style={styles.variantSheetHandle} />
+        <Text variant="h4" style={{ textAlign: 'center', marginBottom: spacing[4] }}>{product.name}</Text>
+        <ScrollView showsVerticalScrollIndicator={false} keyboardShouldPersistTaps="handled">
+          {variants.map(v => {
+            const outOfStock = v.stock_qty <= 0;
+            return (
+              <Pressable
+                key={v.id}
+                onPress={outOfStock ? undefined : () => { onPick(v); onClose(); }}
+                style={({ pressed }) => [
+                  styles.variantOption,
+                  outOfStock && { opacity: 0.4 },
+                  pressed && !outOfStock && { opacity: 0.65 },
+                ]}
+              >
+                <View style={{ flex: 1 }}>
+                  <Text variant="body" style={{ fontWeight: '600' }}>{v.name}</Text>
+                  <Text variant="caption" color="secondary">
+                    {outOfStock ? 'Épuisé' : `${v.stock_qty} en stock`}
+                  </Text>
+                </View>
+                <Text variant="label" style={{ color: outOfStock ? palette.textDisabled : palette.primary }}>
+                  {formatAmount(v.sale_price, currency)}
+                </Text>
+              </Pressable>
+            );
+          })}
+        </ScrollView>
+      </Animated.View>
+    </Modal>
+  );
 }
 
 // ─── Animated FAB ─────────────────────────────────────────────────────────────
@@ -832,15 +940,35 @@ export default function VendreScreen() {
   const role = session?.activeMembership?.role;
   const isVendeur = role === 'vendeur';
 
-  const { products, loading, fetchProducts } = useProductStore();
-  const { cart, submitting, error: saleError, addToCart, removeFromCart, setQty, toggleBulk, clearCart, submitSale, clearError } =
+  const { products, variantsByProduct, loading, fetchProducts, fetchVariants } = useProductStore();
+  const { cart, submitting, error: saleError, addToCart, addToCartVariant, removeFromCart, setQty, toggleBulk, clearCart, submitSale, submitCarnetDebt, clearError } =
     useSalesStore();
+
+  const [mode, setMode] = useState<'vente' | 'credit'>('vente');
+  const [creditName, setCreditName] = useState('');
+  const [creditPhone, setCreditPhone] = useState('');
+  const [creditClientId, setCreditClientId] = useState<string | undefined>();
+  const [creditAmount, setCreditAmount] = useState('');
+  const [clientBalance, setClientBalance] = useState<number | null>(null);
+  const [creditSaving, setCreditSaving] = useState(false);
+  const [creditSuccess, setCreditSuccess] = useState(false);
+  const [creditError, setCreditError] = useState<string | null>(null);
+  const [creditSessionCount, setCreditSessionCount] = useState(0);
+  const [creditPhoneResetKey, setCreditPhoneResetKey] = useState(0);
+  const [showCreditClientList, setShowCreditClientList] = useState(false);
+  const [creditClientSearch, setCreditClientSearch] = useState('');
+  const [creditQuickClients, setCreditQuickClients] = useState<{ id?: string; name: string; phone?: string | null }[]>([]);
+  const creditNameRef = useRef<TextInput>(null);
+  const creditAmountRef = useRef<TextInput>(null);
+  const creditBlinkAnim = useRef(new Animated.Value(0)).current;
+  const creditBlinkLoopRef = useRef<Animated.CompositeAnimation | null>(null);
 
   const [search, setSearch] = useState('');
   const [showPayment, setShowPayment] = useState(false);
   const [payStep, setPayStep] = useState<PayStep>('pay');
   const [offlineMsg, setOfflineMsg] = useState('');
   const [showConfirmSheet, setShowConfirmSheet] = useState(false);
+  const [variantPickerProduct, setVariantPickerProduct] = useState<Product | null>(null);
   const [lastReceipt, setLastReceipt] = useState<ReceiptData | null>(null);
   const currencyConfirmedRef = useRef(false);
   const receiptViewRef = useRef<View>(null);
@@ -850,6 +978,74 @@ export default function VendreScreen() {
     if (businessId) fetchProducts(businessId, userId);
   }, [businessId]);
 
+  useEffect(() => {
+    if (!businessId || products.length === 0) return;
+    products.filter(p => p.has_variants && !variantsByProduct[p.id])
+      .forEach(p => fetchVariants(p.id, businessId));
+  }, [products, businessId]);
+
+  useEffect(() => {
+    if (mode === 'credit' && businessId && creditQuickClients.length === 0) {
+      supabase.from('clients').select('id, name, phone').eq('business_id', businessId)
+        .then(({ data }) => {
+          if (data) setCreditQuickClients(
+            (data as { id: string; name: string; phone?: string | null }[])
+              .sort((a, b) => a.name.localeCompare(b.name))
+          );
+        });
+    }
+  }, [mode, businessId]);
+
+  useEffect(() => {
+    if (creditName.trim() && !creditAmount) {
+      creditBlinkLoopRef.current = Animated.loop(
+        Animated.sequence([
+          Animated.timing(creditBlinkAnim, { toValue: 1, duration: 700, useNativeDriver: false }),
+          Animated.timing(creditBlinkAnim, { toValue: 0, duration: 700, useNativeDriver: false }),
+        ])
+      );
+      creditBlinkLoopRef.current.start();
+    } else {
+      creditBlinkLoopRef.current?.stop();
+      creditBlinkLoopRef.current = null;
+      Animated.timing(creditBlinkAnim, { toValue: 0, duration: 150, useNativeDriver: false }).start();
+    }
+    return () => { creditBlinkLoopRef.current?.stop(); };
+  }, [creditName, creditAmount]);
+
+  useEffect(() => {
+    // Resolve ID from direct selection or exact name match
+    const resolvedId = creditClientId ?? creditQuickClients.find(
+      c => c.name.toLowerCase() === creditName.trim().toLowerCase()
+    )?.id;
+    if (!resolvedId || !businessId) { setClientBalance(null); return; }
+
+    // Two-step: get credit orders by client_id, then sum actual payments per order
+    supabase
+      .from('sale_orders')
+      .select('id, total_amount, discount_amount')
+      .eq('business_id', businessId)
+      .eq('client_id', resolvedId)
+      .eq('status', 'credit')
+      .then(async ({ data: orders }) => {
+        if (!orders?.length) { setClientBalance(null); return; }
+        const orderIds = orders.map(o => (o as { id: string }).id);
+        const { data: pays } = await supabase
+          .from('payments')
+          .select('order_id, amount')
+          .in('order_id', orderIds);
+        const paidByOrder: Record<string, number> = {};
+        for (const p of (pays ?? []) as { order_id: string; amount: number }[]) {
+          paidByOrder[p.order_id] = (paidByOrder[p.order_id] ?? 0) + p.amount;
+        }
+        const totalCents = (orders as { id: string; total_amount: number; discount_amount: number | null }[])
+          .reduce((sum, s) => {
+            const remaining = s.total_amount - (s.discount_amount ?? 0) - (paidByOrder[s.id] ?? 0);
+            return sum + (remaining > 0 ? remaining : 0);
+          }, 0);
+        setClientBalance(totalCents > 0 ? totalCents / 100 : null);
+      });
+  }, [creditClientId, creditName, creditQuickClients, businessId]);
 
   const filtered = useMemo(() => {
     const q = search.toLowerCase().trim();
@@ -859,11 +1055,33 @@ export default function VendreScreen() {
     return [...base].sort((a, b) => a.name.localeCompare(b.name, 'fr'));
   }, [products, search]);
 
-  const inStockFiltered    = useMemo(() => filtered.filter(p => p.stock_qty > 0),  [filtered]);
-  const outOfStockFiltered = useMemo(() => filtered.filter(p => p.stock_qty === 0), [filtered]);
+  const inStockFiltered = useMemo(() => filtered.filter(p => {
+    if (!p.has_variants) return p.stock_qty > 0;
+    const variants = variantsByProduct[p.id];
+    if (!variants || variants.length === 0) return true;
+    return variants.some(v => v.stock_qty > 0);
+  }), [filtered, variantsByProduct]);
 
   const cartTotal = useMemo(() => cart.reduce((s, l) => s + l.unit_price * l.qty, 0), [cart]);
   const cartCount = useMemo(() => cart.reduce((s, l) => s + l.qty, 0), [cart]);
+  const displayTotal = useCountUp(cartTotal);
+
+  const sheetCheckW = useRef(new Animated.Value(0)).current;
+  useEffect(() => {
+    if (showConfirmSheet) {
+      const t = setTimeout(() => {
+        Animated.timing(sheetCheckW, {
+          toValue: 22,
+          duration: 200,
+          easing: Easing.out(Easing.quad),
+          useNativeDriver: false,
+        }).start();
+      }, 400);
+      return () => clearTimeout(t);
+    } else {
+      sheetCheckW.setValue(0);
+    }
+  }, [showConfirmSheet]);
 
   // Confirmation sheet: pre-computed breakdown for lastReceipt
   const confirmNet       = lastReceipt ? lastReceipt.total - (lastReceipt.discountAmount ?? 0) : 0;
@@ -885,6 +1103,43 @@ export default function VendreScreen() {
 
   const openPay = () => { setPayStep('pay'); setShowPayment(true); };
   const openCredit = () => { setPayStep('credit'); setShowPayment(true); };
+
+  const handleCreditAdd = async () => {
+    const trimmedName = creditName.trim();
+    const trimmedPhone = creditPhone.trim();
+    const parsed = parseInt(creditAmount.replace(/\s/g, ''), 10);
+    if (!trimmedName || isNaN(parsed) || parsed <= 0) return;
+    setCreditSaving(true);
+    setCreditError(null);
+
+    let resolvedClientId = creditClientId;
+    if (!resolvedClientId) {
+      const { data } = await supabase.from('clients').upsert(
+        { business_id: businessId, name: trimmedName, phone: trimmedPhone || null },
+        { onConflict: 'business_id,name' },
+      ).select('id').single();
+      resolvedClientId = data?.id ?? undefined;
+    }
+
+    const ok = await submitCarnetDebt(businessId, userId, trimmedName, parsed * 100);
+    setCreditSaving(false);
+    if (!ok) {
+      setCreditError('Impossible d\'enregistrer. Vérifiez votre connexion et réessayez.');
+      return;
+    }
+    setCreditName('');
+    setCreditPhone('');
+    setCreditPhoneResetKey(k => k + 1);
+    setCreditAmount('');
+    setCreditClientId(undefined);
+    setClientBalance(null);
+    setShowCreditClientList(false);
+    setCreditClientSearch('');
+    trackEvent('credit_debt_added', businessId, userId);
+    setCreditSuccess(true);
+    setCreditSessionCount(c => c + 1);
+    setTimeout(() => { setCreditSuccess(false); creditNameRef.current?.focus(); }, 1200);
+  };
 
   const handleConfirmPayment = useCallback(
     async (payment: SalePayment | null, customerName?: string, discountAmount?: number, clientId?: string, dueDate?: string | null) => {
@@ -914,17 +1169,19 @@ export default function VendreScreen() {
         currencyConfirmedRef.current = true;
       }
 
-      // Snapshot cart before submitSale clears it
+      // When merchant sells above catalog price, use their typed amount as the actual sale total
+      const effectiveTotal = payment && payment.amount > total + 0.5 ? payment.amount : total;
+      // Scale item unit prices so they sum to the effective total — avoids a mismatch on the receipt
+      const priceRatio = effectiveTotal > total + 0.5 && total > 0 ? effectiveTotal / total : 1;
       const receiptItems: ReceiptItem[] = cart.map(l => ({
         name: l.product.name,
         qty: l.qty,
-        unit_price: l.unit_price,
+        unit_price: priceRatio !== 1 ? Math.round(l.unit_price * priceRatio) : l.unit_price,
         is_bulk: l.is_bulk,
       }));
-      // When merchant sells above catalog price, use their typed amount as the actual sale total
-      const effectiveTotal = payment && payment.amount > total + 0.5 ? payment.amount : total;
       pendingReceiptRef.current = {
         businessName: business?.name ?? '',
+        businessPhone: business?.phone ?? null,
         currency,
         items: receiptItems,
         total: effectiveTotal,
@@ -960,6 +1217,9 @@ export default function VendreScreen() {
       // Share while modal is still mounted — iOS can present share sheet on top.
       // Close only after the share sheet is dismissed (shareAsync resolves).
       await Sharing.shareAsync(uri, { mimeType: 'image/png', UTI: 'public.png', dialogTitle: 'Partager le reçu' });
+      trackEvent('receipt_shared', businessId, userId, {
+        is_credit: confirmIsCredit,
+      });
       setShowConfirmSheet(false);
     } catch (shareErr) {
       Alert.alert('Impossible de partager le reçu pour l\'instant.');
@@ -974,25 +1234,6 @@ export default function VendreScreen() {
     );
   }
 
-  if (products.length === 0) {
-    return (
-      <SafeAreaView style={styles.safe} edges={['top']}>
-        <View style={styles.emptyFull}>
-          <Ionicons name="receipt-outline" size={48} color={palette.textDisabled} />
-          <Text variant="h4">Point de vente</Text>
-          <Text variant="body" color="secondary" style={styles.emptyDesc}>
-            {isVendeur
-              ? 'Le catalogue est vide pour l\'instant — votre responsable prépare les produits.'
-              : 'Ajoutez votre premier produit au catalogue pour commencer à vendre.'}
-          </Text>
-        </View>
-        {!isVendeur && (
-          <AnimatedFAB onPress={() => router.push({ pathname: '/(app)/(tabs)/catalogue', params: { openForm: '1' } })} />
-        )}
-      </SafeAreaView>
-    );
-  }
-
   return (
     <SafeAreaView style={styles.safe} edges={['top']}>
       {/* Error banner */}
@@ -1003,10 +1244,10 @@ export default function VendreScreen() {
         </Pressable>
       ) : null}
 
-      {/* Header */}
+      {/* Header + mode toggle */}
       <View style={styles.header}>
         <Text variant="h3">Vendre</Text>
-        {cart.length > 0 && (
+        {mode === 'vente' && cart.length > 0 && (
           <Pressable onPress={() => Alert.alert('Vider le panier ?', '', [
             { text: 'Annuler', style: 'cancel' },
             { text: 'Vider', style: 'destructive', onPress: clearCart },
@@ -1016,13 +1257,184 @@ export default function VendreScreen() {
         )}
       </View>
 
-      {/* Search */}
-      <View style={styles.searchRow}>
-        <Input placeholder="Rechercher un produit…" value={search} onChangeText={setSearch} />
+      {/* Vente / Crédit segment */}
+      <View style={[styles.modeToggle, { backgroundColor: palette.border + '55', borderColor: palette.border }]}>
+        <Pressable
+          style={[styles.modeBtn, mode === 'vente' && { backgroundColor: palette.surface }]}
+          onPress={() => setMode('vente')}
+        >
+          <Text variant="label" style={{ color: mode === 'vente' ? palette.primary : palette.textSecondary }}>
+            Vente
+          </Text>
+        </Pressable>
+        <Pressable
+          style={[styles.modeBtn, mode === 'credit' && { backgroundColor: palette.surface }]}
+          onPress={() => setMode('credit')}
+        >
+          <Text variant="label" style={{ color: mode === 'credit' ? palette.primary : palette.textSecondary }}>
+            Crédit
+          </Text>
+        </Pressable>
       </View>
 
-      {/* Bulk hint */}
-      {products.some(p => p.bulk_price) && (
+      {/* Crédit rapide form */}
+      {mode === 'credit' && (
+        <View style={styles.creditForm}>
+          {/* Client picker — shows when list is open */}
+          {showCreditClientList ? (
+            <View style={[styles.creditClientList, { borderColor: palette.border }]}>
+              <View style={{ flexDirection: 'row', alignItems: 'center', gap: spacing[2], marginBottom: spacing[2] }}>
+                <TextInput
+                  style={[styles.creditClientSearch, { color: palette.textPrimary, borderColor: palette.border }]}
+                  value={creditClientSearch}
+                  onChangeText={setCreditClientSearch}
+                  placeholder="Rechercher…"
+                  placeholderTextColor={palette.textDisabled}
+                  autoFocus
+                />
+                <Pressable onPress={() => { setShowCreditClientList(false); setCreditClientSearch(''); }} hitSlop={8}>
+                  <Text variant="caption" style={{ color: palette.textSecondary }}>Annuler</Text>
+                </Pressable>
+              </View>
+              <ScrollView style={{ maxHeight: 160 }} keyboardShouldPersistTaps="handled" showsVerticalScrollIndicator={false}>
+                {creditQuickClients
+                  .filter(c => !creditClientSearch || c.name.toLowerCase().includes(creditClientSearch.toLowerCase()) || (c.phone ?? '').includes(creditClientSearch))
+                  .map(c => (
+                    <Pressable
+                      key={c.id ?? c.name}
+                      onPress={() => {
+                        setCreditName(c.name);
+                        setCreditPhone(c.phone ?? '');
+                        setCreditClientId(c.id);
+                        setShowCreditClientList(false);
+                        setCreditClientSearch('');
+                        setTimeout(() => creditAmountRef.current?.focus(), 50);
+                      }}
+                      style={({ pressed }) => [styles.creditClientRow, { borderBottomColor: palette.border }, pressed && { opacity: 0.55 }]}
+                    >
+                      <View style={{ flex: 1 }}>
+                        <Text variant="label">{c.name}</Text>
+                        {c.phone ? <Text variant="caption" color="secondary">{c.phone}</Text> : null}
+                      </View>
+                      <Ionicons name="chevron-forward" size={14} color={palette.textDisabled} />
+                    </Pressable>
+                  ))}
+                {creditQuickClients.filter(c => !creditClientSearch || c.name.toLowerCase().includes(creditClientSearch.toLowerCase()) || (c.phone ?? '').includes(creditClientSearch)).length === 0 && (
+                  <Text variant="caption" color="secondary" style={{ paddingVertical: spacing[2] }}>Aucun client trouvé</Text>
+                )}
+              </ScrollView>
+            </View>
+          ) : (
+            <>
+              <View style={{ flexDirection: 'row', alignItems: 'center', gap: spacing[2] }}>
+                <TextInput
+                  ref={creditNameRef}
+                  style={[styles.creditInput, { flex: 1, color: palette.textPrimary, borderColor: palette.border }]}
+                  placeholder="Nom"
+                  placeholderTextColor={palette.textDisabled}
+                  value={creditName}
+                  onChangeText={v => { setCreditName(v); setCreditClientId(undefined); setCreditError(null); }}
+                  returnKeyType="next"
+                  onSubmitEditing={() => creditAmountRef.current?.focus()}
+                  autoCapitalize="words"
+                  autoFocus={!creditName}
+                />
+                {creditQuickClients.length > 0 && (
+                  <Pressable
+                    onPress={() => setShowCreditClientList(true)}
+                    style={[styles.creditClientBtn, { borderColor: palette.border }]}
+                    hitSlop={4}
+                  >
+                    <Ionicons name="people-outline" size={18} color={palette.primary} />
+                  </Pressable>
+                )}
+              </View>
+              <PhoneInput
+                label="Téléphone (optionnel)"
+                onChange={(e164, isComplete) => { setCreditPhone(isComplete ? e164 : ''); setCreditError(null); }}
+                strict={false}
+                resetKey={creditPhoneResetKey}
+              />
+              <View>
+                <Text variant="label" color="secondary" style={{ marginBottom: spacing[2] }}>
+                  Combien il vous doit ?
+                </Text>
+                <Animated.View style={[styles.moneyAmountBox, {
+                  borderColor: creditBlinkAnim.interpolate({
+                    inputRange: [0, 1],
+                    outputRange: [palette.border, palette.primary],
+                  }),
+                }]}>
+                  <TextInput
+                    ref={creditAmountRef}
+                    style={[styles.moneyAmountInput, { color: creditAmount ? palette.textPrimary : palette.textDisabled }]}
+                    placeholder="0"
+                    placeholderTextColor={palette.textDisabled}
+                    value={creditAmount.replace(/\B(?=(\d{3})+(?!\d))/g, ' ')}
+                    onChangeText={v => { setCreditAmount(v.replace(/\s/g, '')); setCreditError(null); }}
+                    keyboardType="numeric"
+                    returnKeyType="done"
+                    onSubmitEditing={handleCreditAdd}
+                  />
+                  <Text style={[styles.moneyAmountCurrency, { color: palette.textSecondary }]}>{currency}</Text>
+                </Animated.View>
+                {clientBalance !== null && clientBalance > 0 && (
+                  <Text variant="caption" style={{ color: palette.textDisabled, marginTop: spacing[1], textAlign: 'center' }}>
+                    Solde actuel · {formatAmount(clientBalance, currency)}
+                  </Text>
+                )}
+              </View>
+            </>
+          )}
+          <Button
+            label={creditSuccess ? '✓ Noté !' : 'Ajouter'}
+            onPress={handleCreditAdd}
+            loading={creditSaving}
+            fullWidth
+            size="lg"
+            style={creditSuccess ? { backgroundColor: palette.success } : undefined}
+          />
+          {creditError ? (
+            <Text variant="caption" style={{ color: palette.warning, textAlign: 'center', marginTop: spacing[2] }}>
+              {creditError}
+            </Text>
+          ) : null}
+          {creditSessionCount > 0 && !creditError ? (
+            <Pressable
+              onPress={() => router.push('/(app)/credits')}
+              style={{ flexDirection: 'row', alignItems: 'center', justifyContent: 'center', gap: spacing[1], marginTop: spacing[3] }}
+            >
+              <Text variant="caption" style={{ color: palette.success }}>
+                {creditSessionCount} crédit{creditSessionCount > 1 ? 's' : ''} enregistré{creditSessionCount > 1 ? 's' : ''}
+              </Text>
+              <Text variant="caption" style={{ color: palette.primary }}>· Voir →</Text>
+            </Pressable>
+          ) : null}
+        </View>
+      )}
+
+      {/* Empty state — Vente mode, no products yet */}
+      {mode === 'vente' && products.length === 0 && (
+        <View style={styles.emptyFull}>
+          <Ionicons name="receipt-outline" size={48} color={palette.textDisabled} />
+          <Text variant="h4">Point de vente</Text>
+          <Text variant="body" color="secondary" style={styles.emptyDesc}>
+            {isVendeur
+              ? 'Le catalogue est vide — votre responsable prépare les produits.'
+              : 'Ajoutez votre premier produit au catalogue pour commencer à vendre.'}
+          </Text>
+        </View>
+      )}
+
+      {/* Search — only in Vente mode with 3+ products */}
+      {mode === 'vente' && products.length >= 3 && (
+        <View style={styles.searchRow}>
+          <Input placeholder="Rechercher un produit…" value={search} onChangeText={setSearch} />
+        </View>
+      )}
+
+      {/* Bulk hint — only in Vente mode with products */}
+      {mode === 'vente' && products.length > 0 && products.some(p => p.bulk_price) && (
         <View style={styles.hintBanner}>
           <Ionicons name="information-circle-outline" size={14} color={colors.warning[700]} />
           <Text variant="caption" style={{ color: colors.warning[700], flex: 1 }}>
@@ -1031,13 +1443,13 @@ export default function VendreScreen() {
         </View>
       )}
 
-      {/* Product grid */}
-      <FlatList
+      {/* Product grid — only in Vente mode with products */}
+      {mode === 'vente' && products.length > 0 && <FlatList
         data={inStockFiltered}
         keyExtractor={p => p.id}
         numColumns={2}
         columnWrapperStyle={styles.tileRow}
-        contentContainerStyle={[styles.tileList, cart.length > 0 && { paddingBottom: 240 }]}
+        contentContainerStyle={[styles.tileList, cart.length > 0 && { paddingBottom: 300 }]}
         showsVerticalScrollIndicator={false}
         renderItem={({ item }) => (
           <ProductTile
@@ -1046,96 +1458,82 @@ export default function VendreScreen() {
             cartQty={cartQtyMap[item.id]?.unit ?? 0}
             cartBulkQty={cartQtyMap[item.id]?.bulk ?? 0}
             onAdd={() => {
-              setLastReceipt(null);
+              if (item.has_variants) {
+                setLastReceipt(null);
+                haptics.selection();
+                Keyboard.dismiss();
+                setVariantPickerProduct(item);
+                return;
+              }
               const inCart = cartQtyMap[item.id]?.unit ?? 0;
-              if (inCart + 1 >= item.stock_qty) haptics.warning(); else haptics.tap();
+              if (inCart >= item.stock_qty) { haptics.warning(); return; }
+              setLastReceipt(null);
+              if (inCart + 1 >= item.stock_qty) haptics.warning(); else haptics.selection();
               Keyboard.dismiss();
               addToCart(item, false);
             }}
-            onAddBulk={() => { setLastReceipt(null); haptics.tap(); Keyboard.dismiss(); addToCart(item, true); }}
+            onAddBulk={item.has_variants ? undefined : () => { setLastReceipt(null); haptics.selection(); Keyboard.dismiss(); addToCart(item, true); }}
           />
         )}
         ListEmptyComponent={
-          outOfStockFiltered.length === 0 ? (
-            <View style={styles.emptySearch}>
-              <Text variant="body" color="secondary">Aucun résultat pour "{search}"</Text>
-            </View>
-          ) : null
+          <View style={styles.emptySearch}>
+            <Text variant="body" color="secondary">Aucun résultat pour "{search}"</Text>
+          </View>
         }
-        ListFooterComponent={
-          outOfStockFiltered.length > 0 ? (
-            <View>
-              <View style={styles.outOfStockHeader}>
-                <View style={styles.outOfStockLine} />
-                <Text variant="caption" color="secondary" style={{ paddingHorizontal: spacing[3] }}>
-                  Rupture de stock
-                </Text>
-                <View style={styles.outOfStockLine} />
-              </View>
-              {pairUp(outOfStockFiltered).map((pair, i) => (
-                <View key={i} style={[styles.tileRow, { flexDirection: 'row' }]}>
-                  {pair.map(p => (
-                    <ProductTile
-                      key={p.id}
-                      product={p}
-                      currency={currency}
-                      cartQty={0}
-                      cartBulkQty={0}
-                      onAdd={() => {}}
-                    />
-                  ))}
-                  {pair.length === 1 && <View style={{ flex: 1 }} />}
-                </View>
-              ))}
-            </View>
-          ) : null
-        }
-      />
+      />}
 
-      {/* Cart panel (floating) */}
-      {cart.length > 0 && (
+      {/* Cart panel (floating) — only in Vente mode */}
+      {mode === 'vente' && cart.length > 0 && (
         <View style={styles.cartPanel}>
           <ScrollView style={styles.cartScroll} keyboardShouldPersistTaps="handled">
             {cart.map(line => (
               <CartRow
-                key={`${line.product.id}-${line.is_bulk}`}
+                key={line.variant_id ?? `${line.product.id}-${line.is_bulk}`}
                 line={line}
                 currency={currency}
-                onInc={() => setQty(line.product.id, line.qty + 1, line.is_bulk)}
-                onDec={() => setQty(line.product.id, line.qty - 1, line.is_bulk)}
-                onRemove={() => removeFromCart(line.product.id, line.is_bulk)}
+                onInc={() => setQty(line.product.id, line.qty + 1, line.is_bulk, line.variant_id)}
+                onDec={() => setQty(line.product.id, line.qty - 1, line.is_bulk, line.variant_id)}
+                onRemove={() => removeFromCart(line.product.id, line.is_bulk, line.variant_id)}
                 onToggleBulk={() => toggleBulk(line.product.id, line.is_bulk)}
-                onSetQty={(qty) => setQty(line.product.id, qty, line.is_bulk)}
+                onSetQty={(qty) => setQty(line.product.id, qty, line.is_bulk, line.variant_id)}
               />
             ))}
           </ScrollView>
           <View style={styles.cartFooter}>
-            <View style={{ flexShrink: 1, minWidth: 0 }}>
+            <View style={styles.cartTotalRow}>
               <Text variant="caption" color="secondary">
                 {cartCount} article{cartCount > 1 ? 's' : ''}
               </Text>
-              <Text
-                variant="amountLarge"
-                adjustsFontSizeToFit
-                numberOfLines={1}
-              >
-                {formatAmount(cartTotal, currency)}
+              <Text variant="amountLarge" numberOfLines={1} style={styles.cartTotalAmount}>
+                {formatAmount(displayTotal, currency)}
               </Text>
             </View>
-            <View style={styles.cartActions}>
-              <Button
-                label="Encaisser maintenant"
-                onPress={openPay}
-                size="lg"
-                fullWidth
-              />
-              <Pressable onPress={openCredit} style={styles.creditLink}>
-                <Text variant="caption" style={{ color: palette.primary }}>ou enregistrer à crédit</Text>
-              </Pressable>
-            </View>
+            <Button label="Encaisser maintenant" onPress={openPay} size="lg" fullWidth />
+            <Pressable onPress={openCredit} style={styles.creditLink}>
+              <Text variant="caption" style={{ color: palette.primary }}>ou enregistrer à crédit</Text>
+            </Pressable>
           </View>
         </View>
       )}
+
+      {/* FAB to add first product — Vente mode, no products, not vendeur */}
+      {mode === 'vente' && products.length === 0 && !isVendeur && (
+        <AnimatedFAB onPress={() => router.push({ pathname: '/(app)/(tabs)/catalogue', params: { openForm: '1' } })} />
+      )}
+
+      <VariantPickerSheet
+        visible={variantPickerProduct !== null}
+        product={variantPickerProduct}
+        variants={variantPickerProduct ? (variantsByProduct[variantPickerProduct.id] ?? []) : []}
+        currency={currency}
+        onClose={() => setVariantPickerProduct(null)}
+        onPick={variant => {
+          if (!variantPickerProduct) return;
+          setLastReceipt(null);
+          haptics.selection();
+          addToCartVariant(variantPickerProduct, variant);
+        }}
+      />
 
       <PaymentModal
         visible={showPayment}
@@ -1181,7 +1579,7 @@ export default function VendreScreen() {
           <View style={styles.sheet}>
             <View style={styles.sheetHead}>
               <View style={styles.sheetCheckCircle}>
-                <View style={styles.sheetCheckmark} />
+                <Animated.View style={[styles.sheetCheckmark, { width: sheetCheckW }]} />
               </View>
               <Text variant="h3" style={{ textAlign: 'center' }}>
                 {confirmIsCredit ? 'Crédit enregistré' : 'Vente enregistrée'}
@@ -1243,6 +1641,53 @@ function makeStyles(p: Palette) {
       flexDirection: 'row', alignItems: 'center', justifyContent: 'space-between',
       paddingHorizontal: spacing[5], paddingTop: spacing[4], paddingBottom: spacing[2],
     },
+    modeToggle: {
+      flexDirection: 'row', marginHorizontal: spacing[5], marginBottom: spacing[3],
+      borderRadius: radius.md, borderWidth: 1, overflow: 'hidden',
+    },
+    modeBtn: {
+      flex: 1, paddingVertical: spacing[2], alignItems: 'center',
+    },
+    creditForm: {
+      paddingHorizontal: spacing[5], paddingBottom: spacing[4], gap: spacing[3],
+    },
+    creditInput: {
+      borderWidth: 1, borderRadius: radius.md,
+      paddingHorizontal: spacing[3], paddingVertical: spacing[3],
+      fontSize: 15,
+    },
+    creditInputAmount: {},
+    creditAmountInner: {
+      paddingHorizontal: spacing[3], paddingVertical: spacing[3],
+      fontSize: 15,
+    },
+    moneyAmountBox: {
+      borderWidth: 1, borderRadius: radius.md,
+      flexDirection: 'row', alignItems: 'center',
+      paddingHorizontal: spacing[4], paddingVertical: spacing[4],
+      gap: spacing[2],
+    },
+    moneyAmountInput: {
+      flex: 1, fontSize: 32, fontWeight: '800', textAlign: 'center',
+    },
+    moneyAmountCurrency: {
+      fontSize: 16, fontWeight: '600',
+    },
+    creditClientBtn: {
+      borderWidth: 1, borderRadius: radius.md,
+      padding: spacing[3], alignItems: 'center', justifyContent: 'center',
+    },
+    creditClientList: {
+      borderWidth: 1, borderRadius: radius.md, padding: spacing[3],
+    },
+    creditClientSearch: {
+      flex: 1, borderWidth: 1, borderRadius: radius.md,
+      paddingHorizontal: spacing[3], paddingVertical: spacing[2], fontSize: 15,
+    },
+    creditClientRow: {
+      flexDirection: 'row', alignItems: 'center', gap: spacing[2],
+      paddingVertical: spacing[3], borderBottomWidth: 1,
+    },
     searchRow: { paddingHorizontal: spacing[5], paddingBottom: spacing[2] },
     hintBanner: {
       flexDirection: 'row', alignItems: 'center', gap: spacing[2],
@@ -1257,7 +1702,7 @@ function makeStyles(p: Palette) {
       flex: 1, backgroundColor: p.surface, borderRadius: radius.lg,
       borderWidth: 1, borderColor: p.border, padding: spacing[3], gap: spacing[1], position: 'relative',
     },
-    tileDisabled: { opacity: 0.5 },
+    tileDisabled: { opacity: 0.45 },
     tileName: { minHeight: 36 },
     tileBadge: {
       position: 'absolute', top: 8, right: 8, backgroundColor: p.primary,
@@ -1272,7 +1717,7 @@ function makeStyles(p: Palette) {
     cartPanel: {
       position: 'absolute', bottom: 0, left: 0, right: 0,
       backgroundColor: p.surface, borderTopWidth: 1, borderTopColor: p.border,
-      maxHeight: 300, shadowColor: '#0F172A', shadowOffset: { width: 0, height: -4 },
+      shadowColor: '#0F172A', shadowOffset: { width: 0, height: -4 },
       shadowOpacity: 0.1, shadowRadius: 12, elevation: 10,
     },
     sheetOverlay: { flex: 1, justifyContent: 'flex-end' },
@@ -1286,7 +1731,7 @@ function makeStyles(p: Palette) {
       backgroundColor: '#22c55e', justifyContent: 'center', alignItems: 'center',
     },
     sheetCheckmark: {
-      width: 22, height: 13,
+      height: 13,
       borderLeftWidth: 3, borderBottomWidth: 3,
       borderColor: '#fff', borderRadius: 1,
       transform: [{ rotate: '-45deg' }], marginTop: -3,
@@ -1326,11 +1771,14 @@ function makeStyles(p: Palette) {
       borderBottomWidth: 1.5, borderBottomColor: p.primary,
     },
     cartFooter: {
-      flexDirection: 'row', alignItems: 'center', padding: spacing[4],
-      borderTopWidth: 1, borderTopColor: p.border, gap: spacing[3],
+      padding: spacing[4], borderTopWidth: 1, borderTopColor: p.border, gap: spacing[3],
     },
-    cartActions: { flex: 1, gap: 0 },
-    creditLink: { alignItems: 'center', paddingTop: spacing[2] },
+    cartTotalRow: {
+      flexDirection: 'row', alignItems: 'baseline',
+      justifyContent: 'space-between', gap: spacing[3],
+    },
+    cartTotalAmount: { flexShrink: 1, textAlign: 'right' },
+    creditLink: { alignItems: 'center' },
 
     emptyFull: { flex: 1, alignItems: 'center', justifyContent: 'center', padding: spacing[8], gap: spacing[3] },
     emptyDesc: { textAlign: 'center', maxWidth: 260 },
@@ -1422,6 +1870,24 @@ function makeStyles(p: Palette) {
     warnRow: {
       backgroundColor: colors.warning[50], borderRadius: radius.md,
       padding: spacing[3], borderWidth: 1, borderColor: colors.warning[100],
+    },
+
+    variantSheet: {
+      position: 'absolute', bottom: 0, left: 0, right: 0,
+      backgroundColor: p.surface, borderTopLeftRadius: 24, borderTopRightRadius: 24,
+      paddingHorizontal: spacing[5], paddingTop: spacing[4], paddingBottom: spacing[10],
+      maxHeight: '70%',
+      shadowColor: '#0F172A', shadowOffset: { width: 0, height: -4 },
+      shadowOpacity: 0.14, shadowRadius: 16, elevation: 12,
+    },
+    variantSheetHandle: {
+      width: 40, height: 4, borderRadius: 2, backgroundColor: p.border,
+      alignSelf: 'center', marginBottom: spacing[4],
+    },
+    variantOption: {
+      flexDirection: 'row', alignItems: 'center',
+      paddingVertical: spacing[4],
+      borderBottomWidth: 1, borderBottomColor: p.border,
     },
   });
 }

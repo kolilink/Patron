@@ -23,6 +23,9 @@ jest.mock('@/lib/db', () => ({
   getVentesCache:    jest.fn().mockResolvedValue(null),
 }));
 
+jest.mock('@/lib/analytics', () => ({ trackEvent: jest.fn() }));
+jest.mock('@/lib/posthog', () => ({ posthog: null }));
+
 import { useSalesStore } from '@/stores/sales';
 import { supabase } from '@/lib/supabase';
 import { enqueue } from '@/lib/db';
@@ -47,6 +50,7 @@ const mockProduct: Product = {
   created_at: '2026-01-01T00:00:00Z',
   updated_at: '2026-01-01T00:00:00Z',
   created_by: 'user-1',
+  has_variants: false,
 };
 
 beforeEach(() => {

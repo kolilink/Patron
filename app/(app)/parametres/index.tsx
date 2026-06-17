@@ -5,6 +5,7 @@ import { router } from 'expo-router';
 import { Ionicons } from '@expo/vector-icons';
 import { Card } from '@/src/components/ui/Card';
 import { Input } from '@/src/components/ui/Input';
+import { PhoneInput } from '@/src/components/ui/PhoneInput';
 import { Text } from '@/src/components/ui/Text';
 import { useTheme, spacing, radius } from '@/src/theme';
 import type { Palette } from '@/src/theme';
@@ -39,6 +40,7 @@ export default function ParametresScreen() {
   const isAdmin  = role === 'administrateur';
 
   const [bizName,  setBizName]  = useState(business?.name ?? '');
+  const [bizPhone, setBizPhone] = useState(business?.phone ?? '');
   const [currency, setCurrency] = useState(business?.currency ?? '');
   const [userName, setUserName] = useState(session?.user.name ?? '');
   const [saving,   setSaving]   = useState(false);
@@ -59,7 +61,7 @@ export default function ParametresScreen() {
   }, [business?.id]);
 
   const isDirty = (isAdmin
-    ? (bizName.trim() !== (business?.name ?? '') || (hasSales === false && currency !== (business?.currency ?? 'GNF')))
+    ? (bizName.trim() !== (business?.name ?? '') || bizPhone.trim() !== (business?.phone ?? '') || (hasSales === false && currency !== (business?.currency ?? 'GNF')))
     : false
   ) || userName.trim() !== (session?.user.name ?? '');
 
@@ -96,15 +98,16 @@ export default function ParametresScreen() {
     setSaving(true);
 
     const saveBiz = async () => {
+      const trimmedPhone = bizPhone.trim() || null;
       // Never change currency after first sale — UI + API guard
-      const patch = hasSales ? { name: trimmedBiz } : { name: trimmedBiz, currency };
+      const patch = hasSales ? { name: trimmedBiz, phone: trimmedPhone } : { name: trimmedBiz, phone: trimmedPhone, currency };
       const { error } = await supabase.from('businesses')
         .update(patch)
         .eq('id', business?.id ?? '');
       if (!error) {
         useAuthStore.setState(state => {
           if (!state.session?.activeBusiness) return state;
-          const updated: Business = { ...state.session.activeBusiness, name: trimmedBiz, ...(hasSales ? {} : { currency }) };
+          const updated: Business = { ...state.session.activeBusiness, name: trimmedBiz, phone: trimmedPhone, ...(hasSales ? {} : { currency }) };
           return {
             session: {
               ...state.session,
@@ -251,7 +254,13 @@ export default function ParametresScreen() {
                 value={bizName}
                 onChangeText={setBizName}
                 placeholder="Nom de votre commerce"
-                returnKeyType="done"
+                returnKeyType="next"
+              />
+              <PhoneInput
+                label="Numéro du commerce"
+                initialValue={business?.phone ?? undefined}
+                strict={false}
+                onChange={(e164, isComplete) => setBizPhone(isComplete ? e164 : '')}
               />
               <View style={{ gap: spacing[2] }}>
                 <Text variant="label">Monnaie</Text>

@@ -196,7 +196,7 @@
 
   <header>
     <span class="logo">patron</span>
-    <span>Mise à jour : 10 juin 2026</span>
+    <span>Mise à jour : 16 juin 2026</span>
   </header>
 
   <div class="hero">
@@ -218,13 +218,13 @@
       <h2>Ce que nous stockons</h2>
       <p>Pour créer votre compte, nous demandons uniquement :</p>
       <ul class="list">
-        <li>Votre numéro de téléphone WhatsApp — pour envoyer le code de connexion, rien d'autre</li>
+        <li>Votre numéro de téléphone — pour envoyer le code de vérification par SMS, rien d'autre</li>
         <li>Un nom affiché — celui que vous choisissez</li>
       </ul>
       <p>Dans l'application, vous créez des données : produits, ventes, dépenses, clients, fournisseurs, équipe. Ces données nous sont confiées pour les synchroniser entre vos appareils.</p>
       <p>Si vous utilisez le chat de votre boutique ou publiez dans Le Marché (le forum communautaire), vos messages, publications et commentaires sont également stockés sur nos serveurs. Le chat de la boutique est privé : seuls vos collaborateurs le voient. Les publications du Marché sont visibles par tous les utilisateurs de Patron.</p>
       <div class="callout">
-        <p>Nous ne demandons ni email, ni mot de passe, ni localisation. Face ID et Touch ID fonctionnent exclusivement sur votre appareil — aucune donnée biométrique ne quitte jamais votre téléphone.</p>
+        <p>Nous ne demandons ni email, ni mot de passe, ni localisation. L'authentification biométrique (Face ID, Touch ID, empreinte digitale) fonctionne exclusivement sur votre appareil — aucune donnée biométrique ne quitte jamais votre téléphone.</p>
       </div>
     </div>
 
@@ -235,7 +235,7 @@
       <h2>Pourquoi ces données</h2>
       <ul class="list">
         <li>Faire fonctionner votre compte et synchroniser vos données entre vos appareils</li>
-        <li>Envoyer le code de vérification via WhatsApp à chaque connexion</li>
+        <li>Envoyer le code de vérification par SMS à chaque connexion</li>
         <li>Permettre à vos collaborateurs de voir les données selon leur rôle dans le commerce</li>
         <li>Afficher vos messages dans le chat de la boutique à vos collaborateurs</li>
         <li>Publier vos contributions dans Le Marché à la communauté Patron</li>
@@ -263,7 +263,7 @@
       <p>Nous faisons appel à deux services tiers :</p>
       <ul class="list">
         <li><strong>Supabase</strong> — hébergement et base de données sécurisée</li>
-        <li><strong>Twilio</strong> — envoi du message WhatsApp de vérification</li>
+        <li><strong>Twilio</strong> — envoi du SMS de vérification</li>
       </ul>
       <p>Aucun autre service n'a accès à vos données.</p>
     </div>
@@ -275,8 +275,8 @@
       <h2>Comment nous protégeons vos données</h2>
       <ul class="list">
         <li>Toutes les communications sont chiffrées (HTTPS / TLS)</li>
-        <li>Votre session est stockée dans la zone sécurisée de votre iPhone (Secure Enclave)</li>
-        <li>Face ID et Touch ID verrouillent l'accès après quelques minutes d'inactivité</li>
+        <li>Votre session est stockée dans la zone sécurisée de votre appareil (Secure Enclave sur iOS, Strongbox sur Android)</li>
+        <li>L'authentification biométrique verrouille l'accès après quelques minutes d'inactivité</li>
         <li>Les données locales hors-ligne sont chiffrées (AES-256-GCM) sur votre appareil</li>
         <li>Chaque membre de votre équipe ne voit que ce que son rôle lui permet</li>
       </ul>
