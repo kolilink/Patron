@@ -61,7 +61,7 @@ beforeEach(() => {
     session: {
       user: {
         id: 'user-1', name: 'Nick', email: '', phone: null,
-        avatar_url: null, language: 'fr',
+        avatar_url: null, language: 'fr', recovery_email: null,
         created_at: '2026-01-01T00:00:00Z', updated_at: '2026-01-01T00:00:00Z',
       },
       memberships: [mem1, mem2],

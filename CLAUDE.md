@@ -214,6 +214,7 @@ All domain types live here. Key ones:
 - `OrderStatus`: `brouillon | confirme | annule | paye | credit`
 - `AppSession`: `{ user, activeBusiness, activeMembership, memberships }`
 - `Business`: multi-tenant entity with per-business `currency` field
+- `User.recovery_email`: nullable — loaded from `profiles.recovery_email` in `loadSession`
 
 ### DB schema & migrations
 
@@ -267,6 +268,7 @@ Run Supabase migrations in order in the SQL Editor. Never skip versions.
 | `db/migration_v55.sql` | Chat reply threading: `chat_messages` gets `reply_to_id`, `reply_to_content`, `reply_to_sender_name` (denormalised — no JOIN needed to render reply preview) |
 | `db/migration_v56.sql` | Message + post editing: `chat_messages` and `market_posts`/`market_comments` get `edited_at` timestamp |
 | `db/migration_v57.sql` | `sale_orders.due_date` (DATE) — optional payment deadline for credit sales |
+| `db/migration_v76.sql` | Email account recovery: `profiles.recovery_email` (UNIQUE TEXT); `email_verifications` + `email_verification_attempts` tables (service-role only, no user RLS policies) |
 
 `discount_amount` convention: `total_amount` always stores catalog total; `discount_amount + amount_paid = total_amount` for a closed discounted sale.
 
@@ -292,6 +294,22 @@ Four roles: `administrateur`, `manager`, `vendeur`, `investisseur`.
 - `fetchSales` passes `sellerId` filter for vendeurs so they only see their own sales.
 - `ventes/index.tsx` defaults to a 90-day window; "Voir tout l'historique" toggle re-fetches without the date filter.
 
+### Email account recovery
+
+`profiles.recovery_email` (TEXT UNIQUE, nullable) — set proactively by the user in Paramètres as a fallback if they lose their phone number.
+
+**Linking flow (in-app, authenticated):** Paramètres → "Email de récupération" → enter email → `send-email-otp` sends 6-digit code via Resend → user enters code → `link-recovery-email` validates + saves to profile.
+
+**Recovery flow (unauthenticated, on login screen):** "Numéro indisponible ?" → `/(welcome)/recuperation` → same email OTP → `recover-by-email` finds profile by `recovery_email`, generates magic link → `supabase.auth.verifyOtp({ token_hash, type: 'magiclink' })` → session. Identical magic-link pattern to `restore-phone-session`.
+
+**OTP validation pattern in edge functions:** Always fetch the `email_verifications` row by `id` alone first (no status/expiry filters in the query), then check each condition separately with a distinct error message. Combining all filters into one query silently returns null for any failure reason, making debugging impossible.
+
+### Critical: auth store `loading` flag
+
+`(app)/_layout.tsx` renders `null` when `loading === true` — this unmounts the entire navigator, causing a white screen and redirect to `/(welcome)/`. **Never set `loading: true` from a store method called while the user is already inside the app.** 
+
+Auth store has a separate `emailOtpLoading: boolean` flag for email OTP operations (`sendEmailOtp`, `linkRecoveryEmail`). Any future in-app async operations that need a loading state must use their own flag — not the global `loading`. The global `loading` is only for the initial session bootstrap.
+
 ### Supabase client (`lib/supabase.ts`)
 
 Uses `expo-secure-store` for session storage with custom 2 KB chunking (SecureStore has a per-key size limit, so tokens are split across multiple keys). The `@/` alias maps to the project root (configured in `tsconfig.json`).
@@ -308,3 +326,6 @@ Uses `expo-secure-store` for session storage with custom 2 KB chunking (SecureSt
 | `send-whatsapp-otp` | Twilio WhatsApp message dispatch |
 | `verify-phone-code` | Verifies 6-digit code entered in-app against `phone_verifications` row; marks `verifie` on match |
 | `verify-phone-otp` | OTP verification helper |
+| `send-email-otp` | Sends 6-digit recovery code via Resend (`noreply@patron.kolilink.com`). No auth required — user may be locked out. Rate-limited via `email_verification_attempts`. |
+| `link-recovery-email` | Validates email OTP then links `recovery_email` to authenticated user's profile. Rejects if email already taken by another account. |
+| `recover-by-email` | Validates email OTP, finds profile by `recovery_email`, generates magic link session. No auth required. |

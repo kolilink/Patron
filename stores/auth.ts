@@ -16,6 +16,7 @@ import { useSyncStore } from './sync';
 import { useChatStore } from './chat';
 import { useMarketStore } from './market';
 import { useRapportsStore } from './rapports';
+import { useAportsStore } from './apports';
 import { trackEvent, identifyUser, resetAnalytics } from '@/lib/analytics';
 
 // ─── Last phone + biometric refresh token (quick-login) ──────────────────────
@@ -106,6 +107,7 @@ function resetAllStores() {
   useChatStore.getState().reset();
   useMarketStore.getState().reset();
   useRapportsStore.getState().reset();
+  useAportsStore.getState().reset();
 }
 
 interface PendingPhoneVerification {
@@ -116,6 +118,7 @@ interface PendingPhoneVerification {
 interface AuthStore {
   session: AppSession | null;
   loading: boolean;
+  emailOtpLoading: boolean;
   error: string | null;
   pendingPhoneVerification: PendingPhoneVerification | null;
   removedBusinessName: string | null;
@@ -140,6 +143,10 @@ interface AuthStore {
   businessDrawerOpen: boolean;
   openBusinessDrawer: () => void;
   closeBusinessDrawer: () => void;
+
+  sendEmailOtp: (email: string) => Promise<{ verificationId: string } | null>;
+  recoverByEmail: (email: string, code: string, verificationId: string) => Promise<void>;
+  linkRecoveryEmail: (email: string, code: string, verificationId: string) => Promise<boolean>;
 
   clearTrialWelcome: () => void;
   refreshActiveBusiness: () => Promise<void>;
@@ -178,6 +185,7 @@ async function loadSession(userId: string): Promise<AppSession> {
     phone: p.phone ?? null,
     avatar_url: p.avatar_url ?? null,
     language: p.language ?? 'fr',
+    recovery_email: p.recovery_email ?? null,
     created_at: p.created_at,
     updated_at: p.updated_at,
   };
@@ -195,6 +203,7 @@ async function loadSession(userId: string): Promise<AppSession> {
 export const useAuthStore = create<AuthStore>((set, get) => ({
   session: null,
   loading: true,
+  emailOtpLoading: false,
   error: null,
   pendingPhoneVerification: null,
   removedBusinessName: null,
@@ -329,6 +338,7 @@ export const useAuthStore = create<AuthStore>((set, get) => ({
         phone: null,
         avatar_url: null,
         language: 'fr',
+        recovery_email: null,
         created_at: new Date().toISOString(),
         updated_at: new Date().toISOString(),
       };
@@ -423,6 +433,7 @@ export const useAuthStore = create<AuthStore>((set, get) => ({
     setKV(`last_business_${session.user.id}`, businessId).catch(() => {});
     // Seed the cache so first-reload removal detection works immediately
     syncKnownBusinesses(session.user.id, newMemberships).catch(() => {});
+    resetAllStores();
     set({
       session: {
         ...session,
@@ -468,6 +479,7 @@ export const useAuthStore = create<AuthStore>((set, get) => ({
       // Reload the full session now that the membership exists and RLS can see the business
       const appSession = await loadSession(session.user.id);
       syncKnownBusinesses(session.user.id, appSession.memberships).catch(() => {});
+      resetAllStores();
       set({ session: appSession, loading: false });
     } catch (err) {
       const raw = err instanceof Error ? err.message : (err as Record<string, unknown>)?.message as string | undefined;
@@ -696,6 +708,110 @@ export const useAuthStore = create<AuthStore>((set, get) => ({
       }
     } catch (err) {
       set({ error: translateError(err, 'Connexion échouée'), loading: false });
+    }
+  },
+
+  sendEmailOtp: async (email) => {
+    set({ emailOtpLoading: true, error: null });
+    try {
+      const { data: fnData, error: fnErr } = await supabase.functions.invoke('send-email-otp', {
+        body: { email: email.trim().toLowerCase() },
+      });
+      if (fnErr) {
+        try {
+          const body = await (fnErr as { context?: { json?: () => Promise<{ error?: string }> } }).context?.json?.();
+          if (body?.error) throw new Error(body.error);
+        } catch (extractErr) {
+          if (extractErr !== fnErr) throw extractErr;
+        }
+        throw fnErr;
+      }
+      if (fnData?.error) throw new Error(fnData.error);
+      set({ emailOtpLoading: false });
+      return { verificationId: (fnData as { verificationId: string }).verificationId };
+    } catch (err) {
+      const raw = err instanceof Error ? err.message : String(err);
+      set({ error: raw, emailOtpLoading: false });
+      return null;
+    }
+  },
+
+  recoverByEmail: async (email, code, verificationId) => {
+    set({ loading: true, error: null });
+    try {
+      const { data: fnData, error: fnErr } = await supabase.functions.invoke('recover-by-email', {
+        body: { email: email.trim().toLowerCase(), code: code.trim(), verificationId },
+      });
+      if (fnErr) {
+        try {
+          const body = await (fnErr as { context?: { json?: () => Promise<{ error?: string }> } }).context?.json?.();
+          if (body?.error) throw new Error(body.error);
+        } catch (extractErr) {
+          if (extractErr !== fnErr) throw extractErr;
+        }
+        throw fnErr;
+      }
+      if (fnData?.error) throw new Error(fnData.error);
+
+      const { token_hash } = fnData as { token_hash: string };
+      const { data: { session }, error: otpErr } = await supabase.auth.verifyOtp({
+        token_hash,
+        type: 'magiclink',
+      });
+      if (otpErr) throw otpErr;
+      if (!session) throw new Error('Session introuvable');
+
+      void saveBioRefreshToken(session.refresh_token);
+      const appSession = await loadSession(session.user.id);
+      identifyUser(appSession);
+      trackEvent('user_logged_in', appSession.activeBusiness?.id ?? null, appSession.user.id, {
+        method: 'email_recovery',
+        has_business: appSession.memberships.length > 0,
+      });
+      const removed = await syncKnownBusinesses(session.user.id, appSession.memberships);
+      if (removed.length > 0 && appSession.memberships.length === 0) {
+        set({ session: appSession, removedBusinessesOnLogin: removed, loading: false });
+      } else if (removed.length > 0 && appSession.memberships.length > 0) {
+        set({ session: appSession, dismissedFromBusiness: { name: removed[0].name }, loading: false });
+      } else {
+        set({ session: appSession, loading: false });
+      }
+    } catch (err) {
+      const raw = err instanceof Error ? err.message : 'Récupération échouée';
+      set({ error: translateError(err, raw), loading: false });
+    }
+  },
+
+  linkRecoveryEmail: async (email, code, verificationId) => {
+    set({ emailOtpLoading: true, error: null });
+    try {
+      const { data: fnData, error: fnErr } = await supabase.functions.invoke('link-recovery-email', {
+        body: { email: email.trim().toLowerCase(), code: code.trim(), verificationId },
+      });
+      if (fnErr) {
+        try {
+          const body = await (fnErr as { context?: { json?: () => Promise<{ error?: string }> } }).context?.json?.();
+          if (body?.error) throw new Error(body.error);
+        } catch (extractErr) {
+          if (extractErr !== fnErr) throw extractErr;
+        }
+        throw fnErr;
+      }
+      if (fnData?.error) throw new Error(fnData.error);
+
+      const normalizedEmail = email.trim().toLowerCase();
+      set(state => {
+        if (!state.session) return state;
+        return {
+          session: { ...state.session, user: { ...state.session.user, recovery_email: normalizedEmail } },
+          emailOtpLoading: false,
+        };
+      });
+      return true;
+    } catch (err) {
+      const raw = err instanceof Error ? err.message : String(err);
+      set({ error: raw, emailOtpLoading: false });
+      return false;
     }
   },
 

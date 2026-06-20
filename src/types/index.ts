@@ -37,6 +37,7 @@ export interface User {
   phone: string | null;
   avatar_url: string | null;
   language: string;
+  recovery_email: string | null;
   created_at: string;
   updated_at: string;
 }
@@ -324,6 +325,17 @@ export interface MarketComment {
   likes_count: number;
   created_at: string;
   author_level?: number;
+}
+
+// ─── Member Product Scope ─────────────────────────────────────────────────────
+
+export interface MemberProductStake {
+  id: string;
+  membership_id: string;
+  product_id: string;
+  product_name: string;
+  contribution: number;  // GNF units (already divided by 100)
+  profit_share: number;  // 0–100
 }
 
 // ─── Auth Session ─────────────────────────────────────────────────────────────

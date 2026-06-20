@@ -155,10 +155,15 @@ export default function ConnexionScreen() {
                 size="lg"
                 disabled={!phoneComplete}
               />
+              <Button
+                label="Numéro indisponible ?"
+                variant="ghost"
+                onPress={() => router.push('/(welcome)/recuperation')}
+              />
             </View>
           ) : (
             <View style={[styles.form, styles.formCentered]}>
-              <OtpInput key={otpKey} onComplete={handleOtpComplete} disabled={loading} />
+              <OtpInput key={otpKey} onComplete={handleOtpComplete} disabled={loading} autoFocus />
               <Button
                 label="Renvoyer le code"
                 variant="ghost"

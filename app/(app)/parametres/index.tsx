@@ -5,6 +5,7 @@ import { router } from 'expo-router';
 import { Ionicons } from '@expo/vector-icons';
 import { Card } from '@/src/components/ui/Card';
 import { Input } from '@/src/components/ui/Input';
+import { OtpInput } from '@/src/components/ui/OtpInput';
 import { PhoneInput } from '@/src/components/ui/PhoneInput';
 import { Text } from '@/src/components/ui/Text';
 import { useTheme, spacing, radius } from '@/src/theme';
@@ -33,18 +34,25 @@ const CURRENCY_NAMES: Record<string, string> = {
 export default function ParametresScreen() {
   const { palette, colorScheme, setColorScheme } = useTheme();
   const styles = useMemo(() => makeStyles(palette), [palette]);
-  const session  = useAuthStore(s => s.session);
+  const { session, sendEmailOtp, linkRecoveryEmail, emailOtpLoading, error: authError, clearError } = useAuthStore();
   const business = session?.activeBusiness;
   const userId   = session?.user.id ?? '';
   const role     = session?.activeMembership?.role;
   const isAdmin  = role === 'administrateur';
 
+  const defaultPhone = business?.phone ?? session?.user.phone ?? '';
   const [bizName,  setBizName]  = useState(business?.name ?? '');
-  const [bizPhone, setBizPhone] = useState(business?.phone ?? '');
+  const [bizPhone, setBizPhone] = useState(defaultPhone);
   const [currency, setCurrency] = useState(business?.currency ?? '');
   const [userName, setUserName] = useState(session?.user.name ?? '');
   const [saving,   setSaving]   = useState(false);
   const [hasSales, setHasSales] = useState<boolean | null>(null);
+
+  // Email recovery linking
+  const [emailStep, setEmailStep]     = useState<'idle' | 'input' | 'otp'>('idle');
+  const [emailInput, setEmailInput]   = useState('');
+  const [emailOtpKey, setEmailOtpKey] = useState(0);
+  const emailVerifIdRef               = useRef('');
 
   // Check if any sales exist — currency locks once this is true
   useEffect(() => {
@@ -60,8 +68,17 @@ export default function ParametresScreen() {
       });
   }, [business?.id]);
 
+  // Silently backfill business phone from user profile if not yet set
+  useEffect(() => {
+    if (!isAdmin || !business?.id || business.phone || !session?.user.phone) return;
+    supabase.from('businesses')
+      .update({ phone: session.user.phone })
+      .eq('id', business.id)
+      .then(() => {});
+  }, [business?.id]);
+
   const isDirty = (isAdmin
-    ? (bizName.trim() !== (business?.name ?? '') || bizPhone.trim() !== (business?.phone ?? '') || (hasSales === false && currency !== (business?.currency ?? 'GNF')))
+    ? (bizName.trim() !== (business?.name ?? '') || bizPhone.trim() !== defaultPhone || (hasSales === false && currency !== (business?.currency ?? 'GNF')))
     : false
   ) || userName.trim() !== (session?.user.name ?? '');
 
@@ -88,6 +105,28 @@ export default function ParametresScreen() {
   const [showDeleteConfirm, setShowDeleteConfirm] = useState(false);
   const [deleteInput,       setDeleteInput]       = useState('');
   const [deleting,          setDeleting]          = useState(false);
+
+  const handleSendEmailCode = async () => {
+    clearError();
+    const result = await sendEmailOtp(emailInput.trim().toLowerCase());
+    if (result) {
+      emailVerifIdRef.current = result.verificationId;
+      setEmailStep('otp');
+    }
+  };
+
+  const handleEmailOtpComplete = async (code: string) => {
+    const ok = await linkRecoveryEmail(emailInput.trim().toLowerCase(), code, emailVerifIdRef.current);
+    if (ok) {
+      haptics.success();
+      toast.success('Email de récupération enregistré');
+      setEmailStep('idle');
+      setEmailInput('');
+      emailVerifIdRef.current = '';
+    } else {
+      setEmailOtpKey(k => k + 1);
+    }
+  };
 
   const saveAll = async () => {
     const trimmedBiz  = bizName.trim();
@@ -257,8 +296,9 @@ export default function ParametresScreen() {
                 returnKeyType="next"
               />
               <PhoneInput
+                key={defaultPhone}
                 label="Numéro du commerce"
-                initialValue={business?.phone ?? undefined}
+                initialValue={defaultPhone || undefined}
                 strict={false}
                 onChange={(e164, isComplete) => setBizPhone(isComplete ? e164 : '')}
               />
@@ -303,6 +343,95 @@ export default function ParametresScreen() {
               placeholder={generateFallbackName(userId)}
               returnKeyType="done"
             />
+
+            {/* Email de récupération */}
+            {emailStep === 'idle' && (
+              <Pressable onPress={() => setEmailStep('input')} style={styles.emailRow}>
+                <View style={{ flex: 1 }}>
+                  <Text variant="label">Email de récupération</Text>
+                  <Text variant="caption" color="secondary">
+                    {session?.user.recovery_email ?? 'Non configuré'}
+                  </Text>
+                </View>
+                <Text variant="caption" color="secondary">›</Text>
+              </Pressable>
+            )}
+
+            {emailStep === 'input' && (
+              <View style={styles.emailBox}>
+                <Text variant="label">Email de récupération</Text>
+                <Text variant="caption" color="secondary" style={{ marginBottom: spacing[2] }}>
+                  Vous recevrez un code pour confirmer votre adresse.
+                </Text>
+                {authError ? (
+                  <Text variant="caption" style={{ color: palette.warning, marginBottom: spacing[2] }}>
+                    {authError}
+                  </Text>
+                ) : null}
+                <Input
+                  label=""
+                  value={emailInput}
+                  onChangeText={setEmailInput}
+                  placeholder="vous@exemple.com"
+                  keyboardType="email-address"
+                  autoCapitalize="none"
+                  autoCorrect={false}
+                  returnKeyType="done"
+                  onSubmitEditing={handleSendEmailCode}
+                  autoFocus
+                />
+                <View style={{ flexDirection: 'row', gap: spacing[3] }}>
+                  <Pressable
+                    onPress={() => { setEmailStep('idle'); setEmailInput(''); clearError(); }}
+                    style={{ flex: 1, alignItems: 'center', paddingVertical: spacing[2] }}
+                  >
+                    <Text variant="label" color="secondary">Annuler</Text>
+                  </Pressable>
+                  <Pressable
+                    onPress={handleSendEmailCode}
+                    disabled={!emailInput.trim().includes('@') || emailOtpLoading}
+                    style={{ flex: 1, alignItems: 'center', paddingVertical: spacing[2],
+                      opacity: !emailInput.trim().includes('@') || emailOtpLoading ? 0.4 : 1 }}
+                  >
+                    <Text variant="label" style={{ color: palette.primary }}>
+                      {emailOtpLoading ? 'Envoi…' : 'Envoyer le code'}
+                    </Text>
+                  </Pressable>
+                </View>
+              </View>
+            )}
+
+            {emailStep === 'otp' && (
+              <View style={styles.emailBox}>
+                <Text variant="label">Entrez le code reçu</Text>
+                <Text variant="caption" color="secondary" style={{ marginBottom: spacing[3] }}>
+                  Envoyé à {emailInput.trim().toLowerCase()}
+                </Text>
+                {authError ? (
+                  <Text variant="caption" style={{ color: palette.warning, marginBottom: spacing[2] }}>
+                    {authError}
+                  </Text>
+                ) : null}
+                <OtpInput key={emailOtpKey} onComplete={handleEmailOtpComplete} disabled={emailOtpLoading} autoFocus />
+                <View style={{ flexDirection: 'row', gap: spacing[3] }}>
+                  <Pressable
+                    onPress={() => { setEmailStep('input'); clearError(); setEmailOtpKey(k => k + 1); }}
+                    style={{ flex: 1, alignItems: 'center', paddingVertical: spacing[2] }}
+                  >
+                    <Text variant="label" color="secondary">Changer l'email</Text>
+                  </Pressable>
+                  <Pressable
+                    onPress={handleSendEmailCode}
+                    disabled={emailOtpLoading}
+                    style={{ flex: 1, alignItems: 'center', paddingVertical: spacing[2], opacity: emailOtpLoading ? 0.4 : 1 }}
+                  >
+                    <Text variant="label" style={{ color: palette.primary }}>
+                      {emailOtpLoading ? 'Envoi…' : 'Renvoyer'}
+                    </Text>
+                  </Pressable>
+                </View>
+              </View>
+            )}
           </Card>
 
           {/* À propos */}
@@ -421,6 +550,9 @@ function makeStyles(p: Palette) {
     },
 
     linkRow: { flexDirection: 'row', alignItems: 'center', justifyContent: 'space-between', paddingVertical: spacing[2] },
+
+    emailRow: { flexDirection: 'row', alignItems: 'center', justifyContent: 'space-between', paddingVertical: spacing[2] },
+    emailBox: { gap: spacing[3], paddingTop: spacing[1] },
 
     // Danger — plain text rows, no border, no background tint
     dangerRow:  { paddingVertical: spacing[2] },

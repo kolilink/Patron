@@ -196,7 +196,7 @@
 
   <header>
     <span class="logo">patron</span>
-    <span>Mise à jour : 16 juin 2026</span>
+    <span>Mise à jour : 20 juin 2026</span>
   </header>
 
   <div class="hero">
@@ -218,13 +218,14 @@
       <h2>Ce que nous stockons</h2>
       <p>Pour créer votre compte, nous demandons uniquement :</p>
       <ul class="list">
-        <li>Votre numéro de téléphone — pour envoyer le code de vérification par SMS, rien d'autre</li>
+        <li>Votre numéro de téléphone — pour envoyer le code de vérification par WhatsApp, rien d'autre</li>
         <li>Un nom affiché — celui que vous choisissez</li>
       </ul>
+      <p>En option, vous pouvez ajouter une adresse email de récupération depuis les paramètres. Elle sert uniquement à retrouver votre compte si vous changez de numéro de téléphone. Nous ne l'utilisons à aucune autre fin.</p>
       <p>Dans l'application, vous créez des données : produits, ventes, dépenses, clients, fournisseurs, équipe. Ces données nous sont confiées pour les synchroniser entre vos appareils.</p>
       <p>Si vous utilisez le chat de votre boutique ou publiez dans Le Marché (le forum communautaire), vos messages, publications et commentaires sont également stockés sur nos serveurs. Le chat de la boutique est privé : seuls vos collaborateurs le voient. Les publications du Marché sont visibles par tous les utilisateurs de Patron.</p>
       <div class="callout">
-        <p>Nous ne demandons ni email, ni mot de passe, ni localisation. L'authentification biométrique (Face ID, Touch ID, empreinte digitale) fonctionne exclusivement sur votre appareil — aucune donnée biométrique ne quitte jamais votre téléphone.</p>
+        <p>Nous ne demandons pas de mot de passe ni de localisation. L'adresse email est facultative et réservée à la récupération de compte. L'authentification biométrique (Face ID, Touch ID, empreinte digitale) fonctionne exclusivement sur votre appareil — aucune donnée biométrique ne quitte jamais votre téléphone.</p>
       </div>
     </div>
 
@@ -235,7 +236,8 @@
       <h2>Pourquoi ces données</h2>
       <ul class="list">
         <li>Faire fonctionner votre compte et synchroniser vos données entre vos appareils</li>
-        <li>Envoyer le code de vérification par SMS à chaque connexion</li>
+        <li>Envoyer le code de vérification par WhatsApp à chaque connexion</li>
+        <li>Envoyer un code de récupération par email si vous avez choisi d'en ajouter un</li>
         <li>Permettre à vos collaborateurs de voir les données selon leur rôle dans le commerce</li>
         <li>Afficher vos messages dans le chat de la boutique à vos collaborateurs</li>
         <li>Publier vos contributions dans Le Marché à la communauté Patron</li>
@@ -260,10 +262,11 @@
     <div class="section">
       <div class="section-label">Partenaires</div>
       <h2>Services utilisés</h2>
-      <p>Nous faisons appel à deux services tiers :</p>
+      <p>Nous faisons appel à trois services tiers :</p>
       <ul class="list">
         <li><strong>Supabase</strong> — hébergement et base de données sécurisée</li>
-        <li><strong>Twilio</strong> — envoi du SMS de vérification</li>
+        <li><strong>Twilio</strong> — envoi du code de vérification par WhatsApp</li>
+        <li><strong>Resend</strong> — envoi du code de récupération par email (uniquement si vous avez ajouté une adresse email)</li>
       </ul>
       <p>Aucun autre service n'a accès à vos données.</p>
     </div>
