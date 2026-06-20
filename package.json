@@ -22,7 +22,7 @@
     "@sentry/react-native": "~7.2.0",
     "@supabase/supabase-js": "^2.105.4",
     "date-fns": "^4.1.0",
-    "expo": "~54.0.33",
+    "expo": "~56.0.12",
     "expo-application": "~7.0.8",
     "expo-blur": "~15.0.8",
     "expo-crypto": "~15.0.9",
