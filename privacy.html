@@ -68,9 +68,22 @@
       font-weight: 800;
       line-height: 1.2;
       letter-spacing: -0.03em;
-      margin-bottom: 32px;
+      margin-bottom: 16px;
       color: var(--primary);
       text-wrap: balance;
+    }
+
+    @media (min-width: 768px) {
+      .hero h1 {
+        white-space: nowrap;
+      }
+    }
+
+    .hero .subtitle {
+      font-size: clamp(18px, 2.5vw, 22px);
+      font-weight: 500;
+      margin-bottom: 32px;
+      color: var(--secondary);
     }
 
     .hero .date {
@@ -193,7 +206,8 @@
   <div class="container">
     <header class="hero">
       <h2>Politique de Confidentialité</h2>
-      <h1>Notre promesse sur vos données</h1>
+      <h1>Notre Mission est de structurer le commerce informel</h1>
+      <p class="subtitle">Notre promesse sur vos données</p>
       <div class="date">Mise à jour : 30 juin 2026</div>
     </header>
 
