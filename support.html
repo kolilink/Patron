@@ -4,310 +4,328 @@
   <meta charset="UTF-8">
   <meta name="viewport" content="width=device-width, initial-scale=1.0">
   <title>Patron — Support</title>
+  <link rel="preconnect" href="https://fonts.googleapis.com">
+  <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+  <link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700;800&display=swap" rel="stylesheet">
   <style>
     :root {
-      --indigo: #6366F1;
-      --indigo-dark: #4F46E5;
-      --indigo-light: #EEF2FF;
-      --text: #111827;
-      --muted: #6B7280;
-      --border: #E5E7EB;
-      --bg: #F9FAFB;
-      --white: #ffffff;
+      --bg: #FFFFFF;
+      --primary: #18181B;
+      --secondary: #71717A;
     }
 
-    * { margin: 0; padding: 0; box-sizing: border-box; }
+    @media (prefers-color-scheme: dark) {
+      :root {
+        --bg: #09090B;
+        --primary: #FFFFFF;
+        --secondary: #71717A;
+      }
+    }
+
+    * {
+      margin: 0;
+      padding: 0;
+      box-sizing: border-box;
+    }
 
     body {
-      font-family: -apple-system, BlinkMacSystemFont, 'Inter', 'Segoe UI', sans-serif;
-      background: var(--bg);
-      color: var(--text);
+      font-family: 'Inter', -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif;
+      background-color: var(--bg);
+      color: var(--primary);
+      line-height: 1.6;
       -webkit-font-smoothing: antialiased;
+      -moz-osx-font-smoothing: grayscale;
+      padding: 120px 24px;
     }
 
-    /* ── Header ── */
-    header {
-      background: var(--white);
-      border-bottom: 1px solid var(--border);
-      padding: 20px 32px;
-      display: flex;
-      align-items: center;
-      justify-content: space-between;
-    }
-    .logo {
-      font-size: 20px;
-      font-weight: 800;
-      color: var(--indigo);
-      letter-spacing: -0.5px;
-    }
-    header span {
-      font-size: 13px;
-      color: var(--muted);
-    }
-
-    /* ── Hero ── */
-    .hero {
-      background: linear-gradient(160deg, var(--indigo) 0%, var(--indigo-dark) 100%);
-      padding: 80px 32px 64px;
-      text-align: center;
-    }
-    .hero h1 {
-      font-size: 40px;
-      font-weight: 800;
-      color: #fff;
-      letter-spacing: -1px;
-      margin-bottom: 12px;
-    }
-    .hero p {
-      font-size: 15px;
-      color: rgba(255,255,255,0.6);
-      font-weight: 400;
-    }
-
-    /* ── Layout ── */
-    .wrapper {
-      max-width: 720px;
+    .container {
+      max-width: 900px;
       margin: 0 auto;
-      padding: 64px 24px 96px;
     }
 
-    /* ── Section ── */
-    .section {
-      margin-bottom: 48px;
+    main, footer {
+      max-width: 620px;
+      margin: 0 auto;
     }
-    .section-label {
-      font-size: 11px;
-      font-weight: 700;
-      letter-spacing: 1.5px;
+
+    /* Hero Section */
+    .hero {
+      text-align: center;
+      margin-bottom: 80px;
+    }
+
+    .hero h2 {
+      font-size: 14px;
+      font-weight: 600;
       text-transform: uppercase;
-      color: var(--indigo);
-      margin-bottom: 10px;
+      letter-spacing: 0.15em;
+      margin-bottom: 24px;
+      color: var(--primary);
     }
-    .section h2 {
-      font-size: 22px;
-      font-weight: 700;
-      color: var(--text);
-      letter-spacing: -0.3px;
+
+    .hero h1 {
+      font-size: clamp(24px, 4.2vw, 38px);
+      font-weight: 800;
+      line-height: 1.2;
+      letter-spacing: -0.03em;
       margin-bottom: 16px;
+      color: var(--primary);
+      text-wrap: balance;
     }
+
+    @media (min-width: 768px) {
+      .hero h1 {
+        white-space: nowrap;
+      }
+    }
+
+    .hero .subtitle {
+      font-size: clamp(18px, 2.5vw, 22px);
+      font-weight: 500;
+      margin-bottom: 32px;
+      color: var(--secondary);
+    }
+
+    /* Dividers */
+    hr {
+      border: 0;
+      height: 1px;
+      background-color: var(--secondary);
+      opacity: 0.15;
+      margin: 56px 0;
+    }
+
+    /* Content Sections */
+    .section {
+      margin-bottom: 56px;
+    }
+
+    .section h3 {
+      font-size: 13px;
+      font-weight: 700;
+      letter-spacing: 0.15em;
+      text-transform: uppercase;
+      margin-bottom: 32px;
+      color: var(--primary);
+    }
+
     .section p {
       font-size: 16px;
-      line-height: 1.75;
-      color: var(--muted);
-      margin-bottom: 12px;
+      font-weight: 400;
+      margin-bottom: 24px;
+      color: var(--primary);
     }
-    .section p:last-child { margin-bottom: 0; }
 
-    /* ── FAQ ── */
-    .faq {
-      display: flex;
-      flex-direction: column;
-      gap: 24px;
-      margin-top: 8px;
+    .section p strong {
+      font-weight: 600;
     }
+
+    .section ul {
+      list-style: none;
+      margin-bottom: 24px;
+    }
+
+    .section ul li {
+      font-size: 16px;
+      margin-bottom: 16px;
+      padding-left: 24px;
+      position: relative;
+    }
+
+    .section ul li::before {
+      content: "—";
+      position: absolute;
+      left: 0;
+      color: var(--secondary);
+    }
+
+    /* FAQ Item Styles */
     .faq-item {
-      background: var(--white);
-      border: 1px solid var(--border);
-      border-radius: 12px;
-      padding: 20px 24px;
+      margin-bottom: 36px;
     }
-    .faq-item strong {
-      display: block;
-      font-size: 15px;
-      font-weight: 700;
-      color: var(--text);
-      margin-bottom: 8px;
+
+    .faq-item:last-child {
+      margin-bottom: 0;
     }
+
+    .faq-item h4 {
+      font-size: 16px;
+      font-weight: 600;
+      margin-bottom: 12px;
+      color: var(--primary);
+    }
+
     .faq-item p {
       font-size: 15px;
-      line-height: 1.65;
-      color: var(--muted);
-      margin: 0;
-    }
-    .faq-item a {
-      color: var(--indigo);
-      font-weight: 600;
-      text-decoration: none;
-    }
-    .faq-item a:hover { text-decoration: underline; }
-
-    /* ── Callout ── */
-    .callout {
-      background: var(--indigo-light);
-      border-radius: 12px;
-      padding: 20px 24px;
-      margin: 20px 0;
-    }
-    .callout p {
-      font-size: 15px;
-      line-height: 1.65;
-      color: #3730A3;
-      font-weight: 500;
-      margin: 0;
+      line-height: 1.6;
+      color: var(--primary);
+      margin-bottom: 0;
     }
 
-    /* ── Divider ── */
-    hr {
-      border: none;
-      border-top: 1px solid var(--border);
-      margin: 48px 0;
+    /* Contact Details */
+    .contact-list {
+      list-style: none;
+      padding: 0;
+      margin-bottom: 0;
     }
 
-    /* ── Contact ── */
-    .contact-grid {
-      display: grid;
-      grid-template-columns: 1fr 1fr;
-      gap: 16px;
-      margin-top: 20px;
+    .contact-list li {
+      padding-left: 0 !important;
+      margin-bottom: 24px !important;
     }
-    @media (max-width: 520px) {
-      .contact-grid { grid-template-columns: 1fr; }
+
+    .contact-list li::before {
+      display: none !important;
     }
-    .contact-card {
-      background: var(--white);
-      border: 1px solid var(--border);
-      border-radius: 12px;
-      padding: 20px 24px;
-    }
-    .contact-card .type {
+
+    .contact-list span {
+      display: inline-block;
+      width: 110px;
       font-size: 11px;
       font-weight: 700;
-      letter-spacing: 1px;
+      letter-spacing: 0.1em;
+      color: var(--secondary);
       text-transform: uppercase;
-      color: var(--muted);
-      margin-bottom: 6px;
-    }
-    .contact-card a {
-      font-size: 15px;
-      font-weight: 600;
-      color: var(--indigo);
-      text-decoration: none;
-    }
-    .contact-card a:hover { text-decoration: underline; }
-    .contact-card p {
-      font-size: 13px;
-      color: var(--muted);
-      margin-top: 4px;
     }
 
-    /* ── Footer ── */
-    footer {
-      border-top: 1px solid var(--border);
-      padding: 32px 24px;
-      text-align: center;
+    .contact-list a {
+      color: var(--primary);
+      text-decoration: none;
+      font-weight: 500;
+      border-bottom: 1px solid var(--secondary);
+      transition: opacity 0.2s ease;
     }
+
+    .contact-list a:hover {
+      opacity: 0.7;
+    }
+
+    .contact-desc {
+      font-size: 13px !important;
+      color: var(--secondary);
+      margin-top: 4px;
+      margin-bottom: 0 !important;
+    }
+
+    .text-link {
+      color: var(--primary);
+      text-decoration: none;
+      font-weight: 500;
+      border-bottom: 1px solid var(--secondary);
+      transition: opacity 0.2s ease;
+    }
+
+    .text-link:hover {
+      opacity: 0.7;
+    }
+
+    /* Footer */
+    footer {
+      text-align: center;
+      margin-top: 120px;
+    }
+
     footer p {
       font-size: 13px;
-      color: var(--muted);
+      color: var(--secondary);
       line-height: 1.8;
     }
   </style>
 </head>
 <body>
 
-  <header>
-    <span class="logo">patron</span>
-    <span>Support</span>
-  </header>
-
-  <div class="hero">
-    <h1>Support</h1>
-    <p>On répond vite. Posez votre question.</p>
-  </div>
-
-  <div class="wrapper">
-
-    <div class="section">
-      <div class="section-label">Nous contacter</div>
-      <h2>Une question ou un problème ?</h2>
-      <p>WhatsApp est le moyen le plus rapide. On répond généralement le jour même. L'email fonctionne aussi pour les sujets plus détaillés.</p>
-      <div class="contact-grid">
-        <div class="contact-card">
-          <div class="type">WhatsApp</div>
-          <a href="https://wa.me/16094454809">+1 609 445 4809</a>
-          <p>Réponse le jour même</p>
-        </div>
-        <div class="contact-card">
-          <div class="type">Email</div>
-          <a href="mailto:patroncommercesupprt@gmail.com">patroncommercesupprt@gmail.com</a>
-          <p>Réponse sous 10 h</p>
-        </div>
-      </div>
-    </div>
+  <div class="container">
+    <header class="hero">
+      <h2>Support</h2>
+      <h1>On répond vite. Posez votre question.</h1>
+      <p class="subtitle">Nous sommes là pour vous aider au quotidien.</p>
+    </header>
 
     <hr>
 
-    <div class="section">
-      <div class="section-label">Questions fréquentes</div>
-      <h2>Ce qu'on nous demande souvent</h2>
+    <main>
+      <section class="section">
+        <h3>Nous contacter</h3>
+        <p>WhatsApp est le moyen le plus rapide. On répond généralement le jour même. L'email fonctionne aussi pour les sujets plus détaillés.</p>
+        
+        <ul class="contact-list">
+          <li>
+            <span>WhatsApp :</span> 
+            <a href="https://wa.me/16094454809">+1 609 445 4809</a>
+            <p class="contact-desc">Réponse le jour même</p>
+          </li>
+          <li>
+            <span>Email :</span> 
+            <a href="mailto:support@patron.com">support@patron.com</a>
+            <p class="contact-desc">Réponse sous 10 h</p>
+          </li>
+        </ul>
+      </section>
 
-      <div class="faq">
+      <hr>
+
+      <section class="section">
+        <h3>Questions fréquentes</h3>
 
         <div class="faq-item">
-          <strong>Comment créer un commerce ?</strong>
+          <h4>Comment créer un commerce ?</h4>
           <p>Après votre inscription avec votre numéro WhatsApp, appuyez sur "Créer un commerce" et suivez les étapes. Votre commerce est prêt en moins d'une minute.</p>
         </div>
 
         <div class="faq-item">
-          <strong>Comment ajouter un produit ?</strong>
+          <h4>Comment ajouter un produit ?</h4>
           <p>Allez dans l'onglet Catalogue et appuyez sur le bouton +. Vous pouvez définir le prix d'achat, le prix de vente, le stock initial et un prix de gros si vous vendez en grande quantité.</p>
         </div>
 
         <div class="faq-item">
-          <strong>Comment inviter un collaborateur ?</strong>
+          <h4>Comment inviter un collaborateur ?</h4>
           <p>Allez dans l'onglet Plus → Équipe → générer un code d'invitation. Partagez ce code à votre collaborateur. Il l'entre dans son application pour rejoindre votre commerce. Vous choisissez son rôle : manager, vendeur ou investisseur.</p>
         </div>
 
         <div class="faq-item">
-          <strong>Quels sont les rôles disponibles ?</strong>
+          <h4>Quels sont les rôles disponibles ?</h4>
           <p>Il y a quatre rôles : <strong>Administrateur</strong> (contrôle total), <strong>Manager</strong> (gestion complète sans supprimer le commerce), <strong>Vendeur</strong> (enregistre les ventes et les dépenses), <strong>Investisseur</strong> (lecture seule — voit les chiffres sans pouvoir modifier).</p>
         </div>
 
         <div class="faq-item">
-          <strong>L'application marche sans internet ?</strong>
+          <h4>L'application marche sans internet ?</h4>
           <p>Oui. Ventes, dépenses, créations de produits, ajustements de stock et paiements fonctionnent hors ligne. Une bannière dans l'application indique le nombre d'opérations en attente. Tout se synchronise automatiquement dès que la connexion revient.</p>
         </div>
 
         <div class="faq-item">
-          <strong>Comment enregistrer une vente à crédit ?</strong>
+          <h4>Comment enregistrer une vente à crédit ?</h4>
           <p>Sur l'écran de vente, activez l'option "À crédit" avant de valider. La vente apparaît dans l'historique avec le statut Crédit. Quand le client paie, allez dans la vente et appuyez sur "Enregistrer un paiement".</p>
         </div>
 
         <div class="faq-item">
-          <strong>Qu'est-ce que Le Marché ?</strong>
+          <h4>Qu'est-ce que Le Marché ?</h4>
           <p>Le Marché est un forum communautaire accessible depuis l'onglet Plus. Tous les utilisateurs de Patron peuvent y poser des questions, partager des conseils et discuter de commerce. Vos publications sont visibles par toute la communauté.</p>
         </div>
 
         <div class="faq-item">
-          <strong>Comment supprimer mon compte ?</strong>
+          <h4>Comment supprimer mon compte ?</h4>
           <p>Allez dans Plus → Paramètres → Supprimer mon compte. Toutes vos données sont effacées immédiatement et définitivement. Si vous êtes administrateur d'un commerce avec d'autres membres actifs, retirez-les d'abord.</p>
         </div>
 
         <div class="faq-item">
-          <strong>Je n'arrive pas à me connecter.</strong>
+          <h4>Je n'arrive pas à me connecter.</h4>
           <p>La connexion se fait par WhatsApp : vous recevez un code sur votre numéro et vous le copiez dans l'application. Si le code n'arrive pas après quelques minutes, vérifiez que votre numéro est bien au format international (ex. +224...) et réessayez. Si le problème persiste, écrivez-nous sur WhatsApp.</p>
         </div>
+      </section>
 
-      </div>
-    </div>
+      <hr>
 
-    <hr>
+      <section class="section">
+        <h3>Confidentialité</h3>
+        <p>Pour tout savoir sur ce que nous collectons, comment nous le protégeons et comment exercer vos droits, consultez notre politique de confidentialité.</p>
+        <p><a href="https://patron.kolilink.com/privacy.html" class="text-link">Lire la politique de confidentialité →</a></p>
+      </section>
+    </main>
 
-    <div class="section">
-      <div class="section-label">Confidentialité</div>
-      <h2>Vos données, vos droits.</h2>
-      <p>Pour tout savoir sur ce que nous collectons, comment nous le protégeons et comment exercer vos droits, consultez notre politique de confidentialité.</p>
-      <div class="callout">
-        <p><a href="https://patron.kolilink.com/privacy.html">Lire la politique de confidentialité →</a></p>
-      </div>
-    </div>
-
+    <footer>
+      <p>© 2026 — Patron. Tous droits réservés.</p>
+    </footer>
   </div>
-
-  <footer>
-    <p>© 2026 — Patron</p>
-    <p>USA, Washington · Tous droits réservés</p>
-  </footer>
 
 </body>
 </html>
