@@ -39,6 +39,11 @@
     }
 
     .container {
+      max-width: 900px;
+      margin: 0 auto;
+    }
+
+    main, footer {
       max-width: 620px;
       margin: 0 auto;
     }
@@ -59,18 +64,13 @@
     }
 
     .hero h1 {
-      font-size: 44px;
+      font-size: clamp(24px, 4.2vw, 38px);
       font-weight: 800;
-      line-height: 1.15;
-      letter-spacing: -0.04em;
+      line-height: 1.2;
+      letter-spacing: -0.03em;
       margin-bottom: 32px;
       color: var(--primary);
-    }
-
-    @media (max-width: 600px) {
-      .hero h1 {
-        font-size: 32px;
-      }
+      text-wrap: balance;
     }
 
     .hero .date {
@@ -193,7 +193,7 @@
   <div class="container">
     <header class="hero">
       <h2>Politique de Confidentialité</h2>
-      <h1>Notre Mission : Structurer le commerce informel.</h1>
+      <h1>Notre promesse sur vos données</h1>
       <div class="date">Mise à jour : 30 juin 2026</div>
     </header>
 
@@ -201,26 +201,30 @@
 
     <main>
       <section class="section">
-        <h3>Vos données vous appartiennent</h3>
-        <p>Vous nous confiez les données de votre entreprise — nous les protégeons et les utilisons uniquement pour assurer le bon fonctionnement de votre application. Pas de publicité, pas de revente, pas de surprise.</p>
+        <h3>Vos données sont à vous</h3>
+        <p>Vous nous donnez les informations de votre boutique. Notre seul travail est de les garder en sécurité pour que votre application marche bien.</p>
+        <p>Pas de publicité.</p>
+        <p>Pas de revente de vos données.</p>
+        <p>Pas de mauvaise surprise.</p>
       </section>
 
       <section class="section">
-        <h3>Ce que nous stockons</h3>
-        <p>Pour créer votre compte, nous demandons uniquement :</p>
+        <h3>Ce que nous gardons</h3>
+        <p>Pour créer votre compte, nous avons juste besoin de :</p>
         <ul>
-          <li><strong>Votre numéro de téléphone</strong> — pour envoyer votre code de vérification par WhatsApp.</li>
-          <li><strong>Un nom d'affichage</strong> — celui que vous choisissez librement.</li>
+          <li><strong>Votre numéro de téléphone</strong> — Pour vous envoyer un code de connexion par WhatsApp.</li>
+          <li><strong>Votre nom</strong> — Le nom que vous voulez afficher dans l'application.</li>
+          <li><strong>Votre adresse email (en option)</strong> — Si vous perdez votre numéro de téléphone ou si vous changez d'appareil, cet email vous permettra de vous reconnecter et de récupérer votre compte facilement.</li>
         </ul>
-        <p>Dans l'application, vous générez des données : produits, ventes, dépenses, clients, fournisseurs et équipes. Ces données nous sont confiées afin d'être synchronisées instantanément entre tous vos appareils.</p>
+        <p>Dans l'application, vous écrivez vos informations : vos produits, vos ventes, vos dépenses, vos clients et votre équipe. Nous gardons ces informations pour que vous puissiez les retrouver sur tous vos téléphones en même temps.</p>
       </section>
 
       <hr>
 
       <section class="section">
-        <h3>Mode hors-ligne</h3>
-        <p>Patron est conçu pour fonctionner pleinement sans aucune connexion internet. Vos ventes, dépenses, créations de produits, ajustements de stocks et enregistrements de paiements sont sauvegardés localement sur votre appareil dans une base de données chiffrée, puis synchronisés automatiquement dès que vous retrouvez du réseau.</p>
-        <p>Les données locales en attente de synchronisation sont protégées par un <strong>chiffrement matériel AES-256-GCM</strong> dès leur écriture. Elles ne quittent jamais votre téléphone non chiffrées.</p>
+        <h3>Marche sans internet</h3>
+        <p>Patron marche très bien même quand vous n'avez pas internet. Tout ce que vous écrivez (vos ventes, vos stocks, vos calculs) reste caché et protégé dans votre téléphone.</p>
+        <p>Dès que votre téléphone retrouve internet, l'application remet tout à jour toute seule. Vos données ne quittent jamais votre téléphone sans être totalement protégées.</p>
       </section>
 
       <hr>
@@ -228,17 +232,17 @@
       <section class="section">
         <h3>Vos droits</h3>
         <ul>
-          <li><strong>Droit de regard :</strong> Toutes vos données financières et commerciales sont visibles directement et en clair dans l'application.</li>
-          <li><strong>Droit de modification :</strong> Vous pouvez modifier le nom de votre commerce, vos produits ou vos profils à tout moment.</li>
-          <li><strong>Droit de suppression :</strong> Vous pouvez détruire votre compte directement depuis l'application (<strong>Plus → Paramètres → Supprimer mon compte</strong>). Toutes vos données seront alors effacées immédiatement, totalement et définitivement de nos serveurs.</li>
+          <li><strong>Vous voyez tout :</strong> Toutes vos ventes et tout votre argent sont écrits clairement dans l'application. Vous pouvez tout vérifier.</li>
+          <li><strong>Vous changez tout :</strong> Vous pouvez changer le nom de votre boutique, vos prix ou vos produits quand vous voulez.</li>
+          <li><strong>Vous effacez tout :</strong> Si vous voulez arrêter, vous pouvez supprimer votre compte directement dans l'application (<strong>Plus → Paramètres → Supprimer mon compte</strong>). Nous effaçons tout par terre, tout de suite et pour toujours de nos ordinateurs.</li>
         </ul>
       </section>
 
       <hr>
 
       <section class="section">
-        <h3>Contact</h3>
-        <p>Pour toute demande relative à la gestion de vos données :</p>
+        <h3>Nous contacter</h3>
+        <p>Si vous avez une question sur vos informations :</p>
         <ul class="contact-list">
           <li><span>WhatsApp :</span> <a href="https://wa.me/16094454809">+1 609 445 4809</a></li>
           <li><span>Email :</span> <a href="mailto:support@patron.com">support@patron.com</a></li>
