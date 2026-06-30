@@ -7,6 +7,8 @@ module.exports = {
     '^expo-sqlite$': '<rootDir>/__mocks__/expo-sqlite.js',
     '^expo-secure-store$': '<rootDir>/__mocks__/expo-secure-store.js',
     '^expo-haptics$': '<rootDir>/__mocks__/expo-haptics.js',
+    '^expo-localization$': '<rootDir>/__mocks__/expo-localization.js',
+    '^expo-file-system(/.*)?$': '<rootDir>/__mocks__/expo-file-system.js',
     '^@react-native-async-storage/async-storage$': '<rootDir>/__mocks__/async-storage.js',
   },
   transform: {

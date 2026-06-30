@@ -31,6 +31,27 @@ eas submit --platform android --profile production
 
 No test suite. No linting config.
 
+## UI components (`src/components/ui/`)
+
+### Screen — required root for every screen
+
+**Every screen file must use `<Screen>` as its root element, not `<SafeAreaView>` directly.**
+
+```tsx
+import { Screen } from '@/src/components/ui/Screen';
+
+// Standard screen (top + bottom safe area):
+return <Screen>...</Screen>;
+
+// Tab-bar screen (top only — bottom handled by tab bar):
+return <Screen tab>...</Screen>;
+
+// Escape hatch for unusual edge needs:
+return <Screen edges={['top']}>...</Screen>;
+```
+
+`Screen` applies `flex: 1`, `backgroundColor: palette.background`, and the correct safe area edges automatically. Using raw `<SafeAreaView>` as a screen root is a violation — it's easy to forget `edges` and content ends up behind the notch or home indicator. `SafeAreaView` is still allowed inside `<Modal>` components (for modal sheet inner wrappers).
+
 ## Architecture
 
 ### Routing (Expo Router v6 file-based)
@@ -269,6 +290,10 @@ Run Supabase migrations in order in the SQL Editor. Never skip versions.
 | `db/migration_v56.sql` | Message + post editing: `chat_messages` and `market_posts`/`market_comments` get `edited_at` timestamp |
 | `db/migration_v57.sql` | `sale_orders.due_date` (DATE) — optional payment deadline for credit sales |
 | `db/migration_v76.sql` | Email account recovery: `profiles.recovery_email` (UNIQUE TEXT); `email_verifications` + `email_verification_attempts` tables (service-role only, no user RLS policies) |
+| `db/migration_v99.sql` | Nightly reconciliation system: `reconciliation_runs` / `reconciliation_findings` tables + `run_reconciliation()` — 68 SECURITY DEFINER checks across 14 domains (stock, sales, payments, COGS, expenses, credit, suppliers, purchase orders, products, monetary precision, members, cross-aggregates, temporal, referential integrity). Run nightly by the `send-reconciliation-report` Edge Function. |
+| `db/migration_v103.sql` | `get_financial_snapshot()` — independent ground-truth revenue/COGS/expenses/net-profit recompute straight from the ledger, grouped by business currency (never blended across currencies). Included in the nightly reconciliation email as a sanity-check reference, separate from the 68 structural checks. |
+
+(Note: `migration_v58.sql` through `v75.sql`, `v77.sql` through `v98.sql`, and `v100.sql` through `v102.sql` exist in `db/` but are undocumented here and unrelated to the reconciliation system — out of scope for this entry.)
 
 `discount_amount` convention: `total_amount` always stores catalog total; `discount_amount + amount_paid = total_amount` for a closed discounted sale.
 
@@ -329,3 +354,29 @@ Uses `expo-secure-store` for session storage with custom 2 KB chunking (SecureSt
 | `send-email-otp` | Sends 6-digit recovery code via Resend (`noreply@patron.kolilink.com`). No auth required — user may be locked out. Rate-limited via `email_verification_attempts`. |
 | `link-recovery-email` | Validates email OTP then links `recovery_email` to authenticated user's profile. Rejects if email already taken by another account. |
 | `recover-by-email` | Validates email OTP, finds profile by `recovery_email`, generates magic link session. No auth required. |
+| `send-reconciliation-report` | Calls `run_reconciliation()` + `get_financial_snapshot()`, emails the HTML report via Resend to `FOUNDER_EMAIL`. Deployed with `--no-verify-jwt` (authenticates via its own `x-cron-secret` header check instead of a Supabase JWT, since it's invoked by `pg_cron`, not a user). See "Nightly reconciliation" below. |
+
+### Nightly reconciliation (data integrity monitoring)
+
+A `pg_cron` job (`patron-nightly-reconciliation`, `0 2 * * *` UTC) calls the
+`send-reconciliation-report` Edge Function every night, which:
+
+1. Runs `run_reconciliation()` — 68 checks across 14 domains (stock, sales,
+   payments, COGS, expenses, credit, suppliers, purchase orders, products,
+   monetary precision, members, cross-aggregates, temporal, referential
+   integrity) — writing results to `reconciliation_runs` / `reconciliation_findings`.
+2. Runs `get_financial_snapshot()` — an independent revenue/COGS/expenses/net-profit
+   recompute straight from the ledger, grouped by currency.
+3. Emails the combined report via Resend to `FOUNDER_EMAIL`. Clean runs send a
+   short "all clear" email; runs with findings list each one grouped by severity.
+
+The cron job authenticates to the Edge Function via a secret stored in
+**Supabase Vault** (`patron_cron_secret`), pulled at execution time via
+`vault.decrypted_secrets` — never stored as plaintext in `cron.job`. The
+Edge Function checks this against its `CRON_SECRET` env var.
+
+This system catches data corruption (e.g. an order total that doesn't match
+its line items) but does **not** detect disagreement between the app's own
+display formulas — e.g. the dashboard, reports, and catalogue screens each
+compute "profit" slightly differently as of this writing. Consolidating those
+into one canonical backend function is a separate, tracked follow-up.
