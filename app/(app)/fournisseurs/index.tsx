@@ -37,15 +37,6 @@ const AVATAR_PALETTE = [
   { bg: '#ECFEFF', text: '#0E7490' },
 ];
 
-function compactTime(dateStr: string): string {
-  const days = Math.floor((Date.now() - new Date(dateStr).getTime()) / 86_400_000);
-  if (days === 0) return "auj.";
-  if (days === 1) return 'hier';
-  if (days < 7) return `${days}j`;
-  if (days < 60) return `${Math.floor(days / 7)}sem`;
-  return new Date(dateStr).toLocaleDateString('fr-FR', { day: 'numeric', month: 'short' });
-}
-
 const STATUS_LABEL: Record<string, string> = {
   brouillon: 'Non confirmé', envoye: 'Envoyé', recu_partiel: 'Partiel', recu: 'Reçu', annule: 'Annulé',
 };
@@ -729,16 +720,6 @@ export default function FournisseursScreen() {
     return map;
   }, [products]);
 
-  const lastOrderMap = useMemo(() => {
-    const map: Record<string, string> = {};
-    for (const c of commandes) {
-      if (!map[c.supplier_id] || c.ordered_at > map[c.supplier_id]) {
-        map[c.supplier_id] = c.ordered_at;
-      }
-    }
-    return map;
-  }, [commandes]);
-
   const totalDebtsCount = useMemo(() => Object.keys(supplierDebtMap).length, [supplierDebtMap]);
 
   const { activeGroups, doneGroups, doneCount } = useMemo(() => {
@@ -973,7 +954,6 @@ export default function FournisseursScreen() {
               const initials = item.name.split(/\s+/).slice(0, 2).map((w: string) => w[0]?.toUpperCase() ?? '').join('');
               const owedAmount = supplierDebtMap[item.id] ?? 0;
               const reorderCount = reorderMap[item.id] ?? 0;
-              const lastOrder = lastOrderMap[item.id];
               return (
                 <Pressable
                   onLongPress={() => Alert.alert(item.name, '', [
@@ -1018,9 +998,6 @@ export default function FournisseursScreen() {
                   </View>
 
                   <View style={{ alignItems: 'flex-end', gap: 4 }}>
-                    {lastOrder && (
-                      <Text variant="caption" color="secondary">{compactTime(lastOrder)}</Text>
-                    )}
                     {owedAmount > 0 && (
                       <Text variant="label" style={{ color: palette.warning }}>
                         − {fmt(owedAmount, currency)}
