@@ -352,6 +352,19 @@ async function migrate(db: SQLite.SQLiteDatabase): Promise<void> {
     );
     await db.execAsync('INSERT OR IGNORE INTO _migrations (version) VALUES (16)');
   }
+
+  if (current < 17) {
+    // apports_cache: capital injections had no offline read cache at all —
+    // going offline showed a raw error instead of the last-known data.
+    await db.execAsync(
+      `CREATE TABLE IF NOT EXISTS apports_cache (
+        business_id TEXT PRIMARY KEY,
+        data        TEXT NOT NULL,
+        cached_at   INTEGER NOT NULL
+      )`,
+    );
+    await db.execAsync('INSERT OR IGNORE INTO _migrations (version) VALUES (17)');
+  }
 }
 
 export async function getKV(key: string): Promise<string | null> {
@@ -819,6 +832,34 @@ export async function getMarketCache(): Promise<unknown[] | null> {
   }
 }
 
+// ─── Apports (capital injections) read cache ───────────────────────────────────
+
+export async function saveApportsCache(businessId: string, data: unknown[]): Promise<void> {
+  try {
+    const db = await openDb();
+    const encrypted = await encrypt(JSON.stringify(data));
+    await db.runAsync(
+      'INSERT OR REPLACE INTO apports_cache (business_id, data, cached_at) VALUES (?, ?, ?)',
+      [businessId, encrypted, Date.now()],
+    );
+  } catch { }
+}
+
+export async function getApportsCache(businessId: string): Promise<unknown[] | null> {
+  try {
+    const db = await openDb();
+    const row = await db.getFirstAsync<{ data: string }>(
+      'SELECT data FROM apports_cache WHERE business_id = ?',
+      [businessId],
+    );
+    if (!row) return null;
+    const decrypted = await decrypt(row.data);
+    return JSON.parse(decrypted) as unknown[];
+  } catch {
+    return null;
+  }
+}
+
 // ─── Cache timestamp helper ─────────────────────────────────────────────────────
 // Returns the epoch-ms timestamp when a cache table was last written for a given key.
 // Used by stores to expose staleness info to the UI.
@@ -835,7 +876,8 @@ type CacheTable =
   | 'rapports_cache'
   | 'investor_cache'
   | 'equipe_cache'
-  | 'partnerships_cache';
+  | 'partnerships_cache'
+  | 'apports_cache';
 
 export async function getCacheTimestamp(table: CacheTable, key?: string): Promise<number | null> {
   try {

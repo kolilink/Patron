@@ -13,6 +13,7 @@ import { useVentesStore } from '@/stores/ventes';
 import { useSalesStore } from '@/stores/sales';
 import { formatAmountInput, parseAmountInput } from '@/src/utils/format';
 import { SkeletonList } from '@/src/components/ui/SkeletonPlaceholder';
+import { OfflineNotice } from '@/src/components/ui/OfflineNotice';
 
 function fmt(n: number, cur: string) { return `${Math.round(n).toLocaleString('fr-FR')} ${cur}`; }
 
@@ -52,7 +53,7 @@ export default function CreditsScreen() {
   const isInvestisseur = role === 'investisseur';
 
   const businessName = session?.activeBusiness?.name ?? 'notre boutique';
-  const { sales, loading, error, fetchSales } = useVentesStore();
+  const { sales, loading, error, offline, offlineSince, fetchSales } = useVentesStore();
   const { submitCarnetDebt } = useSalesStore();
 
   const [showAddForm, setShowAddForm] = useState(false);
@@ -150,6 +151,8 @@ export default function CreditsScreen() {
         <Text variant="h4">Clients qui vous doivent</Text>
         <View style={{ width: 60 }} />
       </View>
+
+      {offline && <OfflineNotice offlineSince={offlineSince} />}
 
       {/* Total outstanding — hidden when nothing is owed */}
       {debtors.length > 0 && <Card style={styles.totalCard}>

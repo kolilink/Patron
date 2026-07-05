@@ -147,6 +147,8 @@ export const useRapportsStore = create<RapportsState>((set) => ({
           });
           return;
         }
+        set({ snapshotLoading: false, offline: true, offlineSince: null });
+        return;
       }
       set({ snapshotLoading: false });
       return;

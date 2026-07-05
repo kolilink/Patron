@@ -3,7 +3,7 @@ import * as FileSystem from 'expo-file-system/legacy';
 import { supabase } from '@/lib/supabase';
 import { translateError } from '@/lib/errors';
 import { isNetworkError } from '@/lib/sync';
-import { getKV, setKV, saveChatCache, getChatCache } from '@/lib/db';
+import { getKV, setKV, saveChatCache, getChatCache, getCacheTimestamp } from '@/lib/db';
 import { notifyEvent } from '@/src/utils/notifications';
 import { generateId } from '@/lib/id';
 import type { ChatRoom, ChatMessage } from '@/src/types';
@@ -28,6 +28,8 @@ interface ChatStore {
   error: string | null;
   boutiqueUnread: number;
   marcheUnread: number;
+  offline: boolean;
+  offlineSince: number | null;
   // Internal — cached for synchronous unread computation in appendMessage
   _currentUserId: string;
   _boutiqueLastRead: Date;
@@ -63,6 +65,8 @@ const initialState = {
   error: null,
   boutiqueUnread: 0,
   marcheUnread: 0,
+  offline: false,
+  offlineSince: null as number | null,
   _currentUserId: '',
   _boutiqueLastRead: new Date(0),
   _marcheLastRead: new Date(0),
@@ -97,7 +101,7 @@ export const useChatStore = create<ChatStore>((set, get) => ({
           loading: false,
         });
       } else {
-        set({ loading: true, error: null });
+        set({ loading: true, error: null, offline: false, offlineSince: null });
       }
     } else {
       set({ error: null });
@@ -174,6 +178,8 @@ export const useChatStore = create<ChatStore>((set, get) => ({
         _boutiqueLastRead: boutiqueLastRead,
         _marcheLastRead: marcheLastRead,
         loading: false,
+        offline: false,
+        offlineSince: null,
       });
     } catch (err) {
       if (isNetworkError(err)) {
@@ -195,6 +201,7 @@ export const useChatStore = create<ChatStore>((set, get) => ({
           const marcheUnread = cached.globalRoom
             ? countUnread(cached.messages, cached.globalRoom.id, marcheLastRead, currentUserId)
             : 0;
+          const ts = await getCacheTimestamp('chat_cache', businessId);
           set({
             boutiqueRoom: cached.boutiqueRoom,
             globalRoom: cached.globalRoom,
@@ -205,10 +212,12 @@ export const useChatStore = create<ChatStore>((set, get) => ({
             _boutiqueLastRead: boutiqueLastRead,
             _marcheLastRead: marcheLastRead,
             loading: false,
+            offline: true,
+            offlineSince: ts,
           });
           return;
         }
-        set({ loading: false });
+        set({ loading: false, offline: true, offlineSince: null });
       } else {
         set({ loading: false, error: translateError(err, 'Erreur de chargement') });
       }

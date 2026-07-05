@@ -476,6 +476,7 @@ export default function DiscussionsScreen() {
     boutiqueRoom, globalRoom, messages,
     loading, sending, error,
     boutiqueUnread,
+    offline: chatOffline,
     load, sendMessage, sendVoiceMessage, editMessage, appendMessage, updateMessage, markRead,
   } = useChatStore();
 
@@ -484,6 +485,7 @@ export default function DiscussionsScreen() {
     partners, pending: partnerPending,
     loading: partnersLoading, error: partnersError,
     inviteCode, inviteCodeLoading,
+    offline: partnersOffline,
     loadPartnerships, loadInviteCode, regenerateInviteCode,
     sendPartnerRequest, acceptRequest, declineRequest,
   } = usePartnershipsStore();
@@ -493,7 +495,7 @@ export default function DiscussionsScreen() {
     posts, loading: marketLoading, creating, error: marketError,
     fetchPosts, createPost, prependPost, markVisited,
     likedPostIds, lastVisitedAt, toggleLike,
-    userLevel,
+    userLevel, offline: marketOffline,
   } = useMarketStore();
 
   // ─── Shared state ─────────────────────────────────────────────────────────
@@ -1025,6 +1027,12 @@ export default function DiscussionsScreen() {
 
       <Animated.View style={[{ flex: 1 }, contentStyle]}>
       {/* Category chips — outside KAV so they sit flush under the tab row */}
+      {activeTab === 'marche' && marketOffline && (
+        <View style={{ paddingHorizontal: spacing[4], paddingTop: spacing[1] }}>
+          <Text variant="caption" color="secondary">Hors ligne — dernières données connues</Text>
+        </View>
+      )}
+
       {activeTab === 'marche' && (
         <View style={styles.catScrollWrap}>
           <ScrollView
@@ -1062,6 +1070,11 @@ export default function DiscussionsScreen() {
         {activeTab === 'boutique' ? (
           /* ── Ma Boutique ── */
           <>
+            {chatOffline && (
+              <View style={{ paddingHorizontal: spacing[4], paddingTop: spacing[1] }}>
+                <Text variant="caption" color="secondary">Hors ligne — dernières données connues</Text>
+              </View>
+            )}
             {loading && !boutiqueRoom ? (
               <SkeletonList count={6} />
             ) : !boutiqueRoom ? (
@@ -1224,6 +1237,11 @@ export default function DiscussionsScreen() {
         ) : activeTab === 'amis' ? (
           /* ── Amis ── */
           <>
+            {partnersOffline && (
+              <View style={{ paddingHorizontal: spacing[4], paddingTop: spacing[1] }}>
+                <Text variant="caption" color="secondary">Hors ligne — dernières données connues</Text>
+              </View>
+            )}
             {/* Minimal toolbar: add partner only */}
             <View style={styles.amisHeader}>
               <View style={styles.amisIconBtn} />

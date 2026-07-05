@@ -96,6 +96,8 @@ export const useEquipeStore = create<EquipeStore>((set, get) => ({
           set({ membres: cached as Membre[], loading: false, hasFetched: true, offline: true, offlineSince: ts });
           return;
         }
+        set({ loading: false, hasFetched: true, offline: true, offlineSince: null });
+        return;
       }
       console.error('[fetchMembres memberships]', mErr instanceof Error ? mErr.message : (mErr as { message?: string })?.message ?? JSON.stringify(mErr));
       set({ loading: false, error: translateError(mErr, 'Erreur de chargement'), hasFetched: true });

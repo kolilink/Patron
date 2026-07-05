@@ -2,7 +2,7 @@ import { create } from 'zustand';
 import { supabase } from '@/lib/supabase';
 import { translateError } from '@/lib/errors';
 import { generateId } from '@/lib/id';
-import { saveFournisseurCache, getFournisseurCache, saveCommandeCache, getCommandeCache } from '@/lib/db';
+import { saveFournisseurCache, getFournisseurCache, saveCommandeCache, getCommandeCache, getCacheTimestamp } from '@/lib/db';
 import { isNetworkError } from '@/lib/sync';
 import { useProductStore } from '@/stores/products';
 import { notifyEvent } from '@/src/utils/notifications';
@@ -78,6 +78,7 @@ interface FournisseursStore {
   saving: boolean;
   error: string | null;
   offline: boolean;
+  offlineSince: number | null;
 
   fetchFournisseurs: (businessId: string) => Promise<void>;
   createFournisseur: (businessId: string, userId: string, d: { name: string; phone?: string; country?: string; notes?: string; lead_days?: number | null }) => Promise<boolean>;
@@ -107,6 +108,7 @@ export const useFournisseursStore = create<FournisseursStore>((set, get) => ({
   saving: false,
   error: null,
   offline: false,
+  offlineSince: null,
 
   fetchFournisseurs: async (businessId) => {
     set({ loading: true });
@@ -117,7 +119,13 @@ export const useFournisseursStore = create<FournisseursStore>((set, get) => ({
     if (suppliersRes.error) {
       if (isNetworkError(suppliersRes.error)) {
         const cached = await getFournisseurCache(businessId) as Fournisseur[] | null;
-        if (cached) { set({ fournisseurs: cached, loading: false, offline: true, error: null }); return; }
+        if (cached) {
+          const ts = await getCacheTimestamp('fournisseur_cache', businessId);
+          set({ fournisseurs: cached, loading: false, offline: true, offlineSince: ts, error: null });
+          return;
+        }
+        set({ loading: false, offline: true, offlineSince: null, error: null });
+        return;
       }
       set({ loading: false, error: translateError(suppliersRes.error, 'Erreur de chargement') });
       return;
@@ -134,7 +142,7 @@ export const useFournisseursStore = create<FournisseursStore>((set, get) => ({
       date: d.date as string,
       created_at: d.created_at as string,
     }));
-    set({ fournisseurs, debts, loading: false, offline: false });
+    set({ fournisseurs, debts, loading: false, offline: false, offlineSince: null });
   },
 
   createFournisseur: async (businessId, userId, d) => {
@@ -220,7 +228,13 @@ export const useFournisseursStore = create<FournisseursStore>((set, get) => ({
     if (error) {
       if (isNetworkError(error)) {
         const cached = await getCommandeCache(businessId) as CommandeAchat[] | null;
-        if (cached) { set({ commandes: cached, loading: false, offline: true, error: null }); return; }
+        if (cached) {
+          const ts = await getCacheTimestamp('commande_cache', businessId);
+          set({ commandes: cached, loading: false, offline: true, offlineSince: ts, error: null });
+          return;
+        }
+        set({ loading: false, offline: true, offlineSince: null, error: null });
+        return;
       }
       set({ loading: false, error: translateError(error, 'Erreur de chargement') });
       return;
@@ -231,7 +245,7 @@ export const useFournisseursStore = create<FournisseursStore>((set, get) => ({
       supplier_name: (c.supplier as { name: string } | null)?.name ?? '—',
     } as CommandeAchat));
     void saveCommandeCache(businessId, commandes as unknown[]);
-    set({ commandes, loading: false, offline: false });
+    set({ commandes, loading: false, offline: false, offlineSince: null });
   },
 
   createCommande: async (businessId, userId, input) => {
@@ -406,5 +420,5 @@ export const useFournisseursStore = create<FournisseursStore>((set, get) => ({
   },
 
   clearError: () => set({ error: null }),
-  reset: () => set({ fournisseurs: [], commandes: [], debts: [], payments: [], loading: false, saving: false, error: null, offline: false }),
+  reset: () => set({ fournisseurs: [], commandes: [], debts: [], payments: [], loading: false, saving: false, error: null, offline: false, offlineSince: null }),
 }));

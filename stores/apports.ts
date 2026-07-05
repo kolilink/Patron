@@ -2,6 +2,8 @@ import { create } from 'zustand';
 import { supabase } from '@/lib/supabase';
 import { translateError } from '@/lib/errors';
 import { generateFallbackName } from '@/lib/id';
+import { saveApportsCache, getApportsCache, getCacheTimestamp } from '@/lib/db';
+import { isNetworkError } from '@/lib/sync';
 
 export interface Apport {
   id: string;
@@ -23,6 +25,8 @@ interface AportsStore {
   loading: boolean;
   saving: boolean;
   error: string | null;
+  offline: boolean;
+  offlineSince: number | null;
   fetchApports: (businessId: string) => Promise<void>;
   addApport: (params: {
     businessId: string;
@@ -57,9 +61,20 @@ export const useAportsStore = create<AportsStore>((set, get) => ({
   loading: false,
   saving: false,
   error: null,
+  offline: false,
+  offlineSince: null,
 
   fetchApports: async (businessId) => {
-    set({ loading: true, error: null });
+    if (get().apports.length === 0) {
+      const cached = await getApportsCache(businessId) as Apport[] | null;
+      if (cached) {
+        set({ apports: cached, loading: false, error: null });
+      } else {
+        set({ loading: true, error: null });
+      }
+    } else {
+      set({ error: null });
+    }
 
     const { data, error } = await supabase
       .from('capital_injections')
@@ -68,6 +83,16 @@ export const useAportsStore = create<AportsStore>((set, get) => ({
       .order('injected_at', { ascending: false });
 
     if (error) {
+      if (isNetworkError(error)) {
+        const cached = await getApportsCache(businessId) as Apport[] | null;
+        if (cached) {
+          const ts = await getCacheTimestamp('apports_cache', businessId);
+          set({ apports: cached, loading: false, offline: true, offlineSince: ts, error: null });
+          return;
+        }
+        set({ loading: false, offline: true, offlineSince: null, error: null });
+        return;
+      }
       set({ loading: false, error: translateError(error, 'Erreur de chargement') });
       return;
     }
@@ -88,7 +113,8 @@ export const useAportsStore = create<AportsStore>((set, get) => ({
       edited_by_name: (r.editor as { name: string | null } | null)?.name ?? null,
     }));
 
-    set({ apports, loading: false });
+    void saveApportsCache(businessId, apports as unknown[]);
+    set({ apports, loading: false, offline: false, offlineSince: null });
   },
 
   addApport: async ({ businessId, amount, injectedById, sourceName, note, injectedAt }) => {
@@ -157,5 +183,5 @@ export const useAportsStore = create<AportsStore>((set, get) => ({
     return true;
   },
 
-  reset: () => set({ apports: [], loading: false, saving: false, error: null }),
+  reset: () => set({ apports: [], loading: false, saving: false, error: null, offline: false, offlineSince: null }),
 }));

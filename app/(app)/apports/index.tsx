@@ -8,6 +8,7 @@ import { Text } from '@/src/components/ui/Text';
 import { Button } from '@/src/components/ui/Button';
 import { DatePickerField } from '@/src/components/ui/DatePickerField';
 import { SkeletonList } from '@/src/components/ui/SkeletonPlaceholder';
+import { OfflineNotice } from '@/src/components/ui/OfflineNotice';
 import { useTheme, spacing, radius } from '@/src/theme';
 import type { Palette } from '@/src/theme';
 import { formatAmount, formatAmountInput, parseAmountInput } from '@/src/utils/format';
@@ -253,7 +254,7 @@ export default function AportsScreen() {
   const userId = session?.user?.id;
   const canWrite = role === 'administrateur' || role === 'manager';
 
-  const { apports, loading, saving, fetchApports, addApport, editApport, recordWithdrawal } = useAportsStore();
+  const { apports, loading, saving, offline, offlineSince, fetchApports, addApport, editApport, recordWithdrawal } = useAportsStore();
   const fetchMembres = useEquipeStore(s => s.fetchMembres);
   const [showForm, setShowForm] = useState(false);
   const [formMode, setFormMode] = useState<FormMode>('add');
@@ -353,6 +354,8 @@ export default function AportsScreen() {
           </Pressable>
         )}
       </View>
+
+      {offline && <OfflineNotice offlineSince={offlineSince} />}
 
       {/* Title + total */}
       <View style={styles.headerMeta}>

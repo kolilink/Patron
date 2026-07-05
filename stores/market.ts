@@ -2,7 +2,7 @@ import { create } from 'zustand';
 import { supabase } from '@/lib/supabase';
 import { translateError } from '@/lib/errors';
 import { isNetworkError } from '@/lib/sync';
-import { getKV, setKV, saveMarketCache, getMarketCache } from '@/lib/db';
+import { getKV, setKV, saveMarketCache, getMarketCache, getCacheTimestamp } from '@/lib/db';
 import { toast } from '@/stores/toast';
 import type { MarketPost, MarketComment, MarketCategory } from '@/src/types';
 
@@ -23,6 +23,8 @@ interface MarketStore {
   comments: MarketComment[];
   loadingDetail: boolean;
   sendingComment: boolean;
+  offline: boolean;
+  offlineSince: number | null;
 
   fetchPosts: (userId: string, category?: MarketCategory) => Promise<void>;
   prependPost: (post: MarketPost) => void;
@@ -53,6 +55,8 @@ const initialState = {
   comments: [],
   loadingDetail: false,
   sendingComment: false,
+  offline: false,
+  offlineSince: null as number | null,
 };
 
 export const useMarketStore = create<MarketStore>((set, get) => ({
@@ -117,15 +121,18 @@ export const useMarketStore = create<MarketStore>((set, get) => ({
         userLevel: profileRes.data?.community_level ?? 1,
         lastVisitedAt: visitTs ? new Date(visitTs) : null,
         loading: false,
+        offline: false,
+        offlineSince: null,
       });
     } catch (err) {
       if (isNetworkError(err)) {
         const cached = await getMarketCache() as MarketPost[] | null;
         if (cached) {
-          set({ posts: cached, loading: false, error: null });
+          const ts = await getCacheTimestamp('market_cache');
+          set({ posts: cached, loading: false, error: null, offline: true, offlineSince: ts });
           return;
         }
-        set({ loading: false, error: null }); // show empty state, not an error
+        set({ loading: false, error: null, offline: true, offlineSince: null }); // show empty state, not an error
         return;
       }
       set({ loading: false, error: translateError(err, 'Erreur de chargement') });

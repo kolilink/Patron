@@ -6,6 +6,7 @@ import { Screen } from '@/src/components/ui/Screen';
 import { router } from 'expo-router';
 import { AppSheet } from '@/src/components/ui/AppSheet';
 import { SkeletonList } from '@/src/components/ui/SkeletonPlaceholder';
+import { OfflineNotice } from '@/src/components/ui/OfflineNotice';
 import { Button } from '@/src/components/ui/Button';
 import { Card } from '@/src/components/ui/Card';
 import { Text } from '@/src/components/ui/Text';
@@ -174,7 +175,7 @@ function MemberDetailSheet({
   const { palette } = useTheme();
   const styles = useMemo(() => makeStyles(palette), [palette]);
   const { saving, changeRole, removeMembre, fetchMemberScope, setMemberScope, removeScopeProduct, updateDisplayName, updateScopeAll } = useEquipeStore();
-  const { balance, payouts, saving: investorSaving, fetchBalance, fetchPayouts, confirmPayout } = useInvestorStore();
+  const { balance, payouts, saving: investorSaving, offline: investorOffline, fetchBalance, fetchPayouts, confirmPayout } = useInvestorStore();
   const { apports, fetchApports } = useAportsStore();
 
   const [scope, setScope] = useState<MemberProductStake[]>([]);
@@ -386,6 +387,12 @@ function MemberDetailSheet({
               <View style={styles.sectionHdr}>
                 <Text variant="label">Investissement</Text>
               </View>
+
+              {investorOffline && (
+                <Text variant="caption" color="secondary" style={{ paddingHorizontal: spacing[4] }}>
+                  Hors ligne — dernières données connues
+                </Text>
+              )}
 
               {(() => {
                 const totalInvested = apports
@@ -908,7 +915,7 @@ export default function EquipeScreen() {
     if (role && role !== 'administrateur') router.back();
   }, [role]);
 
-  const { membres, codes, loading, saving, error, hasFetched, fetchMembres, fetchCodes, createCode, revokeCode } = useEquipeStore();
+  const { membres, codes, loading, saving, error, hasFetched, offline, offlineSince, fetchMembres, fetchCodes, createCode, revokeCode } = useEquipeStore();
   const { products, fetchProducts } = useProductStore();
 
   const [tab, setTab] = useState<'membres' | 'codes'>('membres');
@@ -951,6 +958,8 @@ export default function EquipeScreen() {
         </Pressable>
       </View>
 
+      {offline && <OfflineNotice offlineSince={offlineSince} />}
+
       <View style={styles.tabs}>
         {(['membres', 'codes'] as const).map(t => (
           <Pressable key={t} onPress={() => setTab(t)} style={[styles.tab, tab === t && styles.tabActive]}>
@@ -964,7 +973,7 @@ export default function EquipeScreen() {
       {tab === 'membres' ? (
         (!hasFetched || loading) && membres.length === 0 ? (
           <SkeletonList count={5} />
-        ) : !loading && membres.length === 0 && error ? (
+        ) : !loading && membres.length === 0 && (error || offline) ? (
           <Text variant="body" color="secondary" style={styles.center}>Données non disponibles hors ligne</Text>
         ) : (
           <FlatList

@@ -150,7 +150,8 @@ export const useProductStore = create<ProductStore>((set, get) => ({
         set({
           error: 'Pas de connexion. Ouvrez l\'application en ligne une première fois pour activer le mode hors ligne.',
           loading: false,
-          offline: false,
+          offline: true,
+          offlineSince: null,
         });
         return;
       }

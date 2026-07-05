@@ -165,6 +165,8 @@ export const usePartnershipsStore = create<PartnershipsStore>((set, get) => ({
           set({ partners: cached.partners, pending: cached.pending, loading: false, offline: true, offlineSince: ts });
           return;
         }
+        set({ loading: false, offline: true, offlineSince: null });
+        return;
       }
       set({ loading: false, error: translateError(err, 'Impossible de charger vos amis') });
     }

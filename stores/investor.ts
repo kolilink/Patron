@@ -68,6 +68,8 @@ export const useInvestorStore = create<InvestorStore>((set, get) => ({
           set({ balance: cached as number, loading: false, offline: true, offlineSince: ts });
           return;
         }
+        set({ loading: false, offline: true, offlineSince: null });
+        return;
       }
       set({ loading: false, error: translateError(error, 'Impossible de charger le solde') });
       return;
@@ -101,6 +103,8 @@ export const useInvestorStore = create<InvestorStore>((set, get) => ({
           set({ payouts: cached as InvestorPayout[], loading: false, offline: true, offlineSince: ts });
           return;
         }
+        set({ loading: false, offline: true, offlineSince: null });
+        return;
       }
       set({ loading: false, error: translateError(error, 'Impossible de charger les retraits') });
       return;
