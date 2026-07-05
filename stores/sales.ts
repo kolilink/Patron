@@ -11,6 +11,8 @@ import { useProductStore } from '@/stores/products';
 import { trackEvent } from '@/lib/analytics';
 import { haptics } from '@/lib/haptics';
 import { useToastStore } from '@/stores/toast';
+import { notifyEvent } from '@/src/utils/notifications';
+import { formatAmount } from '@/src/utils/format';
 import type { PaymentMethod, Product, ProductVariant } from '@/src/types';
 
 export interface CartLine {
@@ -21,6 +23,7 @@ export interface CartLine {
   variant_id?: string;
   variant_name?: string;
   variant_cost_price?: number;
+  variant_stock_qty?: number;
 }
 
 export interface SalePayment {
@@ -36,7 +39,7 @@ interface SalesStore {
   lastSubmitQueued: boolean;
 
   addToCart: (product: Product, bulk?: boolean) => void;
-  addToCartVariant: (product: Product, variant: ProductVariant) => void;
+  addToCartVariant: (product: Product, variant: ProductVariant, qty?: number) => void;
   removeFromCart: (productId: string, isBulk?: boolean, variantId?: string) => void;
   setQty: (productId: string, qty: number, isBulk?: boolean, variantId?: string) => void;
   toggleBulk: (productId: string, isBulk?: boolean) => void;
@@ -57,6 +60,31 @@ interface SalesStore {
   reset: () => void;
 }
 
+// Builds the "{qty} {product}" fragment for the sale-completed notification.
+// Groups by base product_id: a single product (even split across variant
+// lines) is named directly; 2+ distinct products fall back to a generic count.
+function describeSaleForNotification(lines: CartLine[]): string {
+  const byProduct = new Map<string, CartLine[]>();
+  for (const l of lines) {
+    const group = byProduct.get(l.product.id);
+    if (group) group.push(l);
+    else byProduct.set(l.product.id, [l]);
+  }
+
+  const totalQty = lines.reduce((s, l) => s + l.qty, 0);
+
+  if (byProduct.size > 1) {
+    return `${totalQty} produits`;
+  }
+
+  const group = byProduct.values().next().value!;
+  const productName = group[0].product.name;
+  if (group.length === 1 && group[0].variant_name) {
+    return `${totalQty} ${productName} ${group[0].variant_name}`;
+  }
+  return `${totalQty} ${productName}`;
+}
+
 export const useSalesStore = create<SalesStore>((set, get) => ({
   cart: [],
   submitting: false,
@@ -65,6 +93,14 @@ export const useSalesStore = create<SalesStore>((set, get) => ({
 
   addToCart: (product, bulk = false) => {
     const { cart } = get();
+    // Bulk and unit lines for the same product share one physical stock pool —
+    // cap the combined total at stock_qty so tapping the tile repeatedly can
+    // never reserve more than what's actually left to sell.
+    const totalInCart = cart
+      .filter(l => l.product.id === product.id && !l.variant_id)
+      .reduce((s, l) => s + l.qty, 0);
+    if (totalInCart >= product.stock_qty) return;
+
     const existing = cart.find(l => l.product.id === product.id && l.is_bulk === bulk && !l.variant_id);
     if (existing) {
       set({
@@ -78,20 +114,27 @@ export const useSalesStore = create<SalesStore>((set, get) => ({
     }
   },
 
-  addToCartVariant: (product, variant) => {
+  addToCartVariant: (product, variant, qty = 1) => {
     const { cart } = get();
     const existing = cart.find(l => l.variant_id === variant.id);
     if (existing) {
-      set({ cart: cart.map(l => l.variant_id === variant.id ? { ...l, qty: l.qty + 1 } : l) });
+      set({
+        cart: cart.map(l =>
+          l.variant_id === variant.id
+            ? { ...l, qty: Math.min(l.qty + qty, variant.stock_qty) }
+            : l,
+        ),
+      });
     } else {
       set({ cart: [...cart, {
         product,
-        qty: 1,
+        qty: Math.min(qty, variant.stock_qty),
         unit_price: variant.sale_price,
         is_bulk: false,
         variant_id: variant.id,
         variant_name: variant.name,
         variant_cost_price: variant.cost_price,
+        variant_stock_qty: variant.stock_qty,
       }] });
     }
   },
@@ -112,10 +155,16 @@ export const useSalesStore = create<SalesStore>((set, get) => ({
     }
     set(state => ({
       cart: state.cart.map(l => {
-        if (variantId !== undefined) return l.variant_id === variantId ? { ...l, qty } : l;
-        return l.product.id === productId && (isBulk === undefined || l.is_bulk === isBulk)
-          ? { ...l, qty }
-          : l;
+        if (variantId !== undefined) {
+          if (l.variant_id !== variantId) return l;
+          const max = l.variant_stock_qty ?? Infinity;
+          return { ...l, qty: Math.min(qty, max) };
+        }
+        if (l.product.id === productId && (isBulk === undefined || l.is_bulk === isBulk)) {
+          const max = l.product.stock_qty;
+          return { ...l, qty: Math.min(qty, max) };
+        }
+        return l;
       }),
     }));
   },
@@ -176,17 +225,25 @@ export const useSalesStore = create<SalesStore>((set, get) => ({
     set({ submitting: true, error: null });
 
     try {
-      const totalAmount = overrideTotalAmount ?? cartSnapshot.reduce((sum, l) => sum + l.unit_price * l.qty, 0);
+      const catalogTotal = cartSnapshot.reduce((sum, l) => sum + l.unit_price * l.qty, 0);
+      const totalAmount = overrideTotalAmount ?? catalogTotal;
       const isFullCredit = payment === null;
       const discount = discountAmount ?? 0;
       const isPartialCredit = !isFullCredit && payment!.amount < (totalAmount - discount) - 0.01;
       const isCredit = isFullCredit || isPartialCredit;
       const today = new Date().toISOString().split('T')[0];
 
+      // When the merchant sold above catalog price, distribute the override
+      // proportionally across lines so unit_price always holds the real price
+      // charged — there's no separate "catalog vs paid" field any more.
+      const priceRatio = overrideTotalAmount && overrideTotalAmount > catalogTotal + 0.5 && catalogTotal > 0
+        ? overrideTotalAmount / catalogTotal
+        : 1;
+
       const cartJson = cartSnapshot.map(l => ({
         product_id:   l.product.id,
         qty:          l.qty,
-        unit_price:   Math.round(l.unit_price * 100),
+        unit_price:   Math.round(l.unit_price * priceRatio * 100),
         is_bulk:      l.is_bulk,
         product_name: l.product.name,
         variant_id:   l.variant_id ?? null,
@@ -213,6 +270,21 @@ export const useSalesStore = create<SalesStore>((set, get) => ({
       const { error: rpcErr } = await supabase.rpc('submit_sale', rpcPayload);
       if (rpcErr) throw rpcErr;
 
+      // Notify managers/admins of the completed sale (online path only)
+      const _notifSession = useAuthStore.getState().session;
+      if (_notifSession?.activeBusiness && !_notifSession.isDemoMode) {
+        notifyEvent({
+          businessId,
+          eventType: 'sale_completed',
+          payload: {
+            seller: _notifSession.user.name || 'Vendeur',
+            desc: describeSaleForNotification(cartSnapshot),
+            amount: formatAmount(totalAmount, _notifSession.activeBusiness.currency),
+          },
+          targetRoles: ['administrateur', 'manager'],
+        });
+      }
+
       set({ cart: [], submitting: false, lastSubmitQueued: false });
       haptics.heavy();
       trackEvent('sale_submitted', businessId, userId, {
@@ -221,16 +293,22 @@ export const useSalesStore = create<SalesStore>((set, get) => ({
         has_discount:   (discountAmount ?? 0) > 0,
         payment_method: payment?.method ?? (isCredit ? 'credit' : null),
         currency:       useAuthStore.getState().session?.activeBusiness?.currency,
+        total_amount:   totalAmount,
       });
       return true;
     } catch (err) {
       if (isNetworkError(err)) {
-        const totalAmount = overrideTotalAmount ?? cartSnapshot.reduce((sum, l) => sum + l.unit_price * l.qty, 0);
+        const catalogTotalOffline = cartSnapshot.reduce((sum, l) => sum + l.unit_price * l.qty, 0);
+        const totalAmount = overrideTotalAmount ?? catalogTotalOffline;
         const isFullCredit = payment === null;
         const discount = discountAmount ?? 0;
         const isPartialCredit = !isFullCredit && payment!.amount < (totalAmount - discount) - 0.01;
         const isCredit = isFullCredit || isPartialCredit;
         const today = new Date().toISOString().split('T')[0];
+
+        const priceRatioOffline = overrideTotalAmount && overrideTotalAmount > catalogTotalOffline + 0.5 && catalogTotalOffline > 0
+          ? overrideTotalAmount / catalogTotalOffline
+          : 1;
 
         await enqueue('submit_sale', {
           p_business_id:     businessId,
@@ -243,7 +321,7 @@ export const useSalesStore = create<SalesStore>((set, get) => ({
           p_cart:            cartSnapshot.map(l => ({
             product_id:   l.product.id,
             qty:          l.qty,
-            unit_price:   Math.round(l.unit_price * 100),
+            unit_price:   Math.round(l.unit_price * priceRatioOffline * 100),
             is_bulk:      l.is_bulk,
             product_name: l.product.name,
             variant_id:   l.variant_id ?? null,
@@ -341,7 +419,11 @@ export const useSalesStore = create<SalesStore>((set, get) => ({
 
         return true;
       }
-      const raw = err instanceof Error ? err.message : JSON.stringify(err);
+      const raw = err instanceof Error
+        ? err.message
+        : typeof (err as { message?: unknown })?.message === 'string'
+          ? (err as { message: string }).message
+          : 'Une erreur est survenue. La vente n\'a pas été enregistrée.';
       haptics.error();
       set({ error: raw, submitting: false, lastSubmitQueued: false });
       return false;
