@@ -2,6 +2,7 @@ import { useEffect, useMemo, useRef, useState } from 'react';
 import { Alert, Animated, Easing, FlatList, KeyboardAvoidingView, LayoutAnimation, Modal, Platform, Pressable, ScrollView, StyleSheet, TextInput, UIManager, View } from 'react-native';
 import { Ionicons } from '@expo/vector-icons';
 import { SafeAreaView } from 'react-native-safe-area-context';
+import { Screen } from '@/src/components/ui/Screen';
 import { router } from 'expo-router';
 import { Button } from '@/src/components/ui/Button';
 import { Card } from '@/src/components/ui/Card';
@@ -9,7 +10,7 @@ import { Input } from '@/src/components/ui/Input';
 import { Text } from '@/src/components/ui/Text';
 import { PhoneInput } from '@/src/components/ui/PhoneInput';
 import { DatePickerField } from '@/src/components/ui/DatePickerField';
-import { useTheme, spacing, radius } from '@/src/theme';
+import { useTheme, spacing, radius, SUPPLIER_AVATAR_PALETTE } from '@/src/theme';
 import type { Palette } from '@/src/theme';
 import type { Product, ProductVariant } from '@/src/types';
 import { useAuthStore } from '@/stores/auth';
@@ -19,6 +20,7 @@ import { haptics } from '@/lib/haptics';
 import { translateError } from '@/lib/errors';
 import { generateId } from '@/lib/id';
 import { supabase } from '@/lib/supabase';
+import { formatAmountInput, parseAmountInput } from '@/src/utils/format';
 
 function fmt(n: number, cur: string) { return `${Math.round(n).toLocaleString('fr-FR')} ${cur}`; }
 function todayISO() {
@@ -26,16 +28,7 @@ function todayISO() {
   return `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, '0')}-${String(d.getDate()).padStart(2, '0')}`;
 }
 
-const AVATAR_PALETTE = [
-  { bg: '#EEF2FF', text: '#4F46E5' },
-  { bg: '#FDF4FF', text: '#86198F' },
-  { bg: '#FFFBEB', text: '#92400E' },
-  { bg: '#ECFDF5', text: '#065F46' },
-  { bg: '#EFF6FF', text: '#1D4ED8' },
-  { bg: '#F5F3FF', text: '#6D28D9' },
-  { bg: '#FEF2F2', text: '#991B1B' },
-  { bg: '#ECFEFF', text: '#0E7490' },
-];
+const AVATAR_PALETTE = SUPPLIER_AVATAR_PALETTE;
 
 const STATUS_LABEL: Record<string, string> = {
   brouillon: 'Non confirmé', envoye: 'Envoyé', recu_partiel: 'Partiel', recu: 'Reçu', annule: 'Annulé',
@@ -170,7 +163,7 @@ function FournisseurForm({ visible, editing, products, onClose, onSave, saving }
                     if (showCreate) setNewProductName('');
                   }}>
                   <Animated.View style={[styles.addBadge, showCreate && styles.addBadgeActive, { transform: [{ scale: pulseAnim }] }]}>
-                    <Text style={[styles.addBadgePlus, showCreate && { color: '#fff' }]}>+</Text>
+                    <Text style={[styles.addBadgePlus, showCreate && { color: palette.textInverse }]}>+</Text>
                   </Animated.View>
                 </Pressable>
               </View>
@@ -332,7 +325,7 @@ function DebtModal({ visible, fournisseur, currency, saving, onClose, onSave }: 
               <Text variant="label">{fournisseur.name}</Text>
             </Card>
           )}
-          <Input label={`Montant (${currency})`} value={amount} onChangeText={setAmount}
+          <Input label={`Montant (${currency})`} value={amount} onChangeText={v => setAmount(formatAmountInput(v))}
             keyboardType="decimal-pad" />
           <Input label="Description (optionnel)" value={description} onChangeText={setDescription}
             placeholder="50 sacs de riz, livraison du 5 juin" />
@@ -343,7 +336,7 @@ function DebtModal({ visible, fournisseur, currency, saving, onClose, onSave }: 
             label={saving ? '…' : 'Enregistrer la dette'}
             loading={saving} fullWidth size="lg"
             onPress={() => {
-              const amt = parseFloat(amount.replace(/\s/g, ''));
+              const amt = parseAmountInput(amount);
               if (isNaN(amt) || amt <= 0) { Alert.alert('Vérifiez le montant :)'); return; }
               onSave(amt, description.trim(), date);
             }}
@@ -383,19 +376,19 @@ function CommandeForm({ visible, fournisseur, currency, onClose, onSave, saving 
     const linked = fId
       ? products.filter(p => p.supplier_id === fId && !p.archived)
       : [];
-    setLines(linked.map(p => ({ product_id: p.id, product_name: p.name, variant_id: null, variant_name: null, qty: '1', total_cost: p.cost_price > 0 && !p.has_variants ? String(p.cost_price) : '' })));
+    setLines(linked.map(p => ({ product_id: p.id, product_name: p.name, variant_id: null, variant_name: null, qty: '1', total_cost: p.cost_price > 0 && !p.has_variants ? formatAmountInput(String(p.cost_price)) : '' })));
     // Pre-fetch variants for all linked variant products
     linked.filter(p => p.has_variants && !variantsByProduct[p.id]).forEach(p => fetchVariants(p.id, fId ?? ''));
   }, [visible, products, fournisseur?.id]);
 
   const addLine = (p: Product) => {
-    setLines(prev => [...prev, { product_id: p.id, product_name: p.name, variant_id: null, variant_name: null, qty: '1', total_cost: p.cost_price > 0 && !p.has_variants ? String(p.cost_price) : '' }]);
+    setLines(prev => [...prev, { product_id: p.id, product_name: p.name, variant_id: null, variant_name: null, qty: '1', total_cost: p.cost_price > 0 && !p.has_variants ? formatAmountInput(String(p.cost_price)) : '' }]);
     if (p.has_variants && !variantsByProduct[p.id]) {
       fetchVariants(p.id, fournisseur?.id ?? '');
     }
   };
 
-  const total = lines.reduce((s, l) => s + (parseFloat(l.total_cost) || 0), 0);
+  const total = lines.reduce((s, l) => s + parseAmountInput(l.total_cost), 0);
 
   // Picker only shows products not already in lines, supplier-linked ones first
   const lineIds = new Set(lines.map(l => l.product_id));
@@ -457,7 +450,7 @@ function CommandeForm({ visible, fournisseur, currency, onClose, onSave, saving 
                     {variants.map(v => (
                       <Pressable
                         key={v.id}
-                        onPress={() => setLines(prev => prev.map((x, j) => j === i ? { ...x, variant_id: v.id, variant_name: v.name, total_cost: v.cost_price > 0 ? String(v.cost_price) : x.total_cost } : x))}
+                        onPress={() => setLines(prev => prev.map((x, j) => j === i ? { ...x, variant_id: v.id, variant_name: v.name, total_cost: v.cost_price > 0 ? formatAmountInput(String(v.cost_price)) : x.total_cost } : x))}
                         style={[styles.prodChip, l.variant_id === v.id && styles.prodChipLinked]}
                       >
                         <Text variant="caption" style={{ color: l.variant_id === v.id ? palette.primary : palette.textPrimary }}>{v.name}</Text>
@@ -478,13 +471,13 @@ function CommandeForm({ visible, fournisseur, currency, onClose, onSave, saving 
                   </View>
                   <View style={{ flex: 2 }}>
                     <Input label={`Coût total (${currency})`} value={l.total_cost}
-                      onChangeText={v => setLines(prev => prev.map((x, j) => j === i ? { ...x, total_cost: v } : x))}
+                      onChangeText={v => setLines(prev => prev.map((x, j) => j === i ? { ...x, total_cost: formatAmountInput(v) } : x))}
                       keyboardType="decimal-pad" />
                   </View>
                 </View>
                 {(() => {
                   const qty = parseInt(l.qty) || 0;
-                  const tc = parseFloat(l.total_cost) || 0;
+                  const tc = parseAmountInput(l.total_cost);
                   const unit = qty > 0 && tc > 0 ? fmt(tc / qty, currency) : '—';
                   return (
                     <Text variant="caption" color="secondary">
@@ -517,7 +510,7 @@ function CommandeForm({ visible, fournisseur, currency, onClose, onSave, saving 
             onPress={() => {
               const parsed = lines.map(l => {
                 const qty = parseInt(l.qty) || 0;
-                const tc = parseFloat(l.total_cost) || 0;
+                const tc = parseAmountInput(l.total_cost);
                 return { product_id: l.product_id, product_name: l.product_name, variant_id: l.variant_id ?? null, qty, unit_cost: qty > 0 ? tc / qty : 0 };
               });
               const invalid = parsed.find(l => l.qty <= 0 || l.unit_cost <= 0);
@@ -535,13 +528,32 @@ function CommandeForm({ visible, fournisseur, currency, onClose, onSave, saving 
 function CommandeDetail({ commande, currency, onClose, onRecevoir, saving }: {
   commande: CommandeAchat; currency: string;
   onClose: () => void;
-  onRecevoir: (lines: { id: string; qty: number }[] | null) => void;
+  onRecevoir: (lines: { id: string; qty: number }[] | null, shippingCents: number) => void;
   saving: boolean;
 }) {
   const { palette } = useTheme();
   const styles = useMemo(() => makeStyles(palette), [palette]);
   const [step, setStep] = useState<'detail' | 'select'>('detail');
   const [receivedQtys, setReceivedQtys] = useState<Map<string, number>>(new Map());
+  const [shippingInput, setShippingInput] = useState('');
+  const [shippingHistory, setShippingHistory] = useState<{ id: string; amount: number; date: string }[]>([]);
+
+  useEffect(() => {
+    supabase
+      .from('expenses')
+      .select('id, amount, date')
+      .eq('purchase_order_id', commande.id)
+      .eq('category', 'transport_achat')
+      .order('date', { ascending: true })
+      .then(({ data }) => {
+        if (data) setShippingHistory(
+          (data as { id: string; amount: number; date: string }[]).map(e => ({
+            ...e,
+            amount: e.amount / 100,
+          }))
+        );
+      });
+  }, [commande.id]);
 
   const unreceivedLines = (commande.lines ?? []).filter(l => l.qty_received < l.qty_ordered);
 
@@ -572,7 +584,8 @@ function CommandeDetail({ commande, currency, onClose, onRecevoir, saving }: {
         const orig = unreceivedLines.find(x => x.id === l.id)!;
         return l.qty >= orig.qty_ordered - orig.qty_received;
       });
-    onRecevoir(isAll ? null : lines);
+    const shippingCents = Math.round(parseAmountInput(shippingInput) * 100);
+    onRecevoir(isAll ? null : lines, shippingCents);
   };
 
   return (
@@ -609,13 +622,43 @@ function CommandeDetail({ commande, currency, onClose, onRecevoir, saving }: {
                 )}
               </Card>
             ))}
+
+            {/* Frais de port payés sur cette commande */}
+            {shippingHistory.length > 0 && (
+              <Card style={{ gap: spacing[2] }}>
+                <View style={{ flexDirection: 'row', alignItems: 'center', gap: spacing[2] }}>
+                  <Ionicons name="cube-outline" size={14} color={palette.textSecondary} />
+                  <Text variant="label" color="secondary">Frais de port</Text>
+                </View>
+                {shippingHistory.map(e => (
+                  <View key={e.id} style={styles.dr}>
+                    <Text variant="caption" color="secondary">
+                      {new Date(e.date + 'T00:00:00').toLocaleDateString('fr-FR', { day: 'numeric', month: 'short', year: 'numeric' })}
+                    </Text>
+                    <Text variant="label" style={{ color: palette.warning }}>{fmt(e.amount, currency)}</Text>
+                  </View>
+                ))}
+                {shippingHistory.length > 1 && (
+                  <View style={[styles.dr, { paddingTop: spacing[1], borderTopWidth: 1, borderTopColor: palette.border }]}>
+                    <Text variant="caption" color="secondary">Total fret</Text>
+                    <Text variant="label" style={{ color: palette.warning }}>
+                      {fmt(shippingHistory.reduce((s, e) => s + e.amount, 0), currency)}
+                    </Text>
+                  </View>
+                )}
+              </Card>
+            )}
+
             {(commande.status === 'brouillon' || commande.status === 'recu_partiel') && (
               <Button label="Confirmer la réception" variant="primary" fullWidth onPress={enterSelect} />
             )}
           </ScrollView>
         ) : (
-          <>
-            <ScrollView contentContainerStyle={styles.mpad}>
+          <KeyboardAvoidingView
+            style={{ flex: 1 }}
+            behavior={Platform.OS === 'ios' ? 'padding' : 'height'}
+          >
+            <ScrollView contentContainerStyle={styles.mpad} keyboardShouldPersistTaps="handled">
               <Pressable style={styles.selectAllRow} onPress={setAll}>
                 <Ionicons name="checkmark-done-outline" size={18} color={palette.primary} />
                 <Text variant="label" style={{ color: palette.primary }}>Tout recevoir</Text>
@@ -637,7 +680,17 @@ function CommandeDetail({ commande, currency, onClose, onRecevoir, saving }: {
                       <Pressable onPress={() => setQty(l.id, Math.max(0, qty - 1))} style={styles.stepBtn} hitSlop={8}>
                         <Ionicons name="remove" size={18} color={qty > 0 ? palette.textPrimary : palette.textDisabled} />
                       </Pressable>
-                      <Text style={[styles.stepVal, !active && { color: palette.textDisabled }]}>{qty}</Text>
+                      <TextInput
+                        style={[styles.stepVal, !active && { color: palette.textDisabled }]}
+                        value={String(qty)}
+                        onChangeText={v => {
+                          if (v === '' || v === '0') { setQty(l.id, 0); return; }
+                          const n = parseInt(v, 10);
+                          if (!isNaN(n)) setQty(l.id, Math.min(maxQty, Math.max(0, n)));
+                        }}
+                        keyboardType="number-pad"
+                        selectTextOnFocus
+                      />
                       <Pressable onPress={() => setQty(l.id, Math.min(maxQty, qty + 1))} style={styles.stepBtn} hitSlop={8}>
                         <Ionicons name="add" size={18} color={qty < maxQty ? palette.textPrimary : palette.textDisabled} />
                       </Pressable>
@@ -647,14 +700,22 @@ function CommandeDetail({ commande, currency, onClose, onRecevoir, saving }: {
               })}
             </ScrollView>
             <View style={styles.mfooter}>
+              <Input
+                label={`Frais de port (${currency}) — optionnel`}
+                value={shippingInput}
+                onChangeText={v => setShippingInput(formatAmountInput(v))}
+                keyboardType="decimal-pad"
+                placeholder="0"
+              />
               <Button
                 label={saving ? '…' : `Confirmer${activeCount > 0 ? ` (${activeCount} produit${activeCount > 1 ? 's' : ''})` : ''}`}
                 loading={saving} variant="primary" fullWidth
                 disabled={activeCount === 0}
                 onPress={handleConfirm}
+                style={{ marginTop: spacing[3] }}
               />
             </View>
-          </>
+          </KeyboardAvoidingView>
         )}
       </SafeAreaView>
     </Modal>
@@ -771,9 +832,9 @@ export default function FournisseursScreen() {
     setDetailCommande(useFournisseursStore.getState().commandes.find(x => x.id === c.id) ?? c);
   };
 
-  const handleRecevoir = async (lines: { id: string; qty: number }[] | null) => {
+  const handleRecevoir = async (lines: { id: string; qty: number }[] | null, shippingCents: number) => {
     if (!detailCommande) return;
-    const ok = await recevoirCommande(detailCommande.id, businessId, userId, lines ?? undefined);
+    const ok = await recevoirCommande(detailCommande.id, businessId, userId, lines ?? undefined, shippingCents);
     if (ok) {
       haptics.success();
       Alert.alert(lines !== null ? 'Réception partielle enregistrée.' : 'Commande reçue. Stock mis à jour.');
@@ -896,7 +957,7 @@ export default function FournisseursScreen() {
   }, []);
 
   return (
-    <SafeAreaView style={styles.safe} edges={['top']}>
+    <Screen>
       <View style={styles.hdr}>
         <Pressable onPress={() => router.back()}><Text variant="body" color="secondary">‹ Retour</Text></Pressable>
         <Text variant="h4">Fournisseurs</Text>
@@ -1148,7 +1209,7 @@ export default function FournisseursScreen() {
           </Pressable>
         </Animated.View>
       )}
-    </SafeAreaView>
+    </Screen>
   );
 }
 
@@ -1167,7 +1228,7 @@ function makeStyles(p: Palette) {
       backgroundColor: p.surface,
       borderRadius: 16,
       borderWidth: StyleSheet.hairlineWidth, borderColor: p.border,
-      shadowColor: '#000', shadowOffset: { width: 0, height: 2 },
+      shadowColor: p.shadow, shadowOffset: { width: 0, height: 2 },
       shadowOpacity: 0.06, shadowRadius: 8, elevation: 3,
     },
     fRowDebt: {
@@ -1183,7 +1244,7 @@ function makeStyles(p: Palette) {
       alignItems: 'center', justifyContent: 'center',
       borderWidth: 2, borderColor: p.background,
     },
-    reorderBadgeText: { fontSize: 10, fontWeight: '700' as const, color: '#fff' },
+    reorderBadgeText: { fontSize: 10, fontWeight: '700' as const, color: p.textInverse },
     debtPill: {
       flexDirection: 'row', alignItems: 'center', gap: 4,
       alignSelf: 'flex-start',
@@ -1206,7 +1267,7 @@ function makeStyles(p: Palette) {
       backgroundColor: p.surface,
       borderRadius: 14,
       borderWidth: StyleSheet.hairlineWidth, borderColor: p.border,
-      shadowColor: '#000', shadowOffset: { width: 0, height: 2 },
+      shadowColor: p.shadow, shadowOffset: { width: 0, height: 2 },
       shadowOpacity: 0.05, shadowRadius: 6, elevation: 2,
       overflow: 'hidden',
     },
@@ -1253,7 +1314,7 @@ function makeStyles(p: Palette) {
     fab: {
       width: 56, height: 56, borderRadius: radius.full, backgroundColor: p.primary,
       alignItems: 'center', justifyContent: 'center',
-      shadowColor: '#000', shadowOffset: { width: 0, height: 4 }, shadowOpacity: 0.18, shadowRadius: 8, elevation: 8,
+      shadowColor: p.shadow, shadowOffset: { width: 0, height: 4 }, shadowOpacity: 0.18, shadowRadius: 8, elevation: 8,
     },
     fabIcon: { fontSize: 28, lineHeight: 32, fontWeight: '300' as const, color: p.textInverse, marginTop: -2 },
 
@@ -1298,6 +1359,10 @@ function makeStyles(p: Palette) {
     selectRow: { flexDirection: 'row', alignItems: 'center', gap: spacing[3], paddingVertical: spacing[3], borderBottomWidth: StyleSheet.hairlineWidth, borderBottomColor: p.border },
     stepper: { flexDirection: 'row', alignItems: 'center', gap: spacing[1] },
     stepBtn: { width: 32, height: 32, borderRadius: 8, borderWidth: 1, borderColor: p.border, alignItems: 'center', justifyContent: 'center', backgroundColor: p.surface },
-    stepVal: { width: 36, textAlign: 'center', fontSize: 16, fontWeight: '700' as const, color: p.textPrimary },
+    stepVal: {
+      minWidth: 56, paddingHorizontal: spacing[2], paddingVertical: spacing[1],
+      textAlign: 'center', fontSize: 16, fontWeight: '700' as const, color: p.textPrimary,
+      borderWidth: 1, borderColor: p.border, borderRadius: 8, backgroundColor: p.background,
+    },
   });
 }

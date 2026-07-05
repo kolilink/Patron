@@ -11,11 +11,12 @@ import {
   View,
 } from 'react-native';
 import { SafeAreaView } from 'react-native-safe-area-context';
+import { Screen } from '@/src/components/ui/Screen';
 import { router, useLocalSearchParams, useFocusEffect } from 'expo-router';
 import { Ionicons } from '@expo/vector-icons';
 import { Text } from '@/src/components/ui/Text';
 import { haptics } from '@/lib/haptics';
-import { useTheme, radius, spacing, colors } from '@/src/theme';
+import { useTheme, radius, spacing, AVATAR_PALETTE } from '@/src/theme';
 import type { Palette } from '@/src/theme';
 import { useAuthStore } from '@/stores/auth';
 import { useMarketStore } from '@/stores/market';
@@ -40,14 +41,6 @@ function relativeTime(iso: string): string {
   if (sameDay(d, yesterday)) return 'Hier';
   return new Intl.DateTimeFormat(LOCALE, { day: 'numeric', month: 'long' }).format(d);
 }
-
-const AVATAR_PALETTE = [
-  colors.primary[500],
-  '#10B981',
-  '#F59E0B',
-  '#EC4899',
-  '#8B5CF6',
-];
 
 function avatarColor(id: string) {
   return AVATAR_PALETTE[id.charCodeAt(0) % AVATAR_PALETTE.length];
@@ -156,6 +149,10 @@ function CommentItem({
   isCommentLiked,
   onLikeComment,
   currentUserId,
+  parentComment,
+  onScrollToParent,
+  isHighlighted,
+  isReplyToYou,
 }: {
   comment: MarketComment;
   isOwn: boolean;
@@ -165,6 +162,10 @@ function CommentItem({
   isCommentLiked: boolean;
   onLikeComment: () => void;
   currentUserId: string;
+  parentComment?: MarketComment | null;
+  onScrollToParent?: () => void;
+  isHighlighted?: boolean;
+  isReplyToYou?: boolean;
 }) {
   const { palette } = useTheme();
   const styles = useMemo(() => makeStyles(palette), [palette]);
@@ -202,7 +203,26 @@ function CommentItem({
 
       <View style={styles.commentRight}>
         {/* Card bubble — double-tap to like */}
-        <Pressable onPress={handleBubbleTap} style={styles.commentBubble}>
+        <Pressable onPress={handleBubbleTap} style={[styles.commentBubble, isHighlighted && styles.commentBubbleHighlighted]}>
+          {isReplyToYou && (
+            <View style={styles.replyToYouBadge}>
+              <Text style={styles.replyToYouBadgeText}>↩ pour vous</Text>
+            </View>
+          )}
+          {parentComment && (
+            <Pressable
+              onPress={onScrollToParent}
+              style={({ pressed }) => [styles.replyPreview, pressed && { opacity: 0.65 }]}
+            >
+              <View style={styles.replyPreviewAccent} />
+              <View style={styles.replyPreviewContent}>
+                <Text style={styles.replyPreviewName} numberOfLines={1}>
+                  {parentComment.author_name || generateFallbackName(parentComment.author_id)}
+                </Text>
+                <Text style={styles.replyPreviewText} numberOfLines={1}>{parentComment.content}</Text>
+              </View>
+            </Pressable>
+          )}
           <View style={styles.commentMeta}>
             <Text style={styles.commentAuthor}>{authorName}</Text>
             <Text style={styles.commentTime}> • {relativeTime(comment.created_at)}</Text>
@@ -232,8 +252,7 @@ function CommentItem({
 
           {!isReply && canReply && onReply && (
             <Pressable onPress={onReply} hitSlop={8} style={styles.commentActionBtn}>
-              <Ionicons name="arrow-undo-outline" size={13} color={palette.textSecondary} />
-              <Text style={styles.commentActionText}>Répondre</Text>
+              <Ionicons name="arrow-undo-outline" size={14} color={palette.textSecondary} />
             </Pressable>
           )}
         </View>
@@ -260,8 +279,11 @@ export default function PostDetailScreen() {
 
   const [text, setText]             = useState('');
   const [replyingTo, setReplyingTo] = useState<MarketComment | null>(null);
-  const inputRef                    = useRef<TextInput>(null);
-  const channelRef                  = useRef<ReturnType<typeof supabase.channel> | null>(null);
+  const [highlightedCommentId, setHighlightedCommentId] = useState<string | null>(null);
+  const inputRef        = useRef<TextInput>(null);
+  const channelRef      = useRef<ReturnType<typeof supabase.channel> | null>(null);
+  const commentsListRef = useRef<FlatList<{ comment: MarketComment; isReply: boolean }>>(null);
+  const editScrollRef   = useRef<ScrollView>(null);
 
   // Edit post state
   const [showEdit, setShowEdit]       = useState(false);
@@ -347,8 +369,16 @@ export default function PostDetailScreen() {
     return result;
   })();
 
+  const scrollToComment = useCallback((commentId: string) => {
+    const index = threadedComments.findIndex(({ comment }) => comment.id === commentId);
+    if (index === -1) return;
+    commentsListRef.current?.scrollToIndex({ index, animated: true, viewPosition: 0.4 });
+    setHighlightedCommentId(commentId);
+    setTimeout(() => setHighlightedCommentId(null), 1500);
+  }, [threadedComments]);
+
   return (
-    <SafeAreaView style={styles.safe} edges={['top', 'bottom']}>
+    <Screen>
       {/* Header */}
       <View style={styles.header}>
         <Pressable onPress={() => router.back()} hitSlop={8}>
@@ -367,6 +397,8 @@ export default function PostDetailScreen() {
           </View>
         ) : !activePost ? null : (
           <FlatList
+            ref={commentsListRef}
+            onScrollToIndexFailed={() => {}}
             data={threadedComments}
             keyExtractor={({ comment }) => comment.id}
             contentContainerStyle={styles.listContent}
@@ -387,22 +419,32 @@ export default function PostDetailScreen() {
                 </Text>
               </View>
             )}
-            renderItem={({ item: { comment, isReply } }) => (
-              <CommentItem
-                key={comment.id}
-                comment={comment}
-                isOwn={comment.author_id === userId}
-                isReply={isReply}
-                canReply={true}
-                onReply={() => {
-                  setReplyingTo(comment);
-                  setTimeout(() => inputRef.current?.focus(), 100);
-                }}
-                isCommentLiked={likedCommentIds.includes(comment.id)}
-                onLikeComment={() => { haptics.tap(); toggleCommentLike(comment.id, userId); }}
-                currentUserId={userId}
-              />
-            )}
+            renderItem={({ item: { comment, isReply } }) => {
+              const parentComment = isReply
+                ? comments.find(c => c.id === comment.parent_id) ?? null
+                : null;
+              const isReplyToYou = isReply && parentComment?.author_id === userId;
+              return (
+                <CommentItem
+                  key={comment.id}
+                  comment={comment}
+                  isOwn={comment.author_id === userId}
+                  isReply={isReply}
+                  canReply={true}
+                  onReply={() => {
+                    setReplyingTo(comment);
+                    setTimeout(() => inputRef.current?.focus(), 100);
+                  }}
+                  isCommentLiked={likedCommentIds.includes(comment.id)}
+                  onLikeComment={() => { haptics.tap(); toggleCommentLike(comment.id, userId); }}
+                  currentUserId={userId}
+                  parentComment={parentComment}
+                  onScrollToParent={parentComment ? () => scrollToComment(parentComment.id) : undefined}
+                  isHighlighted={comment.id === highlightedCommentId}
+                  isReplyToYou={isReplyToYou}
+                />
+              );
+            }}
           />
         )}
 
@@ -442,58 +484,74 @@ export default function PostDetailScreen() {
       </KeyboardAvoidingView>
 
       {/* ── Edit post modal ── */}
-      <Modal visible={showEdit} animationType="slide" onRequestClose={() => setShowEdit(false)}>
+      <Modal visible={showEdit} animationType="slide" presentationStyle="pageSheet" onRequestClose={() => setShowEdit(false)}>
         <SafeAreaView style={styles.modalSafe} edges={['top', 'bottom']}>
-          <View style={styles.modalHeader}>
-            <Pressable onPress={() => setShowEdit(false)} hitSlop={8}>
-              <Text variant="body" color="secondary">Annuler</Text>
-            </Pressable>
-            <Text variant="h4">Modifier le post</Text>
-            <Pressable
-              onPress={handleSaveEdit}
-              disabled={editSaving || !editTitle.trim() || !editContent.trim()}
-              hitSlop={8}
-            >
-              <Text variant="body" style={{
-                color: (editSaving || !editTitle.trim() || !editContent.trim())
-                  ? palette.textDisabled
-                  : palette.primary,
-                fontWeight: '600',
-              }}>
-                {editSaving ? '…' : 'Enregistrer'}
-              </Text>
-            </Pressable>
-          </View>
-          <ScrollView style={{ flex: 1 }} contentContainerStyle={styles.modalContent} keyboardShouldPersistTaps="handled">
-            <View style={styles.editCard}>
-              <TextInput
-                style={styles.editTitleInput}
-                value={editTitle}
-                onChangeText={t => { setEditTitle(t); setEditError(''); }}
-                placeholder="Titre"
-                placeholderTextColor={palette.textSecondary}
-                maxLength={100}
-              />
-              <View style={styles.editDivider} />
-              <TextInput
-                style={styles.editBodyInput}
-                value={editContent}
-                onChangeText={t => { setEditContent(t); setEditError(''); }}
-                placeholder="Partagez votre idée"
-                placeholderTextColor={palette.textSecondary}
-                multiline
-                maxLength={1000}
-                textAlignVertical="top"
-              />
+          <KeyboardAvoidingView
+            style={{ flex: 1 }}
+            behavior={Platform.OS === 'ios' ? 'padding' : 'height'}
+            keyboardVerticalOffset={Platform.OS === 'ios' ? 0 : 20}
+          >
+            <View style={styles.modalHeader}>
+              <Pressable onPress={() => setShowEdit(false)} hitSlop={8}>
+                <Text variant="body" color="secondary">Annuler</Text>
+              </Pressable>
+              <Text variant="h4">Modifier le post</Text>
+              <Pressable
+                onPress={handleSaveEdit}
+                disabled={editSaving || !editTitle.trim() || !editContent.trim()}
+                hitSlop={8}
+              >
+                <Text variant="body" style={{
+                  color: (editSaving || !editTitle.trim() || !editContent.trim())
+                    ? palette.textDisabled
+                    : palette.primary,
+                  fontWeight: '600',
+                }}>
+                  {editSaving ? '…' : 'Enregistrer'}
+                </Text>
+              </Pressable>
             </View>
-            {editError ? (
-              <Text variant="caption" style={{ color: palette.warning, marginTop: 8 }}>{editError}</Text>
-            ) : null}
-          </ScrollView>
+            <ScrollView
+              ref={editScrollRef}
+              style={{ flex: 1 }}
+              contentContainerStyle={styles.modalContent}
+              keyboardShouldPersistTaps="handled"
+              keyboardDismissMode="interactive"
+            >
+              <View style={styles.editCard}>
+                <TextInput
+                  style={styles.editTitleInput}
+                  value={editTitle}
+                  onChangeText={t => { setEditTitle(t); setEditError(''); }}
+                  placeholder="Titre"
+                  placeholderTextColor={palette.textSecondary}
+                  maxLength={100}
+                  returnKeyType="next"
+                  autoFocus
+                />
+                <View style={styles.editDivider} />
+                <TextInput
+                  style={styles.editBodyInput}
+                  value={editContent}
+                  onChangeText={t => { setEditContent(t); setEditError(''); }}
+                  placeholder="Partagez votre idée"
+                  placeholderTextColor={palette.textSecondary}
+                  multiline
+                  maxLength={1000}
+                  textAlignVertical="top"
+                  scrollEnabled={false}
+                  onFocus={() => setTimeout(() => editScrollRef.current?.scrollToEnd({ animated: true }), 300)}
+                />
+              </View>
+              {editError ? (
+                <Text variant="caption" style={{ color: palette.warning, marginTop: 8 }}>{editError}</Text>
+              ) : null}
+            </ScrollView>
+          </KeyboardAvoidingView>
         </SafeAreaView>
       </Modal>
 
-    </SafeAreaView>
+    </Screen>
   );
 }
 
@@ -522,7 +580,7 @@ function makeStyles(p: Palette) {
       width: 36, height: 36, borderRadius: 18,
       alignItems: 'center', justifyContent: 'center',
     },
-    postAvatarText: { fontSize: 15, fontWeight: '700' as const, color: '#fff' },
+    postAvatarText: { fontSize: 15, fontWeight: '700' as const, color: p.textInverse },
     authorInfo:     { flex: 1 },
     authorName:  { fontSize: 15, fontWeight: '600' as const, color: p.textPrimary },
     authorMeta:  { fontSize: 13, color: p.textSecondary, marginTop: 2 },
@@ -572,7 +630,7 @@ function makeStyles(p: Palette) {
       width: 32, height: 32, borderRadius: 16,
       alignItems: 'center' as const, justifyContent: 'center' as const,
     },
-    commentAvatarText: { fontSize: 12, fontWeight: '700' as const, color: '#fff' },
+    commentAvatarText: { fontSize: 12, fontWeight: '700' as const, color: p.textInverse },
     levelBadge: {
       position: 'absolute' as const,
       bottom: -2, right: -2,
@@ -581,7 +639,7 @@ function makeStyles(p: Palette) {
       alignItems: 'center' as const, justifyContent: 'center' as const,
       borderWidth: 1.5, borderColor: p.surface,
     },
-    levelBadgeText: { fontSize: 7, fontWeight: '800' as const, color: '#fff', lineHeight: 10 },
+    levelBadgeText: { fontSize: 7, fontWeight: '800' as const, color: p.textInverse, lineHeight: 10 },
 
     commentRight:  { flex: 1 },
     commentBubble: {
@@ -591,6 +649,34 @@ function makeStyles(p: Palette) {
       paddingHorizontal: 12,
       paddingVertical: 10,
     },
+    commentBubbleHighlighted: {
+      borderWidth: 1.5,
+      borderColor: p.primary,
+    },
+
+    // "↩ pour vous" badge on replies directed at the current user
+    replyToYouBadge: {
+      alignSelf: 'flex-start' as const,
+      backgroundColor: `${p.primary}18`,
+      borderRadius: 6,
+      paddingHorizontal: 6,
+      paddingVertical: 2,
+      marginBottom: 6,
+    },
+    replyToYouBadgeText: { fontSize: 11, color: p.primary, fontWeight: '600' as const },
+
+    // Tappable reply preview inside a reply comment
+    replyPreview: {
+      flexDirection: 'row' as const,
+      backgroundColor: `${p.primary}12`,
+      borderRadius: 8,
+      marginBottom: 8,
+      overflow: 'hidden' as const,
+    },
+    replyPreviewAccent: { width: 3, backgroundColor: p.primary },
+    replyPreviewContent: { flex: 1, paddingVertical: 4, paddingHorizontal: 8 },
+    replyPreviewName: { fontSize: 11, fontWeight: '700' as const, color: p.primary, marginBottom: 1 },
+    replyPreviewText: { fontSize: 11, color: p.textSecondary },
     commentMeta:    { flexDirection: 'row' as const, alignItems: 'center' as const, marginBottom: 4 },
     commentAuthor:  { fontSize: 13, fontWeight: '600' as const, color: p.textPrimary },
     commentTime:    { fontSize: 11, color: p.textSecondary },
@@ -680,7 +766,7 @@ function makeStyles(p: Palette) {
       paddingBottom: spacing[4],
       fontSize: 15,
       color: p.textPrimary,
-      minHeight: 200,
+      minHeight: 240,
     },
   });
 }
