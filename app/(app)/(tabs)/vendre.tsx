@@ -1,5 +1,5 @@
 import React, { useCallback, useEffect, useMemo, useRef, useState } from 'react';
-import { router } from 'expo-router';
+import { router, useFocusEffect } from 'expo-router';
 import {
   Alert,
   Animated,
@@ -1102,6 +1102,16 @@ export default function VendreScreen() {
     products.filter(p => p.has_variants && !variantsByProduct[p.id])
       .forEach(p => fetchVariants(p.id, businessId));
   }, [products, businessId]);
+
+  // Variant stock can change from another device or the offline queue while this
+  // screen stays mounted in the background — refetch on every focus so the cart's
+  // stock cap (Math.min against variant.stock_qty) isn't capping against stale data.
+  useFocusEffect(
+    useCallback(() => {
+      if (!businessId) return;
+      products.filter(p => p.has_variants).forEach(p => fetchVariants(p.id, businessId));
+    }, [businessId, products, fetchVariants])
+  );
 
 
   useEffect(() => {
