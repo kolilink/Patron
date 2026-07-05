@@ -1,33 +1,37 @@
-import { useEffect, useMemo, useRef } from 'react';
+import { useEffect, useMemo, useRef, useState } from 'react';
 import { Animated, Modal, Pressable, StyleSheet, View } from 'react-native';
-import { Ionicons } from '@expo/vector-icons';
 import { Button } from './Button';
 import { Text } from './Text';
+import { PinInput } from './PinInput';
 import { useTheme } from '@/src/theme';
 import { radius, spacing } from '@/src/theme';
 import type { Palette } from '@/src/theme';
 
-type IoniconName = React.ComponentProps<typeof Ionicons>['name'];
-
 interface Props {
   visible: boolean;
-  onClose: () => void;
-  icon?: IoniconName;
   title: string;
   body: string;
-  action?: { label: string; onPress: () => void };
-  /** A second meaningful choice, distinct from "Fermer" (which always just dismisses). */
-  secondaryAction?: { label: string; onPress: () => void };
+  /** Called with the entered PIN. Return true if correct — the sheet closes; false shows an inline error. */
+  onSubmit: (pin: string) => Promise<boolean>;
+  onCancel: () => void;
 }
 
-export function AppSheet({ visible, onClose, icon, title, body, action, secondaryAction }: Props) {
+// Same Modal + slide-up pattern as AppSheet, but embeds a PinInput instead of
+// plain body text — AppSheet has no children slot, so this is a sibling, not a
+// variant of it.
+export function PinConfirmSheet({ visible, title, body, onSubmit, onCancel }: Props) {
   const { palette } = useTheme();
   const styles = useMemo(() => makeStyles(palette), [palette]);
   const slideY          = useRef(new Animated.Value(400)).current;
   const backdropOpacity = useRef(new Animated.Value(0)).current;
+  const [error, setError] = useState<string | null>(null);
+  const [resetSignal, setResetSignal] = useState(0);
+  const [checking, setChecking] = useState(false);
 
   useEffect(() => {
     if (visible) {
+      setError(null);
+      setResetSignal(s => s + 1);
       Animated.parallel([
         Animated.spring(slideY, { toValue: 0, useNativeDriver: true, tension: 65, friction: 11 }),
         Animated.timing(backdropOpacity, { toValue: 1, duration: 200, useNativeDriver: true }),
@@ -40,39 +44,36 @@ export function AppSheet({ visible, onClose, icon, title, body, action, secondar
     }
   }, [visible]);
 
+  async function handleComplete(pin: string) {
+    setChecking(true);
+    const ok = await onSubmit(pin);
+    setChecking(false);
+    if (!ok) {
+      setError('Code incorrect. Réessayez.');
+      setResetSignal(s => s + 1);
+    }
+  }
+
   return (
-    <Modal visible={visible} transparent animationType="none" onRequestClose={onClose}>
+    <Modal visible={visible} transparent animationType="none" onRequestClose={onCancel}>
       <Animated.View style={[styles.backdrop, { opacity: backdropOpacity }]}>
-        <Pressable style={StyleSheet.absoluteFill} onPress={onClose} />
+        <Pressable style={StyleSheet.absoluteFill} onPress={onCancel} />
       </Animated.View>
       <View style={styles.anchor} pointerEvents="box-none">
         <Animated.View style={[styles.sheet, { transform: [{ translateY: slideY }] }]}>
           <View style={styles.handle} />
-          {icon && (
-            <View style={styles.iconWrap}>
-              <Ionicons name={icon} size={28} color={palette.primary} />
-            </View>
-          )}
           <Text variant="h3" style={styles.title}>{title}</Text>
           <Text variant="body" color="secondary" style={styles.body}>{body}</Text>
-          {action && (
-            <Button
-              label={action.label}
-              onPress={() => { action.onPress(); onClose(); }}
-              fullWidth
-              size="lg"
-              style={styles.actionBtn}
+          <View style={styles.pinWrap}>
+            <PinInput
+              onComplete={handleComplete}
+              disabled={checking}
+              autoFocus
+              resetSignal={resetSignal}
             />
-          )}
-          {secondaryAction && (
-            <Button
-              label={secondaryAction.label}
-              onPress={() => { secondaryAction.onPress(); onClose(); }}
-              variant="secondary"
-              fullWidth
-            />
-          )}
-          <Button label="Fermer" variant="ghost" onPress={onClose} fullWidth />
+          </View>
+          {error && <Text variant="bodySmall" color="warning" style={styles.errorText}>{error}</Text>}
+          <Button label="Annuler" variant="ghost" onPress={onCancel} fullWidth />
         </Animated.View>
       </View>
     </Modal>
@@ -91,8 +92,8 @@ function makeStyles(p: Palette) {
     },
     sheet: {
       backgroundColor: p.surface,
-      borderTopLeftRadius: 24,
-      borderTopRightRadius: 24,
+      borderTopLeftRadius: radius.xl,
+      borderTopRightRadius: radius.xl,
       paddingHorizontal: spacing[6],
       paddingTop: spacing[3],
       paddingBottom: spacing[10],
@@ -106,16 +107,9 @@ function makeStyles(p: Palette) {
       backgroundColor: p.border,
       marginBottom: spacing[2],
     },
-    iconWrap: {
-      width: 64,
-      height: 64,
-      borderRadius: 20,
-      backgroundColor: p.primaryLight,
-      alignItems: 'center',
-      justifyContent: 'center',
-    },
-    title:     { textAlign: 'center' },
-    body:      { textAlign: 'center', lineHeight: 22 },
-    actionBtn: { marginTop: spacing[2] },
+    title:   { textAlign: 'center' },
+    body:    { textAlign: 'center', lineHeight: 22 },
+    pinWrap:   { marginVertical: spacing[3] },
+    errorText: { textAlign: 'center' },
   });
 }

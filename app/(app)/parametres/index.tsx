@@ -459,6 +459,15 @@ export default function ParametresScreen() {
             )}
           </Card>
 
+          {/* Sécurité */}
+          <Card style={styles.section}>
+            <Text variant="label" color="secondary">Sécurité</Text>
+            <Pressable onPress={() => router.push('/(auth)/creer-pin')} style={styles.linkRow}>
+              <Text variant="body">Modifier mon code PIN</Text>
+              <Text variant="caption" color="secondary">›</Text>
+            </Pressable>
+          </Card>
+
           {/* À propos */}
           <Card style={styles.section}>
             <Text variant="label" color="secondary">À propos</Text>

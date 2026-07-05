@@ -6,6 +6,7 @@ import { translateError } from '@/lib/errors';
 import { generateId } from '@/lib/id';
 import { syncKnownBusinesses } from '@/lib/knownBusinesses';
 import { getKV, setKV } from '@/lib/db';
+import { isLocked, setLocked, clearPin, verifyPin, incrementPinFailCount, resetPinFailCount } from '@/lib/pin';
 import type { AppSession, Business, Membership, Role, User } from '@/src/types';
 import { useProductStore } from './products';
 import { useVentesStore } from './ventes';
@@ -140,6 +141,7 @@ interface PendingPhoneVerification {
 interface AuthStore {
   session: AppSession | null;
   loading: boolean;
+  locked: boolean;
   emailOtpLoading: boolean;
   error: string | null;
   pendingPhoneVerification: PendingPhoneVerification | null;
@@ -157,6 +159,12 @@ interface AuthStore {
   createBusiness: (data: { name: string; type?: string; currency: string }) => Promise<void>;
   joinBusiness: (code: string) => Promise<void>;
   loginWithBiometric: () => Promise<boolean>;
+  lock: () => Promise<void>;
+  // 'wrong-pin' counts against the attempt limit; 'restore-failed' means the PIN
+  // was correct but the underlying session couldn't be refreshed (e.g. offline)
+  // — that must never be reported to the user as an incorrect code.
+  unlockWithPin: (pin: string) => Promise<'unlocked' | 'wrong-pin' | 'restore-failed'>;
+  unlockWithBiometric: () => Promise<boolean>;
   createPhoneVerification: (phone: string) => Promise<{ verificationId: string } | null>;
   loginWithPhone: (phone: string) => Promise<{ verificationId: string } | null>;
   verifyPhoneCode: (phone: string, code: string, verificationId: string) => Promise<boolean>;
@@ -227,6 +235,7 @@ async function loadSession(userId: string, authPhone?: string | null, skipCache 
 export const useAuthStore = create<AuthStore>((set, get) => ({
   session: null,
   loading: true,
+  locked: false,
   emailOtpLoading: false,
   error: null,
   pendingPhoneVerification: null,
@@ -264,6 +273,16 @@ export const useAuthStore = create<AuthStore>((set, get) => ({
         console.warn('[auth] onAuthStateChange error:', e);
       }
     });
+
+    // A soft lock (see lock()) deliberately leaves the underlying Supabase
+    // session/refresh token untouched — only a local flag says "don't show it
+    // yet, ask for the PIN first." Honor that before hydrating anything, so a
+    // killed-and-relaunched app lands on the PIN screen instead of silently
+    // back inside.
+    if (await isLocked()) {
+      set({ session: null, locked: true, loading: false });
+      return;
+    }
 
     // Render instantly from the local session cache (SecureStore, no
     // network) so the app never sits on a blank screen waiting for a
@@ -434,9 +453,11 @@ export const useAuthStore = create<AuthStore>((set, get) => ({
     await clearSupabaseLocalSession();
     await clearSessionCache();
     void clearBioRefreshToken();
+    void clearPin();
+    await setLocked(false);
     if (userId) setKV(`demo_mode_${userId}`, 'false').catch(() => {});
     resetAllStores();
-    set({ session: null, error: null, pendingPhoneVerification: null });
+    set({ session: null, locked: false, error: null, pendingPhoneVerification: null });
 
     void (async () => {
       // Unsubscribe Realtime channels before signOut() disconnects the
@@ -640,6 +661,60 @@ export const useAuthStore = create<AuthStore>((set, get) => ({
       set({ loading: false });
       return false;
     }
+  },
+
+  // ─── PIN-based soft lock ───────────────────────────────────────────────────
+  // "Verrouiller" is deliberately NOT logout(): it never touches SecureStore's
+  // Supabase session, the bio refresh token, or any domain store — those are
+  // exactly what let unlockWithPin/unlockWithBiometric restore the session for
+  // free below, with no WhatsApp OTP. logout() remains the only path that
+  // wipes all of that, for the rarer "fully sign out / switch account" case.
+
+  lock: async () => {
+    await setLocked(true);
+    set({ session: null, locked: true });
+  },
+
+  unlockWithPin: async (pin) => {
+    const ok = await verifyPin(pin);
+    if (!ok) {
+      await incrementPinFailCount();
+      return 'wrong-pin';
+    }
+    // The PIN itself is correct from here on — nothing below should ever
+    // count against the wrong-attempt limit or be reported as a bad code.
+    await resetPinFailCount();
+    const restored = await get().loginWithBiometric();
+    if (!restored) return 'restore-failed';
+    await setLocked(false);
+    set({ locked: false });
+    return 'unlocked';
+  },
+
+  unlockWithBiometric: async () => {
+    try {
+      const LocalAuthentication = await import('expo-local-authentication');
+      const [hasHardware, isEnrolled] = await Promise.all([
+        LocalAuthentication.hasHardwareAsync(),
+        LocalAuthentication.isEnrolledAsync(),
+      ]);
+      if (!hasHardware || !isEnrolled) return false;
+
+      const result = await LocalAuthentication.authenticateAsync({
+        promptMessage: 'Confirmez votre identité pour continuer',
+        cancelLabel: 'Annuler',
+      });
+      if (!result.success) return false;
+    } catch {
+      return false;
+    }
+
+    const restored = await get().loginWithBiometric();
+    if (restored) {
+      await setLocked(false);
+      set({ locked: false });
+    }
+    return restored;
   },
 
   createPhoneVerification: async (phone) => {

@@ -11,6 +11,7 @@ import { NotificationSetup } from '@/src/components/NotificationSetup';
 import { Text } from '@/src/components/ui/Text';
 import { useTheme, spacing } from '@/src/theme';
 import { useAuthStore } from '@/stores/auth';
+import { usePinGate } from '@/src/hooks/usePinGate';
 import { useChatStore } from '@/stores/chat';
 import { useProductStore } from '@/stores/products';
 import { useVentesStore } from '@/stores/ventes';
@@ -70,6 +71,8 @@ function SyncBanner() {
 export default function AppLayout() {
   const session = useAuthStore(s => s.session);
   const loading = useAuthStore(s => s.loading);
+  const locked = useAuthStore(s => s.locked);
+  const pinSet = usePinGate(session?.user.id);
   const showTrialWelcome = useAuthStore(s => s.showTrialWelcome);
   const clearTrialWelcome = useAuthStore(s => s.clearTrialWelcome);
   const removedBusinessName = useAuthStore(s => s.removedBusinessName);
@@ -281,7 +284,10 @@ export default function AppLayout() {
   }, [session?.user.id]);
 
   if (loading) return null;
+  if (locked) return <Redirect href="/(auth)/verrouille" />;
   if (!session) return <Redirect href="/(welcome)/" />;
+  if (pinSet === false) return <Redirect href="/(auth)/creer-pin" />;
+  if (pinSet === null) return null;
 
   const activeBusiness = session.activeBusiness;
   const isDemoMode = session.isDemoMode ?? false;
