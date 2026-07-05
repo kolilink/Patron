@@ -1,6 +1,7 @@
 import { create } from 'zustand';
 import * as SecureStore from 'expo-secure-store';
-import { supabase } from '@/lib/supabase';
+import * as Localization from 'expo-localization';
+import { supabase, clearSupabaseLocalSession, revokeAccessToken } from '@/lib/supabase';
 import { translateError } from '@/lib/errors';
 import { generateId } from '@/lib/id';
 import { syncKnownBusinesses } from '@/lib/knownBusinesses';
@@ -17,7 +18,10 @@ import { useChatStore } from './chat';
 import { useMarketStore } from './market';
 import { useRapportsStore } from './rapports';
 import { useAportsStore } from './apports';
+import { useInvestorStore } from './investor';
+import { usePartnershipsStore } from './partnerships';
 import { trackEvent, identifyUser, resetAnalytics } from '@/lib/analytics';
+import { notifyEvent, deleteDeviceToken } from '@/src/utils/notifications';
 
 // ─── Last phone + biometric refresh token (quick-login) ──────────────────────
 
@@ -89,12 +93,28 @@ async function clearSessionCache(): Promise<void> {
   } catch {}
 }
 
+// If logout() couldn't reach the server to revoke the session (offline, or
+// killed before the background attempt finished), the access token it was
+// trying to revoke is stashed here so the next launch can retry — otherwise
+// that refresh token would stay valid on Supabase's side indefinitely.
+async function retryPendingSignOut(): Promise<void> {
+  const pending = await getKV(PENDING_SIGNOUT_TOKEN_KEY).catch(() => null);
+  if (!pending) return;
+  const ok = await revokeAccessToken(pending);
+  if (ok) await setKV(PENDING_SIGNOUT_TOKEN_KEY, '').catch(() => {});
+}
+
 // ─────────────────────────────────────────────────────────────────────────────
 
 // Set to true only during an explicit logout() call so the onAuthStateChange
 // handler can distinguish a deliberate sign-out from a failed JWT refresh
 // triggered while the device is offline.
 let _explicitLogout = false;
+
+// Mirrors the current access token so logout() can revoke it synchronously,
+// without an extra getSession() round trip on the must-be-instant logout path.
+let _currentAccessToken: string | null = null;
+const PENDING_SIGNOUT_TOKEN_KEY = 'pending_signout_token';
 
 function resetAllStores() {
   useProductStore.getState().reset();
@@ -108,6 +128,8 @@ function resetAllStores() {
   useMarketStore.getState().reset();
   useRapportsStore.getState().reset();
   useAportsStore.getState().reset();
+  useInvestorStore.getState().reset();
+  usePartnershipsStore.getState().reset();
 }
 
 interface PendingPhoneVerification {
@@ -148,6 +170,8 @@ interface AuthStore {
   recoverByEmail: (email: string, code: string, verificationId: string) => Promise<void>;
   linkRecoveryEmail: (email: string, code: string, verificationId: string) => Promise<boolean>;
 
+  startDemoMode: () => Promise<void>;
+
   clearTrialWelcome: () => void;
   refreshActiveBusiness: () => Promise<void>;
   clearError: () => void;
@@ -163,7 +187,7 @@ interface AuthStore {
   clearDismissedFromBusiness: () => void;
 }
 
-async function loadSession(userId: string): Promise<AppSession> {
+async function loadSession(userId: string, authPhone?: string | null, skipCache = false): Promise<AppSession> {
   const [profileRes, membershipsRes] = await Promise.all([
     supabase.from('profiles').select('*').eq('id', userId).single(),
     supabase
@@ -182,7 +206,7 @@ async function loadSession(userId: string): Promise<AppSession> {
     id: userId,
     name: p.name ?? '',
     email: p.email ?? '',
-    phone: p.phone ?? null,
+    phone: p.phone ?? authPhone ?? null,
     avatar_url: p.avatar_url ?? null,
     language: p.language ?? 'fr',
     recovery_email: p.recovery_email ?? null,
@@ -196,7 +220,7 @@ async function loadSession(userId: string): Promise<AppSession> {
   const activeBusiness = (activeMembership?.business as Business) ?? null;
 
   const session: AppSession = { user, memberships, activeBusiness, activeMembership };
-  void persistSessionCache(session);
+  if (!skipCache) void persistSessionCache(session);
   return session;
 }
 
@@ -218,35 +242,74 @@ export const useAuthStore = create<AuthStore>((set, get) => ({
     // registered after, the rotation happens silently and our stored token
     // goes stale on the very first open after login.
     supabase.auth.onAuthStateChange(async (event, session) => {
-      if (event === 'TOKEN_REFRESHED' && session) {
-        void saveBioRefreshToken(session.refresh_token);
-      }
-      if (event === 'SIGNED_OUT' || !session) {
-        if (_explicitLogout) {
-          // Deliberate logout — clear everything.
-          set({ session: null });
-          resetAllStores();
+      try {
+        _currentAccessToken = session?.access_token ?? _currentAccessToken;
+        if (event === 'TOKEN_REFRESHED' && session) {
+          void saveBioRefreshToken(session.refresh_token);
         }
-        // If not explicit: token refresh failed (device is offline). Keep the
-        // current session so the user can still access cached data.
+        if (event === 'SIGNED_OUT' || !session) {
+          if (_explicitLogout) {
+            // Deliberate logout — clear everything.
+            set({ session: null });
+            resetAllStores();
+          }
+          // If not explicit: token refresh failed (device is offline). Keep the
+          // current session so the user can still access cached data.
+        }
+      } catch (e) {
+        // Supabase awaits and rethrows errors from this async callback, which
+        // propagates them into signOut(). Our logout() try/catch handles that.
+        // The try/catch here is a belt-and-suspenders in case future code paths
+        // call _notifyAllSubscribers without awaiting the result.
+        console.warn('[auth] onAuthStateChange error:', e);
       }
     });
 
+    // Render instantly from the local session cache (SecureStore, no
+    // network) so the app never sits on a blank screen waiting for a
+    // connection. The live check below then runs as a background upgrade —
+    // it only overwrites this if it actually succeeds.
+    const cachedSession = await restoreSessionCache();
+    if (cachedSession) {
+      set({ session: cachedSession, loading: false });
+    }
+
     try {
       const { data: { session } } = await supabase.auth.getSession();
+      _currentAccessToken = session?.access_token ?? _currentAccessToken;
+
+      // Retry any server-side sign-out that couldn't reach the network last
+      // time (see logout()) — best-effort, never blocks startup.
+      void retryPendingSignOut();
 
       if (!session) {
-        set({ session: null, loading: false });
+        if (!cachedSession) set({ session: null, loading: false });
+        // Offline (or genuinely logged out) with a cached session already
+        // rendered above — nothing more to do here.
       } else {
         // Belt-and-suspenders: save the token we got from getSession() directly,
         // in case the TOKEN_REFRESHED event fired before the listener was ready.
         void saveBioRefreshToken(session.refresh_token);
 
-        const appSession = await loadSession(session.user.id);
-        // Anonymous user with no phone = still in the verification flow.
-        // Don't set session — keep them on the welcome screen.
+        // Cache is written explicitly below, once we know whether this is a
+        // genuine login — not unconditionally inside loadSession() — so an
+        // abandoned anonymous/phone-verification session never gets persisted
+        // and later restored offline as if it were a real logged-in user.
+        const appSession = await loadSession(session.user.id, session.user.phone, true);
+        // Anonymous user with no phone = either still in the verification flow
+        // OR a returning demo user. Check KV to distinguish the two cases.
         if (session.user.is_anonymous && !appSession.user.phone) {
-          set({ session: null, loading: false });
+          const demoFlag = await getKV(`demo_mode_${session.user.id}`).catch(() => null);
+          if (demoFlag === 'true') {
+            const demoSession = { ...appSession, isDemoMode: true };
+            void persistSessionCache(demoSession);
+            set({ session: demoSession, loading: false });
+          } else {
+            // Genuinely incomplete session (verification abandoned mid-flow) —
+            // do not cache it. Nothing is persisted, so an offline cold start
+            // later won't resurrect this half-finished login.
+            set({ session: null, loading: false });
+          }
         } else {
           // User is anonymous but has already verified their phone (joined before
           // upgradePhone gained the RPC call, or session restored from storage).
@@ -256,6 +319,7 @@ export const useAuthStore = create<AuthStore>((set, get) => ({
             await supabase.auth.refreshSession();
           }
           const removed = await syncKnownBusinesses(session.user.id, appSession.memberships);
+          void persistSessionCache(appSession);
           if (removed.length > 0 && appSession.memberships.length === 0) {
             set({ session: appSession, removedBusinessesOnLogin: removed, loading: false });
           } else if (removed.length > 0 && appSession.memberships.length > 0) {
@@ -353,18 +417,56 @@ export const useAuthStore = create<AuthStore>((set, get) => ({
   },
 
   logout: async () => {
-    trackEvent('user_logged_out', get().session?.activeBusiness?.id ?? null, get().session?.user.id ?? null);
+    const { session } = get();
+    const userId = session?.user.id;
+    const accessTokenToRevoke = _currentAccessToken;
+    trackEvent('user_logged_out', session?.activeBusiness?.id ?? null, userId ?? null);
     resetAnalytics();
+
+    // Logging out is a local, instant action — it must never wait on the
+    // network. supabase.auth.signOut() calls the server *before* it clears
+    // the local session, so on a slow or dead connection (the norm this app
+    // is built for) it can hang for the full 15s fetch timeout, or fail
+    // outright and never clear anything. Wipe every local trace ourselves,
+    // synchronously and unconditionally, then tell the server in the
+    // background as a courtesy — its outcome no longer matters to the user.
     _explicitLogout = true;
-    try {
-      await supabase.auth.signOut();
-    } finally {
-      _explicitLogout = false;
-    }
-    void clearSessionCache();
+    await clearSupabaseLocalSession();
+    await clearSessionCache();
     void clearBioRefreshToken();
+    if (userId) setKV(`demo_mode_${userId}`, 'false').catch(() => {});
     resetAllStores();
     set({ session: null, error: null, pendingPhoneVerification: null });
+
+    void (async () => {
+      // Unsubscribe Realtime channels before signOut() disconnects the
+      // WebSocket — otherwise channel error callbacks can fire after the
+      // socket closes and become unhandled rejections that crash Hermes.
+      try { await supabase.removeAllChannels(); } catch {}
+      let signOutOk = true;
+      try { await supabase.auth.signOut(); } catch { signOutOk = false; }
+      // signOut() throwing means we can't be sure the server ever heard about
+      // this — revoke directly with the token captured before the local wipe.
+      // If that also fails (offline), stash it so the next launch retries;
+      // otherwise this refresh token would stay valid on Supabase's side.
+      if (!signOutOk && accessTokenToRevoke) {
+        const ok = await revokeAccessToken(accessTokenToRevoke);
+        if (!ok) await setKV(PENDING_SIGNOUT_TOKEN_KEY, accessTokenToRevoke).catch(() => {});
+      }
+      _explicitLogout = false;
+    })();
+
+    // Remove push token fire-and-forget — must not block or crash the logout.
+    if (!session?.isDemoMode) {
+      void (async () => {
+        try {
+          const { getExpoPushTokenAsync } = await import('expo-notifications');
+          const tokenResult = await getExpoPushTokenAsync({ projectId: '9cd0ec2b-0dc9-49f3-ba97-999bb31a0252' });
+          const { Platform } = await import('react-native');
+          await deleteDeviceToken(tokenResult.data, Platform.OS as 'ios' | 'android');
+        } catch {}
+      })();
+    }
   },
 
   selectBusiness: (businessId) => {
@@ -377,13 +479,16 @@ export const useAuthStore = create<AuthStore>((set, get) => ({
     setKV(`last_business_${session.user.id}`, businessId).catch(() => {});
     resetAllStores();
 
-    set({
-      session: {
-        ...session,
-        activeBusiness: (membership.business as Business) ?? null,
-        activeMembership: membership,
-      },
-    });
+    const nextSession: AppSession = {
+      ...session,
+      activeBusiness: (membership.business as Business) ?? null,
+      activeMembership: membership,
+    };
+    // Keep the offline session cache in sync with the switch — otherwise a
+    // cold start that happens to land offline right after this would restore
+    // the OLD business instead of the one just selected.
+    void persistSessionCache(nextSession);
+    set({ session: nextSession });
   },
 
   createBusiness: async ({ name, type, currency }) => {
@@ -400,30 +505,20 @@ export const useAuthStore = create<AuthStore>((set, get) => ({
 
     const businessId = generateId();
 
-    const { error: bizErr } = await supabase
-      .from('businesses')
-      .insert({ id: businessId, name, type: type ?? null, currency, phone: session.user.phone ?? null, created_by: session.user.id });
-    if (bizErr) {
-      set({ error: translateError(bizErr, 'Impossible de créer le commerce'), loading: false });
-      return;
-    }
-
-    // Retry up to 3x — the DB trigger creating the membership row may lag slightly
-    let membership = null;
-    let fetchErr = null;
-    for (let attempt = 0; attempt < 5; attempt++) {
-      if (attempt > 0) await new Promise<void>(r => setTimeout(r, 600));
-      const res = await supabase
-        .from('memberships')
-        .select('*, business:businesses(*)')
-        .eq('user_id', session.user.id)
-        .eq('business_id', businessId)
-        .single();
-      if (!res.error) { membership = res.data; break; }
-      fetchErr = res.error;
-    }
-    if (!membership) {
-      set({ error: translateError(fetchErr, 'Impossible de charger le commerce'), loading: false });
+    // create_business_with_membership: SECURITY DEFINER RPC — inserts the
+    // business, lets the on_business_created trigger create the admin
+    // membership in the same transaction, then returns both atomically.
+    // Replaces a separate insert + up-to-5x poll loop (previously up to ~3s
+    // on a slow connection) with a single round trip.
+    const { data: membership, error: rpcErr } = await supabase.rpc('create_business_with_membership', {
+      p_id: businessId,
+      p_name: name,
+      p_type: type ?? null,
+      p_currency: currency,
+      p_phone: session.user.phone ?? null,
+    });
+    if (rpcErr || !membership) {
+      set({ error: translateError(rpcErr, 'Impossible de créer le commerce'), loading: false });
       return;
     }
 
@@ -434,13 +529,18 @@ export const useAuthStore = create<AuthStore>((set, get) => ({
     // Seed the cache so first-reload removal detection works immediately
     syncKnownBusinesses(session.user.id, newMemberships).catch(() => {});
     resetAllStores();
+    const nextSession: AppSession = {
+      ...session,
+      memberships: newMemberships,
+      activeBusiness: m.business as Business,
+      activeMembership: m,
+    };
+    // Keep the offline session cache in sync — otherwise a cold start that
+    // lands offline right after creating a business would restore a session
+    // that predates it (missing membership, wrong/no active business).
+    void persistSessionCache(nextSession);
     set({
-      session: {
-        ...session,
-        memberships: newMemberships,
-        activeBusiness: m.business as Business,
-        activeMembership: m,
-      },
+      session: nextSession,
       showTrialWelcome: true,
       loading: false,
     });
@@ -480,6 +580,22 @@ export const useAuthStore = create<AuthStore>((set, get) => ({
       const appSession = await loadSession(session.user.id);
       syncKnownBusinesses(session.user.id, appSession.memberships).catch(() => {});
       resetAllStores();
+
+      const joinedMembership = appSession.memberships.find(m => m.business_id === business_id);
+      const roleLabels: Record<string, string> = {
+        administrateur: 'Administrateur', manager: 'Gérant',
+        vendeur: 'Vendeur', investisseur: 'Investisseur',
+      };
+      notifyEvent({
+        businessId: business_id,
+        eventType: 'member_joined',
+        payload: {
+          name: appSession.user.name || appSession.user.phone || 'Nouveau membre',
+          role: roleLabels[joinedMembership?.role ?? 'vendeur'] ?? 'Vendeur',
+        },
+        targetRoles: ['administrateur', 'manager'],
+      });
+
       set({ session: appSession, loading: false });
     } catch (err) {
       const raw = err instanceof Error ? err.message : (err as Record<string, unknown>)?.message as string | undefined;
@@ -529,15 +645,19 @@ export const useAuthStore = create<AuthStore>((set, get) => ({
   createPhoneVerification: async (phone) => {
     set({ loading: true, error: null });
     try {
-      // Create anonymous session so the Edge Function can link the verification to a user_id
-      const { data, error: anonErr } = await supabase.auth.signInAnonymously();
-      if (anonErr) throw anonErr;
-      if (!data.user) throw new Error('Connexion échouée');
-
-      await supabase.from('profiles').upsert(
-        { id: data.user.id, name: '', email: '', language: 'fr' },
-        { onConflict: 'id', ignoreDuplicates: true },
-      );
+      // If no Supabase session exists, create a fresh anonymous one so the Edge
+      // Function can link the verification to a user_id. If one already exists
+      // (e.g., converting from demo mode), reuse it — no new anonymous user needed.
+      const { data: { user: currentUser } } = await supabase.auth.getUser();
+      if (!currentUser) {
+        const { data, error: anonErr } = await supabase.auth.signInAnonymously();
+        if (anonErr) throw anonErr;
+        if (!data.user) throw new Error('Connexion échouée');
+        await supabase.from('profiles').upsert(
+          { id: data.user.id, name: '', email: '', language: 'fr' },
+          { onConflict: 'id', ignoreDuplicates: true },
+        );
+      }
 
       const { data: fnData, error: fnErr } = await supabase.functions.invoke('create-phone-verification', {
         body: { phone: phone.trim() },
@@ -646,6 +766,8 @@ export const useAuthStore = create<AuthStore>((set, get) => ({
       if (refreshData.session) void saveBioRefreshToken(refreshData.session.refresh_token);
 
       void saveLastPhone(phone.trim());
+      // Clear demo mode flag — this user is now a real account
+      setKV(`demo_mode_${user.id}`, 'false').catch(() => {});
       const appSession = await loadSession(user.id);
       identifyUser(appSession);
       trackEvent('user_signed_up', appSession.activeBusiness?.id ?? null, appSession.user.id, {
@@ -692,7 +814,7 @@ export const useAuthStore = create<AuthStore>((set, get) => ({
 
       void saveLastPhone(phone.trim());
       void saveBioRefreshToken(session.refresh_token);
-      const appSession = await loadSession(session.user.id);
+      const appSession = await loadSession(session.user.id, session.user.phone);
       identifyUser(appSession);
       trackEvent('user_logged_in', appSession.activeBusiness?.id ?? null, appSession.user.id, {
         method: 'phone_otp',
@@ -762,7 +884,7 @@ export const useAuthStore = create<AuthStore>((set, get) => ({
       if (!session) throw new Error('Session introuvable');
 
       void saveBioRefreshToken(session.refresh_token);
-      const appSession = await loadSession(session.user.id);
+      const appSession = await loadSession(session.user.id, session.user.phone);
       identifyUser(appSession);
       trackEvent('user_logged_in', appSession.activeBusiness?.id ?? null, appSession.user.id, {
         method: 'email_recovery',
@@ -812,6 +934,55 @@ export const useAuthStore = create<AuthStore>((set, get) => ({
       const raw = err instanceof Error ? err.message : String(err);
       set({ error: raw, emailOtpLoading: false });
       return false;
+    }
+  },
+
+  startDemoMode: async () => {
+    set({ loading: true, error: null });
+    try {
+      const { data, error: anonErr } = await supabase.auth.signInAnonymously();
+      if (anonErr) throw anonErr;
+      if (!data.user) throw new Error('Connexion anonyme échouée');
+      const userId = data.user.id;
+
+      await supabase.from('profiles').upsert(
+        { id: userId, name: 'Démo', email: '', language: 'fr' },
+        { onConflict: 'id', ignoreDuplicates: true },
+      );
+
+      // Detect the device's local currency so the demo business reflects it.
+      const SUPPORTED_CURRENCIES = new Set([
+        'GNF', 'XOF', 'XAF', 'NGN', 'GHS', 'MAD', 'DZD', 'TND', 'EGP',
+        'KES', 'ZAR', 'ETB', 'AED', 'SAR', 'USD', 'EUR', 'GBP', 'CNY', 'CAD', 'CHF', 'INR',
+      ]);
+      let demoCurrency = 'USD'; // fallback for unrecognized locales
+      try {
+        const code = Localization.getLocales()[0]?.currencyCode;
+        if (code && SUPPORTED_CURRENCIES.has(code)) demoCurrency = code;
+      } catch {}
+
+      const { data: fnData, error: fnErr } = await supabase.functions.invoke('seed-demo-business', {
+        body: { currency: demoCurrency },
+      });
+      if (fnErr) {
+        try {
+          const body = await (fnErr as { context?: { json?: () => Promise<{ error?: string }> } }).context?.json?.();
+          if (body?.error) throw new Error(body.error);
+        } catch (extractErr) {
+          if (extractErr !== fnErr) throw extractErr;
+        }
+        throw fnErr;
+      }
+      if (fnData?.error) throw new Error(fnData.error);
+
+      const { businessId } = fnData as { businessId: string };
+      await setKV(`last_business_${userId}`, businessId).catch(() => {});
+      await setKV(`demo_mode_${userId}`, 'true').catch(() => {});
+
+      const appSession = await loadSession(userId);
+      set({ session: { ...appSession, isDemoMode: true }, loading: false });
+    } catch (err) {
+      set({ error: translateError(err, 'Erreur lors du démarrage de la démo'), loading: false });
     }
   },
 

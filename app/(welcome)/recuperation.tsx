@@ -1,7 +1,7 @@
 import { useEffect, useMemo, useRef, useState } from 'react';
 import { KeyboardAvoidingView, Platform, StyleSheet, View } from 'react-native';
 import { router } from 'expo-router';
-import { SafeAreaView } from 'react-native-safe-area-context';
+import { Screen } from '@/src/components/ui/Screen';
 import { Button } from '@/src/components/ui/Button';
 import { Input } from '@/src/components/ui/Input';
 import { OtpInput } from '@/src/components/ui/OtpInput';
@@ -9,6 +9,9 @@ import { Text } from '@/src/components/ui/Text';
 import { useTheme, radius, spacing } from '@/src/theme';
 import type { Palette } from '@/src/theme';
 import { useAuthStore } from '@/stores/auth';
+import { getKV, setKV } from '@/lib/db';
+
+const LAST_EMAIL_KEY = 'last_login_email';
 
 export default function RecuperationScreen() {
   const { palette } = useTheme();
@@ -22,6 +25,7 @@ export default function RecuperationScreen() {
 
   useEffect(() => {
     clearError();
+    getKV(LAST_EMAIL_KEY).then(saved => { if (saved) setEmail(saved); });
   }, []);
 
   useEffect(() => {
@@ -41,6 +45,7 @@ export default function RecuperationScreen() {
     if (result) {
       verificationIdRef.current = result.verificationId;
       setStep('otp');
+      setKV(LAST_EMAIL_KEY, trimmed);
     }
   };
 
@@ -66,7 +71,7 @@ export default function RecuperationScreen() {
   };
 
   return (
-    <SafeAreaView style={styles.safe}>
+    <Screen>
       <KeyboardAvoidingView
         behavior={Platform.OS === 'ios' ? 'padding' : 'height'}
         style={styles.kav}
@@ -80,12 +85,12 @@ export default function RecuperationScreen() {
               style={styles.back}
             />
             <Text variant="h2">
-              {step === 'email' ? 'Récupérer mon compte' : 'Entrez votre code'}
+              {step === 'email' ? 'Se connecter via email' : 'Entrez votre code'}
             </Text>
             <Text variant="body" color="secondary" style={styles.sub}>
               {step === 'email'
-                ? 'Entrez l\'email de récupération lié à votre compte.'
-                : `Un code à 6 chiffres a été envoyé à ${email.trim().toLowerCase()}`}
+                ? 'Entrez votre email, on vous enverra un code.'
+                : `Un code à 6 chiffres est arrivé à ${email.trim().toLowerCase()}`}
             </Text>
           </View>
 
@@ -98,13 +103,14 @@ export default function RecuperationScreen() {
           {step === 'email' ? (
             <View style={styles.form}>
               <Input
-                label="Email de récupération"
+                label="Email"
                 value={email}
                 onChangeText={setEmail}
                 placeholder="vous@exemple.com"
                 keyboardType="email-address"
+                textContentType="emailAddress"
+                autoComplete="email"
                 autoCapitalize="none"
-                autoCorrect={false}
                 returnKeyType="done"
                 onSubmitEditing={handleSendCode}
                 autoFocus
@@ -136,7 +142,7 @@ export default function RecuperationScreen() {
           )}
         </View>
       </KeyboardAvoidingView>
-    </SafeAreaView>
+    </Screen>
   );
 }
 

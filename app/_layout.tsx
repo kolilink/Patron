@@ -1,5 +1,6 @@
 import * as Sentry from '@sentry/react-native';
 import { useEffect, useRef } from 'react';
+import { GestureHandlerRootView } from 'react-native-gesture-handler';
 import { Stack, usePathname, useGlobalSearchParams } from 'expo-router';
 import * as SplashScreen from 'expo-splash-screen';
 import { useFonts } from 'expo-font';
@@ -72,7 +73,7 @@ function RootLayout() {
 
   useEffect(() => {
     if (!fontsLoaded) return;
-    const timeout = setTimeout(() => SplashScreen.hideAsync(), 5000);
+    const timeout = setTimeout(() => SplashScreen.hideAsync(), 2000);
     Promise.all([initialize(), openDb()]).finally(() => {
       clearTimeout(timeout);
       SplashScreen.hideAsync();
@@ -80,11 +81,13 @@ function RootLayout() {
   }, [fontsLoaded]);
 
   return (
-    <PostHogProvider client={posthog} autocapture>
-      <ThemeProvider>
-        <Stack screenOptions={{ headerShown: false, animation: 'fade' }} />
-      </ThemeProvider>
-    </PostHogProvider>
+    <GestureHandlerRootView style={{ flex: 1 }}>
+      <PostHogProvider client={posthog} autocapture>
+        <ThemeProvider>
+          <Stack screenOptions={{ headerShown: false, animation: 'fade' }} />
+        </ThemeProvider>
+      </PostHogProvider>
+    </GestureHandlerRootView>
   );
 }
 

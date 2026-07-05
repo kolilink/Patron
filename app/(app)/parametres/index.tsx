@@ -1,6 +1,6 @@
 import { useEffect, useMemo, useRef, useState } from 'react';
 import { Alert, Animated, KeyboardAvoidingView, Linking, Platform, Pressable, ScrollView, StyleSheet, TextInput, View } from 'react-native';
-import { SafeAreaView } from 'react-native-safe-area-context';
+import { Screen } from '@/src/components/ui/Screen';
 import { router } from 'expo-router';
 import { Ionicons } from '@expo/vector-icons';
 import { Card } from '@/src/components/ui/Card';
@@ -43,6 +43,15 @@ export default function ParametresScreen() {
   const defaultPhone = business?.phone ?? session?.user.phone ?? '';
   const [bizName,  setBizName]  = useState(business?.name ?? '');
   const [bizPhone, setBizPhone] = useState(defaultPhone);
+
+  // PhoneInput fires onChange on mount — skip that first fire so it doesn't reset
+  // bizPhone to '' when the stored number's digit count doesn't match exactly.
+  const bizPhoneInitKeyRef = useRef(defaultPhone);
+  const bizPhoneSkipRef    = useRef(true);
+  if (bizPhoneInitKeyRef.current !== defaultPhone) {
+    bizPhoneInitKeyRef.current = defaultPhone;
+    bizPhoneSkipRef.current    = true;
+  }
   const [currency, setCurrency] = useState(business?.currency ?? '');
   const [userName, setUserName] = useState(session?.user.name ?? '');
   const [saving,   setSaving]   = useState(false);
@@ -264,7 +273,7 @@ export default function ParametresScreen() {
   };
 
   return (
-    <SafeAreaView style={styles.safe} edges={['top']}>
+    <Screen>
 
       {/* Header */}
       <View style={styles.hdr}>
@@ -300,7 +309,10 @@ export default function ParametresScreen() {
                 label="Numéro du commerce"
                 initialValue={defaultPhone || undefined}
                 strict={false}
-                onChange={(e164, isComplete) => setBizPhone(isComplete ? e164 : '')}
+                onChange={(e164, isComplete) => {
+                  if (bizPhoneSkipRef.current) { bizPhoneSkipRef.current = false; return; }
+                  setBizPhone(isComplete ? e164 : '');
+                }}
               />
               <View style={{ gap: spacing[2] }}>
                 <Text variant="label">Monnaie</Text>
@@ -337,7 +349,7 @@ export default function ParametresScreen() {
           <Card style={styles.section}>
             <Text variant="label" color="secondary">Mon profil</Text>
             <Input
-              label="Nom affiché"
+              label="Votre nom"
               value={userName}
               onChangeText={setUserName}
               placeholder={generateFallbackName(userId)}
@@ -346,14 +358,26 @@ export default function ParametresScreen() {
 
             {/* Email de récupération */}
             {emailStep === 'idle' && (
-              <Pressable onPress={() => setEmailStep('input')} style={styles.emailRow}>
+              <Pressable
+                onPress={() => setEmailStep('input')}
+                style={[
+                  styles.emailRow,
+                  !session?.user.recovery_email && {
+                    borderWidth: 1.5,
+                    borderColor: palette.warning,
+                    backgroundColor: palette.warning + '12',
+                    borderRadius: radius.md,
+                    paddingHorizontal: spacing[3],
+                    paddingVertical: spacing[3],
+                  },
+                ]}
+              >
                 <View style={{ flex: 1 }}>
                   <Text variant="label">Email de récupération</Text>
-                  <Text variant="caption" color="secondary">
-                    {session?.user.recovery_email ?? 'Non configuré'}
-                  </Text>
+                  {session?.user.recovery_email ? (
+                    <Text variant="caption" color="secondary">{session.user.recovery_email}</Text>
+                  ) : null}
                 </View>
-                <Text variant="caption" color="secondary">›</Text>
               </Pressable>
             )}
 
@@ -374,8 +398,9 @@ export default function ParametresScreen() {
                   onChangeText={setEmailInput}
                   placeholder="vous@exemple.com"
                   keyboardType="email-address"
+                  textContentType="emailAddress"
+                  autoComplete="email"
                   autoCapitalize="none"
-                  autoCorrect={false}
                   returnKeyType="done"
                   onSubmitEditing={handleSendEmailCode}
                   autoFocus
@@ -521,7 +546,7 @@ export default function ParametresScreen() {
 
         </ScrollView>
       </KeyboardAvoidingView>
-    </SafeAreaView>
+    </Screen>
   );
 }
 

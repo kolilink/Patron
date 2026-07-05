@@ -424,8 +424,13 @@ export const useSalesStore = create<SalesStore>((set, get) => ({
         : typeof (err as { message?: unknown })?.message === 'string'
           ? (err as { message: string }).message
           : 'Une erreur est survenue. La vente n\'a pas été enregistrée.';
+      // submit_sale raises plain French exceptions (e.g. "Stock insuffisant…"),
+      // which should reach the UI as-is — translateError only overrides `raw`
+      // when it recognizes a known raw Postgrest/network/auth error pattern,
+      // so a genuine technical error never reaches the merchant untranslated.
+      const friendly = translateError(err, raw);
       haptics.error();
-      set({ error: raw, submitting: false, lastSubmitQueued: false });
+      set({ error: friendly, submitting: false, lastSubmitQueued: false });
       return false;
     }
   },

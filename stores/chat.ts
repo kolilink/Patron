@@ -1,8 +1,11 @@
 import { create } from 'zustand';
+import * as FileSystem from 'expo-file-system/legacy';
 import { supabase } from '@/lib/supabase';
 import { translateError } from '@/lib/errors';
 import { isNetworkError } from '@/lib/sync';
 import { getKV, setKV, saveChatCache, getChatCache } from '@/lib/db';
+import { notifyEvent } from '@/src/utils/notifications';
+import { generateId } from '@/lib/id';
 import type { ChatRoom, ChatMessage } from '@/src/types';
 
 const GLOBAL_ROOM_ID = '00000000-0000-0000-0000-000000000001';
@@ -29,8 +32,21 @@ interface ChatStore {
   _currentUserId: string;
   _boutiqueLastRead: Date;
   _marcheLastRead: Date;
+  // Voice message playback: only one plays at a time across the whole chat
+  currentlyPlayingVoiceId: string | null;
+  setCurrentlyPlayingVoice: (id: string | null) => void;
+
   load: (businessId: string, currentUserId: string) => Promise<void>;
   sendMessage: (params: { roomId: string; senderId: string; senderName: string; content: string; replyTo?: { id: string; content: string; senderName: string } | null }) => Promise<void>;
+  sendVoiceMessage: (params: {
+    roomId: string;
+    senderId: string;
+    senderName: string;
+    businessId: string;
+    fileUri: string;          // local file:// URI from expo-av
+    duration: number;         // seconds
+    waveform: number[];       // amplitude samples 0.0–1.0
+  }) => Promise<void>;
   editMessage: (messageId: string, newContent: string) => Promise<void>;
   appendMessage: (msg: ChatMessage) => void;
   updateMessage: (msg: ChatMessage) => void;
@@ -50,10 +66,13 @@ const initialState = {
   _currentUserId: '',
   _boutiqueLastRead: new Date(0),
   _marcheLastRead: new Date(0),
+  currentlyPlayingVoiceId: null as string | null,
 };
 
 export const useChatStore = create<ChatStore>((set, get) => ({
   ...initialState,
+
+  setCurrentlyPlayingVoice: (id) => set({ currentlyPlayingVoiceId: id }),
 
   load: async (businessId, currentUserId) => {
     if (get().messages.length === 0) {
@@ -114,6 +133,24 @@ export const useChatStore = create<ChatStore>((set, get) => ({
           .limit(200);
         if (msgsErr) throw msgsErr;
         messages = msgs ?? [];
+
+        // Resolve current profile names so old messages reflect name changes
+        const senderIds = [...new Set(messages.map(m => m.sender_id))];
+        if (senderIds.length > 0) {
+          const { data: profiles } = await supabase
+            .from('profiles')
+            .select('id, name')
+            .in('id', senderIds);
+          if (profiles && profiles.length > 0) {
+            const nameMap: Record<string, string | null> = Object.fromEntries(
+              profiles.map(p => [p.id, (p.name as string | null) ?? null]),
+            );
+            messages = messages.map(m => ({
+              ...m,
+              sender_name: nameMap[m.sender_id] ?? m.sender_name,
+            }));
+          }
+        }
       }
 
       // 4. Compute unread counts
@@ -213,6 +250,20 @@ export const useChatStore = create<ChatStore>((set, get) => ({
         messages: state.messages.map(m => m.id === optimisticMsg.id ? (data as ChatMessage) : m),
         sending: false,
       }));
+      // Push notification for boutique (private) chat only — Le Marché is intentionally excluded
+      const boutiqueRoom = get().boutiqueRoom;
+      if (boutiqueRoom && roomId === boutiqueRoom.id && boutiqueRoom.business_id) {
+        notifyEvent({
+          businessId: boutiqueRoom.business_id,
+          eventType: 'chat_message',
+          payload: {
+            sender: senderName,
+            preview: content.slice(0, 60) + (content.length > 60 ? '…' : ''),
+          },
+          targetRoles: ['administrateur', 'manager', 'vendeur', 'investisseur'],
+          excludeUserId: senderId,
+        });
+      }
     } catch (err) {
       // Remove optimistic message on failure
       set(state => ({
@@ -222,6 +273,77 @@ export const useChatStore = create<ChatStore>((set, get) => ({
           ? 'Pas de connexion — message non envoyé'
           : translateError(err, 'Erreur d\'envoi'),
       }));
+    }
+  },
+
+  sendVoiceMessage: async ({ roomId, senderId, senderName, businessId, fileUri, duration, waveform }) => {
+    set({ sending: true, error: null });
+    const messageId = generateId();
+    const storagePath = `${businessId}/${messageId}.m4a`;
+
+    try {
+      // Upload audio file to Supabase Storage.
+      // fetch().blob() produces 0-byte blobs for file:// URIs in Hermes —
+      // read via FileSystem as base64 and decode to Uint8Array instead.
+      // Note: must import from 'expo-file-system/legacy' — the main package
+      // stubs all legacy methods to throw in expo-file-system v19+.
+      const base64 = await FileSystem.readAsStringAsync(fileUri, {
+        encoding: FileSystem.EncodingType.Base64,
+      });
+      const binary = atob(base64);
+      const bytes = new Uint8Array(binary.length);
+      for (let i = 0; i < binary.length; i++) bytes[i] = binary.charCodeAt(i);
+
+      const { error: uploadErr } = await supabase.storage
+        .from('voice-messages')
+        .upload(storagePath, bytes, { contentType: 'audio/mp4', upsert: false });
+      if (uploadErr) throw uploadErr;
+
+      // Public bucket — permanent URL, no expiry, no tokens
+      const { data: urlData } = supabase.storage
+        .from('voice-messages')
+        .getPublicUrl(storagePath);
+      const voiceUrl = urlData.publicUrl;
+
+      // Insert message row
+      const { data, error: insertErr } = await supabase
+        .from('chat_messages')
+        .insert({
+          id: messageId,
+          room_id: roomId,
+          sender_id: senderId,
+          sender_name: senderName,
+          content: '',            // empty for voice messages
+          message_type: 'voice',
+          voice_url: voiceUrl,
+          voice_duration: Math.round(duration),
+          voice_waveform: waveform,
+        })
+        .select()
+        .single();
+      if (insertErr) throw insertErr;
+
+      get().appendMessage(data as ChatMessage);
+      set({ sending: false });
+
+      // Notification: "Mamadou · 🎤 0:23" format
+      const boutiqueRoom = get().boutiqueRoom;
+      if (boutiqueRoom && roomId === boutiqueRoom.id && boutiqueRoom.business_id) {
+        const mins = Math.floor(duration / 60);
+        const secs = String(Math.round(duration % 60)).padStart(2, '0');
+        notifyEvent({
+          businessId: boutiqueRoom.business_id,
+          eventType: 'chat_message',
+          payload: {
+            sender: senderName,
+            preview: `🎤 ${mins}:${secs}`,
+          },
+          targetRoles: ['administrateur', 'manager', 'vendeur', 'investisseur'],
+          excludeUserId: senderId,
+        });
+      }
+    } catch (err) {
+      set({ sending: false, error: translateError(err, 'Impossible d\'envoyer le message vocal') });
     }
   },
 

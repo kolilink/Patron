@@ -113,7 +113,7 @@ function buildEmail(run: ReconciliationRun, findings: ReconciliationFinding[], s
   const isClean = run.status === 'clean';
   const headerBg = isClean ? '#059669' : run.critical_count > 0 ? '#dc2626' : '#d97706';
   const headerText = isClean
-    ? '✅ Tout est propre — 68 vérifications OK'
+    ? '✅ Tout est propre — 78 vérifications OK'
     : run.critical_count > 0
       ? `🚨 ${run.critical_count} critique(s) · ${run.warning_count} alerte(s)`
       : `⚠️ ${run.warning_count} alerte(s) — aucun critique`;
@@ -196,7 +196,7 @@ function buildEmail(run: ReconciliationRun, findings: ReconciliationFinding[], s
               ${statsRow('Boutiques', run.businesses_checked)}
               ${statsRow('Critiques', run.critical_count, run.critical_count > 0 ? '#dc2626' : '#059669')}
               ${statsRow('Alertes', run.warning_count, run.warning_count > 0 ? '#d97706' : '#059669')}
-              ${statsRow('Vérifications', 68)}
+              ${statsRow('Vérifications', 78)}
             </tr>
           </table>
         </td></tr>
@@ -217,7 +217,7 @@ function buildEmail(run: ReconciliationRun, findings: ReconciliationFinding[], s
                 Tous les comptes sont exacts
               </p>
               <p style="margin:0;font-size:13px;color:#4b5563;">
-                68 contrôles exécutés · 0 anomalie · ${run.businesses_checked} boutiques vérifiées
+                78 contrôles exécutés · 0 anomalie · ${run.businesses_checked} boutiques vérifiées
               </p>
             </td></tr>
           </table>
@@ -262,7 +262,7 @@ function buildEmail(run: ReconciliationRun, findings: ReconciliationFinding[], s
           <p style="margin:0;font-size:12px;color:#6b7280;line-height:1.8;">
             Stock · Ventes · Paiements · COGS · Dépenses · Crédit ·
             Fournisseurs · Commandes · Produits · Montants · Membres ·
-            Agrégats · Temporel · Intégrité référentielle
+            Agrégats · Temporel · Intégrité référentielle · Affichage
           </p>
         </td></tr>` : ''}
 
@@ -297,13 +297,13 @@ serve(async (req) => {
     });
   }
 
-  // Verify this is a legitimate cron call
+  // Verify this is a legitimate cron call. Fail closed: an unset CRON_SECRET
+  // must reject the request, not skip the check — this endpoint runs with
+  // the service role and can read every business's financial data.
   const cronSecret = Deno.env.get('CRON_SECRET');
-  if (cronSecret) {
-    const incoming = req.headers.get('x-cron-secret');
-    if (incoming !== cronSecret) {
-      return new Response(JSON.stringify({ error: 'Non autorisé' }), { status: 401 });
-    }
+  const incoming = req.headers.get('x-cron-secret');
+  if (!cronSecret || incoming !== cronSecret) {
+    return new Response(JSON.stringify({ error: 'Non autorisé' }), { status: 401 });
   }
 
   try {
@@ -312,14 +312,22 @@ serve(async (req) => {
       Deno.env.get('SUPABASE_SERVICE_ROLE_KEY')!,
     );
 
-    // 1. Run all 68 reconciliation checks
+    // 1. Run the 69 structural reconciliation checks
     const { data: runIdData, error: rpcErr } = await serviceClient
       .rpc('run_reconciliation');
 
     if (rpcErr) throw new Error(`run_reconciliation() failed: ${rpcErr.message}`);
     const runId: string = runIdData;
 
-    // 2. Fetch the run summary
+    // 2. Run the 10 display-accuracy checks (69–78) and refresh run totals
+    const { error: displayErr } = await serviceClient.rpc('run_display_checks', { p_run_id: runId });
+    if (displayErr) console.error('run_display_checks failed:', displayErr.message);
+    else {
+      const { error: refreshErr } = await serviceClient.rpc('refresh_reconciliation_run', { p_run_id: runId });
+      if (refreshErr) console.error('refresh_reconciliation_run failed:', refreshErr.message);
+    }
+
+    // 3. Fetch the run summary (after display checks updated the totals)
     const { data: run, error: runErr } = await serviceClient
       .from('reconciliation_runs')
       .select('*')
@@ -328,7 +336,7 @@ serve(async (req) => {
 
     if (runErr || !run) throw new Error(`Failed to fetch run: ${runErr?.message}`);
 
-    // 3. Fetch all findings, ordered by severity then check_id
+    // 4. Fetch all findings, ordered by severity then check_id
     const { data: findings, error: findErr } = await serviceClient
       .from('reconciliation_findings')
       .select('check_id,domain,check_name,severity,business_id,entity_type,entity_id,detail,affected_count')
@@ -339,14 +347,14 @@ serve(async (req) => {
 
     if (findErr) throw new Error(`Failed to fetch findings: ${findErr.message}`);
 
-    // 4. Independent ground-truth financial snapshot (not from app code).
+    // 5. Independent ground-truth financial snapshot (not from app code).
     //    Best-effort: a failure here shouldn't block the integrity report.
     const { data: snapshotData, error: snapshotErr } = await serviceClient
       .rpc('get_financial_snapshot');
     if (snapshotErr) console.error('get_financial_snapshot failed:', snapshotErr.message);
     const snapshot = (snapshotData ?? []) as CurrencySnapshot[];
 
-    // 5. Send email via Resend
+    // 6. Send email via Resend
     const founderEmail = Deno.env.get('FOUNDER_EMAIL') ?? 'mdousebastiao@gmail.com';
     const resendKey = Deno.env.get('RESEND_API_KEY')!;
 

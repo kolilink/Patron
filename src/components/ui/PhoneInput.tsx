@@ -24,6 +24,10 @@ interface PhoneInputProps {
   resetKey?: number;
   strict?: boolean;
   initialValue?: string; // E.164 number to pre-fill (e.g. "+224620000000")
+  // Enables OS-level "this is your own number" autofill (Contacts/SIM suggestion).
+  // Only appropriate when the field captures the current user's own number
+  // (login, signup) — not when entering someone else's (client, supplier).
+  autofillOwnNumber?: boolean;
 }
 
 function parseE164(e164: string): { country: Country; local: string } | null {
@@ -55,7 +59,7 @@ function buildList(search: string): ListItem[] {
   return [...PINNED, { divider: true }, ...REST];
 }
 
-export function PhoneInput({ onChange, label, autoFocus, resetKey, strict = true, initialValue }: PhoneInputProps) {
+export function PhoneInput({ onChange, label, autoFocus, resetKey, strict = true, initialValue, autofillOwnNumber }: PhoneInputProps) {
   const { palette } = useTheme();
   const styles = useMemo(() => makeStyles(palette), [palette]);
 
@@ -82,7 +86,7 @@ export function PhoneInput({ onChange, label, autoFocus, resetKey, strict = true
     });
   }, []);
 
-  useEffect(() => { setLocalNumber(''); }, [resetKey]);
+  useEffect(() => { if ((resetKey ?? 0) > 0) setLocalNumber(''); }, [resetKey]);
 
   useEffect(() => {
     const anim = Animated.loop(
@@ -110,7 +114,26 @@ export function PhoneInput({ onChange, label, autoFocus, resetKey, strict = true
 
   const handleChangeText = (t: string) => {
     const raw = t.replace(/\D/g, '');
-    let digits = raw.startsWith('0') ? raw.slice(1) : raw;
+
+    // Autofill/paste of a full international number can carry a different
+    // country than the one currently selected on screen (e.g. the screen
+    // defaulted to Guinea but the device's own number is French) — resolve
+    // the country straight from the pasted digits instead of assuming it
+    // matches whatever is already selected.
+    if (raw.length > country.digits + 1) {
+      const parsed = parseE164(`+${raw}`);
+      if (parsed) {
+        userTouched.current = true;
+        setCountry(parsed.country);
+        setLocalNumber(parsed.local.slice(0, parsed.country.digits));
+        return;
+      }
+    }
+
+    // Strip leading trunk-prefix 0 only when pasting a full number that's too long —
+    // not while typing digit by digit, since many countries (Gabon, Nigeria, Senegal…)
+    // have mobile numbers that genuinely start with 0.
+    let digits = (raw.startsWith('0') && raw.length > country.digits) ? raw.slice(1) : raw;
     const prefix = country.dial.replace('+', '');
     if (digits.startsWith(prefix) && digits.length > country.digits) {
       digits = digits.slice(prefix.length);
@@ -181,6 +204,8 @@ export function PhoneInput({ onChange, label, autoFocus, resetKey, strict = true
             style={styles.hiddenInput}
             caretHidden
             selectionColor="transparent"
+            textContentType={autofillOwnNumber ? 'telephoneNumber' : undefined}
+            autoComplete={autofillOwnNumber ? 'tel' : undefined}
           />
         </View>
       </Pressable>

@@ -1,7 +1,7 @@
 import { useMemo } from 'react';
 import { StyleSheet, View } from 'react-native';
 import { router } from 'expo-router';
-import { SafeAreaView } from 'react-native-safe-area-context';
+import { Screen } from '@/src/components/ui/Screen';
 import { Ionicons } from '@expo/vector-icons';
 import { Button } from '@/src/components/ui/Button';
 import { Text } from '@/src/components/ui/Text';
@@ -35,7 +35,7 @@ export default function AccesSupprime() {
   };
 
   return (
-    <SafeAreaView style={styles.safe}>
+    <Screen>
       <View style={styles.container}>
 
         <View style={styles.iconWrap}>
@@ -79,7 +79,7 @@ export default function AccesSupprime() {
         </View>
 
       </View>
-    </SafeAreaView>
+    </Screen>
   );
 }
 

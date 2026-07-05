@@ -1,7 +1,14 @@
 import { supabase } from '@/lib/supabase';
 import { getPendingOps, deleteQueueItem, markAttemptFailed } from '@/lib/db';
 
-export type SyncResult = { synced: number; failed: number };
+export type SyncResult = {
+  synced: number;
+  failed: number;
+  // Payment-specific rejections (e.g. a debt already settled by another queued
+  // payment before this one synced) — surfaced separately so the caller can
+  // alert the merchant instead of letting them vanish into a silent retry.
+  rejectedPayments: string[];
+};
 
 let _running = false;
 
@@ -59,18 +66,40 @@ async function executeOp(operation: string, payload: Record<string, unknown>): P
       break;
     }
     case 'record_payment': {
-      const { payments, fully_paid_ids } = payload as {
-        payments: object[];
-        fully_paid_ids: string[];
-      };
-      const { error } = await supabase.from('payments').insert(payments);
-      if (error) throw error;
-      if (fully_paid_ids.length > 0) {
-        await supabase
-          .from('sale_orders')
-          .update({ status: 'paye', paid_at: new Date().toISOString() })
-          .in('id', fully_paid_ids);
+      // Legacy shape: queued by an app version from before record_payment became
+      // an RPC (payload has `payments`/`fully_paid_ids` instead of `p_sale_id`
+      // etc.). Devices that queued a payment offline on that older build still
+      // have rows like this sitting in their local sync_queue. migration_v105
+      // dropped the direct client-side INSERT policy on `payments` (record_payment
+      // is now the only path in), so these can no longer be replayed with a raw
+      // insert — map each legacy row onto the RPC instead, which re-derives
+      // fullyPaid itself instead of trusting `fully_paid_ids` computed offline.
+      if ('payments' in payload) {
+        const { payments } = payload as {
+          payments: { order_id: string; business_id: string; amount: number; method: string; date: string }[];
+        };
+        for (const p of payments) {
+          const { error } = await supabase.rpc('record_payment', {
+            p_sale_id:     p.order_id,
+            p_business_id: p.business_id,
+            p_amount:      p.amount,
+            p_method:      p.method,
+            p_date:        p.date,
+          });
+          if (error) throw error;
+        }
+        break;
       }
+      // Current shape: replays through the same guarded RPC used online — re-checks
+      // the real remaining balance at drain time and throws if it would overpay,
+      // instead of blindly inserting whatever the phone computed before going offline.
+      const { error } = await supabase.rpc('record_payment', payload);
+      if (error) throw error;
+      break;
+    }
+    case 'record_client_payment': {
+      const { error } = await supabase.rpc('record_client_payment', payload);
+      if (error) throw error;
       break;
     }
     case 'create_product': {
@@ -111,10 +140,10 @@ async function executeOp(operation: string, payload: Record<string, unknown>): P
 }
 
 export async function drainQueue(): Promise<SyncResult> {
-  if (_running) return { synced: 0, failed: 0 };
+  if (_running) return { synced: 0, failed: 0, rejectedPayments: [] };
   _running = true;
 
-  const result: SyncResult = { synced: 0, failed: 0 };
+  const result: SyncResult = { synced: 0, failed: 0, rejectedPayments: [] };
 
   try {
     const ops = await getPendingOps();
@@ -131,10 +160,18 @@ export async function drainQueue(): Promise<SyncResult> {
           result.failed++;
           break; // still offline — stop trying
         }
-        // Server/auth/validation error — mark failed, continue with next item
-        const msg = e instanceof Error ? e.message : String(e);
+        // Server/auth/validation error — mark failed, continue with next item.
+        // Supabase RPC errors (PostgrestError) are plain objects with a
+        // `.message`, not `Error` instances — fall through to that before
+        // String(e), which would otherwise stringify them as "[object Object]".
+        const msg = e instanceof Error
+          ? e.message
+          : (e && typeof e === 'object' && 'message' in e ? String((e as { message: unknown }).message) : String(e));
         await markAttemptFailed(op.id, msg);
         result.failed++;
+        if (op.operation === 'record_payment' || op.operation === 'record_client_payment') {
+          result.rejectedPayments.push(msg);
+        }
       }
     }
   } finally {

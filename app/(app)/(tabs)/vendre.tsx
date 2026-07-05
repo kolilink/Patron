@@ -18,6 +18,7 @@ import {
 import { captureRef } from 'react-native-view-shot';
 import * as Sharing from 'expo-sharing';
 import { SafeAreaView } from 'react-native-safe-area-context';
+import { Screen } from '@/src/components/ui/Screen';
 import { Ionicons } from '@expo/vector-icons';
 import { Button } from '@/src/components/ui/Button';
 import { Card } from '@/src/components/ui/Card';
@@ -27,9 +28,9 @@ import { PhoneInput } from '@/src/components/ui/PhoneInput';
 import { SaleSuccessOverlay } from '@/src/components/ui/SaleSuccessOverlay';
 import { SaleReceiptView, type ReceiptData, type ReceiptItem } from '@/src/components/ui/SaleReceiptView';
 import { DatePickerField } from '@/src/components/ui/DatePickerField';
-import { colors, useTheme, radius, spacing } from '@/src/theme';
+import { useTheme, radius, spacing, CLIENT_AVATAR_PALETTE } from '@/src/theme';
 import type { Palette } from '@/src/theme';
-import { formatAmount } from '@/src/utils/format';
+import { formatAmount, formatAmountInput, parseAmountInput } from '@/src/utils/format';
 import { todayIso } from '@/src/utils/dates';
 import type { Product, ProductVariant } from '@/src/types';
 import { useAuthStore } from '@/stores/auth';
@@ -96,9 +97,11 @@ interface CartRowProps {
   onRemove: () => void;
   onToggleBulk: () => void;
   onSetQty: (qty: number) => void;
+  onEditStart?: () => void;
+  onLayout?: (e: import('react-native').LayoutChangeEvent) => void;
 }
 
-function CartRow({ line, currency, onInc, onDec, onRemove, onToggleBulk, onSetQty }: CartRowProps) {
+function CartRow({ line, currency, onInc, onDec, onRemove, onToggleBulk, onSetQty, onEditStart, onLayout }: CartRowProps) {
   const { palette } = useTheme();
   const styles = useMemo(() => makeStyles(palette), [palette]);
   const hasBulk = !!(line.product.bulk_price && line.product.bulk_min_qty);
@@ -109,17 +112,18 @@ function CartRow({ line, currency, onInc, onDec, onRemove, onToggleBulk, onSetQt
   const startEdit = () => {
     setInputVal(String(line.qty));
     setEditing(true);
+    onEditStart?.();
     setTimeout(() => inputRef.current?.focus(), 30);
   };
 
   const commitEdit = () => {
     const n = parseInt(inputVal, 10);
-    if (!isNaN(n) && n > 0) onSetQty(line.variant_id ? n : Math.min(n, line.product.stock_qty));
+    if (!isNaN(n) && n > 0) onSetQty(Math.min(n, line.variant_id ? (line.variant_stock_qty ?? Infinity) : line.product.stock_qty));
     setEditing(false);
   };
 
   return (
-    <View style={styles.cartRow}>
+    <View style={styles.cartRow} onLayout={onLayout}>
       <View style={{ flex: 1 }}>
         <Text variant="label" numberOfLines={1}>{line.product.name}{line.variant_name ? ` · ${line.variant_name}` : ''}</Text>
         <View style={{ flexDirection: 'row', alignItems: 'center', gap: spacing[2] }}>
@@ -157,7 +161,7 @@ function CartRow({ line, currency, onInc, onDec, onRemove, onToggleBulk, onSetQt
           </Pressable>
         )}
         {(() => {
-          const atMax = !line.variant_id && line.qty >= line.product.stock_qty;
+          const atMax = line.qty >= (line.variant_id ? (line.variant_stock_qty ?? Infinity) : line.product.stock_qty);
           return (
             <Pressable
               onPress={() => { if (atMax) return; haptics.selection(); onInc(); }}
@@ -215,12 +219,18 @@ function PaymentModal({
   const [dueDatePill, setDueDatePill] = useState<'1w' | '1m' | 'custom' | null>(null);
   const [customDueDateInput, setCustomDueDateInput] = useState('');
   const clientSearchRef = useRef<TextInput>(null);
+  const modalScrollRef = useRef<ScrollView>(null);
+  // Clients are only needed once the user opens the client section (credit
+  // sales or "Nom du client") — most sales are plain cash and never touch it,
+  // so fetching them unconditionally on every modal open wastes two Supabase
+  // round trips on the hottest screen in the app.
+  const clientsLoadedRef = useRef(false);
 
   useEffect(() => {
     if (visible) {
       setStep(initialStep);
       setPayMethod('especes');
-      setAmountInput(String(total));
+      setAmountInput(formatAmountInput(String(Math.round(total))));
       setDisambig(null);
       setCreditDiscountInput('');
       setCreditUpfrontInput('');
@@ -235,7 +245,7 @@ function PaymentModal({
       setNewClientPhone('');
       setDueDatePill(null);
       setCustomDueDateInput('');
-      loadClients();
+      clientsLoadedRef.current = false;
     }
   }, [visible, initialStep, total]);
 
@@ -275,6 +285,13 @@ function PaymentModal({
   }, [showClientSection, showNewClientForm]);
 
   useEffect(() => {
+    if (showClientSection && !clientsLoadedRef.current) {
+      clientsLoadedRef.current = true;
+      loadClients();
+    }
+  }, [showClientSection]);
+
+  useEffect(() => {
     if (step === 'credit' && visible && !clientName) setShowClientSection(true);
   }, [step]);
 
@@ -292,6 +309,7 @@ function PaymentModal({
     setNewClientName('');
     setNewClientPhone('');
     Keyboard.dismiss();
+    setTimeout(() => modalScrollRef.current?.scrollTo({ y: 0, animated: true }), 100);
   };
 
   const handleAddNewClient = async () => {
@@ -305,13 +323,12 @@ function PaymentModal({
     handleSelectClient(name, phone, data?.id ?? undefined);
   };
 
-  const cleanNum = (s: string) => s.replace(/[^\d.,]/g, '').replace(',', '.');
-  const parsedAmount = parseFloat(cleanNum(amountInput)) || 0;
+  const parsedAmount = parseAmountInput(amountInput);
   const shortfall = total - parsedAmount;
   const isShort = shortfall > 0.5;
 
-  const creditDiscount = parseFloat(cleanNum(creditDiscountInput)) || 0;
-  const creditUpfront  = parseFloat(cleanNum(creditUpfrontInput)) || 0;
+  const creditDiscount = parseAmountInput(creditDiscountInput);
+  const creditUpfront  = parseAmountInput(creditUpfrontInput);
   const creditEffectiveTotal = total - creditDiscount;
   const creditUpfrontCoversAll = creditUpfront >= creditEffectiveTotal - 0.01 && creditUpfront > 0;
 
@@ -323,7 +340,7 @@ function PaymentModal({
   })();
 
   const handleAmountChange = (val: string) => {
-    setAmountInput(val);
+    setAmountInput(formatAmountInput(val));
     setDisambig(null);
   };
 
@@ -368,6 +385,7 @@ function PaymentModal({
         >
           {/* Single scroll for all content — keyboard pushes footer up, scroll handles the rest */}
           <ScrollView
+            ref={modalScrollRef}
             style={{ flex: 1 }}
             contentContainerStyle={{ paddingBottom: spacing[6] }}
             keyboardShouldPersistTaps="handled"
@@ -399,7 +417,7 @@ function PaymentModal({
                 <TextInput
                   style={styles.amountBigInput}
                   value={creditDiscountInput}
-                  onChangeText={setCreditDiscountInput}
+                  onChangeText={v => setCreditDiscountInput(formatAmountInput(v))}
                   keyboardType="decimal-pad"
                   placeholderTextColor={palette.textDisabled}
                   selectTextOnFocus
@@ -412,7 +430,7 @@ function PaymentModal({
                 <TextInput
                   style={styles.amountBigInput}
                   value={creditUpfrontInput}
-                  onChangeText={setCreditUpfrontInput}
+                  onChangeText={v => setCreditUpfrontInput(formatAmountInput(v))}
                   keyboardType="decimal-pad"
                   placeholderTextColor={palette.textDisabled}
                   selectTextOnFocus
@@ -421,8 +439,8 @@ function PaymentModal({
 
               {/* Show remaining only when upfront > 0 */}
               {creditUpfront > 0 && !creditUpfrontCoversAll && (
-                <View style={[styles.disambigBox, { backgroundColor: '#FFF7ED', borderColor: '#FED7AA' }]}>
-                  <Text variant="label" style={{ color: colors.warning[700] }}>
+                <View style={[styles.disambigBox, { backgroundColor: palette.warningLight, borderColor: palette.warning }]}>
+                  <Text variant="label" style={{ color: palette.warning }}>
                     Reste à payer : {formatAmount(Math.max(0, creditEffectiveTotal - creditUpfront), currency)}
                   </Text>
                 </View>
@@ -430,7 +448,7 @@ function PaymentModal({
 
               {creditUpfrontCoversAll && (
                 <View style={styles.warnRow}>
-                  <Text variant="caption" style={{ color: colors.warning[700] }}>
+                  <Text variant="caption" style={{ color: palette.warning }}>
                     Payé en entier — pas de crédit.
                   </Text>
                 </View>
@@ -530,24 +548,30 @@ function PaymentModal({
 
                 {isShort && (
                   <View style={styles.disambigBox}>
-                    <Text variant="label" style={{ color: colors.warning[700] }}>
-                      😊 {formatAmount(shortfall, currency)} de moins que le prix
+                    <Text variant="caption" style={{ color: palette.textSecondary }}>
+                      <Text style={{ color: palette.textPrimary, fontWeight: '600' }}>{formatAmount(shortfall, currency)}</Text>
+                      {' '}de moins que le prix
                     </Text>
-                    <Text variant="label" style={{ marginTop: spacing[3] }}>C'est :</Text>
 
                     <Pressable onPress={() => setDisambig('rabais')} style={styles.radioRow}>
-                      <View style={[styles.radio, disambig === 'rabais' && styles.radioActive]} />
+                      <View style={[styles.radio, disambig === 'rabais' && styles.radioActive]}>
+                        {disambig === 'rabais' && <View style={styles.radioDot} />}
+                      </View>
                       <View style={{ flex: 1 }}>
-                        <Text variant="label">Une réduction</Text>
-                        <Text variant="caption" color="secondary">Le client ne doit plus rien</Text>
+                        <Text variant="label" style={{ color: disambig === 'rabais' ? palette.primary : palette.textPrimary }}>Une réduction</Text>
+                        <Text variant="caption" style={{ color: palette.textSecondary }}>Le client ne doit plus rien</Text>
                       </View>
                     </Pressable>
 
+                    <View style={styles.radioSeparator} />
+
                     <Pressable onPress={() => setDisambig('credit')} style={styles.radioRow}>
-                      <View style={[styles.radio, disambig === 'credit' && styles.radioActive]} />
+                      <View style={[styles.radio, disambig === 'credit' && styles.radioActive]}>
+                        {disambig === 'credit' && <View style={styles.radioDot} />}
+                      </View>
                       <View style={{ flex: 1 }}>
-                        <Text variant="label">Un crédit</Text>
-                        <Text variant="caption" color="secondary">
+                        <Text variant="label" style={{ color: disambig === 'credit' ? palette.primary : palette.textPrimary }}>Un crédit</Text>
+                        <Text variant="caption" style={{ color: palette.textSecondary }}>
                           Le client paiera {formatAmount(shortfall, currency)} plus tard
                         </Text>
                       </View>
@@ -648,9 +672,8 @@ function PaymentModal({
                       </View>
                     ) : (
                       filteredClients.map(c => {
-                        const AVATAR_COLORS = ['#DAFCE3', '#FDF0DA', '#E0E7FF', '#FEF3C7'];
                         const sum = c.name ? c.name.split('').reduce((acc, ch) => acc + ch.charCodeAt(0), 0) : 0;
-                        const avatarBg = AVATAR_COLORS[sum % AVATAR_COLORS.length];
+                        const avatarBg = CLIENT_AVATAR_PALETTE[sum % CLIENT_AVATAR_PALETTE.length];
                         const initial = c.name ? c.name.charAt(0).toUpperCase() : '?';
                         return (
                           <Pressable
@@ -764,16 +787,11 @@ interface ProductTileProps {
 function ProductTile({ product, currency, onAdd, onAddBulk, cartQty, cartBulkQty }: ProductTileProps) {
   const { palette } = useTheme();
   const styles = useMemo(() => makeStyles(palette), [palette]);
-  // Variant products always have stock_qty=0 on the parent — never treat them as out-of-stock
-  const outOfStock = !product.has_variants && product.stock_qty === 0;
   const totalInCart = cartQty + cartBulkQty;
+  // Variant products always have stock_qty=0 on the parent — never treat them as out-of-stock.
+  // For plain products, stock already reserved in the cart is no longer sellable this session.
+  const outOfStock = !product.has_variants && product.stock_qty - totalInCart <= 0;
   const hasBulk = !!(product.bulk_price && product.bulk_min_qty);
-
-  function stockLabel() {
-    if (product.has_variants) return 'Variétés disponibles';
-    if (outOfStock) return 'Épuisé';
-    return `${product.stock_qty} ${product.unit}`;
-  }
 
   return (
     <Pressable
@@ -792,11 +810,15 @@ function ProductTile({ product, currency, onAdd, onAddBulk, cartQty, cartBulkQty
       )}
       {hasBulk && (
         <View style={styles.tileGrosBadge}>
-          <Text variant="caption" style={{ color: colors.warning[700], fontSize: 9 }}>GROS</Text>
+          <Text variant="caption" style={{ color: palette.warning, fontSize: 9 }}>GROS</Text>
         </View>
       )}
       <Text variant="label" numberOfLines={2} style={styles.tileName}>{product.name}</Text>
-      <Text variant="caption" color="secondary" numberOfLines={1}>{stockLabel()}</Text>
+      {!product.has_variants && (
+        <Text variant="caption" color="secondary" numberOfLines={1}>
+          {outOfStock ? 'Épuisé' : `${product.stock_qty - totalInCart} ${product.unit}`}
+        </Text>
+      )}
       <View style={{ flexDirection: 'row', alignItems: 'center', justifyContent: 'space-between' }}>
         <Text variant="label" style={{ color: outOfStock ? palette.textDisabled : palette.primary }}>
           {formatAmount(product.sale_price, currency)}
@@ -806,7 +828,7 @@ function ProductTile({ product, currency, onAdd, onAddBulk, cartQty, cartBulkQty
         )}
       </View>
       {hasBulk && product.bulk_price ? (
-        <Text variant="caption" style={{ color: colors.warning[700] }}>
+        <Text variant="caption" style={{ color: palette.warning }}>
           Gros: {formatAmount(product.bulk_price, currency)}
         </Text>
       ) : null}
@@ -828,18 +850,25 @@ interface VariantPickerSheetProps {
   visible: boolean;
   product: Product | null;
   variants: ProductVariant[];
+  cartQtyByVariant: Record<string, number>;
   currency: string;
   onClose: () => void;
-  onPick: (variant: ProductVariant) => void;
+  onPickMany: (selections: { variant: ProductVariant; qty: number }[]) => void;
 }
 
-function VariantPickerSheet({ visible, product, variants, currency, onClose, onPick }: VariantPickerSheetProps) {
+function VariantPickerSheet({ visible, product, variants, cartQtyByVariant, currency, onClose, onPickMany }: VariantPickerSheetProps) {
   const { palette } = useTheme();
   const styles = useMemo(() => makeStyles(palette), [palette]);
   const translateY = useRef(new Animated.Value(400)).current;
+  const [qtys, setQtys] = useState<Record<string, number>>({});
+  const [editingId, setEditingId] = useState<string | null>(null);
+  const [editVal, setEditVal] = useState('');
+  const editRef = useRef<TextInput>(null);
 
   useEffect(() => {
     if (visible) {
+      setQtys({});
+      setEditingId(null);
       Animated.spring(translateY, { toValue: 0, useNativeDriver: true, bounciness: 4 }).start();
     } else {
       translateY.setValue(400);
@@ -848,6 +877,38 @@ function VariantPickerSheet({ visible, product, variants, currency, onClose, onP
 
   if (!product) return null;
 
+  const totalAdded = Object.values(qtys).reduce((s, q) => s + q, 0);
+
+  const changeQty = (variantId: string, delta: number, maxStock: number) => {
+    setQtys(prev => {
+      const cur = prev[variantId] ?? 0;
+      const next = Math.max(0, Math.min(cur + delta, maxStock));
+      return { ...prev, [variantId]: next };
+    });
+  };
+
+  const startEdit = (variantId: string, currentQty: number) => {
+    setEditVal(String(currentQty));
+    setEditingId(variantId);
+    setTimeout(() => editRef.current?.focus(), 30);
+  };
+
+  const commitEdit = (variantId: string, maxStock: number) => {
+    const n = parseInt(editVal, 10);
+    if (!isNaN(n)) {
+      setQtys(prev => ({ ...prev, [variantId]: Math.max(0, Math.min(n, maxStock)) }));
+    }
+    setEditingId(null);
+  };
+
+  const confirm = () => {
+    const selections = variants
+      .map(v => ({ variant: v, qty: qtys[v.id] ?? 0 }))
+      .filter(s => s.qty > 0);
+    onPickMany(selections);
+    onClose();
+  };
+
   return (
     <Modal visible={visible} transparent animationType="none" onRequestClose={onClose}>
       <Pressable style={StyleSheet.absoluteFill} onPress={onClose}>
@@ -855,33 +916,81 @@ function VariantPickerSheet({ visible, product, variants, currency, onClose, onP
       </Pressable>
       <Animated.View style={[styles.variantSheet, { transform: [{ translateY }] }]}>
         <View style={styles.variantSheetHandle} />
-        <Text variant="h4" style={{ textAlign: 'center', marginBottom: spacing[4] }}>{product.name}</Text>
+        <View style={{ flexDirection: 'row', alignItems: 'center', justifyContent: 'space-between', marginBottom: spacing[4] }}>
+          <Text variant="h4">{product.name}</Text>
+          <Text variant="label" style={{ color: palette.primary }}>
+            {formatAmount(product.sale_price, currency)}
+          </Text>
+        </View>
         <ScrollView showsVerticalScrollIndicator={false} keyboardShouldPersistTaps="handled">
           {variants.map(v => {
-            const outOfStock = v.stock_qty <= 0;
+            // Stock already sitting in the cart this session isn't sellable
+            // again until the sale completes or the cart is cleared.
+            const reserved = cartQtyByVariant[v.id] ?? 0;
+            const remaining = Math.max(0, v.stock_qty - reserved);
+            const outOfStock = remaining <= 0;
+            const qty = qtys[v.id] ?? 0;
+            const isEditing = editingId === v.id;
+            const atMax = qty >= remaining;
             return (
-              <Pressable
+              <View
                 key={v.id}
-                onPress={outOfStock ? undefined : () => { onPick(v); onClose(); }}
-                style={({ pressed }) => [
-                  styles.variantOption,
-                  outOfStock && { opacity: 0.4 },
-                  pressed && !outOfStock && { opacity: 0.65 },
-                ]}
+                style={[styles.variantOption, outOfStock && { opacity: 0.4 }]}
               >
                 <View style={{ flex: 1 }}>
                   <Text variant="body" style={{ fontWeight: '600' }}>{v.name}</Text>
                   <Text variant="caption" color="secondary">
-                    {outOfStock ? 'Épuisé' : `${v.stock_qty} en stock`}
+                    {outOfStock ? 'Épuisé' : `${remaining} en stock`}
+                    {reserved > 0 ? ` · ${reserved} déjà dans le panier` : ''}
                   </Text>
                 </View>
-                <Text variant="label" style={{ color: outOfStock ? palette.textDisabled : palette.primary }}>
-                  {formatAmount(v.sale_price, currency)}
-                </Text>
-              </Pressable>
+                <View style={styles.qtyControl}>
+                  <Pressable
+                    onPress={() => { if (!outOfStock && qty > 0) { haptics.selection(); changeQty(v.id, -1, remaining); } }}
+                    style={[styles.qtyBtn, (outOfStock || qty === 0) && { opacity: 0.3 }]}
+                  >
+                    <Text variant="label" style={{ color: qty === 0 ? palette.textDisabled : palette.danger }}>−</Text>
+                  </Pressable>
+                  {isEditing ? (
+                    <TextInput
+                      ref={editRef}
+                      style={styles.qtyInput}
+                      value={editVal}
+                      onChangeText={setEditVal}
+                      onBlur={() => commitEdit(v.id, remaining)}
+                      onSubmitEditing={() => commitEdit(v.id, remaining)}
+                      keyboardType="number-pad"
+                      selectTextOnFocus
+                      returnKeyType="done"
+                    />
+                  ) : (
+                    <Pressable
+                      onPress={() => !outOfStock && startEdit(v.id, qty)}
+                      style={styles.qtyNumPress}
+                    >
+                      <Text variant="label" style={styles.qtyNum}>{qty}</Text>
+                    </Pressable>
+                  )}
+                  <Pressable
+                    onPress={() => { if (!outOfStock && !atMax) { haptics.selection(); changeQty(v.id, 1, remaining); } }}
+                    style={[styles.qtyBtn, (outOfStock || atMax) && { opacity: 0.3 }]}
+                  >
+                    <Text variant="label" style={{ color: (outOfStock || atMax) ? palette.textDisabled : palette.primary }}>+</Text>
+                  </Pressable>
+                </View>
+              </View>
             );
           })}
         </ScrollView>
+        <View style={{ paddingTop: spacing[4] }}>
+          <Button
+            label={totalAdded > 0 ? `Ajouter ${totalAdded} article${totalAdded > 1 ? 's' : ''}` : 'Ajouter'}
+            onPress={confirm}
+            fullWidth
+            size="lg"
+            disabled={totalAdded === 0}
+          />
+        </View>
       </Animated.View>
     </Modal>
   );
@@ -940,7 +1049,13 @@ export default function VendreScreen() {
   const role = session?.activeMembership?.role;
   const isVendeur = role === 'vendeur';
 
-  const { products, variantsByProduct, loading, fetchProducts, fetchVariants } = useProductStore();
+  const { products: allProducts, vendeurProductScope, variantsByProduct, loading, fetchProducts, fetchVariants } = useProductStore();
+
+  // Apply vendeur product scope (empty = unscoped, sees everything)
+  const products = useMemo(() => {
+    if (!isVendeur || vendeurProductScope.length === 0) return allProducts;
+    return allProducts.filter(p => vendeurProductScope.includes(p.id));
+  }, [allProducts, vendeurProductScope, isVendeur]);
   const { cart, submitting, error: saleError, addToCart, addToCartVariant, removeFromCart, setQty, toggleBulk, clearCart, submitSale, submitCarnetDebt, clearError } =
     useSalesStore();
 
@@ -973,9 +1088,13 @@ export default function VendreScreen() {
   const currencyConfirmedRef = useRef(false);
   const receiptViewRef = useRef<View>(null);
   const pendingReceiptRef = useRef<ReceiptData | null>(null);
+  const cartScrollRef = useRef<ScrollView>(null);
+  const cartRowOffsets = useRef<Record<string, number>>({});
+
+  const membershipId = session?.activeMembership?.id;
 
   useEffect(() => {
-    if (businessId) fetchProducts(businessId, userId);
+    if (businessId) fetchProducts(businessId, userId, membershipId, role);
   }, [businessId]);
 
   useEffect(() => {
@@ -983,6 +1102,7 @@ export default function VendreScreen() {
     products.filter(p => p.has_variants && !variantsByProduct[p.id])
       .forEach(p => fetchVariants(p.id, businessId));
   }, [products, businessId]);
+
 
   useEffect(() => {
     if (mode === 'credit' && businessId && creditQuickClients.length === 0) {
@@ -1064,6 +1184,16 @@ export default function VendreScreen() {
 
   const cartTotal = useMemo(() => cart.reduce((s, l) => s + l.unit_price * l.qty, 0), [cart]);
   const cartCount = useMemo(() => cart.reduce((s, l) => s + l.qty, 0), [cart]);
+  // How much of each variant is already reserved in the cart this session —
+  // the picker must subtract this from stock_qty so it can never let the
+  // merchant select more than what's actually left to sell.
+  const variantCartQty = useMemo(() => {
+    const map: Record<string, number> = {};
+    for (const l of cart) {
+      if (l.variant_id) map[l.variant_id] = (map[l.variant_id] ?? 0) + l.qty;
+    }
+    return map;
+  }, [cart]);
   const displayTotal = useCountUp(cartTotal);
 
   const sheetCheckW = useRef(new Animated.Value(0)).current;
@@ -1107,7 +1237,7 @@ export default function VendreScreen() {
   const handleCreditAdd = async () => {
     const trimmedName = creditName.trim();
     const trimmedPhone = creditPhone.trim();
-    const parsed = parseInt(creditAmount.replace(/\s/g, ''), 10);
+    const parsed = Math.round(parseAmountInput(creditAmount));
     if (!trimmedName || isNaN(parsed) || parsed <= 0) return;
     setCreditSaving(true);
     setCreditError(null);
@@ -1174,7 +1304,7 @@ export default function VendreScreen() {
       // Scale item unit prices so they sum to the effective total — avoids a mismatch on the receipt
       const priceRatio = effectiveTotal > total + 0.5 && total > 0 ? effectiveTotal / total : 1;
       const receiptItems: ReceiptItem[] = cart.map(l => ({
-        name: l.product.name,
+        name: l.variant_name ? `${l.product.name} · ${l.variant_name}` : l.product.name,
         qty: l.qty,
         unit_price: priceRatio !== 1 ? Math.round(l.unit_price * priceRatio) : l.unit_price,
         is_bulk: l.is_bulk,
@@ -1199,12 +1329,34 @@ export default function VendreScreen() {
         setSearch('');
         const queued = useSalesStore.getState().lastSubmitQueued;
         if (!queued) {
-          fetchProducts(businessId, userId);
+          fetchProducts(businessId, userId, membershipId, role);
           setShowConfirmSheet(true);
         } else {
           setOfflineMsg('Vente enregistrée hors ligne ⏳');
           setTimeout(() => setOfflineMsg(''), 4000);
         }
+      } else {
+        // Sale failed — show a blocking alert so the merchant knows the sale was NOT saved
+        const errMsg = useSalesStore.getState().error ?? 'Une erreur est survenue. La vente n\'a pas été enregistrée.';
+        if (errMsg.startsWith('Stock insuffisant')) {
+          // Someone sold the same stock in the meantime (or our cached count was
+          // stale). Refresh the real numbers and trim the cart down to what's
+          // actually available instead of leaving a doomed line for the merchant
+          // to retry blindly — mirrors how simple products can never be added
+          // past their known stock.
+          await fetchProducts(businessId, userId, membershipId, role);
+          const variantProductIds = Array.from(new Set(cart.filter(l => l.variant_id).map(l => l.product.id)));
+          await Promise.all(variantProductIds.map(id => fetchVariants(id, businessId)));
+          const freshVariants = useProductStore.getState().variantsByProduct;
+          const freshProducts = useProductStore.getState().products;
+          cart.forEach(l => {
+            const max = l.variant_id
+              ? freshVariants[l.product.id]?.find(v => v.id === l.variant_id)?.stock_qty ?? 0
+              : freshProducts.find(p => p.id === l.product.id)?.stock_qty ?? 0;
+            if (l.qty > max) setQty(l.product.id, max, l.is_bulk, l.variant_id);
+          });
+        }
+        Alert.alert('Vente non enregistrée', errMsg, [{ text: 'OK', onPress: clearError }]);
       }
     },
     [businessId, userId, cartTotal, currency, submitSale, fetchProducts],
@@ -1228,19 +1380,19 @@ export default function VendreScreen() {
 
   if (loading && products.length === 0) {
     return (
-      <SafeAreaView style={styles.safe} edges={['top']}>
+      <Screen tab>
         <SkeletonList count={9} />
-      </SafeAreaView>
+      </Screen>
     );
   }
 
   return (
-    <SafeAreaView style={styles.safe} edges={['top']}>
+    <Screen tab>
       {/* Error banner */}
       {saleError ? (
         <Pressable onPress={clearError} style={styles.errorBanner}>
-          <Text variant="label" style={{ color: '#fff' }}>{saleError}</Text>
-          <Text variant="caption" style={{ color: '#ffffff99' }}>Appuyer pour fermer</Text>
+          <Text variant="label" style={{ color: palette.warning }}>{saleError}</Text>
+          <Text variant="caption" style={{ color: palette.warning, opacity: 0.7 }}>Appuyer pour fermer</Text>
         </Pressable>
       ) : null}
 
@@ -1370,8 +1522,8 @@ export default function VendreScreen() {
                     style={[styles.moneyAmountInput, { color: creditAmount ? palette.textPrimary : palette.textDisabled }]}
                     placeholder="0"
                     placeholderTextColor={palette.textDisabled}
-                    value={creditAmount.replace(/\B(?=(\d{3})+(?!\d))/g, ' ')}
-                    onChangeText={v => { setCreditAmount(v.replace(/\s/g, '')); setCreditError(null); }}
+                    value={creditAmount}
+                    onChangeText={v => { setCreditAmount(formatAmountInput(v)); setCreditError(null); }}
                     keyboardType="numeric"
                     returnKeyType="done"
                     onSubmitEditing={handleCreditAdd}
@@ -1436,8 +1588,8 @@ export default function VendreScreen() {
       {/* Bulk hint — only in Vente mode with products */}
       {mode === 'vente' && products.length > 0 && products.some(p => p.bulk_price) && (
         <View style={styles.hintBanner}>
-          <Ionicons name="information-circle-outline" size={14} color={colors.warning[700]} />
-          <Text variant="caption" style={{ color: colors.warning[700], flex: 1 }}>
+          <Ionicons name="information-circle-outline" size={14} color={palette.warning} />
+          <Text variant="caption" style={{ color: palette.warning, flex: 1 }}>
             Maintenez un produit en gros pour l'ajouter en vente de gros
           </Text>
         </View>
@@ -1458,6 +1610,10 @@ export default function VendreScreen() {
             cartQty={cartQtyMap[item.id]?.unit ?? 0}
             cartBulkQty={cartQtyMap[item.id]?.bulk ?? 0}
             onAdd={() => {
+              if (item.sale_price <= 0) {
+                Alert.alert('Prix manquant', 'Ajoutez un prix de vente pour ce produit.');
+                return;
+              }
               if (item.has_variants) {
                 setLastReceipt(null);
                 haptics.selection();
@@ -1485,19 +1641,27 @@ export default function VendreScreen() {
       {/* Cart panel (floating) — only in Vente mode */}
       {mode === 'vente' && cart.length > 0 && (
         <View style={styles.cartPanel}>
-          <ScrollView style={styles.cartScroll} keyboardShouldPersistTaps="handled">
-            {cart.map(line => (
-              <CartRow
-                key={line.variant_id ?? `${line.product.id}-${line.is_bulk}`}
-                line={line}
-                currency={currency}
-                onInc={() => setQty(line.product.id, line.qty + 1, line.is_bulk, line.variant_id)}
-                onDec={() => setQty(line.product.id, line.qty - 1, line.is_bulk, line.variant_id)}
-                onRemove={() => removeFromCart(line.product.id, line.is_bulk, line.variant_id)}
-                onToggleBulk={() => toggleBulk(line.product.id, line.is_bulk)}
-                onSetQty={(qty) => setQty(line.product.id, qty, line.is_bulk, line.variant_id)}
-              />
-            ))}
+          <ScrollView ref={cartScrollRef} style={styles.cartScroll} keyboardShouldPersistTaps="handled">
+            {cart.map(line => {
+              const rowKey = line.variant_id ?? `${line.product.id}-${line.is_bulk}`;
+              return (
+                <CartRow
+                  key={rowKey}
+                  line={line}
+                  currency={currency}
+                  onInc={() => setQty(line.product.id, line.qty + 1, line.is_bulk, line.variant_id)}
+                  onDec={() => setQty(line.product.id, line.qty - 1, line.is_bulk, line.variant_id)}
+                  onRemove={() => removeFromCart(line.product.id, line.is_bulk, line.variant_id)}
+                  onToggleBulk={() => toggleBulk(line.product.id, line.is_bulk)}
+                  onSetQty={(qty) => setQty(line.product.id, qty, line.is_bulk, line.variant_id)}
+                  onEditStart={() => {
+                    const y = cartRowOffsets.current[rowKey];
+                    if (y !== undefined) cartScrollRef.current?.scrollTo({ y, animated: true });
+                  }}
+                  onLayout={e => { cartRowOffsets.current[rowKey] = e.nativeEvent.layout.y; }}
+                />
+              );
+            })}
           </ScrollView>
           <View style={styles.cartFooter}>
             <View style={styles.cartTotalRow}>
@@ -1525,13 +1689,16 @@ export default function VendreScreen() {
         visible={variantPickerProduct !== null}
         product={variantPickerProduct}
         variants={variantPickerProduct ? (variantsByProduct[variantPickerProduct.id] ?? []) : []}
+        cartQtyByVariant={variantCartQty}
         currency={currency}
         onClose={() => setVariantPickerProduct(null)}
-        onPick={variant => {
-          if (!variantPickerProduct) return;
+        onPickMany={selections => {
+          if (!variantPickerProduct || selections.length === 0) return;
           setLastReceipt(null);
           haptics.selection();
-          addToCartVariant(variantPickerProduct, variant);
+          for (const { variant, qty } of selections) {
+            addToCartVariant(variantPickerProduct, variant, qty);
+          }
         }}
       />
 
@@ -1567,7 +1734,7 @@ export default function VendreScreen() {
           </View>
         )}
         {/* Solid white layer hides the receipt from the user */}
-        <View style={[StyleSheet.absoluteFill, { backgroundColor: '#fff' }]} pointerEvents="none" />
+        <View style={[StyleSheet.absoluteFill, { backgroundColor: palette.surface }]} pointerEvents="none" />
         {/* Outer container — box-none so it never consumes touches itself */}
         <View style={styles.sheetOverlay} pointerEvents="box-none">
           {/* Backdrop — sits behind the sheet in z-order (rendered first) */}
@@ -1606,7 +1773,7 @@ export default function VendreScreen() {
                   <Text variant="label">Partagez le reçu</Text>
                   <Text variant="bodySmall" color="secondary">
                     {lastReceipt?.payment === null
-                      ? 'Envoyez la preuve du crédit — évitez les disputes plus tard.'
+                      ? 'Ça donne plus confiance au client 🤗'
                       : 'Ça donne plus confiance au client 🤗'}
                   </Text>
                 </View>
@@ -1622,7 +1789,7 @@ export default function VendreScreen() {
 
       {/* Offline-only fallback overlay */}
       <SaleSuccessOverlay visible={!!offlineMsg} message={offlineMsg} />
-    </SafeAreaView>
+    </Screen>
   );
 }
 
@@ -1634,7 +1801,7 @@ function makeStyles(p: Palette) {
   return StyleSheet.create({
     safe: { flex: 1, backgroundColor: p.background },
     errorBanner: {
-      backgroundColor: p.danger, paddingHorizontal: spacing[5], paddingVertical: spacing[3],
+      backgroundColor: p.warningLight, paddingHorizontal: spacing[5], paddingVertical: spacing[3],
       alignItems: 'center', gap: 2,
     },
     header: {
@@ -1692,7 +1859,7 @@ function makeStyles(p: Palette) {
     hintBanner: {
       flexDirection: 'row', alignItems: 'center', gap: spacing[2],
       paddingHorizontal: spacing[5], paddingVertical: spacing[2],
-      backgroundColor: colors.warning[50], borderBottomWidth: 1, borderBottomColor: colors.warning[100],
+      backgroundColor: p.warningLight, borderBottomWidth: 1, borderBottomColor: p.warning,
       marginBottom: spacing[2],
     },
 
@@ -1710,14 +1877,14 @@ function makeStyles(p: Palette) {
     },
     tileGrosBadge: {
       position: 'absolute', top: 4, right: 4,
-      backgroundColor: colors.warning[50], borderRadius: radius.sm, paddingHorizontal: 4, paddingVertical: 2,
-      borderWidth: 1, borderColor: colors.warning[100],
+      backgroundColor: p.warningLight, borderRadius: radius.sm, paddingHorizontal: 4, paddingVertical: 2,
+      borderWidth: 1, borderColor: p.warning,
     },
 
     cartPanel: {
       position: 'absolute', bottom: 0, left: 0, right: 0,
       backgroundColor: p.surface, borderTopWidth: 1, borderTopColor: p.border,
-      shadowColor: '#0F172A', shadowOffset: { width: 0, height: -4 },
+      shadowColor: p.shadow, shadowOffset: { width: 0, height: -4 },
       shadowOpacity: 0.1, shadowRadius: 12, elevation: 10,
     },
     sheetOverlay: { flex: 1, justifyContent: 'flex-end' },
@@ -1728,12 +1895,12 @@ function makeStyles(p: Palette) {
     },
     sheetCheckCircle: {
       width: 64, height: 64, borderRadius: 32,
-      backgroundColor: '#22c55e', justifyContent: 'center', alignItems: 'center',
+      backgroundColor: p.success, justifyContent: 'center', alignItems: 'center',
     },
     sheetCheckmark: {
       height: 13,
       borderLeftWidth: 3, borderBottomWidth: 3,
-      borderColor: '#fff', borderRadius: 1,
+      borderColor: p.textInverse, borderRadius: 1,
       transform: [{ rotate: '-45deg' }], marginTop: -3,
     },
     sheetDivider: { height: 1, backgroundColor: p.border },
@@ -1757,16 +1924,16 @@ function makeStyles(p: Palette) {
       paddingHorizontal: spacing[2], paddingVertical: 2, borderRadius: radius.sm,
       borderWidth: 1, borderColor: p.border, backgroundColor: p.surface,
     },
-    bulkToggleActive: { backgroundColor: colors.warning[500], borderColor: colors.warning[500] },
+    bulkToggleActive: { backgroundColor: p.warning, borderColor: p.warning },
     qtyControl: {
       flexDirection: 'row', alignItems: 'center', borderWidth: 1, borderColor: p.border,
       borderRadius: radius.md, overflow: 'hidden',
     },
     qtyBtn: { width: 32, height: 32, alignItems: 'center', justifyContent: 'center', backgroundColor: p.background },
-    qtyNumPress: { minWidth: 28, alignItems: 'center', paddingHorizontal: 2 },
-    qtyNum: { width: 28, textAlign: 'center' },
+    qtyNumPress: { minWidth: 36, alignItems: 'center', paddingHorizontal: 4 },
+    qtyNum: { minWidth: 36, textAlign: 'center' },
     qtyInput: {
-      width: 44, textAlign: 'center', fontWeight: '600', fontSize: 15,
+      minWidth: 44, width: 56, textAlign: 'center', fontWeight: '600', fontSize: 15,
       color: p.textPrimary, paddingVertical: 2,
       borderBottomWidth: 1.5, borderBottomColor: p.primary,
     },
@@ -1783,7 +1950,7 @@ function makeStyles(p: Palette) {
     emptyFull: { flex: 1, alignItems: 'center', justifyContent: 'center', padding: spacing[8], gap: spacing[3] },
     emptyDesc: { textAlign: 'center', maxWidth: 260 },
     fabContainer: { position: 'absolute', bottom: 194, right: spacing[4], zIndex: 10 },
-    fab: { width: 56, height: 56, borderRadius: radius.full, backgroundColor: p.primary, alignItems: 'center', justifyContent: 'center', shadowColor: colors.neutral[900], shadowOffset: { width: 0, height: 4 }, shadowOpacity: 0.18, shadowRadius: 8, elevation: 8 },
+    fab: { width: 56, height: 56, borderRadius: radius.full, backgroundColor: p.primary, alignItems: 'center', justifyContent: 'center', shadowColor: p.textPrimary, shadowOffset: { width: 0, height: 4 }, shadowOpacity: 0.18, shadowRadius: 8, elevation: 8 },
     fabIcon: { fontSize: 28, lineHeight: 32, fontWeight: '300' as const, color: p.textInverse, marginTop: -2 },
     emptySearch: { alignItems: 'center', paddingVertical: spacing[10] },
     outOfStockHeader: { flexDirection: 'row', alignItems: 'center', paddingTop: spacing[4], paddingBottom: spacing[3] },
@@ -1860,16 +2027,19 @@ function makeStyles(p: Palette) {
     },
 
     disambigBox: {
-      backgroundColor: colors.warning[50], borderRadius: radius.md,
-      borderWidth: 1, borderColor: colors.warning[100],
-      padding: spacing[4], gap: spacing[2],
+      marginTop: spacing[1], gap: 0,
     },
-    radioRow: { flexDirection: 'row', alignItems: 'flex-start', gap: spacing[3], paddingVertical: spacing[2] },
-    radio: { width: 20, height: 20, borderRadius: 10, borderWidth: 2, borderColor: p.border, marginTop: 2 },
+    radioRow: {
+      flexDirection: 'row', alignItems: 'center', gap: spacing[3],
+      paddingVertical: spacing[3],
+    },
+    radioSeparator: { height: StyleSheet.hairlineWidth, backgroundColor: p.border, marginLeft: 22 + spacing[3] },
+    radio: { width: 20, height: 20, borderRadius: 10, borderWidth: 1.5, borderColor: p.border, alignItems: 'center', justifyContent: 'center', flexShrink: 0 },
     radioActive: { borderColor: p.primary, backgroundColor: p.primary },
+    radioDot: { width: 7, height: 7, borderRadius: 3.5, backgroundColor: p.textInverse },
     warnRow: {
-      backgroundColor: colors.warning[50], borderRadius: radius.md,
-      padding: spacing[3], borderWidth: 1, borderColor: colors.warning[100],
+      backgroundColor: p.warningLight, borderRadius: radius.md,
+      padding: spacing[3], borderWidth: 1, borderColor: p.warning,
     },
 
     variantSheet: {
@@ -1877,7 +2047,7 @@ function makeStyles(p: Palette) {
       backgroundColor: p.surface, borderTopLeftRadius: 24, borderTopRightRadius: 24,
       paddingHorizontal: spacing[5], paddingTop: spacing[4], paddingBottom: spacing[10],
       maxHeight: '70%',
-      shadowColor: '#0F172A', shadowOffset: { width: 0, height: -4 },
+      shadowColor: p.shadow, shadowOffset: { width: 0, height: -4 },
       shadowOpacity: 0.14, shadowRadius: 16, elevation: 12,
     },
     variantSheetHandle: {

@@ -1,7 +1,6 @@
 import { StyleSheet, View } from 'react-native';
 import { Text } from '@/src/components/ui/Text';
-import { useTheme } from '@/src/theme';
-import { spacing } from '@/src/theme';
+import { colors, useTheme, spacing } from '@/src/theme';
 
 interface Props {
   offlineSince: number | null;
@@ -34,5 +33,5 @@ const styles = StyleSheet.create({
     paddingVertical: spacing[1],
     alignItems: 'center',
   },
-  text: { color: '#fff' },
+  text: { color: colors.neutral[0] },
 });

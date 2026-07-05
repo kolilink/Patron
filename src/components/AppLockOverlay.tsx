@@ -1,7 +1,7 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { Animated, AppState, Pressable, StyleSheet, View } from 'react-native';
 import { BlurView } from 'expo-blur';
-import { useSafeAreaInsets } from 'react-native-safe-area-context';
+import { SafeAreaView } from 'react-native-safe-area-context';
 import { Ionicons } from '@expo/vector-icons';
 import * as LocalAuthentication from 'expo-local-authentication';
 import { Text } from '@/src/components/ui/Text';
@@ -15,8 +15,7 @@ const BACKGROUND_MS = 3 * 60_000;
 
 export function AppLockOverlay({ children }: { children: React.ReactNode }) {
   const { palette } = useTheme();
-  const insets = useSafeAreaInsets();
-  const styles = useMemo(() => makeStyles(palette, insets.top), [palette, insets.top]);
+  const styles = useMemo(() => makeStyles(palette), [palette]);
 
   const lockRef = useRef<LockState>('clear');
   const [lockState, _setLock] = useState<LockState>('clear');
@@ -113,7 +112,7 @@ export function AppLockOverlay({ children }: { children: React.ReactNode }) {
           tint="dark"
           style={StyleSheet.absoluteFill}
         >
-          <View style={styles.authContainer} pointerEvents="box-none">
+          <SafeAreaView style={styles.authContainer} edges={['top', 'bottom']}>
             <View style={styles.topSection}>
               <Text style={styles.wordmark}>Patron</Text>
             </View>
@@ -131,22 +130,21 @@ export function AppLockOverlay({ children }: { children: React.ReactNode }) {
                 </Pressable>
               </View>
             )}
-          </View>
+          </SafeAreaView>
         </BlurView>
       )}
     </View>
   );
 }
 
-function makeStyles(_p: Palette, topInset: number) {
+function makeStyles(_p: Palette) {
   return StyleSheet.create({
     root: { flex: 1 },
     authContainer: {
       flex: 1,
-      paddingTop: topInset,
     },
     topSection: {
-      paddingTop: spacing[14],
+      paddingTop: spacing[10],
       alignItems: 'center',
     },
     centerSection: {
@@ -162,6 +160,7 @@ function makeStyles(_p: Palette, topInset: number) {
       fontSize: 26,
       fontWeight: '300',
       letterSpacing: 3,
+      lineHeight: 36,
       color: 'rgba(255,255,255,0.85)',
     },
     retryWrap: {

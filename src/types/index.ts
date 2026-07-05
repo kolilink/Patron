@@ -171,6 +171,7 @@ export interface SaleOrder extends Base {
   due_date?: string | null;
   total_amount: number;
   discount_amount: number;
+  cancelled_by_id?: string | null;
   lines?: SOLine[];
   payments?: Payment[];
 }
@@ -184,6 +185,7 @@ export interface SOLine {
   is_bulk: boolean;
   variant_id?: string | null;
   variant_name?: string | null;
+  product_name?: string | null;
   product?: Product;
 }
 
@@ -230,6 +232,9 @@ export interface Expense {
   created_at: string;
   updated_at: string;
   creator_name?: string;
+  product_id?: string | null;
+  product_name?: string | null;
+  purchase_order_id?: string | null;
 }
 
 // ─── Change Proposal ──────────────────────────────────────────────────────────
@@ -295,6 +300,11 @@ export interface ChatMessage {
   reply_to_id?: string | null;
   reply_to_content?: string | null;
   reply_to_sender_name?: string | null;
+  // Voice messages (v90)
+  message_type?: 'text' | 'voice';
+  voice_url?: string | null;
+  voice_duration?: number | null;       // seconds
+  voice_waveform?: number[] | null;     // amplitude samples 0.0–1.0
 }
 
 // ─── Forum (Le Marché) ────────────────────────────────────────────────────────
@@ -324,6 +334,7 @@ export interface MarketComment {
   content: string;
   likes_count: number;
   created_at: string;
+  edited_at?: string | null;
   author_level?: number;
 }
 
@@ -345,4 +356,61 @@ export interface AppSession {
   activeBusiness: Business | null;
   activeMembership: Membership | null;
   memberships: Membership[];
+  isDemoMode?: boolean;
+}
+
+// ─── Business Partnerships (Amis) ─────────────────────────────────────────────
+
+export type PartnershipStatus = 'pending' | 'accepted' | 'declined' | 'blocked';
+
+export interface BusinessPartnership {
+  id: string;
+  requester_id: string;
+  recipient_id: string;
+  status: PartnershipStatus;
+  requester_shares_stock: boolean;
+  recipient_shares_stock: boolean;
+  requester_nickname: string | null;
+  recipient_nickname: string | null;
+  created_at: string;
+  updated_at: string;
+}
+
+export interface PartnerData {
+  partnership_id: string;
+  partner_business_id: string;
+  partner_business_name: string;
+  display_name: string; // custom nickname ?? business name
+  is_requester: boolean;
+  i_share_stock: boolean;   // whether I allow them to see my stock
+  they_share_stock: boolean; // whether they allow me to see their stock
+  dm_room_id: string | null;
+  last_message: string | null;
+  last_message_at: string | null;
+  unread_count: number;
+}
+
+export interface PendingRequest {
+  id: string;
+  requester_business_id: string;
+  requester_business_name: string;
+  created_at: string;
+}
+
+export interface PartnerProduct {
+  name: string;
+  category: string | null;
+  stock_qty: number;
+  in_stock: boolean;
+  unit: string;
+}
+
+export interface PartnerStockResult {
+  business_name: string;
+  products: PartnerProduct[] | null;
+}
+
+export interface PartnerInviteCode {
+  code: string;
+  expires_at: string; // ISO string — 24h from creation
 }

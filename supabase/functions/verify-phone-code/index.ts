@@ -13,6 +13,21 @@ function err(msg: string, status = 400) {
   });
 }
 
+const MAX_FAILED_ATTEMPTS = 5;
+
+// Constant-time comparison — prevents timing-based brute-force of the code.
+function timingSafeEqual(a: string, b: string): boolean {
+  const enc = new TextEncoder();
+  const aBytes = enc.encode(a);
+  const bBytes = enc.encode(b);
+  const len = Math.max(aBytes.length, bBytes.length);
+  let diff = aBytes.length ^ bBytes.length;
+  for (let i = 0; i < len; i++) {
+    diff |= (aBytes[i] ?? 0) ^ (bBytes[i] ?? 0);
+  }
+  return diff === 0;
+}
+
 serve(async (req) => {
   if (req.method === 'OPTIONS') return new Response('ok', { headers: corsHeaders });
 
@@ -33,7 +48,7 @@ serve(async (req) => {
     // Find the pending verification row
     const { data: verif } = await serviceClient
       .from('phone_verifications')
-      .select('id, token')
+      .select('id, token, failed_attempts')
       .eq('id', verificationId)
       .eq('phone', phone.trim())
       .eq('status', 'en_attente')
@@ -44,8 +59,16 @@ serve(async (req) => {
       return err('Code expiré. Demandez un nouveau code.');
     }
 
-    // Check code against stored token
-    if (verif.token !== code.trim()) {
+    if (verif.failed_attempts >= MAX_FAILED_ATTEMPTS) {
+      return err('Trop de tentatives incorrectes. Demandez un nouveau code.');
+    }
+
+    // Check code against stored token (constant-time to avoid leaking match position)
+    if (!timingSafeEqual(verif.token, code.trim())) {
+      await serviceClient
+        .from('phone_verifications')
+        .update({ failed_attempts: verif.failed_attempts + 1 })
+        .eq('id', verificationId);
       return err('Code incorrect. Vérifiez et réessayez.');
     }
 

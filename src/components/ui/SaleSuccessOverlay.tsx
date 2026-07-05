@@ -7,6 +7,7 @@ import Animated, {
   useAnimatedStyle,
   Easing,
 } from 'react-native-reanimated';
+import { colors } from '@/src/theme';
 import { Text } from './Text';
 
 interface Props {
@@ -75,7 +76,7 @@ const styles = StyleSheet.create({
     width: 64,
     height: 64,
     borderRadius: 32,
-    backgroundColor: '#22c55e',
+    backgroundColor: colors.success[500],
     justifyContent: 'center',
     alignItems: 'center',
   },
@@ -84,13 +85,13 @@ const styles = StyleSheet.create({
     height: 13,
     borderLeftWidth: 3,
     borderBottomWidth: 3,
-    borderColor: '#fff',
+    borderColor: colors.neutral[0],
     borderRadius: 1,
     transform: [{ rotate: '-45deg' }],
     marginTop: -3,
   },
   message: {
-    color: '#fff',
+    color: colors.neutral[0],
     textAlign: 'center',
   },
 });

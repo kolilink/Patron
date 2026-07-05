@@ -2,7 +2,7 @@ import { StyleSheet, View } from 'react-native';
 import { Pressable } from 'react-native';
 import { router } from 'expo-router';
 import { Controller, useForm } from 'react-hook-form';
-import { SafeAreaView } from 'react-native-safe-area-context';
+import { Screen } from '@/src/components/ui/Screen';
 import { Button } from '@/src/components/ui/Button';
 import { Input } from '@/src/components/ui/Input';
 import { Text } from '@/src/components/ui/Text';
@@ -20,7 +20,33 @@ export default function RejoindreScreen() {
   const { palette } = useTheme();
   const styles = useMemo(() => makeStyles(palette), [palette]);
   const { joinBusiness, loading, error, clearError } = useAuthStore();
+  const isDemoMode = useAuthStore(s => s.session?.isDemoMode);
   const { control, handleSubmit } = useForm<JoinForm>();
+
+  // Demo users have no phone — show a gate instead of the join form.
+  // Using an inline render (not a redirect) so the ← Retour button works correctly.
+  if (isDemoMode) {
+    return (
+      <Screen>
+        <View style={styles.content}>
+          <View style={styles.header}>
+            <Pressable onPress={() => router.back()} style={styles.backBtn}>
+              <Text variant="body" color="brand">← Retour</Text>
+            </Pressable>
+            <Text variant="h2">Rejoindre un commerce</Text>
+            <Text variant="body" color="secondary">
+              Pour rejoindre un commerce, vous devez d'abord créer votre compte et vérifier votre numéro.
+            </Text>
+          </View>
+          <Button
+            label="Créer mon compte →"
+            onPress={() => router.push('/(welcome)/rejoindre')}
+            fullWidth
+          />
+        </View>
+      </Screen>
+    );
+  }
 
   const onSubmit = async ({ code }: JoinForm) => {
     clearError();
@@ -32,11 +58,10 @@ export default function RejoindreScreen() {
       trackEvent('business_joined', s?.activeBusiness?.id ?? null, s?.user.id ?? null);
       router.replace('/(app)/(tabs)/');
     }
-    // If there's an error, it shows in the errorBox below
   };
 
   return (
-    <SafeAreaView style={styles.safe}>
+    <Screen>
       <View style={styles.content}>
         <View style={styles.header}>
           <Pressable onPress={() => router.back()} style={styles.backBtn}>
@@ -87,7 +112,7 @@ export default function RejoindreScreen() {
           />
         </View>
       </View>
-    </SafeAreaView>
+    </Screen>
   );
 }
 

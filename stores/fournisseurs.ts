@@ -5,6 +5,7 @@ import { generateId } from '@/lib/id';
 import { saveFournisseurCache, getFournisseurCache, saveCommandeCache, getCommandeCache } from '@/lib/db';
 import { isNetworkError } from '@/lib/sync';
 import { useProductStore } from '@/stores/products';
+import { notifyEvent } from '@/src/utils/notifications';
 
 export interface Fournisseur {
   id: string;
@@ -59,10 +60,20 @@ export interface SupplierDebt {
   created_at: string;
 }
 
+export interface SupplierPayment {
+  id: string;
+  supplier_id: string;
+  amount: number;   // display unit (already ÷100)
+  paid_by: string;
+  paid_at: string;
+  note: string | null;
+}
+
 interface FournisseursStore {
   fournisseurs: Fournisseur[];
   commandes: CommandeAchat[];
   debts: SupplierDebt[];
+  payments: SupplierPayment[];
   loading: boolean;
   saving: boolean;
   error: string | null;
@@ -77,10 +88,11 @@ interface FournisseursStore {
   fetchCommandes: (businessId: string) => Promise<void>;
   createCommande: (businessId: string, userId: string, input: CreateCommandeInput) => Promise<boolean>;
   loadCommandeLines: (commandeId: string) => Promise<void>;
-  recevoirCommande: (commandeId: string, businessId: string, userId: string, lines?: { id: string; qty: number }[]) => Promise<boolean>;
+  recevoirCommande: (commandeId: string, businessId: string, userId: string, lines?: { id: string; qty: number }[], shippingCostCents?: number) => Promise<boolean>;
 
   fetchDebts: (businessId: string) => Promise<void>;
   createDebt: (businessId: string, userId: string, d: { supplierId: string; amount: number; description?: string | null; date: string }) => Promise<boolean>;
+  fetchPayments: (businessId: string, supplierId: string) => Promise<void>;
 
   clearError: () => void;
   reset: () => void;
@@ -90,6 +102,7 @@ export const useFournisseursStore = create<FournisseursStore>((set, get) => ({
   fournisseurs: [],
   commandes: [],
   debts: [],
+  payments: [],
   loading: false,
   saving: false,
   error: null,
@@ -172,28 +185,26 @@ export const useFournisseursStore = create<FournisseursStore>((set, get) => ({
 
   payDebt: async (businessId, supplierId, paymentAmount) => {
     set({ saving: true, error: null });
-    // Apply payment to oldest unpaid debts first (FIFO)
-    const unpaid = get().debts
-      .filter(d => d.supplier_id === supplierId && d.amount > d.amount_paid)
-      .sort((a, b) => new Date(a.created_at).getTime() - new Date(b.created_at).getTime());
-
-    let remaining = paymentAmount;
-    for (const debt of unpaid) {
-      if (remaining <= 0) break;
-      const outstanding = debt.amount - debt.amount_paid;
-      const paying = Math.min(outstanding, remaining);
-      const { error } = await supabase
-        .from('supplier_debts')
-        .update({ amount_paid: Math.round((debt.amount_paid + paying) * 100) })
-        .eq('id', debt.id);
-      if (error) {
-        set({ saving: false, error: translateError(error, 'Erreur lors du paiement') });
-        return false;
-      }
-      remaining -= paying;
+    const { data, error } = await supabase.rpc('pay_supplier_debt', {
+      p_business_id:  businessId,
+      p_supplier_id:  supplierId,
+      p_amount_cents: Math.round(paymentAmount * 100),
+    });
+    if (error) {
+      set({ saving: false, error: translateError(error, 'Erreur lors du paiement') });
+      return false;
     }
-
-    await get().fetchDebts(businessId);
+    const remaining = (data as { remaining_cents?: number } | null)?.remaining_cents ?? 0;
+    if (remaining > 0) {
+      // The supplier has no more outstanding debts — the excess was not applied anywhere.
+      set({
+        saving: false,
+        error: `Paiement partiellement alloué — ${remaining / 100} excèdent les dettes enregistrées. Créez une dette si nécessaire.`,
+      });
+      await get().fetchDebts(businessId);
+      return false;
+    }
+    await Promise.all([get().fetchDebts(businessId), get().fetchPayments(businessId, supplierId)]);
     set({ saving: false });
     return true;
   },
@@ -298,14 +309,17 @@ export const useFournisseursStore = create<FournisseursStore>((set, get) => ({
     }));
   },
 
-  recevoirCommande: async (commandeId, businessId, userId, lines) => {
+  recevoirCommande: async (commandeId, businessId, userId, lines, shippingCostCents = 0) => {
     set({ saving: true, error: null });
+
+    const _commande = get().commandes.find(c => c.id === commandeId);
 
     const { error } = await supabase.rpc('receive_purchase_order', {
       p_po_id: commandeId,
       p_business_id: businessId,
       p_line_ids: lines ? lines.map(l => l.id) : null,
       p_line_qtys: lines ? lines.map(l => l.qty) : null,
+      p_shipping_cost_cents: shippingCostCents,
     });
 
     if (error) {
@@ -319,6 +333,17 @@ export const useFournisseursStore = create<FournisseursStore>((set, get) => ({
 
     // Refresh products so the edit form pre-fills with the updated cost_price
     void useProductStore.getState().fetchProducts(businessId, userId);
+
+    // Notify team that new stock has arrived
+    const totalItems = lines
+      ? lines.reduce((s, l) => s + l.qty, 0)
+      : (_commande?.lines?.reduce((s, l) => s + l.qty_ordered, 0) ?? 1);
+    notifyEvent({
+      businessId,
+      eventType: 'po_received',
+      payload: { N: totalItems, supplier: _commande?.supplier_name ?? '' },
+      targetRoles: ['administrateur', 'manager', 'vendeur'],
+    });
 
     return true;
   },
@@ -360,6 +385,26 @@ export const useFournisseursStore = create<FournisseursStore>((set, get) => ({
     return true;
   },
 
+  fetchPayments: async (businessId, supplierId) => {
+    const { data, error } = await supabase
+      .from('supplier_payments')
+      .select('id, supplier_id, amount_cents, paid_by, paid_at, note')
+      .eq('business_id', businessId)
+      .eq('supplier_id', supplierId)
+      .order('paid_at', { ascending: false })
+      .limit(50);
+    if (error) return;
+    const payments: SupplierPayment[] = (data ?? []).map((p: Record<string, unknown>) => ({
+      id: p.id as string,
+      supplier_id: p.supplier_id as string,
+      amount: (p.amount_cents as number) / 100,
+      paid_by: p.paid_by as string,
+      paid_at: p.paid_at as string,
+      note: (p.note as string | null) ?? null,
+    }));
+    set({ payments });
+  },
+
   clearError: () => set({ error: null }),
-  reset: () => set({ fournisseurs: [], commandes: [], debts: [], loading: false, saving: false, error: null, offline: false }),
+  reset: () => set({ fournisseurs: [], commandes: [], debts: [], payments: [], loading: false, saving: false, error: null, offline: false }),
 }));

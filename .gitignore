@@ -40,3 +40,6 @@ yarn-error.*
 /ios
 /android
 .env
+
+# MCP config (contains secrets)
+.mcp.json

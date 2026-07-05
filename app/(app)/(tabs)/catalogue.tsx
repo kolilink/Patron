@@ -16,20 +16,21 @@ import {
   View,
 } from 'react-native';
 import { SafeAreaView, useSafeAreaInsets } from 'react-native-safe-area-context';
+import { Screen } from '@/src/components/ui/Screen';
 import { Button } from '@/src/components/ui/Button';
 import { Card } from '@/src/components/ui/Card';
 import { Input } from '@/src/components/ui/Input';
 import { Text } from '@/src/components/ui/Text';
 import { PhoneInput } from '@/src/components/ui/PhoneInput';
 import { Ionicons } from '@expo/vector-icons';
-import { colors, useTheme, radius, spacing, fontFamily as FF } from '@/src/theme';
+import { useTheme, radius, spacing, fontFamily as FF, PRODUCT_BADGE_PALETTE } from '@/src/theme';
 import type { Palette } from '@/src/theme';
 import type { Product, ProductVariant } from '@/src/types';
 import { useAuthStore } from '@/stores/auth';
 import { type CreateProductData, type DraftVariant, type ProductStats, useProductStore } from '@/stores/products';
 import { useFournisseursStore, type Fournisseur } from '@/stores/fournisseurs';
 import { haptics } from '@/lib/haptics';
-import { formatAmount } from '@/src/utils/format';
+import { formatAmount, formatAmountInput, parseAmountInput } from '@/src/utils/format';
 import { OfflineNotice } from '@/src/components/ui/OfflineNotice';
 import { SkeletonList } from '@/src/components/ui/SkeletonPlaceholder';
 
@@ -39,17 +40,6 @@ function formatPrice(amount: number, currency: string) {
   return `${amount.toLocaleString('fr-FR')} ${currency}`;
 }
 
-function stockColor(product: Product): string {
-  if (product.stock_qty === 0) return colors.danger[600];
-  if (product.stock_qty <= product.reorder_level) return colors.warning[600];
-  return colors.success[600];
-}
-
-function stockBg(product: Product): string {
-  if (product.stock_qty === 0) return colors.danger[50];
-  if (product.stock_qty <= product.reorder_level) return colors.warning[50];
-  return colors.success[50];
-}
 
 // ─── Form State ───────────────────────────────────────────────────────────────
 
@@ -78,9 +68,9 @@ const EMPTY_FORM: FormState = {
 function productToForm(p: Product): FormState {
   return {
     name: p.name,
-    purchase_price: p.cost_price > 0 ? String(p.cost_price) : '',
+    purchase_price: p.cost_price > 0 ? formatAmountInput(String(p.cost_price)) : '',
     extra_fees: '',
-    sale_price: String(p.sale_price),
+    sale_price: formatAmountInput(String(p.sale_price)),
     initial_stock: '',
     purchase_qty: '1',
     reorder_level: p.reorder_level > 0 ? String(p.reorder_level) : '',
@@ -90,14 +80,14 @@ function productToForm(p: Product): FormState {
 
 function totalCost(f: FormState): number {
   const qty = Math.max(parseFloat(f.initial_stock) || parseFloat(f.purchase_qty) || 1, 1);
-  const fees = parseFloat(f.extra_fees) || 0;
-  return (parseFloat(f.purchase_price) || 0) + fees / qty;
+  const fees = parseAmountInput(f.extra_fees);
+  return parseAmountInput(f.purchase_price) + fees / qty;
 }
 
 function validateForm(f: FormState): string | null {
   if (!f.name.trim()) return 'Indiquez le nom :)';
-  const sp = parseFloat(f.sale_price);
-  if (isNaN(sp) || sp < 0) return 'Indiquer le prix de vente';
+  const sp = parseAmountInput(f.sale_price);
+  if (isNaN(sp) || sp <= 0) return 'Le prix de vente doit être supérieur à 0';
   return null;
 }
 
@@ -106,7 +96,7 @@ function formToData(f: FormState): CreateProductData {
     name: f.name,
     unit: 'pcs',
     cost_price: totalCost(f),
-    sale_price: parseFloat(f.sale_price) || 0,
+    sale_price: parseAmountInput(f.sale_price),
     reorder_level: parseInt(f.reorder_level) || 0,
     initial_stock: parseInt(f.initial_stock) || 0,
     supplier_id: f.supplier_id || null,
@@ -227,71 +217,30 @@ interface VariantRowProps {
   onRemove: () => void;
 }
 
-function VariantRow({ variant, currency, onChange, onRemove }: VariantRowProps) {
+function VariantRow({ variant, onChange, onRemove }: Omit<VariantRowProps, 'currency'>) {
   const { palette } = useTheme();
   const styles = useMemo(() => makeStyles(palette), [palette]);
   return (
-    <View>
-      {/* Compact row: Name + Qty side by side */}
-      <View style={styles.variantRowHeader}>
-        <TextInput
-          style={[styles.fieldInput, { flex: 1, fontSize: 17 }]}
-          value={variant.name}
-          onChangeText={v => onChange({ name: v })}
-          placeholder="S, M, L, Rouge, 1L…"
-          placeholderTextColor={palette.textDisabled}
-        />
-        <TextInput
-          style={[styles.fieldInput, { width: 60, textAlign: 'right', fontSize: 17 }]}
-          value={variant.stock_qty > 0 ? String(variant.stock_qty) : ''}
-          onChangeText={v => onChange({ stock_qty: parseInt(v) || 0 })}
-          keyboardType="number-pad"
-          placeholder="0"
-          placeholderTextColor={palette.textDisabled}
-        />
-        <Text style={[styles.unitTag, { marginLeft: 4 }]}>pcs</Text>
-        <Pressable
-          onPress={() => onChange({ _overridePrice: !variant._overridePrice })}
-          style={styles.variantExpandBtn}
-          hitSlop={8}
-        >
-          <Ionicons
-            name={variant._overridePrice ? 'chevron-up' : 'chevron-down'}
-            size={16}
-            color={variant._overridePrice ? palette.primary : palette.textDisabled}
-          />
-        </Pressable>
-        <Pressable onPress={onRemove} hitSlop={10} style={{ paddingHorizontal: 4 }}>
-          <Ionicons name="close-circle" size={20} color={palette.textDisabled} />
-        </Pressable>
-      </View>
-      {/* Expandable per-variant price override */}
-      {variant._overridePrice && (
-        <View style={[styles.variantPriceOverride, { backgroundColor: palette.surface }]}>
-          <View style={{ flex: 1 }}>
-            <Text style={styles.fieldLabel}>Achat ({currency})</Text>
-            <TextInput
-              style={[styles.fieldInput, { fontSize: 18 }]}
-              value={variant.cost_price > 0 ? String(variant.cost_price) : ''}
-              onChangeText={v => onChange({ cost_price: parseFloat(v) || 0 })}
-              keyboardType="decimal-pad"
-              placeholder="0"
-              placeholderTextColor={palette.textDisabled}
-            />
-          </View>
-          <View style={{ flex: 1 }}>
-            <Text style={styles.fieldLabel}>Vente ({currency})</Text>
-            <TextInput
-              style={[styles.fieldInput, { fontSize: 18 }]}
-              value={variant.sale_price > 0 ? String(variant.sale_price) : ''}
-              onChangeText={v => onChange({ sale_price: parseFloat(v) || 0 })}
-              keyboardType="decimal-pad"
-              placeholder="0"
-              placeholderTextColor={palette.textDisabled}
-            />
-          </View>
-        </View>
-      )}
+    <View style={styles.variantRowHeader}>
+      <TextInput
+        style={[styles.fieldInput, { flex: 1, fontSize: 17 }]}
+        value={variant.name}
+        onChangeText={v => onChange({ name: v })}
+        placeholder="S, M, L, Rouge, 1L…"
+        placeholderTextColor={palette.textDisabled}
+      />
+      <TextInput
+        style={[styles.fieldInput, { width: 60, textAlign: 'right', fontSize: 17 }]}
+        value={variant.stock_qty > 0 ? String(variant.stock_qty) : ''}
+        onChangeText={v => onChange({ stock_qty: parseInt(v) || 0 })}
+        keyboardType="number-pad"
+        placeholder="0"
+        placeholderTextColor={palette.textDisabled}
+      />
+      <Text style={[styles.unitTag, { marginLeft: 4 }]}>pcs</Text>
+      <Pressable onPress={onRemove} hitSlop={10} style={{ paddingHorizontal: 4 }}>
+        <Ionicons name="close-circle" size={20} color={palette.textDisabled} />
+      </Pressable>
     </View>
   );
 }
@@ -301,7 +250,7 @@ function makeVariantItem(form: FormState, overrides?: Partial<VariantDraftItem>)
     _key: generateLocalKey(),
     _overridePrice: false,
     name: '',
-    sale_price: parseFloat(form.sale_price) || 0,
+    sale_price: parseAmountInput(form.sale_price),
     cost_price: totalCost(form),
     stock_qty: 0,
     reorder_level: 0,
@@ -361,17 +310,13 @@ function ProductFormModal({ visible, editing, onClose, onSave, saving, currency,
       return;
     }
     setFormError(null);
-    // Variants that didn't override prices inherit from the parent form
-    const parentSalePrice = parseFloat(form.sale_price) || 0;
-    const parentCostPrice = totalCost(form);
+    // Each variant keeps its own loaded price — a new variant already defaults
+    // to the parent form's price at creation time (see makeVariantItem), and an
+    // existing variant's distinct price must not be clobbered by an unrelated edit.
     await onSave(
       formToData(form),
       hasVariants,
-      variantDraft.map(({ _key: _k, _overridePrice, ...v }) => ({
-        ...v,
-        sale_price: _overridePrice ? v.sale_price : parentSalePrice,
-        cost_price: _overridePrice ? v.cost_price : parentCostPrice,
-      })),
+      variantDraft.map(({ _key: _k, _overridePrice: _op, ...v }) => v),
     );
   };
 
@@ -384,10 +329,10 @@ function ProductFormModal({ visible, editing, onClose, onSave, saving, currency,
   };
 
   const qty = parseFloat(form.initial_stock) || 0;
-  const pp = parseFloat(form.purchase_price) || 0;
-  const sp = parseFloat(form.sale_price) || 0;
+  const pp = parseAmountInput(form.purchase_price);
+  const sp = parseAmountInput(form.sale_price);
   const computedCost = totalCost(form);
-  const fees = parseFloat(form.extra_fees) || 0;
+  const fees = parseAmountInput(form.extra_fees);
   const liveInvested = qty * pp + fees;
   const totalVariantStock = variantDraft.reduce((s, v) => s + (v.stock_qty || 0), 0);
   const showLiveCalc = !editing && !hasVariants && liveInvested > 0;
@@ -456,12 +401,12 @@ function ProductFormModal({ visible, editing, onClose, onSave, saving, currency,
               {/* 3 — Prix d'achat */}
               <View style={styles.fieldBlock}>
                 <Text style={styles.fieldLabel}>
-                  {hasVariants ? `Prix d'achat par défaut (${currency})` : `Prix d'achat unitaire (${currency})`}
+                  {`Prix d'achat unitaire (${currency})`}
                 </Text>
                 <TextInput
                   style={styles.fieldInput}
                   value={form.purchase_price}
-                  onChangeText={setField('purchase_price')}
+                  onChangeText={v => setForm(prev => ({ ...prev, purchase_price: formatAmountInput(v) }))}
                   keyboardType="decimal-pad"
                   placeholderTextColor={palette.textDisabled}
                 />
@@ -470,15 +415,27 @@ function ProductFormModal({ visible, editing, onClose, onSave, saving, currency,
               {/* 4 — Prix de vente */}
               <View style={styles.fieldBlock}>
                 <Text style={styles.fieldLabel}>
-                  {hasVariants ? `Prix de vente par défaut (${currency})` : `Prix de vente unitaire (${currency})`}
+                  {`Prix de vente unitaire (${currency})`}
                 </Text>
                 <TextInput
                   style={styles.fieldInput}
                   value={form.sale_price}
-                  onChangeText={setField('sale_price')}
+                  onChangeText={v => setForm(prev => ({ ...prev, sale_price: formatAmountInput(v) }))}
                   keyboardType="decimal-pad"
                   placeholderTextColor={palette.textDisabled}
                 />
+                {(() => {
+                  const sp = parseAmountInput(form.sale_price);
+                  const cp = totalCost(form);
+                  if (cp > 0 && sp > 0 && sp < cp) {
+                    return (
+                      <Text style={{ fontSize: 12, color: palette.warning, marginTop: 4 }}>
+                        Le prix est inférieur au coût d'achat
+                      </Text>
+                    );
+                  }
+                  return null;
+                })()}
               </View>
 
               {/* 5a — Quantity (plain products, new only) */}
@@ -502,7 +459,7 @@ function ProductFormModal({ visible, editing, onClose, onSave, saving, currency,
               {hasVariants && (
                 <View style={styles.variantList}>
                   <View style={styles.variantListHeader}>
-                    <Text style={[styles.fieldLabel, { flex: 1 }]}>Version</Text>
+                    <Text style={[styles.fieldLabel, { flex: 1 }]}>Variantes</Text>
                     <Text style={[styles.fieldLabel, { width: 60, textAlign: 'right' }]}>Qté</Text>
                     <View style={{ width: 72 }} />
                   </View>
@@ -510,7 +467,6 @@ function ProductFormModal({ visible, editing, onClose, onSave, saving, currency,
                     <VariantRow
                       key={v._key}
                       variant={v}
-                      currency={currency}
                       onChange={patch => setVariantDraft(prev => prev.map((item, idx) => idx === i ? { ...item, ...patch } : item))}
                       onRemove={() => setVariantDraft(prev => prev.filter((_, idx) => idx !== i))}
                     />
@@ -520,12 +476,12 @@ function ProductFormModal({ visible, editing, onClose, onSave, saving, currency,
                     onPress={() => setVariantDraft(prev => [...prev, makeVariantItem(form)])}
                   >
                     <Ionicons name="add-circle-outline" size={18} color={palette.primary} />
-                    <Text variant="label" style={{ color: palette.primary, marginLeft: 4 }}>Ajouter une variété</Text>
+                    <Text variant="label" style={{ color: palette.primary, marginLeft: 4 }}>Ajouter une variante</Text>
                   </Pressable>
                   {totalVariantStock > 0 && (
                     <View style={[styles.liveCalcBlock, { borderTopWidth: 0 }]}>
                       <Text style={styles.liveCalcText}>
-                        Stock total : {totalVariantStock} pcs sur {variantDraft.length} version{variantDraft.length !== 1 ? 's' : ''}
+                        Stock total : {totalVariantStock} pcs sur {variantDraft.length} variante{variantDraft.length !== 1 ? 's' : ''}
                       </Text>
                     </View>
                   )}
@@ -584,7 +540,7 @@ function ProductFormModal({ visible, editing, onClose, onSave, saving, currency,
                     <TextInput
                       style={styles.fieldInput}
                       value={form.extra_fees}
-                      onChangeText={setField('extra_fees')}
+                      onChangeText={v => setForm(prev => ({ ...prev, extra_fees: formatAmountInput(v) }))}
                       keyboardType="decimal-pad"
                       placeholder="0"
                       placeholderTextColor={palette.textDisabled}
@@ -789,6 +745,14 @@ function ProductStatsModal({ visible, product, onClose, businessId, currency, fe
                   {formatAmount(stats.capital, currency)}
                 </Text>
               </View>
+              {stats.linkedExpenses > 0 && (
+                <View style={[styles.statsRow, styles.statsRowBorder]}>
+                  <Text variant="body" color="secondary">Dépenses liées</Text>
+                  <Text variant="body" style={{ fontFamily: 'System', fontWeight: '600' }}>
+                    {formatAmount(stats.linkedExpenses, currency)}
+                  </Text>
+                </View>
+              )}
               <View style={[styles.statsRow, styles.statsRowBorder]}>
                 <Text variant="body">Bénéfice</Text>
                 <Text variant="body" style={{ fontFamily: 'System', fontWeight: '700', color: profitColor }}>
@@ -822,11 +786,7 @@ function StockStatus({ product }: { product: Product }) {
   const styles = useMemo(() => makeStyles(palette), [palette]);
 
   if (product.has_variants) {
-    return (
-      <View style={styles.variantBadge}>
-        <Text style={styles.variantBadgeText}>Versions</Text>
-      </View>
-    );
+    return null;
   }
 
   const isOut = product.stock_qty === 0;
@@ -842,7 +802,7 @@ function StockStatus({ product }: { product: Product }) {
   if (isLow) {
     return (
       <View style={styles.stockLowRow}>
-        <Ionicons name="leaf-outline" size={11} color="#B45309" />
+        <Ionicons name="leaf-outline" size={11} color={palette.warning} />
         <Text style={styles.stockLowText}>
           Bientôt fini · Il reste {product.stock_qty} {product.unit}
         </Text>
@@ -854,31 +814,36 @@ function StockStatus({ product }: { product: Product }) {
   );
 }
 
-const PRODUCT_BADGE_COLORS = ['#D1FAE5', '#EDE9FE', '#DBEAFE', '#FEF3C7', '#FFE4E6', '#CCFBF1'];
-
 function productBadgeColor(name: string) {
   const sum = name.split('').reduce((acc, ch) => acc + ch.charCodeAt(0), 0);
-  return PRODUCT_BADGE_COLORS[sum % PRODUCT_BADGE_COLORS.length];
+  return PRODUCT_BADGE_PALETTE.bg[sum % PRODUCT_BADGE_PALETTE.bg.length];
+}
+
+function productBadgeTextColor(name: string) {
+  const sum = name.split('').reduce((acc, ch) => acc + ch.charCodeAt(0), 0);
+  return PRODUCT_BADGE_PALETTE.text[sum % PRODUCT_BADGE_PALETTE.text.length];
 }
 
 function ProductRow({ product, currency, onPress, onLongPress, archived }: ProductRowProps) {
   const { palette } = useTheme();
   const styles = useMemo(() => makeStyles(palette), [palette]);
   const badgeBg = productBadgeColor(product.name);
+  const badgeTextColor = productBadgeTextColor(product.name);
   const initial = product.name.charAt(0).toUpperCase();
-  const isOutOfStock = !archived && product.stock_qty === 0;
+  const isOutOfStock = !archived && !product.has_variants && product.stock_qty === 0;
 
   if (archived) {
     return (
       <Pressable
+        onPress={onPress}
         onLongPress={onLongPress}
         style={({ pressed }) => [styles.productRow, pressed && { opacity: 0.65 }]}
       >
         <View style={[styles.productBadge, { backgroundColor: badgeBg, opacity: 0.5 }]}>
-          <Text style={styles.productBadgeText}>{initial}</Text>
+          <Text style={[styles.productBadgeText, { color: badgeTextColor }]}>{initial}</Text>
         </View>
         <View style={styles.productCenter}>
-          <Text style={[styles.productName, { color: '#9CA3AF' }]} numberOfLines={1}>{product.name}</Text>
+          <Text style={[styles.productName, { color: palette.textDisabled }]} numberOfLines={1}>{product.name}</Text>
           <Text style={styles.productStockText}>{product.stock_qty} {product.unit}</Text>
         </View>
         <View style={styles.productRight}>
@@ -891,7 +856,7 @@ function ProductRow({ product, currency, onPress, onLongPress, archived }: Produ
   return (
     <Pressable onPress={onPress} style={({ pressed }) => [styles.productRow, pressed && { opacity: 0.65 }]}>
       <View style={[styles.productBadge, { backgroundColor: badgeBg, opacity: isOutOfStock ? 0.38 : 1 }]}>
-        <Text style={styles.productBadgeText}>{initial}</Text>
+        <Text style={[styles.productBadgeText, { color: badgeTextColor }]}>{initial}</Text>
       </View>
       <View style={styles.productCenter}>
         <View style={{ flexDirection: 'row', alignItems: 'center', gap: spacing[2] }}>
@@ -901,18 +866,159 @@ function ProductRow({ product, currency, onPress, onLongPress, archived }: Produ
           >{product.name}</Text>
           {product.bulk_price ? (
             <View style={styles.bulkBadge}>
-              <Text variant="caption" style={{ color: colors.warning[700] }}>Gros</Text>
+              <Text variant="caption" style={{ color: palette.warning }}>Gros</Text>
             </View>
           ) : null}
         </View>
         <StockStatus product={product} />
       </View>
-      <View style={styles.productRight}>
+      <View style={[styles.productRight, product.has_variants && { alignSelf: 'stretch' }]}>
         <Text style={[styles.priceText, isOutOfStock && { color: palette.textDisabled }]}>
           {formatPrice(product.sale_price, currency)}
         </Text>
+        {product.has_variants ? (
+          <Ionicons
+            name="chevron-forward"
+            size={14}
+            color={palette.primary}
+            style={{ position: 'absolute', bottom: 0, right: 0 }}
+          />
+        ) : null}
       </View>
     </Pressable>
+  );
+}
+
+// ─── Restore Action Sheet (archived products) ────────────────────────────────
+
+function RestoreActionSheet({
+  visible,
+  product,
+  onClose,
+  onRestore,
+}: {
+  visible: boolean;
+  product: Product | null;
+  onClose: () => void;
+  onRestore: () => void;
+}) {
+  const { palette } = useTheme();
+  const insets = useSafeAreaInsets();
+  const styles = useMemo(() => makeStyles(palette), [palette]);
+
+  if (!product) return null;
+
+  return (
+    <Modal visible={visible} transparent animationType="slide" onRequestClose={onClose}>
+      <Pressable style={styles.actionSheetOverlay} onPress={onClose} />
+      <View style={[styles.actionSheet, { paddingBottom: Math.max(insets.bottom, spacing[4]) }]}>
+        <View style={styles.sheetHandle} />
+        <View style={styles.actionSheetHeader}>
+          <Text variant="h4" numberOfLines={1}>{product.name}</Text>
+          <Text variant="caption" color="secondary">Ce produit est archivé</Text>
+        </View>
+        <Pressable
+          style={({ pressed }) => [styles.actionRow, pressed && { opacity: 0.65 }]}
+          onPress={onRestore}
+        >
+          <Ionicons name="refresh-outline" size={22} color={palette.primary} />
+          <Text style={[styles.actionRowLabel, { color: palette.primary }]}>Réactiver ce produit</Text>
+        </Pressable>
+      </View>
+    </Modal>
+  );
+}
+
+// ─── Product Action Sheet ─────────────────────────────────────────────────────
+
+function ProductActionSheet({
+  visible,
+  product,
+  canEdit,
+  currency,
+  onClose,
+  onEdit,
+  onAdjustStock,
+  onStats,
+  onArchive,
+}: {
+  visible: boolean;
+  product: Product | null;
+  canEdit: boolean;
+  currency: string;
+  onClose: () => void;
+  onEdit: () => void;
+  onAdjustStock: () => void;
+  onStats: () => void;
+  onArchive: () => void;
+}) {
+  const { palette } = useTheme();
+  const insets = useSafeAreaInsets();
+  const styles = useMemo(() => makeStyles(palette), [palette]);
+
+  if (!product) return null;
+
+  const stockLabel = product.has_variants
+    ? 'Produit avec variantes'
+    : `${product.stock_qty} ${product.unit} · ${formatPrice(product.sale_price, currency)}`;
+
+  return (
+    <Modal visible={visible} transparent animationType="slide" onRequestClose={onClose}>
+      <Pressable style={styles.actionSheetOverlay} onPress={onClose} />
+      <View style={[styles.actionSheet, { paddingBottom: Math.max(insets.bottom, spacing[4]) }]}>
+        <View style={styles.sheetHandle} />
+        <View style={styles.actionSheetHeader}>
+          <Text variant="h4" numberOfLines={1}>{product.name}</Text>
+          <Text variant="caption" color="secondary">{stockLabel}</Text>
+        </View>
+
+        {canEdit && (
+          <Pressable
+            style={({ pressed }) => [styles.actionRow, pressed && { opacity: 0.65 }]}
+            onPress={onEdit}
+          >
+            <Ionicons name="create-outline" size={22} color={palette.textPrimary} />
+            <Text style={styles.actionRowLabel}>
+              {product.has_variants ? 'Modifier · Gérer les variantes' : 'Modifier'}
+            </Text>
+            <Ionicons name="chevron-forward" size={16} color={palette.textDisabled} />
+          </Pressable>
+        )}
+
+        {canEdit && !product.has_variants && (
+          <Pressable
+            style={({ pressed }) => [styles.actionRow, pressed && { opacity: 0.65 }]}
+            onPress={onAdjustStock}
+          >
+            <Ionicons name="layers-outline" size={22} color={palette.textPrimary} />
+            <Text style={styles.actionRowLabel}>Ajuster le stock</Text>
+            <Ionicons name="chevron-forward" size={16} color={palette.textDisabled} />
+          </Pressable>
+        )}
+
+        <Pressable
+          style={({ pressed }) => [styles.actionRow, pressed && { opacity: 0.65 }]}
+          onPress={onStats}
+        >
+          <Ionicons name="bar-chart-outline" size={22} color={palette.textPrimary} />
+          <Text style={styles.actionRowLabel}>Voir la rentabilité</Text>
+          <Ionicons name="chevron-forward" size={16} color={palette.textDisabled} />
+        </Pressable>
+
+        {canEdit && (
+          <>
+            <View style={{ height: 1, backgroundColor: palette.border, marginTop: spacing[2] }} />
+            <Pressable
+              style={({ pressed }) => [styles.actionRow, pressed && { opacity: 0.65 }]}
+              onPress={onArchive}
+            >
+              <Ionicons name="archive-outline" size={22} color={palette.warning} />
+              <Text style={[styles.actionRowLabel, { color: palette.warning }]}>Archiver</Text>
+            </Pressable>
+          </>
+        )}
+      </View>
+    </Modal>
   );
 }
 
@@ -950,11 +1056,14 @@ export default function CatalogueScreen() {
   const [adjustTarget, setAdjustTarget] = useState<Product | null>(null);
   const [tab, setTab] = useState<'actifs' | 'archives'>('actifs');
   const [successMsg, setSuccessMsg] = useState('');
-  const [detailPromptProduct, setDetailPromptProduct] = useState<Product | null>(null);
   const [showStats, setShowStats] = useState(false);
   const [statsTarget, setStatsTarget] = useState<Product | null>(null);
   const [showOutOfStockModal, setShowOutOfStockModal] = useState(false);
   const [initialVariants, setInitialVariants] = useState<import('@/src/types').ProductVariant[]>([]);
+  const [showActionSheet, setShowActionSheet] = useState(false);
+  const [actionSheetProduct, setActionSheetProduct] = useState<Product | null>(null);
+  const [showRestoreSheet, setShowRestoreSheet] = useState(false);
+  const [restoreSheetProduct, setRestoreSheetProduct] = useState<Product | null>(null);
 
   useEffect(() => {
     if (editingProduct?.has_variants && businessId) {
@@ -1056,53 +1165,49 @@ export default function CatalogueScreen() {
     return archivedProducts.filter(p => p.name.toLowerCase().includes(q));
   }, [archivedProducts, search]);
 
-  const openOptions = useCallback(
-    (product: Product) => {
-      const options: { text: string; style?: 'destructive' | 'cancel'; onPress?: () => void }[] = [];
+  const openOptions = useCallback((product: Product) => {
+    setActionSheetProduct(product);
+    setShowActionSheet(true);
+  }, []);
 
-      options.push({
-        text: 'Voir la rentabilité',
-        onPress: () => { setStatsTarget(product); setShowStats(true); },
-      });
+  const closeActionSheet = useCallback(() => setShowActionSheet(false), []);
 
-      if (canEdit) {
-        options.push({
-          text: 'Modifier',
-          onPress: () => { setEditingProduct(product); setShowForm(true); },
-        });
-        if (product.has_variants) {
-          options.push({
-            text: 'Gérer les options',
-            onPress: () => { setEditingProduct(product); setShowForm(true); },
-          });
-        } else {
-          options.push({
-            text: 'Ajuster le stock',
-            onPress: () => { setAdjustTarget(product); setShowAdjust(true); },
-          });
-        }
-      }
-      if (canEdit) {
-        options.push({
-          text: 'Archiver',
-          style: 'destructive',
-          onPress: () =>
-            Alert.alert(
-              'Archiver ce produit ?',
-              `"${product.name}" sera retiré du catalogue actif. Vous pourrez le réactiver depuis l'onglet Archivés.`,
-              [
-                { text: 'Annuler', style: 'cancel' },
-                { text: 'Archiver', style: 'destructive', onPress: () => { haptics.error(); archiveProduct(product.id, businessId); } },
-              ],
-            ),
-        });
-      }
-      options.push({ text: 'Annuler', style: 'cancel' });
+  const handleActionEdit = useCallback(() => {
+    if (!actionSheetProduct) return;
+    setShowActionSheet(false);
+    setEditingProduct(actionSheetProduct);
+    setShowForm(true);
+  }, [actionSheetProduct]);
 
-      Alert.alert(product.name, `Stock: ${product.stock_qty} ${product.unit}`, options);
-    },
-    [canEdit, archiveProduct],
-  );
+  const handleActionAdjust = useCallback(() => {
+    if (!actionSheetProduct) return;
+    setShowActionSheet(false);
+    setAdjustTarget(actionSheetProduct);
+    setShowAdjust(true);
+  }, [actionSheetProduct]);
+
+  const handleActionStats = useCallback(() => {
+    if (!actionSheetProduct) return;
+    setShowActionSheet(false);
+    setStatsTarget(actionSheetProduct);
+    setShowStats(true);
+  }, [actionSheetProduct]);
+
+  const handleActionArchive = useCallback(() => {
+    const product = actionSheetProduct;
+    if (!product) return;
+    setShowActionSheet(false);
+    setTimeout(() => {
+      Alert.alert(
+        'Archiver ce produit ?',
+        `"${product.name}" sera retiré du catalogue actif. Vous pourrez le réactiver depuis l'onglet Archivés.`,
+        [
+          { text: 'Annuler', style: 'cancel' },
+          { text: 'Archiver', style: 'destructive', onPress: () => { haptics.error(); archiveProduct(product.id, businessId); } },
+        ],
+      );
+    }, 350);
+  }, [actionSheetProduct, archiveProduct, businessId]);
 
   const handleSave = useCallback(
     async (data: CreateProductData, hasVariants: boolean, variants: DraftVariant[]) => {
@@ -1128,17 +1233,7 @@ export default function CatalogueScreen() {
         haptics.success();
         setShowForm(false);
         setEditingProduct(null);
-        if (editingProduct) {
-          showSuccess('Produit mis à jour ✓');
-        } else {
-          const nameLower = data.name.trim().toLowerCase();
-          const created = useProductStore.getState().products.find(
-            p => p.name.trim().toLowerCase() === nameLower,
-          ) ?? null;
-          setDetailPromptProduct(created);
-          if (!created) showSuccess('Produit ajouté ✓');
-          setTimeout(() => setDetailPromptProduct(null), 8000);
-        }
+        showSuccess(editingProduct ? 'Produit mis à jour ✓' : 'Produit ajouté ✓');
       }
     },
     [editingProduct, businessId, userId, createProduct, updateProduct, upsertVariants, showSuccess],
@@ -1158,26 +1253,11 @@ export default function CatalogueScreen() {
   const displayList = tab === 'actifs' ? inStockActive : archivedFiltered;
 
   return (
-    <SafeAreaView style={styles.safe} edges={['top']}>
+    <Screen tab>
       {/* Post-action banners */}
-      {detailPromptProduct ? (
-        <Pressable
-          style={styles.detailPromptBanner}
-          onPress={() => {
-            setEditingProduct(detailPromptProduct);
-            setShowForm(true);
-            setDetailPromptProduct(null);
-          }}
-        >
-          <View style={{ flex: 1 }}>
-            <Text variant="label" style={{ color: '#fff' }}>{detailPromptProduct.name} ajouté ✓</Text>
-            <Text variant="caption" style={{ color: 'rgba(255,255,255,0.75)' }}>Appuyer pour ajouter les détails</Text>
-          </View>
-          <Text style={{ color: '#fff', fontSize: 20, fontWeight: '300' }}>›</Text>
-        </Pressable>
-      ) : successMsg ? (
+      {successMsg ? (
         <View style={styles.successBanner}>
-          <Text variant="label" style={{ color: '#fff' }}>{successMsg}</Text>
+          <Text variant="label" style={{ color: palette.textInverse }}>{successMsg}</Text>
         </View>
       ) : null}
 
@@ -1268,29 +1348,14 @@ export default function CatalogueScreen() {
               currency={currency}
               archived={tab === 'archives'}
               onPress={() => {
-                if (tab === 'archives') return;
-                if (!canEdit) return;
-                if (item.has_variants) {
-                  setEditingProduct(item); setShowForm(true);
-                } else {
-                  setAdjustTarget(item); setShowAdjust(true);
+                if (tab === 'archives') {
+                  setRestoreSheetProduct(item);
+                  setShowRestoreSheet(true);
+                  return;
                 }
+                openOptions(item);
               }}
-              onLongPress={tab === 'archives'
-                ? () => Alert.alert(
-                  item.name,
-                  'Ce produit est archivé.',
-                  [
-                    { text: 'Réactiver', onPress: () =>
-                      Alert.alert('Réactiver ce produit ?', `"${item.name}" sera remis dans le catalogue actif.`, [
-                        { text: 'Annuler', style: 'cancel' },
-                        { text: 'Réactiver', onPress: () => restoreProduct(item.id, businessId, userId) },
-                      ])
-                    },
-                    { text: 'Annuler', style: 'cancel' },
-                  ],
-                )
-                : () => openOptions(item)}
+              onLongPress={() => tab === 'archives' ? undefined : openOptions(item)}
             />
           )}
           ItemSeparatorComponent={() => <View style={styles.separator} />}
@@ -1338,13 +1403,7 @@ export default function CatalogueScreen() {
                 currency={currency}
                 onPress={() => {
                   setShowOutOfStockModal(false);
-                  setTimeout(() => {
-                    if (item.has_variants) {
-                      setEditingProduct(item); setShowForm(true);
-                    } else {
-                      setAdjustTarget(item); setShowAdjust(true);
-                    }
-                  }, 350);
+                  setTimeout(() => openOptions(item), 350);
                 }}
               />
             )}
@@ -1354,6 +1413,33 @@ export default function CatalogueScreen() {
           />
         </View>
       </Modal>
+
+      {/* Restore Action Sheet (archived products) */}
+      <RestoreActionSheet
+        visible={showRestoreSheet}
+        product={restoreSheetProduct}
+        onClose={() => setShowRestoreSheet(false)}
+        onRestore={() => {
+          if (!restoreSheetProduct) return;
+          const p = restoreSheetProduct;
+          setShowRestoreSheet(false);
+          restoreProduct(p.id, businessId, userId);
+          showSuccess(`${p.name} réactivé ✓`);
+        }}
+      />
+
+      {/* Product Action Sheet */}
+      <ProductActionSheet
+        visible={showActionSheet}
+        product={actionSheetProduct}
+        canEdit={canEdit}
+        currency={currency}
+        onClose={closeActionSheet}
+        onEdit={handleActionEdit}
+        onAdjustStock={handleActionAdjust}
+        onStats={handleActionStats}
+        onArchive={handleActionArchive}
+      />
 
       {/* Product Form Modal */}
       <ProductFormModal
@@ -1401,7 +1487,7 @@ export default function CatalogueScreen() {
           </Pressable>
         </Animated.View>
       )}
-    </SafeAreaView>
+    </Screen>
   );
 }
 
@@ -1433,8 +1519,8 @@ function makeStyles(p: Palette) {
     },
     tabChipActive: { backgroundColor: p.primary, borderColor: p.primary },
     alertBanner: {
-      backgroundColor: colors.warning[50], paddingHorizontal: spacing[5], paddingVertical: spacing[2],
-      borderBottomWidth: 1, borderBottomColor: colors.warning[100],
+      backgroundColor: p.warningLight, paddingHorizontal: spacing[5], paddingVertical: spacing[2],
+      borderBottomWidth: 1, borderBottomColor: p.warning,
     },
     searchRow: { paddingHorizontal: spacing[5], paddingBottom: spacing[3] },
     statsCard: {
@@ -1464,7 +1550,7 @@ function makeStyles(p: Palette) {
       alignItems: 'center', justifyContent: 'center',
       marginRight: 0,
     },
-    productBadgeText: { fontFamily: FF.semibold, fontSize: 16, color: p.textPrimary },
+    productBadgeText: { fontFamily: FF.semibold, fontSize: 16 },
     productCenter: { flex: 1, paddingLeft: 12, gap: 3 },
     productName: { fontFamily: FF.semibold, fontSize: 16, color: p.textPrimary },
     productStockText: { fontFamily: FF.regular, fontSize: 13, color: p.textSecondary },
@@ -1490,8 +1576,8 @@ function makeStyles(p: Palette) {
       paddingHorizontal: spacing[1.5], paddingVertical: 2,
     },
     bulkBadge: {
-      backgroundColor: colors.warning[50], borderRadius: radius.sm,
-      paddingHorizontal: spacing[1.5], paddingVertical: 2, borderWidth: 1, borderColor: colors.warning[100],
+      backgroundColor: p.warningLight, borderRadius: radius.sm,
+      paddingHorizontal: spacing[1.5], paddingVertical: 2, borderWidth: 1, borderColor: p.warning,
     },
     productRight: { alignItems: 'flex-end' },
     priceText: { fontFamily: FF.semibold, fontSize: 15, color: p.primary },
@@ -1502,7 +1588,7 @@ function makeStyles(p: Palette) {
     fab: {
       width: 56, height: 56, borderRadius: radius.full,
       backgroundColor: p.primary, alignItems: 'center', justifyContent: 'center',
-      shadowColor: colors.neutral[900], shadowOffset: { width: 0, height: 4 },
+      shadowColor: p.textPrimary, shadowOffset: { width: 0, height: 4 },
       shadowOpacity: 0.18, shadowRadius: 8, elevation: 8,
     },
     fabIcon: { fontSize: 28, lineHeight: 32, fontWeight: '300' as const, color: p.textInverse, marginTop: -2 },
@@ -1576,8 +1662,8 @@ function makeStyles(p: Palette) {
       flex: 1, alignItems: 'center', paddingVertical: spacing[3],
       borderRadius: radius.md, borderWidth: 1.5, borderColor: p.border, backgroundColor: p.surface,
     },
-    typeChipEntree: { backgroundColor: colors.success[600], borderColor: colors.success[600] },
-    typeChipPerte: { backgroundColor: colors.danger[600], borderColor: colors.danger[600] },
+    typeChipEntree: { backgroundColor: p.success, borderColor: p.success },
+    typeChipPerte: { backgroundColor: p.danger, borderColor: p.danger },
 
     variantBadge: {
       alignSelf: 'flex-start',
@@ -1625,12 +1711,47 @@ function makeStyles(p: Palette) {
       backgroundColor: p.surface,
       borderTopLeftRadius: 20, borderTopRightRadius: 20,
       maxHeight: '80%',
-      shadowColor: '#000', shadowOffset: { width: 0, height: -4 },
+      shadowColor: p.shadow, shadowOffset: { width: 0, height: -4 },
       shadowOpacity: 0.12, shadowRadius: 16, elevation: 24,
     },
     sheetHandle: {
       width: 36, height: 4, borderRadius: 2, backgroundColor: p.border,
       alignSelf: 'center', marginTop: spacing[2],
+    },
+    actionSheetOverlay: {
+      ...StyleSheet.absoluteFillObject,
+      backgroundColor: 'rgba(0,0,0,0.45)',
+    },
+    actionSheet: {
+      position: 'absolute', bottom: 0, left: 0, right: 0,
+      backgroundColor: p.surface,
+      borderTopLeftRadius: 20, borderTopRightRadius: 20,
+      paddingTop: spacing[2],
+      shadowColor: p.shadow, shadowOffset: { width: 0, height: -4 },
+      shadowOpacity: 0.12, shadowRadius: 16, elevation: 24,
+    },
+    actionSheetHeader: {
+      paddingHorizontal: spacing[5],
+      paddingTop: spacing[3],
+      paddingBottom: spacing[4],
+      gap: spacing[1],
+      borderBottomWidth: 1,
+      borderBottomColor: p.border,
+    },
+    actionRow: {
+      flexDirection: 'row' as const,
+      alignItems: 'center' as const,
+      paddingHorizontal: spacing[5],
+      paddingVertical: spacing[4],
+      gap: spacing[3],
+      borderBottomWidth: 1,
+      borderBottomColor: p.border,
+    },
+    actionRowLabel: {
+      flex: 1,
+      fontSize: 16,
+      fontFamily: FF.regular,
+      color: p.textPrimary,
     },
   });
 }

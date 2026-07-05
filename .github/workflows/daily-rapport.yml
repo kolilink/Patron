@@ -1,0 +1,29 @@
+name: Rapport quotidien
+
+on:
+  schedule:
+    - cron: '0 11 * * *'  # 6h00 ET (UTC-5 / EST)
+  workflow_dispatch:       # trigger manual depuis GitHub Actions
+
+jobs:
+  rapport:
+    runs-on: ubuntu-latest
+
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 10
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '20'
+          cache: 'npm'
+
+      - name: Install dependencies
+        run: npm ci
+
+      - name: Generate and send daily report
+        env:
+          RESEND_API_KEY: ${{ secrets.RESEND_API_KEY }}
+          RECIPIENT_EMAIL: mdousebastiao@gmail.com
+        run: node scripts/daily-rapport.js

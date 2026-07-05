@@ -13,8 +13,48 @@ export function formatAmount(n: number, currency: string): string {
   return `${formatted}.${decPart} ${currency}`;
 }
 
+/**
+ * Format a raw string from a numeric TextInput with spaces every 3 digits.
+ * Handles both integer amounts (GNF) and decimal amounts (e.g. 1 234.56).
+ * Safe to call on paste: strips all spaces first, then reformats.
+ *
+ * Usage:
+ *   onChangeText={v => setAmountStr(formatAmountInput(v))}
+ *   value={amountStr}
+ *   // on submit: parseAmountInput(amountStr) → number
+ */
+export function formatAmountInput(raw: string): string {
+  // Normalize: accept comma as decimal separator
+  const normalized = raw.replace(/,/g, '.').replace(/[^\d.]/g, '');
+  const dotIdx = normalized.indexOf('.');
+  if (dotIdx === -1) {
+    // Integer
+    if (!normalized) return '';
+    return normalized.replace(/\B(?=(\d{3})+(?!\d))/g, ' ');
+  }
+  // Has decimal part — only format the integer portion
+  const intPart = normalized.slice(0, dotIdx);
+  const decPart = normalized.slice(dotIdx); // includes the dot
+  const formattedInt = intPart ? intPart.replace(/\B(?=(\d{3})+(?!\d))/g, ' ') : '';
+  return formattedInt + decPart;
+}
+
+/** Parse a formatted amount string back to a number. */
+export function parseAmountInput(formatted: string): number {
+  const clean = formatted.replace(/\s/g, '').replace(',', '.');
+  const n = parseFloat(clean);
+  return isNaN(n) ? 0 : n;
+}
+
 export function formatMargin(profit: number, revenue: number): string {
   if (revenue <= 0) return '';
   const pct = ((profit / revenue) * 100).toFixed(0);
   return `${profit >= 0 ? '+' : ''}${pct}%`;
+}
+
+/** Format a seconds count as "m:ss" for countdown displays. */
+export function formatCountdown(totalSeconds: number): string {
+  const m = Math.floor(totalSeconds / 60);
+  const s = totalSeconds % 60;
+  return `${m}:${s.toString().padStart(2, '0')}`;
 }

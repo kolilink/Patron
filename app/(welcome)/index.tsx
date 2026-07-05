@@ -1,35 +1,24 @@
-import { useEffect, useMemo, useState } from 'react';
-import { StyleSheet, View } from 'react-native';
+import { useEffect, useMemo } from 'react';
+import { Linking, Pressable, StyleSheet, View } from 'react-native';
 import { router } from 'expo-router';
-import { SafeAreaView } from 'react-native-safe-area-context';
-import * as LocalAuthentication from 'expo-local-authentication';
+import { Screen } from '@/src/components/ui/Screen';
+import { Ionicons } from '@expo/vector-icons';
 import { Button } from '@/src/components/ui/Button';
 import { Text } from '@/src/components/ui/Text';
 import { useTheme, spacing } from '@/src/theme';
 import type { Palette } from '@/src/theme';
-import { useAuthStore, getLastPhone } from '@/stores/auth';
+import { useAuthStore } from '@/stores/auth';
+
+const SUPPORT_WA_URL = `https://wa.me/16094454809?text=${encodeURIComponent("Bonjour ! J'ai une question sur Patron 🙂")}`;
 
 export default function WelcomeScreen() {
   const { palette } = useTheme();
   const styles = useMemo(() => makeStyles(palette), [palette]);
   const session = useAuthStore(s => s.session);
   const loading = useAuthStore(s => s.loading);
-  const loginWithBiometric = useAuthStore(s => s.loginWithBiometric);
-  const loginWithPhone = useAuthStore(s => s.loginWithPhone);
-
-  const [showBiometric, setShowBiometric] = useState(false);
-
-  useEffect(() => {
-    async function checkBiometric() {
-      const [hasHardware, isEnrolled, phone] = await Promise.all([
-        LocalAuthentication.hasHardwareAsync(),
-        LocalAuthentication.isEnrolledAsync(),
-        getLastPhone(),
-      ]);
-      setShowBiometric(hasHardware && isEnrolled && !!phone);
-    }
-    checkBiometric();
-  }, []);
+  const startDemoMode = useAuthStore(s => s.startDemoMode);
+  const error = useAuthStore(s => s.error);
+  const clearError = useAuthStore(s => s.clearError);
 
   useEffect(() => {
     if (!session) return;
@@ -40,34 +29,8 @@ export default function WelcomeScreen() {
     }
   }, [session]);
 
-  const handleBiometricLogin = async () => {
-    const result = await LocalAuthentication.authenticateAsync({
-      promptMessage:         'Connexion à Patron',
-      fallbackLabel:         'Utiliser le code',
-      disableDeviceFallback: false,
-      cancelLabel:           'Annuler',
-    });
-    if (!result.success) return;
-
-    // Try silent session restore (works when session is still alive on server).
-    const ok = await loginWithBiometric();
-    if (ok) return; // useEffect navigates once session is set
-
-    // Session gone (explicit logout or token expiry) → auto-send OTP to the
-    // stored phone number so the user skips phone entry and lands on the code screen.
-    const phone = await getLastPhone();
-    if (phone) {
-      const loginResult = await loginWithPhone(phone);
-      if (loginResult) {
-        router.push({ pathname: '/(welcome)/connexion', params: { autoOtp: '1' } });
-        return;
-      }
-    }
-    router.push('/(welcome)/connexion');
-  };
-
   return (
-    <SafeAreaView style={styles.safe}>
+    <Screen>
       <View style={styles.content}>
         <View style={styles.hero}>
           <Text variant="display" color="brand" style={styles.logo}>patron</Text>
@@ -75,6 +38,10 @@ export default function WelcomeScreen() {
             Soyez le patron
           </Text>
         </View>
+
+        {error && (
+          <Text variant="bodySmall" color="secondary" style={styles.errorText}>{error}</Text>
+        )}
 
         <View style={styles.actions}>
           <Button
@@ -90,16 +57,6 @@ export default function WelcomeScreen() {
             fullWidth
             size="lg"
           />
-          {showBiometric && (
-            <Button
-              label="Connexion rapide"
-              variant="secondary"
-              onPress={handleBiometricLogin}
-              loading={loading}
-              fullWidth
-              size="lg"
-            />
-          )}
           {!session && (
             <Button
               label="J'ai déjà un compte"
@@ -108,15 +65,32 @@ export default function WelcomeScreen() {
               fullWidth
             />
           )}
+          {!session && (
+            <Button
+              label="Essayer Patron"
+              variant="ghost"
+              onPress={() => { clearError(); startDemoMode(); }}
+              loading={loading}
+              fullWidth
+            />
+          )}
         </View>
       </View>
-    </SafeAreaView>
+
+      <Pressable
+        style={styles.whatsappCorner}
+        onPress={() => Linking.openURL(SUPPORT_WA_URL)}
+        hitSlop={12}
+      >
+        <Ionicons name="logo-whatsapp" size={13} color={palette.textSecondary} />
+        <Text variant="caption" color="secondary">WhatsApp</Text>
+      </Pressable>
+    </Screen>
   );
 }
 
 function makeStyles(p: Palette) {
   return StyleSheet.create({
-    safe: { flex: 1, backgroundColor: p.background },
     content: {
       flex: 1,
       paddingHorizontal: spacing[8],
@@ -130,6 +104,15 @@ function makeStyles(p: Palette) {
     },
     logo: { letterSpacing: -1 },
     tagline: { textAlign: 'center', lineHeight: 30, color: p.textSecondary },
+    errorText: { textAlign: 'center', color: p.textSecondary },
     actions: { gap: spacing[3] },
+    whatsappCorner: {
+      position: 'absolute',
+      bottom: spacing[8],
+      right: spacing[6],
+      flexDirection: 'row',
+      alignItems: 'center',
+      gap: spacing[1],
+    },
   });
 }

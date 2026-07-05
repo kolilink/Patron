@@ -1,14 +1,15 @@
 import { useEffect, useMemo, useRef, useState } from 'react';
 import {
   KeyboardAvoidingView,
+  Linking,
   Platform,
   Pressable,
   ScrollView,
   StyleSheet,
   View,
 } from 'react-native';
-import { router } from 'expo-router';
-import { SafeAreaView } from 'react-native-safe-area-context';
+import { router, useLocalSearchParams } from 'expo-router';
+import { Screen } from '@/src/components/ui/Screen';
 import { Ionicons } from '@expo/vector-icons';
 import { Button } from '@/src/components/ui/Button';
 import { Input } from '@/src/components/ui/Input';
@@ -18,6 +19,13 @@ import { PhoneInput } from '@/src/components/ui/PhoneInput';
 import { useTheme, radius, spacing } from '@/src/theme';
 import type { Palette } from '@/src/theme';
 import { useAuthStore } from '@/stores/auth';
+import { useCountdown } from '@/src/hooks/useCountdown';
+import { formatCountdown } from '@/src/utils/format';
+
+const SUPPORT_WA_URL = `https://wa.me/16094454809?text=${encodeURIComponent("Bonjour ! J'ai une question sur Patron 🙂")}`;
+
+const OTP_VALIDITY_SECONDS = 600;
+const RESEND_COOLDOWN_SECONDS = 60;
 
 const CURRENCY_LIST = [
   // West Africa
@@ -99,6 +107,7 @@ export default function CreerScreen() {
   const { palette } = useTheme();
   const styles = useMemo(() => makeStyles(palette), [palette]);
   const { createPhoneVerification, verifyPhoneCode, upgradePhone, createBusiness, loading, error, clearError } = useAuthStore();
+  const { prefillPhone } = useLocalSearchParams<{ prefillPhone?: string }>();
   const hasPhone = Boolean(useAuthStore.getState().session?.user.phone);
   const [step, setStep] = useState<Step>(hasPhone ? 'details' : 'phone');
   const [phone, setPhone] = useState('');
@@ -111,6 +120,8 @@ export default function CreerScreen() {
 
   const verificationIdRef = useRef('');
   const phoneRef = useRef('');
+  const otpValidity = useCountdown();
+  const resendCooldown = useCountdown();
 
   // Pre-select currency as soon as we have a valid phone number
   useEffect(() => {
@@ -140,6 +151,8 @@ export default function CreerScreen() {
       verificationIdRef.current = result.verificationId;
       phoneRef.current = normalized;
       setStep('otp');
+      otpValidity.start(OTP_VALIDITY_SECONDS);
+      resendCooldown.start(RESEND_COOLDOWN_SECONDS);
     }
   };
 
@@ -156,10 +169,15 @@ export default function CreerScreen() {
   };
 
   const handleResendCreer = async () => {
+    if (!resendCooldown.isDone) return;
     clearError();
     setOtpKey(k => k + 1);
     const result = await createPhoneVerification(phoneRef.current);
-    if (result) verificationIdRef.current = result.verificationId;
+    if (result) {
+      verificationIdRef.current = result.verificationId;
+      otpValidity.start(OTP_VALIDITY_SECONDS);
+      resendCooldown.start(RESEND_COOLDOWN_SECONDS);
+    }
   };
 
   const TITLES: Record<Step, string> = {
@@ -169,13 +187,15 @@ export default function CreerScreen() {
   };
 
   const SUBS: Record<Step, string> = {
-    phone: 'Pas de mot de passe à retenir. Votre numéro est votre identité.',
-    otp: 'Votre code Patron a été envoyé par SMS. Il est valable 30 min.',
+    phone: 'Entrez votre numéro, on vous enverra un code',
+    otp: otpValidity.secondsLeft > 0
+      ? `Votre code Patron a été envoyé par WhatsApp. Valable encore pour ${formatCountdown(otpValidity.secondsLeft)}`
+      : 'Le code a expiré. Demandez-en un nouveau ci-dessous',
     details: 'Pour commencer donnez un nom à votre commerce  :)',
   };
 
   return (
-    <SafeAreaView style={styles.safe}>
+    <Screen>
       <KeyboardAvoidingView behavior={Platform.OS === 'ios' ? 'padding' : 'height'} style={styles.kav}>
         <ScrollView
           contentContainerStyle={styles.scrollContent}
@@ -200,16 +220,19 @@ export default function CreerScreen() {
             </View>
 
             {error === 'PHONE_EXISTS' ? (
-              <View style={styles.errorBox}>
-                <Text variant="bodySmall" color="danger" style={{ marginBottom: spacing[3] }}>
-                  Ce numéro est déjà associé à un compte. Connectez-vous plutôt.
+              <View style={styles.infoBlock}>
+                <Text variant="bodySmall" color="secondary" style={styles.infoText}>
+                  Ce numéro a déjà un compte
                 </Text>
-                <Button label="Se connecter" onPress={() => { clearError(); router.replace('/(welcome)/connexion'); }} fullWidth />
+                <Button
+                  label="Se connecter"
+                  variant="secondary"
+                  onPress={() => { clearError(); router.replace({ pathname: '/(welcome)/connexion', params: { prefillPhone: phone } }); }}
+                  fullWidth
+                />
               </View>
             ) : error ? (
-              <View style={styles.errorBox}>
-                <Text variant="bodySmall" color="danger">{error}</Text>
-              </View>
+              <Text variant="bodySmall" color="secondary" style={styles.infoText}>{error}</Text>
             ) : null}
 
             {step === 'phone' && (
@@ -219,6 +242,8 @@ export default function CreerScreen() {
                   onChange={(e164, complete) => { setPhone(e164); setPhoneComplete(complete); }}
                   autoFocus
                   resetKey={resetKey}
+                  initialValue={prefillPhone}
+                  autofillOwnNumber
                 />
                 <Button label="Continuer" loading={loading} onPress={handleContinuer} fullWidth size="lg" disabled={!phoneComplete} />
               </View>
@@ -226,8 +251,14 @@ export default function CreerScreen() {
 
             {step === 'otp' && (
               <View style={[styles.form, styles.formCentered]}>
-                <OtpInput key={otpKey} onComplete={handleOtpComplete} disabled={loading} />
-                <Button label="Renvoyer le code" variant="ghost" loading={loading} onPress={handleResendCreer} />
+                <OtpInput key={otpKey} onComplete={handleOtpComplete} disabled={loading} autoFocus />
+                <Button
+                  label={resendCooldown.isDone ? 'Renvoyer le code' : `Renvoyer le code (${formatCountdown(resendCooldown.secondsLeft)})`}
+                  variant="ghost"
+                  loading={loading}
+                  disabled={!resendCooldown.isDone}
+                  onPress={handleResendCreer}
+                />
                 <Button
                   label="Changer de numéro"
                   variant="ghost"
@@ -236,6 +267,11 @@ export default function CreerScreen() {
                     setResetKey(k => k + 1);
                     verificationIdRef.current = ''; phoneRef.current = '';
                   }}
+                />
+                <Button
+                  label="Besoin d'aide ? Contactez le support"
+                  variant="ghost"
+                  onPress={() => Linking.openURL(SUPPORT_WA_URL)}
                 />
               </View>
             )}
@@ -317,7 +353,7 @@ export default function CreerScreen() {
           </View>
         </ScrollView>
       </KeyboardAvoidingView>
-    </SafeAreaView>
+    </Screen>
   );
 }
 
@@ -333,7 +369,8 @@ function makeStyles(p: Palette) {
     sub:           { lineHeight: 22 },
     form:          { gap: spacing[4] },
     formCentered:  { alignItems: 'center' },
-    errorBox:      { backgroundColor: p.dangerLight, borderRadius: radius.md, padding: spacing[3] },
+    infoBlock:     { gap: spacing[3] },
+    infoText:      { textAlign: 'center', lineHeight: 20 },
 
     currencyTrigger: {
       flexDirection: 'row', alignItems: 'center', gap: spacing[3],

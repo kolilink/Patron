@@ -6,11 +6,17 @@ import { saveProductCache, getProductCache, enqueue, getQueueCount, getCacheTime
 import { isNetworkError } from '@/lib/sync';
 import { useSyncStore } from '@/stores/sync';
 import { trackEvent } from '@/lib/analytics';
+import { notifyEvent } from '@/src/utils/notifications';
 import type { Product, ProductVariant } from '@/src/types';
+
+// Per-session deduplication: avoid notifying the same low-stock product twice per session.
+// Reset happens when the store resets (logout / business switch).
+const notifiedLowStockIds = new Set<string>();
 
 export interface ProductStats {
   revenue: number;
   capital: number;
+  linkedExpenses: number;
   profit: number;
 }
 
@@ -41,13 +47,14 @@ interface ProductStore {
   products: Product[];
   archivedProducts: Product[];
   variantsByProduct: Record<string, ProductVariant[]>;
+  vendeurProductScope: string[];  // product IDs; empty = unscoped (see all)
   loading: boolean;
   saving: boolean;
   error: string | null;
   offline: boolean;
   offlineSince: number | null;
 
-  fetchProducts: (businessId: string, userId: string) => Promise<void>;
+  fetchProducts: (businessId: string, userId: string, membershipId?: string, role?: string) => Promise<void>;
   fetchArchivedProducts: (businessId: string) => Promise<void>;
   fetchVariants: (productId: string, businessId: string) => Promise<ProductVariant[]>;
   upsertVariants: (businessId: string, productId: string, userId: string, variants: DraftVariant[]) => Promise<boolean>;
@@ -73,13 +80,14 @@ export const useProductStore = create<ProductStore>((set, get) => ({
   products: [],
   archivedProducts: [],
   variantsByProduct: {},
+  vendeurProductScope: [],
   loading: false,
   saving: false,
   error: null,
   offline: false,
   offlineSince: null,
 
-  fetchProducts: async (businessId, userId) => {
+  fetchProducts: async (businessId, userId, membershipId, role) => {
     if (get().products.length === 0) {
       set({ loading: true, error: null });
       const cached = await getProductCache(businessId);
@@ -107,6 +115,30 @@ export const useProductStore = create<ProductStore>((set, get) => ({
       }));
       set({ products, loading: false, offline: false, offlineSince: null });
       void saveProductCache(businessId, products);
+
+      // Low-stock detection: notify admins/managers for each product crossing its threshold.
+      // Server-side 24h cooldown in dispatch-notification prevents notification floods on restart.
+      const lowStock = products.filter(p =>
+        p.reorder_level > 0 && p.stock_qty <= p.reorder_level && !notifiedLowStockIds.has(p.id),
+      );
+      lowStock.forEach(p => {
+        notifiedLowStockIds.add(p.id);
+        notifyEvent({
+          businessId,
+          eventType: 'low_stock',
+          payload: { product: p.name, qty: p.stock_qty, product_id: p.id },
+          targetRoles: ['administrateur', 'manager'],
+        });
+      });
+
+      // Load vendeur product scope (empty = unscoped, sees all products)
+      if (role === 'vendeur' && membershipId) {
+        const { data: scopeRows } = await supabase
+          .from('membership_product_scope')
+          .select('product_id')
+          .eq('membership_id', membershipId);
+        set({ vendeurProductScope: (scopeRows ?? []).map((r: any) => r.product_id as string) });
+      }
     } catch (err) {
       if (isNetworkError(err)) {
         const cached = await getProductCache(businessId);
@@ -387,13 +419,18 @@ export const useProductStore = create<ProductStore>((set, get) => ({
       p_since: since ?? null,
     });
     if (error || !data) return null;
+    const d = data as any;
     return {
-      revenue: (data as any).revenue / 100,
-      capital: (data as any).capital / 100,
-      profit:  (data as any).profit  / 100,
+      revenue:         d.revenue         / 100,
+      capital:         d.capital         / 100,
+      linkedExpenses:  d.linked_expenses / 100,
+      profit:          d.profit          / 100,
     };
   },
 
   clearError: () => set({ error: null }),
-  reset: () => set({ products: [], archivedProducts: [], variantsByProduct: {}, loading: false, error: null, offline: false, offlineSince: null }),
+  reset: () => {
+    notifiedLowStockIds.clear();
+    set({ products: [], archivedProducts: [], variantsByProduct: {}, vendeurProductScope: [], loading: false, error: null, offline: false, offlineSince: null });
+  },
 }));

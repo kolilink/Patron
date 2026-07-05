@@ -6,7 +6,7 @@ import {
   View,
 } from 'react-native';
 import { router } from 'expo-router';
-import { SafeAreaView } from 'react-native-safe-area-context';
+import { Screen } from '@/src/components/ui/Screen';
 import { Button } from '@/src/components/ui/Button';
 import { Input } from '@/src/components/ui/Input';
 import { OtpInput } from '@/src/components/ui/OtpInput';
@@ -87,12 +87,12 @@ export default function RejoindreScreen() {
 
   const SUBS: Record<Step, string> = {
     phone: 'Votre responsable vous a partagé un code. Vérifiez votre identité pour y accéder.',
-    otp: 'Votre code Patron a été envoyé par SMS. Il est valable 30 min.',
+    otp: 'Votre code Patron a été envoyé par WhatsApp. Il est valable pour 10 min.',
     code: 'Entrez le code partagé par votre partenaire pour rejoindre son commerce :)',
   };
 
   return (
-    <SafeAreaView style={styles.safe}>
+    <Screen>
       <KeyboardAvoidingView
         behavior={Platform.OS === 'ios' ? 'padding' : 'height'}
         style={styles.kav}
@@ -144,7 +144,7 @@ export default function RejoindreScreen() {
 
           {step === 'otp' && (
             <View style={[styles.form, styles.formCentered]}>
-              <OtpInput key={otpKey} onComplete={handleOtpComplete} disabled={loading} />
+              <OtpInput key={otpKey} onComplete={handleOtpComplete} disabled={loading} autoFocus />
               <Button label="Renvoyer le code" variant="ghost" loading={loading} onPress={handleResendRejoindre} />
               <Button
                 label="Changer de numéro"
@@ -189,7 +189,7 @@ export default function RejoindreScreen() {
           )}
         </View>
       </KeyboardAvoidingView>
-    </SafeAreaView>
+    </Screen>
   );
 }
 

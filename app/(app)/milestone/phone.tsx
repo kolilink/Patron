@@ -6,7 +6,7 @@ import {
   View,
 } from 'react-native';
 import { router } from 'expo-router';
-import { SafeAreaView } from 'react-native-safe-area-context';
+import { Screen } from '@/src/components/ui/Screen';
 import { Button } from '@/src/components/ui/Button';
 import { OtpInput } from '@/src/components/ui/OtpInput';
 import { Text } from '@/src/components/ui/Text';
@@ -51,7 +51,7 @@ export default function MilestonePhoneScreen() {
   };
 
   return (
-    <SafeAreaView style={styles.safe}>
+    <Screen>
       <KeyboardAvoidingView
         behavior={Platform.OS === 'ios' ? 'padding' : 'height'}
         style={styles.kav}
@@ -65,7 +65,7 @@ export default function MilestonePhoneScreen() {
             <Text variant="body" color="secondary" style={styles.sub}>
               {step === 'phone'
                 ? 'Vérifiez votre numéro pour sécuriser votre commerce. Aucun SMS payant — tout se fait via WhatsApp.'
-                : 'Votre code Patron a été envoyé par WhatsApp. Il est valable 10 min.'}
+                : 'Votre code Patron a été envoyé par WhatsApp. Il est valable pour 10 min.'}
             </Text>
           </View>
 
@@ -121,7 +121,7 @@ export default function MilestonePhoneScreen() {
           )}
         </View>
       </KeyboardAvoidingView>
-    </SafeAreaView>
+    </Screen>
   );
 }
 

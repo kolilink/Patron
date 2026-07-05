@@ -13,17 +13,14 @@ import { useSafeAreaInsets } from 'react-native-safe-area-context';
 import { router } from 'expo-router';
 import { Ionicons } from '@expo/vector-icons';
 import { Text } from '@/src/components/ui/Text';
-import { useTheme, spacing, radius } from '@/src/theme';
+import { colors, useTheme, spacing, radius, BUSINESS_AVATAR_PALETTE } from '@/src/theme';
 import type { Palette } from '@/src/theme';
 import { useAuthStore } from '@/stores/auth';
 import type { Role } from '@/src/types';
 
 const DRAWER_WIDTH = Dimensions.get('window').width * 0.78;
 
-const AVATAR_PALETTE = [
-  '#6366F1', '#8B5CF6', '#EC4899', '#F59E0B',
-  '#10B981', '#3B82F6', '#EF4444', '#14B8A6',
-];
+const DRAWER_AVATAR_PALETTE = BUSINESS_AVATAR_PALETTE;
 
 const ROLE_LABEL: Record<Role, string> = {
   administrateur: 'Gérant',
@@ -33,7 +30,7 @@ const ROLE_LABEL: Record<Role, string> = {
 };
 
 function avatarColor(id: string) {
-  return AVATAR_PALETTE[id.charCodeAt(0) % AVATAR_PALETTE.length];
+  return DRAWER_AVATAR_PALETTE[id.charCodeAt(0) % DRAWER_AVATAR_PALETTE.length];
 }
 
 export function BusinessDrawer() {
@@ -256,7 +253,7 @@ function makeStyles(p: Palette) {
       borderTopRightRadius: 16,
       borderBottomRightRadius: 16,
       overflow: 'hidden',
-      shadowColor: '#000',
+      shadowColor: p.shadow,
       shadowOffset: { width: 4, height: 0 },
       shadowOpacity: 0.18,
       shadowRadius: 16,
@@ -319,7 +316,7 @@ function makeStyles(p: Palette) {
     avatarText: {
       fontSize: 16,
       fontWeight: '700',
-      color: '#fff',
+      color: colors.neutral[0],
     },
     bizName: {
       fontSize: 14,
@@ -423,7 +420,7 @@ function makeStyles(p: Palette) {
     sheetCloseLabel: {
       fontSize: 16,
       fontWeight: '700',
-      color: '#fff',
+      color: colors.neutral[0],
     },
   });
 }
