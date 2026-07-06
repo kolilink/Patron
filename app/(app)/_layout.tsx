@@ -72,7 +72,10 @@ export default function AppLayout() {
   const session = useAuthStore(s => s.session);
   const loading = useAuthStore(s => s.loading);
   const locked = useAuthStore(s => s.locked);
-  const pinSet = usePinGate(session?.user.id);
+  const justAuthenticated = useAuthStore(s => s.justAuthenticated);
+  // See app/index.tsx for why this is gated on justAuthenticated — an existing
+  // user's silently-restored session must never be interrupted here.
+  const pinSet = usePinGate(justAuthenticated ? session?.user.id : undefined);
   const showTrialWelcome = useAuthStore(s => s.showTrialWelcome);
   const clearTrialWelcome = useAuthStore(s => s.clearTrialWelcome);
   const removedBusinessName = useAuthStore(s => s.removedBusinessName);
@@ -286,8 +289,8 @@ export default function AppLayout() {
   if (loading) return null;
   if (locked) return <Redirect href="/(auth)/verrouille" />;
   if (!session) return <Redirect href="/(welcome)/" />;
-  if (pinSet === false) return <Redirect href="/(auth)/creer-pin" />;
-  if (pinSet === null) return null;
+  if (justAuthenticated && pinSet === false) return <Redirect href="/(auth)/creer-pin" />;
+  if (justAuthenticated && pinSet === null) return null;
 
   const activeBusiness = session.activeBusiness;
   const isDemoMode = session.isDemoMode ?? false;

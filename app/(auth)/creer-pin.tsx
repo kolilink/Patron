@@ -70,6 +70,7 @@ export default function CreerPinScreen() {
     }
     setBusy(true);
     await setPin(pin);
+    useAuthStore.getState().clearJustAuthenticated();
     if (afterLock === '1') {
       await useAuthStore.getState().lock();
       setBusy(false);

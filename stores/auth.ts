@@ -142,6 +142,16 @@ interface AuthStore {
   session: AppSession | null;
   loading: boolean;
   locked: boolean;
+  // True only right after a genuine fresh authentication (real login, brand
+  // new registration, email recovery) — never set by initialize()'s silent
+  // session restore on cold start. This is what the routing guard uses to
+  // decide whether the mandatory PIN-creation screen should interrupt right
+  // now: an existing user whose session is just being silently restored must
+  // keep using the app normally and only get prompted for a PIN when they
+  // actually try to sign out (see plus.tsx) — forcing it on every cold start
+  // would ambush people mid-onboarding (anonymous session, no business yet)
+  // and interrupt already-logged-in users for no reason.
+  justAuthenticated: boolean;
   emailOtpLoading: boolean;
   error: string | null;
   pendingPhoneVerification: PendingPhoneVerification | null;
@@ -165,6 +175,7 @@ interface AuthStore {
   // — that must never be reported to the user as an incorrect code.
   unlockWithPin: (pin: string) => Promise<'unlocked' | 'wrong-pin' | 'restore-failed'>;
   unlockWithBiometric: () => Promise<boolean>;
+  clearJustAuthenticated: () => void;
   createPhoneVerification: (phone: string) => Promise<{ verificationId: string } | null>;
   loginWithPhone: (phone: string) => Promise<{ verificationId: string } | null>;
   verifyPhoneCode: (phone: string, code: string, verificationId: string) => Promise<boolean>;
@@ -236,6 +247,7 @@ export const useAuthStore = create<AuthStore>((set, get) => ({
   session: null,
   loading: true,
   locked: false,
+  justAuthenticated: false,
   emailOtpLoading: false,
   error: null,
   pendingPhoneVerification: null,
@@ -457,7 +469,7 @@ export const useAuthStore = create<AuthStore>((set, get) => ({
     await setLocked(false);
     if (userId) setKV(`demo_mode_${userId}`, 'false').catch(() => {});
     resetAllStores();
-    set({ session: null, locked: false, error: null, pendingPhoneVerification: null });
+    set({ session: null, locked: false, justAuthenticated: false, error: null, pendingPhoneVerification: null });
 
     void (async () => {
       // Unsubscribe Realtime channels before signOut() disconnects the
@@ -717,6 +729,8 @@ export const useAuthStore = create<AuthStore>((set, get) => ({
     return restored;
   },
 
+  clearJustAuthenticated: () => set({ justAuthenticated: false }),
+
   createPhoneVerification: async (phone) => {
     set({ loading: true, error: null });
     try {
@@ -850,11 +864,11 @@ export const useAuthStore = create<AuthStore>((set, get) => ({
       });
       const removed = await syncKnownBusinesses(user.id, appSession.memberships);
       if (removed.length > 0 && appSession.memberships.length === 0) {
-        set({ session: appSession, removedBusinessesOnLogin: removed, loading: false, pendingPhoneVerification: null });
+        set({ session: appSession, justAuthenticated: true, removedBusinessesOnLogin: removed, loading: false, pendingPhoneVerification: null });
       } else if (removed.length > 0 && appSession.memberships.length > 0) {
-        set({ session: appSession, dismissedFromBusiness: { name: removed[0].name }, loading: false, pendingPhoneVerification: null });
+        set({ session: appSession, justAuthenticated: true, dismissedFromBusiness: { name: removed[0].name }, loading: false, pendingPhoneVerification: null });
       } else {
-        set({ session: appSession, loading: false, pendingPhoneVerification: null });
+        set({ session: appSession, justAuthenticated: true, loading: false, pendingPhoneVerification: null });
       }
     } catch (err) {
       set({ error: translateError(err, 'Vérification échouée'), loading: false });
@@ -897,11 +911,11 @@ export const useAuthStore = create<AuthStore>((set, get) => ({
       });
       const removed = await syncKnownBusinesses(session.user.id, appSession.memberships);
       if (removed.length > 0 && appSession.memberships.length === 0) {
-        set({ session: appSession, removedBusinessesOnLogin: removed, loading: false, pendingPhoneVerification: null });
+        set({ session: appSession, justAuthenticated: true, removedBusinessesOnLogin: removed, loading: false, pendingPhoneVerification: null });
       } else if (removed.length > 0 && appSession.memberships.length > 0) {
-        set({ session: appSession, dismissedFromBusiness: { name: removed[0].name }, loading: false, pendingPhoneVerification: null });
+        set({ session: appSession, justAuthenticated: true, dismissedFromBusiness: { name: removed[0].name }, loading: false, pendingPhoneVerification: null });
       } else {
-        set({ session: appSession, loading: false, pendingPhoneVerification: null });
+        set({ session: appSession, justAuthenticated: true, loading: false, pendingPhoneVerification: null });
       }
     } catch (err) {
       set({ error: translateError(err, 'Connexion échouée'), loading: false });
@@ -967,11 +981,11 @@ export const useAuthStore = create<AuthStore>((set, get) => ({
       });
       const removed = await syncKnownBusinesses(session.user.id, appSession.memberships);
       if (removed.length > 0 && appSession.memberships.length === 0) {
-        set({ session: appSession, removedBusinessesOnLogin: removed, loading: false });
+        set({ session: appSession, justAuthenticated: true, removedBusinessesOnLogin: removed, loading: false });
       } else if (removed.length > 0 && appSession.memberships.length > 0) {
-        set({ session: appSession, dismissedFromBusiness: { name: removed[0].name }, loading: false });
+        set({ session: appSession, justAuthenticated: true, dismissedFromBusiness: { name: removed[0].name }, loading: false });
       } else {
-        set({ session: appSession, loading: false });
+        set({ session: appSession, justAuthenticated: true, loading: false });
       }
     } catch (err) {
       const raw = err instanceof Error ? err.message : 'Récupération échouée';

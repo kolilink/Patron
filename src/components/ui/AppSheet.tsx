@@ -16,11 +16,9 @@ interface Props {
   title: string;
   body: string;
   action?: { label: string; onPress: () => void };
-  /** A second meaningful choice, distinct from "Fermer" (which always just dismisses). */
-  secondaryAction?: { label: string; onPress: () => void };
 }
 
-export function AppSheet({ visible, onClose, icon, title, body, action, secondaryAction }: Props) {
+export function AppSheet({ visible, onClose, icon, title, body, action }: Props) {
   const { palette } = useTheme();
   const styles = useMemo(() => makeStyles(palette), [palette]);
   const slideY          = useRef(new Animated.Value(400)).current;
@@ -62,14 +60,6 @@ export function AppSheet({ visible, onClose, icon, title, body, action, secondar
               fullWidth
               size="lg"
               style={styles.actionBtn}
-            />
-          )}
-          {secondaryAction && (
-            <Button
-              label={secondaryAction.label}
-              onPress={() => { secondaryAction.onPress(); onClose(); }}
-              variant="secondary"
-              fullWidth
             />
           )}
           <Button label="Fermer" variant="ghost" onPress={onClose} fullWidth />

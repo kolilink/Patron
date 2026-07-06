@@ -1,6 +1,7 @@
-import { useEffect, useMemo, useState } from 'react';
-import { KeyboardAvoidingView, Platform, ScrollView, StyleSheet, View } from 'react-native';
+import { useEffect, useMemo, useRef, useState } from 'react';
+import { Animated, KeyboardAvoidingView, Platform, ScrollView, StyleSheet, View } from 'react-native';
 import { router } from 'expo-router';
+import { Ionicons } from '@expo/vector-icons';
 import { Screen } from '@/src/components/ui/Screen';
 import { Button } from '@/src/components/ui/Button';
 import { PinInput } from '@/src/components/ui/PinInput';
@@ -10,23 +11,49 @@ import type { Palette } from '@/src/theme';
 import { useAuthStore, getLastPhone } from '@/stores/auth';
 import { getPinFailCount, MAX_PIN_ATTEMPTS } from '@/lib/pin';
 
+// Progressive disclosure: Face ID/Touch ID is tried silently first, showing
+// only a calm lock icon (matching AppLockOverlay's visual language) — the PIN
+// boxes only appear once biometrics fail, are unavailable, or the user asks
+// for them directly. Showing both at once reads as cluttered and redundant;
+// biometric success should feel instant with nothing else on screen.
+type Phase = 'checking' | 'pin' | 'locked-out';
+
 export default function VerrouilleScreen() {
   const { palette } = useTheme();
   const styles = useMemo(() => makeStyles(palette), [palette]);
   const unlockWithPin = useAuthStore(s => s.unlockWithPin);
   const unlockWithBiometric = useAuthStore(s => s.unlockWithBiometric);
 
+  const [phase, setPhase] = useState<Phase>('checking');
   const [lastPhone, setLastPhone] = useState<string | null>(null);
   const [error, setError] = useState<string | null>(null);
   const [attemptsLeft, setAttemptsLeft] = useState(MAX_PIN_ATTEMPTS);
-  const [locked, setLockedOut] = useState(false);
   const [resetSignal, setResetSignal] = useState(0);
   const [busy, setBusy] = useState(false);
+
+  const breathOpacity = useRef(new Animated.Value(0.5)).current;
+
+  useEffect(() => {
+    if (phase !== 'checking') return;
+    const anim = Animated.loop(
+      Animated.sequence([
+        Animated.timing(breathOpacity, { toValue: 1, duration: 900, useNativeDriver: true }),
+        Animated.timing(breathOpacity, { toValue: 0.4, duration: 900, useNativeDriver: true }),
+      ]),
+    );
+    anim.start();
+    return () => anim.stop();
+  }, [phase, breathOpacity]);
 
   useEffect(() => {
     getLastPhone().then(setLastPhone);
     getPinFailCount().then(count => setAttemptsLeft(Math.max(0, MAX_PIN_ATTEMPTS - count)));
-    void unlockWithBiometric();
+
+    unlockWithBiometric().then(ok => {
+      // On success the routing guard redirects automatically once `locked`
+      // flips false — nothing to do here. On failure/unavailable, reveal PIN.
+      if (!ok) setPhase('pin');
+    });
   }, []);
 
   async function handlePinComplete(pin: string) {
@@ -49,7 +76,7 @@ export default function VerrouilleScreen() {
     setAttemptsLeft(remaining);
     setResetSignal(s => s + 1);
     if (remaining <= 0) {
-      setLockedOut(true);
+      setPhase('locked-out');
     } else {
       setError(`Code incorrect. ${remaining} tentative${remaining > 1 ? 's' : ''} restante${remaining > 1 ? 's' : ''}.`);
     }
@@ -67,23 +94,36 @@ export default function VerrouilleScreen() {
           <View style={styles.content}>
             <View style={styles.header}>
               <Text variant="h2">Bonjour {lastPhone ? `· ${lastPhone}` : ''}</Text>
-              <Text variant="body" color="secondary" style={styles.sub}>
-                {attemptsLeft < MAX_PIN_ATTEMPTS
-                  ? `Entrez votre code pour continuer (${attemptsLeft} tentative${attemptsLeft > 1 ? 's' : ''} restante${attemptsLeft > 1 ? 's' : ''})`
-                  : 'Entrez votre code pour continuer'}
-              </Text>
+              {phase === 'pin' && (
+                <Text variant="body" color="secondary" style={styles.sub}>
+                  {attemptsLeft < MAX_PIN_ATTEMPTS
+                    ? `Entrez votre code pour continuer (${attemptsLeft} tentative${attemptsLeft > 1 ? 's' : ''} restante${attemptsLeft > 1 ? 's' : ''})`
+                    : 'Entrez votre code pour continuer'}
+                </Text>
+              )}
             </View>
 
             {error && <Text variant="bodySmall" color="warning" style={styles.error}>{error}</Text>}
 
-            {!locked ? (
+            {phase === 'checking' && (
+              <>
+                <Animated.View style={{ opacity: breathOpacity }}>
+                  <Ionicons name="lock-closed" size={34} color={palette.textSecondary} />
+                </Animated.View>
+                <Button label="Utiliser mon code" variant="ghost" onPress={() => setPhase('pin')} />
+              </>
+            )}
+
+            {phase === 'pin' && (
               <>
                 <View style={styles.pinWrap}>
                   <PinInput onComplete={handlePinComplete} disabled={busy} autoFocus resetSignal={resetSignal} />
                 </View>
                 <Button label="Changer de compte" variant="ghost" onPress={degradeToFullLogin} />
               </>
-            ) : (
+            )}
+
+            {phase === 'locked-out' && (
               <View style={styles.form}>
                 <Text variant="bodySmall" color="secondary" style={styles.sub}>
                   Trop de tentatives. Reconnectez-vous avec un nouveau code envoyé par WhatsApp.

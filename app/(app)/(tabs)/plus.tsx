@@ -12,7 +12,6 @@ import { useAuthStore } from '@/stores/auth';
 import { generateFallbackName } from '@/lib/id';
 import { type KnownBusiness, getKnownBusinesses, dismissRemovedBusiness } from '@/lib/knownBusinesses';
 import { hasPinSet, verifyPin } from '@/lib/pin';
-import { AppSheet } from '@/src/components/ui/AppSheet';
 import { PinConfirmSheet } from '@/src/components/ui/PinConfirmSheet';
 
 type IoniconName = React.ComponentProps<typeof Ionicons>['name'];
@@ -46,11 +45,9 @@ export default function PlusScreen() {
   const { palette, resolvedScheme } = useTheme();
   const styles = useMemo(() => makeStyles(palette), [palette]);
   const session = useAuthStore(s => s.session);
-  const logout = useAuthStore(s => s.logout);
   const lock = useAuthStore(s => s.lock);
   const [removedBusinesses, setRemovedBusinesses] = useState<KnownBusiness[]>([]);
   const [lockConfirmOpen, setLockConfirmOpen] = useState(false);
-  const [pinOfferOpen, setPinOfferOpen] = useState(false);
 
   useEffect(() => {
     if (!session?.user.id) return;
@@ -68,26 +65,20 @@ export default function PlusScreen() {
   const isVendeur = role === 'vendeur';
   const isInvestisseur = role === 'investisseur';
 
-  const confirmFullLogout = () => {
-    Alert.alert('Déconnexion', 'Voulez-vous vraiment vous déconnecter ?', [
-      { text: 'Annuler', style: 'cancel' },
-      {
-        text: 'Déconnecter', style: 'destructive',
-        onPress: async () => { try { await logout(); } catch {} },
-      },
-    ]);
-  };
-
-  // Existing users who authenticated before this feature shipped may stay
-  // mid-session for months and never naturally re-authenticate — the sign-out
-  // tap is the only reliable moment to reach them, so it's intercepted here
-  // rather than gating PIN setup on next login (see stores/auth.ts routing).
+  // "Se déconnecter" is PIN-gated rather than an immediate destructive sign-out:
+  // existing users who authenticated before this feature shipped may stay
+  // mid-session for months and never naturally re-authenticate, so this tap is
+  // the only reliable moment to get them onto a PIN. Confirming (or creating)
+  // the PIN locks the app instead of fully signing out — no WhatsApp OTP is
+  // needed to get back in. A true destructive sign-out (fresh OTP required) is
+  // still reachable via the recovery paths on the lock screen (forgotten PIN,
+  // "Changer de compte").
   const handleLogout = async () => {
-    if (!(await hasPinSet())) {
-      setPinOfferOpen(true);
-      return;
+    if (await hasPinSet()) {
+      setLockConfirmOpen(true);
+    } else {
+      router.push({ pathname: '/(auth)/creer-pin', params: { afterLock: '1' } });
     }
-    confirmFullLogout();
   };
 
   return (
@@ -215,18 +206,14 @@ export default function PlusScreen() {
         )}
 
         <View style={styles.section}>
-          <Button label="Verrouiller" variant="secondary" onPress={() => setLockConfirmOpen(true)} fullWidth />
           <Button label="Se déconnecter" variant="danger" onPress={handleLogout} fullWidth />
-          <Text variant="caption" color="secondary" style={styles.logoutCaption}>
-            Nécessite un nouveau code par WhatsApp à la prochaine connexion
-          </Text>
         </View>
       </ScrollView>
 
       <PinConfirmSheet
         visible={lockConfirmOpen}
-        title="Verrouiller l'application"
-        body="Confirmez votre code pour verrouiller."
+        title="Confirmez votre code"
+        body="Entrez votre code pour vous déconnecter."
         onCancel={() => setLockConfirmOpen(false)}
         onSubmit={async (pin) => {
           const ok = await verifyPin(pin);
@@ -236,19 +223,6 @@ export default function PlusScreen() {
           }
           return ok;
         }}
-      />
-
-      <AppSheet
-        visible={pinOfferOpen}
-        onClose={() => setPinOfferOpen(false)}
-        icon="lock-closed-outline"
-        title="Créez un code de sécurité"
-        body="Créez un code à 4 chiffres pour ne plus recevoir de code WhatsApp la prochaine fois."
-        action={{
-          label: 'Créer un code',
-          onPress: () => router.push({ pathname: '/(auth)/creer-pin', params: { afterLock: '1' } }),
-        }}
-        secondaryAction={{ label: 'Déconnexion sans code', onPress: confirmFullLogout }}
       />
     </Screen>
   );
@@ -271,6 +245,5 @@ function makeStyles(p: Palette) {
     menuIconWrap: { width: 28, alignItems: 'center' },
     switchCard: { gap: 2 },
     switchCardActive: { borderWidth: 1.5, borderColor: p.primary },
-    logoutCaption: { textAlign: 'center' },
   });
 }
