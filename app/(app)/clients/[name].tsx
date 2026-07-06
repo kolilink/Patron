@@ -461,7 +461,8 @@ export default function ClientLedgerScreen() {
     if (result.ok) {
       setShowPayModal(false);
       haptics.success();
-      setSuccessPayment({ amount });
+      const paidInFull = specificSaleId ? result.fullyPaid : result.fullySettled;
+      if (!paidInFull) setSuccessPayment({ amount });
       loadLedgerPayments();
     }
   }, [displayName, businessId, recordPayment, recordClientPayment]);
