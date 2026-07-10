@@ -588,6 +588,22 @@ export const useAuthStore = create<AuthStore>((set, get) => ({
       const joinedCount = session.memberships.filter(m => m.role !== 'administrateur').length;
       if (joinedCount >= 3) throw new Error('Vous avez atteint la limite de 3 commerces rejoints. Bientôt, vous pourrez en rejoindre davantage.');
 
+      // record_invite_attempt: logs this attempt for the 5/10min rate limit
+      // as its own top-level call, so it commits regardless of whether
+      // join_business() below succeeds or raises. A Postgres function can
+      // never make one of its own writes survive an exception it raises
+      // later in the same call — join_business() used to log the attempt
+      // internally, right before its validation checks, but any of those
+      // checks raising rolled the log write back along with everything
+      // else, so the rate limit never actually tripped against wrong/
+      // expired/already-claimed code guesses (fixed in migration_v124).
+      // Best-effort: a hiccup here shouldn't block the join attempt itself.
+      try {
+        await supabase.rpc('record_invite_attempt');
+      } catch {
+        // ignore — see comment above
+      }
+
       // join_business: SECURITY DEFINER — validates invite code, enforces rate
       // limiting (5/10 min), expiry, max_uses, and inserts membership atomically.
       // Direct memberships INSERT is no longer allowed (policy dropped in v43).

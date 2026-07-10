@@ -9,7 +9,12 @@
     "web": "expo start --web",
     "test": "jest",
     "test:watch": "jest --watch",
-    "check": "tsc --noEmit && jest",
+    "check:consistency": "node scripts/check-consistency.js",
+    "check": "tsc --noEmit && jest && node scripts/check-consistency.js",
+    "test:db:start": "supabase start",
+    "test:db:stop": "supabase stop",
+    "test:db:reset": "node scripts/test-db-setup.js",
+    "test:integration": "jest --config jest.integration.config.js",
     "build:android": "node -e \"const fs=require('fs'),f='app.json',j=JSON.parse(fs.readFileSync(f,'utf8')),v=j.expo.version.split('.').map(Number);v[2]++;j.expo.version=v.join('.');fs.writeFileSync(f,JSON.stringify(j,null,2)+'\\n');console.log('Version bumped to '+j.expo.version)\" && eas build --platform android --profile preview"
   },
   "dependencies": {
@@ -61,8 +66,10 @@
   },
   "devDependencies": {
     "@types/jest": "^29.5.14",
+    "@types/pg": "^8.20.0",
     "@types/react": "~19.1.0",
     "jest": "^29.7.0",
+    "pg": "^8.22.0",
     "ts-jest": "^29.4.11",
     "typescript": "~5.9.2"
   },

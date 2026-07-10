@@ -16,7 +16,7 @@ npx expo start
 npx expo start --ios
 npx expo start --android
 
-# Type-check (no test suite, no linter)
+# Type-check
 npx tsc --noEmit
 
 # OTA update (JS-only changes — no native rebuild needed)
@@ -27,9 +27,22 @@ eas build --platform ios --profile production
 eas build --platform android --profile production
 eas submit --platform ios --profile production
 eas submit --platform android --profile production
+
+# Full pre-merge gate: type-check + jest (mocked-Supabase unit tests) +
+# consistency checks (palette-only colors, <Screen> as every screen root —
+# see scripts/lib/consistency-checks.js). Fast, hermetic, no Docker needed.
+npm run check
+
+# Integration tests — run the REAL submit_sale/cancel_sale/join_business
+# Postgres functions (not a mocked supabase.rpc) against a local Supabase
+# instance. Requires Docker (Colima works on older macOS where Docker
+# Desktop's cask requires Sonoma+). One-time + per-run:
+npm run test:db:start     # supabase start — local Postgres+Auth+PostgREST
+npm run test:db:reset     # applies db/schema.sql + all db/migration_v*.sql in order
+npm run test:integration  # jest --config jest.integration.config.js
 ```
 
-No test suite. No linting config.
+Jest suite in `__tests__/` (offline queue, submit_sale, cart logic, role/session, error handling — no UI/component tests, all mock `supabase.rpc`). `__tests__/integration/` is separate: real RPC calls against a local Supabase instance — see "Integration tests" below. No linting config beyond the consistency-check script.
 
 ## UI components (`src/components/ui/`)
 
@@ -51,6 +64,10 @@ return <Screen edges={['top']}>...</Screen>;
 ```
 
 `Screen` applies `flex: 1`, `backgroundColor: palette.background`, and the correct safe area edges automatically. Using raw `<SafeAreaView>` as a screen root is a violation — it's easy to forget `edges` and content ends up behind the notch or home indicator. `SafeAreaView` is still allowed inside `<Modal>` components (for modal sheet inner wrappers).
+
+This rule (and the "never hardcode hex" rule under Theme below) is enforced by `scripts/lib/consistency-checks.js`, run via `npm run check` — an import-based check for `SafeAreaView` usage (not a same-line grep, so legitimate Modal-nested usages aren't flagged) and a hex-literal grep over `app/`, `src/`, `stores/`.
+
+`scripts/daily-rapport.js` (the GitHub Actions daily email, `.github/workflows/daily-rapport.yml`) used to run its own inline version of the SafeAreaView check: grep every `SafeAreaView` line, then drop lines containing the literal text `Modal`. Since `<Modal>` is virtually always several lines above `<SafeAreaView>`, not on the same line, that filter almost never matched — every legitimate Modal-nested `SafeAreaView` (imports, open tag, close tag) was being reported as a violation, ~64 false positives a day. It now imports the same `scripts/lib/consistency-checks.js` used by `npm run check`, so both surfaces agree and the report reflects real violations (0, currently) instead of noise.
 
 ## Architecture
 
@@ -303,6 +320,8 @@ Run Supabase migrations in order in the SQL Editor. Never skip versions.
 | `db/migration_v118.sql` | Fix: `get_reports_snapshot()` still raised `column so.seller_name does not exist` after v117 — the top-sellers subquery grouped by `sale_orders.seller_name`, but that column has never existed (`migration_v62.sql` already documented the same mistake in `submit_carnet_debt`). Seller display name has always been derived client-side (`stores/ventes.ts`): `memberships.display_name` override, then `profiles.name`, then a fallback. Fix: replicates that resolution in SQL via `LEFT JOIN memberships` / `profiles`, grouped by the real `seller_id` column. This was the second of two RPC bugs (after v117) that together made Rapports show no data since `get_reports_snapshot` was deployed in v110. |
 | `db/migration_v119.sql` | Fix: `get_reports_snapshot()`'s `activity`/`my_activity` daily series showed "Invalid…" day labels on the Rapports Semaine chart (and silently misplaced bars on Trimestre) for every role. `generate_series(date, date, '1 day'::interval)` returns `timestamp`, not `date`, so `gs.day::text` produced `"2026-06-25 00:00:00"` instead of `"2026-06-25"` — Hermes' `new Date(...)` (used in `app/(app)/rapports/index.tsx` for both the weekday label and the trimestre week-bucket offset) can't parse that non-ISO format. Fix: cast to `gs.day::date::text` before building the JSON payload. |
 | `db/migration_v120.sql` | Perf: `create_business_with_membership(p_id, p_name, p_type, p_currency, p_phone)` — SECURITY DEFINER RPC replacing `createBusiness()`'s old pattern of inserting into `businesses` then polling `memberships` up to 5x (600ms apart, ~3s worst case) waiting for the `on_business_created` trigger. The trigger already fires in the same transaction as the insert, so the poll loop was pure client-side over-caution; the RPC now inserts and reads back the membership + business in one round trip. Re-checks the "1 business per user" rule from the `migration_v29` RLS policy manually, since SECURITY DEFINER bypasses table RLS. |
+| `db/migration_v124.sql` | Security fix, found via `__tests__/integration/`: `join_business`'s rate limiter (5/10min) never actually triggered against a wrong/expired/already-claimed code guess. Its `INSERT INTO invite_attempts` ran before the validation checks specifically so failures would count toward the limit, but a Postgres function invoked by one top-level statement is atomic — an uncaught `RAISE` rolls back everything the call did, including that insert. Only successful joins were ever actually logged. Fix: attempt-logging moved to its own `record_invite_attempt()` RPC (no conditional `RAISE` inside it, so it always commits as its own top-level statement); `join_business()`'s validation logic is otherwise unchanged. Client (`stores/auth.ts`'s `joinBusiness`) now calls `record_invite_attempt()` immediately before `join_business()`. |
+| `db/migration_v125.sql` | Correctness fix, found via `__tests__/integration/`: `cancel_sale`'s stock-restore loop added the cancelled qty back onto the *parent* product's `stock_qty` for every line, variant or not — but `submit_sale` never touches a variant parent's `stock_qty` (documented invariant: "always 0 for variant parents"). Every variant-sale cancellation silently drifted the parent further away from 0. Fix: only restore `products.stock_qty` when the line has no `variant_id`; variant stock restoration is unchanged. |
 
 (Note: `migration_v58.sql` through `v75.sql`, `v77.sql` through `v98.sql`, `v100.sql` through `v102.sql`, `v105.sql` through `v108.sql`, and `v110.sql` exist in `db/` but are undocumented here and unrelated to this entry — out of scope. `migration_v111.sql` adds `run_display_checks()` / `refresh_reconciliation_run()`, patched by `v114.sql` above.)
 
@@ -329,6 +348,16 @@ Four roles: `administrateur`, `manager`, `vendeur`, `investisseur`.
 - Catalogue + Vendre tabs hidden for investisseur (`href: null` in tabs layout).
 - `fetchSales` passes `sellerId` filter for vendeurs so they only see their own sales.
 - `ventes/index.tsx` defaults to a 90-day window; "Voir tout l'historique" toggle re-fetches without the date filter.
+
+### Integration tests (`__tests__/integration/`)
+
+The Jest suite in `__tests__/` mocks `supabase.rpc` entirely — it verifies the client calls the RPC with the right params, not that the SQL function itself is correct. `__tests__/integration/` closes that gap: it runs `submit_sale` / `cancel_sale` / `join_business` for real, against a local Supabase stack (`supabase start`), asserting on actual stock/payment/membership rows.
+
+- **Local Postgres via Colima, not Docker Desktop** — this machine's macOS predates Sonoma, which Docker Desktop's cask requires. `brew install colima docker` gives a CLI-only Docker daemon that works fine for `supabase start`.
+- **`[analytics]` is disabled in `supabase/config.toml`** — the vector/logflare log-shipping container bind-mounts the Docker socket in a way Colima's VM doesn't support (`mkdir ...docker.sock: operation not supported`). Not needed for tests, only the Studio log viewer.
+- **`scripts/test-db-setup.js`** resets the `public` schema, re-grants the standard Supabase role privileges (`anon`/`authenticated`/`service_role` — lost when the schema is dropped and recreated, since `supabase start` doesn't redo cluster-init grants on an existing volume), then applies `db/schema.sql` followed by every `db/migration_v*.sql` **statement-by-statement** (via `scripts/lib/split-sql.js`, a dollar-quote-aware splitter) rather than one file per query. That granularity matters: Postgres treats a multi-statement simple-query message as a single implicit transaction, so if a file mixes an already-applied statement (schema.sql already has it — full-history replay from empty is something production itself never does) with a genuinely new one, running the file as one query rolls back the new statement too when the old one errors. This bit `migration_v90.sql` specifically — its new `message_type` column was reverted along with an unrelated already-applied policy statement further down the same file, which then made `migration_v91.sql` fail with "column message_type does not exist" one file later. Splitting per-statement fixed it.
+- **`__tests__/integration/helpers.ts`** creates real throwaway auth users via the service-role key (`admin.auth.admin.createUser`), signs them in, and calls RPCs through the same `@supabase/supabase-js` client shape the app itself uses — so `auth.uid()` and RLS behave exactly as they do in production, not simulated.
+- Run via `npm run test:db:start && npm run test:db:reset && npm run test:integration`. Deliberately excluded from `npm run check` (`jest.config.js`'s `testPathIgnorePatterns`) — it needs Docker running, so it stays a separate, opt-in gate (`jest.integration.config.js`) rather than blocking every fast local iteration.
 
 ### Email account recovery
 

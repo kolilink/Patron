@@ -23,4 +23,8 @@ module.exports = {
     }],
   },
   testMatch: ['**/__tests__/**/*.test.ts'],
+  // Integration tests hit a real local Supabase instance (npm run test:db:start)
+  // and are run separately via jest.integration.config.js, not as part of the
+  // default fast/hermetic `npm test` / `npm run check`.
+  testPathIgnorePatterns: ['/node_modules/', '<rootDir>/__tests__/integration/'],
 };

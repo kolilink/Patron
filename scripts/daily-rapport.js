@@ -6,6 +6,8 @@ const https = require('https');
 const fs   = require('fs');
 const path = require('path');
 
+const { findHexViolations, findScreenViolations } = require('./lib/consistency-checks');
+
 const RESEND_KEY = process.env.RESEND_API_KEY;
 const TO         = process.env.RECIPIENT_EMAIL || 'mdousebastiao@gmail.com';
 const ROOT       = process.cwd();
@@ -17,24 +19,12 @@ const tsOk    = tsc.status === 0;
 const tsLines = (tsc.stdout + tsc.stderr).trim().split('\n').filter(Boolean);
 
 // ─── 2. Hardcoded hex colours ──────────────────────────────────────────────────
-// Exclude theme/colors files — those are allowed to define hex.
-function grep(pattern, dirs, extraFlags = '') {
-  try {
-    return execSync(
-      `grep -rn ${extraFlags} '${pattern}' ${dirs.join(' ')}` +
-      ` --include="*.tsx" --include="*.ts"` +
-      ` --exclude-dir=node_modules` +
-      ` --exclude="colors.ts" --exclude="palette*.ts" --exclude="index.ts"`,
-      { cwd: ROOT, encoding: 'utf-8', stdio: 'pipe' }
-    ).trim().split('\n').filter(Boolean);
-  } catch { return []; }
-}
-const hexLines    = grep('#[0-9A-Fa-f]\\{3,8\\}', ['app', 'src', 'stores']);
+const hexLines = findHexViolations();
 
 // ─── 3. SafeAreaView used as screen root (Screen component violation) ──────────
-// Filter out lines inside Modal blocks and comments.
-const svLines = grep('SafeAreaView', ['app'])
-  .filter(l => !l.includes('Modal') && !l.includes('//') && !l.match(/^\s*\*/));
+// See scripts/lib/consistency-checks.js — import-based check, not a same-line
+// grep, so legitimate Modal-nested SafeAreaView usages aren't flagged.
+const svLines = findScreenViolations();
 
 // ─── 4. Migration count ────────────────────────────────────────────────────────
 const dbDir         = path.join(ROOT, 'db');
