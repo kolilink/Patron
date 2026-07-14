@@ -349,8 +349,8 @@ export default function AlphaScreen() {
         visible={showWhatsappConsent}
         onClose={() => setShowWhatsappConsent(false)}
         icon="logo-whatsapp"
-        title="Ne perdez pas le fil avec Alpha"
-        body="Si vous voulez continuer plus tard, on vous envoie un seul message WhatsApp pour vous le rappeler — pas de spam, juste ça."
+        title="On vous facilite ça ?"
+        body="La prochaine fois, un tap suffira : on vous envoie le lien de paiement par WhatsApp. Une seule fois."
         action={{
           label: 'Oui, prévenez-moi',
           onPress: () => { if (businessId) void recordWhatsappConsent(businessId, true); },
