@@ -16,6 +16,8 @@ import { Text } from '@/src/components/ui/Text';
 import { colors, useTheme, spacing, radius, BUSINESS_AVATAR_PALETTE } from '@/src/theme';
 import type { Palette } from '@/src/theme';
 import { useAuthStore } from '@/stores/auth';
+import { useSupportChatStore } from '@/stores/supportChat';
+import { isFounderPhone } from '@/src/utils/founder';
 import type { Role } from '@/src/types';
 
 const DRAWER_WIDTH = Dimensions.get('window').width * 0.78;
@@ -42,6 +44,8 @@ export function BusinessDrawer() {
   const closeBusinessDrawer = useAuthStore(s => s.closeBusinessDrawer);
   const selectBusiness = useAuthStore(s => s.selectBusiness);
   const insets = useSafeAreaInsets();
+  const isFounder = isFounderPhone(session?.user.phone);
+  const founderUnreadTotal = useSupportChatStore(s => s.founderUnreadTotal);
 
   const slideAnim = useRef(new Animated.Value(-DRAWER_WIDTH)).current;
   const sheetAnim = useRef(new Animated.Value(300)).current;
@@ -101,6 +105,16 @@ export function BusinessDrawer() {
     router.push('/(app)/onboarding/rejoindre');
   };
 
+  const handleSupportInbox = () => {
+    closeBusinessDrawer();
+    router.push('/(app)/support-inbox');
+  };
+
+  const handleSupport = () => {
+    closeBusinessDrawer();
+    router.push('/(app)/support');
+  };
+
   const handleCreate = () => {
     if (isAlreadyAdmin) {
       openSheet();
@@ -143,7 +157,6 @@ export function BusinessDrawer() {
 
           {/* Search bar */}
           <View style={styles.searchRow}>
-            <Ionicons name="search-outline" size={15} color={palette.textSecondary} />
             <TextInput
               value={search}
               onChangeText={setSearch}
@@ -201,6 +214,25 @@ export function BusinessDrawer() {
 
           {/* Footer */}
           <View style={styles.footer}>
+            {isFounder ? (
+              <Pressable onPress={handleSupportInbox} style={({ pressed }) => [styles.footerRow, pressed && { opacity: 0.6 }]}>
+                <View style={styles.footerIcon}>
+                  <Ionicons name="headset-outline" size={18} color={palette.primary} />
+                </View>
+                <Text style={[styles.footerLabel, { flex: 1 }]}>Service client</Text>
+                {founderUnreadTotal > 0 && <View style={styles.footerUnreadDot} />}
+              </Pressable>
+            ) : (
+              // Relocated from the Accueil header's headphone icon — same
+              // destination (the member's one ongoing thread with the
+              // founder), just moved into this lateral drawer.
+              <Pressable onPress={handleSupport} style={({ pressed }) => [styles.footerRow, pressed && { opacity: 0.6 }]}>
+                <View style={styles.footerIcon}>
+                  <Ionicons name="headset-outline" size={18} color={palette.primary} />
+                </View>
+                <Text style={[styles.footerLabel, { flex: 1 }]}>Support</Text>
+              </Pressable>
+            )}
             <Pressable onPress={handleJoin} style={({ pressed }) => [styles.footerRow, pressed && { opacity: 0.6 }]}>
               <View style={styles.footerIcon}>
                 <Ionicons name="key-outline" size={18} color={palette.primary} />
@@ -277,7 +309,6 @@ function makeStyles(p: Palette) {
     searchRow: {
       flexDirection: 'row',
       alignItems: 'center',
-      gap: spacing[2],
       marginHorizontal: spacing[4],
       marginVertical: spacing[3],
       paddingHorizontal: spacing[3],
@@ -362,6 +393,12 @@ function makeStyles(p: Palette) {
       fontSize: 14,
       fontWeight: '500',
       color: p.primary,
+    },
+    footerUnreadDot: {
+      width: 8,
+      height: 8,
+      borderRadius: radius.full,
+      backgroundColor: p.primary,
     },
     sheetBackdrop: {
       ...StyleSheet.absoluteFillObject,
