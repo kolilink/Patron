@@ -28,16 +28,15 @@ export function identifyUser(session: AppSession): void {
       ...(biz ? {
         business_id:         biz.id,
         business_currency:   biz.currency,
-        subscription_tier:   biz.subscription_tier,
         subscription_status: biz.subscription_status,
         ...(biz.type ? { business_type: biz.type } : {}),
       } : {}),
     });
     if (biz) {
       posthog.group('business', biz.id, {
-        name:               biz.name,
-        currency:           biz.currency,
-        subscription_tier:  biz.subscription_tier,
+        name:                 biz.name,
+        currency:             biz.currency,
+        subscription_status:  biz.subscription_status,
       });
     }
   } catch {

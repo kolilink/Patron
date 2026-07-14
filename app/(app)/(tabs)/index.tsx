@@ -1,5 +1,5 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
-import { Animated, Easing, Linking, Modal, Pressable, ScrollView, StyleSheet, TextInput, View } from 'react-native';
+import { Animated, Easing, KeyboardAvoidingView, Modal, Platform, Pressable, ScrollView, StyleSheet, TextInput, View } from 'react-native';
 import { Screen } from '@/src/components/ui/Screen';
 import { router, useFocusEffect } from 'expo-router';
 import { Ionicons } from '@expo/vector-icons';
@@ -12,6 +12,8 @@ import { useAuthStore } from '@/stores/auth';
 import { useProductStore } from '@/stores/products';
 import { useVentesStore } from '@/stores/ventes';
 import { useChatStore } from '@/stores/chat';
+import { useSupportChatStore } from '@/stores/supportChat';
+import { isFounderPhone } from '@/src/utils/founder';
 import { useRapportsStore } from '@/stores/rapports';
 import { useEquipeStore } from '@/stores/equipe';
 import { useInvestorStore } from '@/stores/investor';
@@ -24,8 +26,6 @@ import { SkeletonKpiGrid } from '@/src/components/ui/SkeletonPlaceholder';
 import { haptics } from '@/lib/haptics';
 import { toast } from '@/stores/toast';
 
-
-const SUPPORT_WA_URL = `https://wa.me/16094454809?text=${encodeURIComponent("Bonjour ! J'ai une question sur Patron 🙂")}`;
 
 interface KPIs {
   revenue_today: number;
@@ -113,6 +113,18 @@ export default function AccueilScreen() {
   const currency = business?.currency ?? 'GNF';
   const memberships = session?.memberships ?? [];
   const totalUnread = useChatStore(s => s.boutiqueUnread + s.marcheUnread);
+  const isFounder = isFounderPhone(session?.user.phone);
+  // Prefetches founder conversations purely so the lateral drawer's
+  // "Service client" unread dot (BusinessDrawer, driven by
+  // founderUnreadTotal) is fresh as soon as the founder opens Accueil, not
+  // only after they've visited the inbox once this session. The store fetch
+  // itself is scoped to businessId — a founder must never see another
+  // business's threads, even switching businesses via the drawer.
+  const loadBusinessConversations = useSupportChatStore(s => s.loadBusinessConversations);
+
+  useEffect(() => {
+    if (isFounder && businessId) void loadBusinessConversations(businessId);
+  }, [isFounder, businessId]);
 
   const { products, fetchProducts } = useProductStore();
   const { snapshot: rapportsSnapshot, fetchReportsSnapshot } = useRapportsStore();
@@ -127,6 +139,21 @@ export default function AccueilScreen() {
   // Withdrawal sheet
   const [showWithdrawSheet, setShowWithdrawSheet] = useState(false);
   const [withdrawAmountStr, setWithdrawAmountStr] = useState('');
+
+  // Alpha entry bar — the app's primary AI entry point (docked to the
+  // bottom of Accueil rather than a header icon, see CLAUDE.md). Submitting
+  // via the keyboard's own send/enter key launches it — no separate arrow
+  // button, matching a plain search-bar affordance.
+  const [alphaText, setAlphaText] = useState('');
+  const submitAlpha = () => {
+    const trimmed = alphaText.trim();
+    setAlphaText('');
+    if (trimmed) {
+      router.push({ pathname: '/(app)/alpha', params: { q: trimmed } });
+    } else {
+      router.push('/(app)/alpha');
+    }
+  };
 
   const welcomeBtnScale = useRef(new Animated.Value(1)).current;
   const welcomeBtnOpacity = useRef(new Animated.Value(1)).current;
@@ -228,8 +255,20 @@ export default function AccueilScreen() {
     const monthStart = new Date(today.getFullYear(), today.getMonth(), 1);
     const daysThisMonth = Math.max(1, Math.floor((today.getTime() - monthStart.getTime()) / 86_400_000));
     void fetchReportsSnapshot(businessId, daysThisMonth, role ?? 'administrateur', userId);
+    // loadKpis()'s offline fallback reads useVentesStore.getState().sales directly
+    // (to reflect today's sales even mid-outage) — but the dashboard never otherwise
+    // touches that store, only the Ventes history screen does. Without seeding it
+    // here first, a user who opens straight to Accueil and never visits Ventes this
+    // session sees revenue_today/credit_total silently reset to 0 the moment they
+    // go offline, even though a valid cached total exists. Gate loadKpis() behind
+    // this fetch (not just parallel) so the fallback never runs against an empty array.
+    const ventesReady = useVentesStore.getState().fetchSales(businessId, isVendeur ? userId : undefined);
     try {
-      await Promise.all([fetchProducts(businessId, userId, membershipId, role), loadKpis(), loadBestSellers()]);
+      await Promise.all([
+        fetchProducts(businessId, userId, membershipId, role),
+        ventesReady.then(() => loadKpis()),
+        loadBestSellers(),
+      ]);
       if (isInvestisseur && membershipId) {
         fetchMemberScope(membershipId).then(rows => setInvestorScope(rows)).catch(() => {});
         fetchBalance(businessId, userId);
@@ -241,7 +280,7 @@ export default function AccueilScreen() {
       setLoading(false);
       loadedForRef.current = businessId;
     }
-  }, [businessId, userId, isInvestisseur, membershipId, role]);
+  }, [businessId, userId, isInvestisseur, isVendeur, membershipId, role]);
 
   // Reload every time this tab gains focus (catches sales made in caisse)
   useFocusEffect(
@@ -377,6 +416,7 @@ export default function AccueilScreen() {
     : "Même niveau qu'hier";
 
   return (
+    <KeyboardAvoidingView style={{ flex: 1 }} behavior={Platform.OS === 'ios' ? 'padding' : undefined}>
     <Screen tab>
       {/* One-time carnet import sheet shown after business creation */}
       <Modal visible={showCarnetSheet} transparent animationType="slide" onRequestClose={() => setShowCarnetSheet(false)}>
@@ -414,7 +454,7 @@ export default function AccueilScreen() {
         </View>
       )}
 
-      <ScrollView contentContainerStyle={styles.content} showsVerticalScrollIndicator={false}>
+      <ScrollView style={{ flex: 1 }} contentContainerStyle={styles.content} showsVerticalScrollIndicator={false}>
 
         {/* Header */}
         <View style={styles.header}>
@@ -427,11 +467,28 @@ export default function AccueilScreen() {
             </Text>
           </View>
           <View style={{ flexDirection: 'row', alignItems: 'center', gap: spacing[2] }}>
+            {/* Support moved to the lateral drawer (BusinessDrawer footer) —
+                founder still lands on support-inbox, regular members on
+                support, same destinations as before, just relocated. This
+                header slot (formerly the headphone icon) now hosts a
+                persistent shortcut into the ongoing Alpha conversation —
+                the bottom pill bar is for starting a new question quickly;
+                this is for jumping back in to see history/continue one. */}
+            <Pressable
+              onPress={() => router.push('/(app)/alpha')}
+              style={({ pressed }) => [styles.chatBtn, { opacity: pressed ? 0.7 : 1 }]}
+            >
+              <View style={styles.chatIconBox}>
+                <Text style={{ color: palette.textSecondary, fontWeight: '800', fontSize: 20, lineHeight: 24 }}>A</Text>
+              </View>
+            </Pressable>
             <Pressable
               onPress={() => router.push('/(app)/discussions')}
               style={({ pressed }) => [styles.chatBtn, { opacity: pressed ? 0.7 : 1 }]}
             >
-              <Ionicons name="chatbubbles-outline" size={24} color={palette.textSecondary} />
+              <View style={styles.chatIconBox}>
+                <Ionicons name="chatbubbles-outline" size={24} color={palette.textSecondary} />
+              </View>
               {totalUnread > 0 && (
                 <View style={styles.chatBadge}>
                   <Text style={styles.chatBadgeText}>{totalUnread > 99 ? '99+' : String(totalUnread)}</Text>
@@ -682,6 +739,25 @@ export default function AccueilScreen() {
         )}
       </ScrollView>
 
+      {/* ── Alpha entry bar — primary AI entry point. Google-style: a fully
+          rounded pill floating with margin on every side, detached from the
+          tab bar rather than a flush full-width strip. No separate send
+          button — the keyboard's own "send"/enter key launches it. ── */}
+      <View style={styles.alphaBarWrap}>
+        <View style={[styles.alphaBar, { backgroundColor: palette.surface, shadowColor: palette.shadow }]}>
+          <TextInput
+            style={[styles.alphaInput, { color: palette.textPrimary }]}
+            value={alphaText}
+            onChangeText={setAlphaText}
+            placeholder="Parler avec Alpha…"
+            placeholderTextColor={palette.textSecondary}
+            onSubmitEditing={submitAlpha}
+            returnKeyType="send"
+            blurOnSubmit={false}
+          />
+        </View>
+      </View>
+
       {/* ── Withdrawal sheet ── */}
       <Modal visible={showWithdrawSheet} transparent animationType="slide" onRequestClose={() => setShowWithdrawSheet(false)}>
         <Pressable style={styles.sheetBackdrop} onPress={() => setShowWithdrawSheet(false)}>
@@ -736,15 +812,8 @@ export default function AccueilScreen() {
         </Pressable>
       </Modal>
 
-      <Pressable
-        style={styles.whatsappCorner}
-        onPress={() => Linking.openURL(SUPPORT_WA_URL)}
-        hitSlop={12}
-      >
-        <Ionicons name="logo-whatsapp" size={13} color={palette.textSecondary} />
-        <Text variant="caption" color="secondary">Support</Text>
-      </Pressable>
     </Screen>
+    </KeyboardAvoidingView>
   );
 }
 
@@ -754,6 +823,7 @@ function makeStyles(p: Palette) {
     content: { padding: spacing[5], gap: spacing[4], paddingBottom: spacing[10] },
     header: { paddingBottom: spacing[2], flexDirection: 'row', alignItems: 'center', justifyContent: 'space-between' },
     chatBtn: { padding: spacing[1] },
+    chatIconBox: { width: 24, height: 24, alignItems: 'center', justifyContent: 'center' },
     chatBadge: {
       position: 'absolute', top: -2, right: -2,
       minWidth: 16, height: 16, borderRadius: radius.full,
@@ -762,6 +832,22 @@ function makeStyles(p: Palette) {
       paddingHorizontal: 3,
     },
     chatBadgeText: { fontSize: 9, fontWeight: '700' as const, color: p.textInverse, lineHeight: 12 },
+
+    alphaBarWrap: {
+      paddingHorizontal: spacing[4],
+      paddingTop: spacing[2],
+      paddingBottom: spacing[3],
+    },
+    alphaBar: {
+      flexDirection: 'row', alignItems: 'center', gap: spacing[3],
+      paddingHorizontal: spacing[5], paddingVertical: spacing[3],
+      borderRadius: radius.full,
+      shadowOffset: { width: 0, height: 2 },
+      shadowOpacity: 0.12,
+      shadowRadius: 8,
+      elevation: 3,
+    },
+    alphaInput: { flex: 1, fontSize: 15, paddingVertical: 4 },
 
     heroCard: {},
     investorHeroRow: { flexDirection: 'row' as const, alignItems: 'center' as const, gap: spacing[4] },
@@ -851,14 +937,6 @@ function makeStyles(p: Palette) {
       flexDirection: 'row', alignItems: 'center', gap: spacing[3],
       borderWidth: 1, borderRadius: radius.md,
       paddingHorizontal: spacing[4], paddingVertical: spacing[3],
-    },
-    whatsappCorner: {
-      position: 'absolute',
-      bottom: 12,
-      right: spacing[3],
-      flexDirection: 'row',
-      alignItems: 'center',
-      gap: spacing[1],
     },
   });
 }

@@ -58,3 +58,20 @@ export function formatCountdown(totalSeconds: number): string {
   const s = totalSeconds % 60;
   return `${m}:${s.toString().padStart(2, '0')}`;
 }
+
+// Plain-text share targets (SMS, WhatsApp, Share sheet previews) have no rich-text
+// API — swapping each character for its Mathematical Sans-Serif Bold Unicode
+// codepoint is the standard trick to render "bold" text there. Only A-Z/0-9 are
+// mapped since referral codes are uppercase hex (see generate_business_referral_code
+// in migration_v130.sql); any other character passes through unchanged.
+const BOLD_UPPER_BASE = 0x1D5D4; // Mathematical Sans-Serif Bold Capital A
+const BOLD_DIGIT_BASE = 0x1D7EC; // Mathematical Sans-Serif Bold Digit Zero
+
+export function toUnicodeBold(text: string): string {
+  return text.replace(/[A-Z0-9]/g, char => {
+    if (char >= '0' && char <= '9') {
+      return String.fromCodePoint(BOLD_DIGIT_BASE + (char.charCodeAt(0) - 48));
+    }
+    return String.fromCodePoint(BOLD_UPPER_BASE + (char.charCodeAt(0) - 65));
+  });
+}

@@ -16,6 +16,8 @@ export type SubscriptionTier = 'gratuit' | 'starter' | 'business' | 'pro';
 
 export type SubscriptionStatus = 'trialing' | 'active' | 'cancelled' | 'expired';
 
+export type PaymentProvider = 'stripe' | 'apple' | 'google' | 'promotional';
+
 export type ExpenseStatus = 'en_attente' | 'approuve' | 'rejete';
 
 // ─── Base ─────────────────────────────────────────────────────────────────────
@@ -57,6 +59,11 @@ export interface Business {
   trial_ends_at: string | null;
   stripe_customer_id: string | null;
   subscription_expires_at: string | null;
+  payment_provider: PaymentProvider | null;
+  revenuecat_customer_id: string | null;
+  bonus_access_until: string | null;
+  referred_by_business_id: string | null;
+  referral_code: string | null;
   created_at: string;
   updated_at: string;
   created_by: string;
@@ -69,7 +76,6 @@ export interface Membership {
   user_id: string;
   business_id: string;
   role: Role;
-  pin_hash: string | null;
   joined_at: string;
   milestone_reached: boolean;
   user?: User;
@@ -301,10 +307,96 @@ export interface ChatMessage {
   reply_to_content?: string | null;
   reply_to_sender_name?: string | null;
   // Voice messages (v90)
-  message_type?: 'text' | 'voice';
+  message_type?: 'text' | 'voice' | 'image';
   voice_url?: string | null;
   voice_duration?: number | null;       // seconds
   voice_waveform?: number[] | null;     // amplitude samples 0.0–1.0
+  // Image messages (v132)
+  image_url?: string | null;
+  image_width?: number | null;
+  image_height?: number | null;
+}
+
+// ─── Support chat (merchant ↔ founder) ─────────────────────────────────────────
+
+export type SupportConversationStatus = 'open' | 'closed';
+export type SupportSenderRole = 'merchant' | 'founder';
+
+export interface SupportConversation {
+  id: string;
+  business_id: string;
+  merchant_user_id: string | null;
+  merchant_name: string | null;
+  status: SupportConversationStatus;
+  last_message_at: string;
+  last_message_preview: string | null;
+  founder_last_read_at: string | null;
+  merchant_last_read_at: string | null;
+  rating: number | null;
+  rated_at: string | null;
+  created_at: string;
+  updated_at: string;
+  business_name?: string; // joined in for the founder inbox list only
+}
+
+export interface SupportMessage {
+  id: string;
+  conversation_id: string;
+  business_id: string;
+  sender_id: string;
+  sender_role: SupportSenderRole;
+  sender_name: string;
+  content: string;
+  used_ai_draft: boolean;
+  created_at: string;
+  // Image messages (v132)
+  message_type?: 'text' | 'image';
+  image_url?: string | null;
+  image_width?: number | null;
+  image_height?: number | null;
+}
+
+export interface SupportAiDraft {
+  id: string;
+  conversation_id: string;
+  based_on_message_id: string | null;
+  draft_content: string | null;
+  status: 'pending' | 'ready' | 'failed';
+  error_note: string | null;
+  model: string | null;
+  created_at: string;
+  updated_at: string;
+}
+
+// ─── Alpha (AI business advisor) ────────────────────────────────────────────
+
+export interface AlphaConversation {
+  id: string;
+  business_id: string;
+  user_id: string;
+  last_message_at: string;
+  created_at: string;
+  updated_at: string;
+}
+
+export interface AlphaMessage {
+  id: string;
+  conversation_id: string;
+  role: 'user' | 'assistant';
+  content: string;
+  status: 'ready' | 'failed';
+  error_note: string | null;
+  model: string | null;
+  created_at: string;
+}
+
+export interface AlphaQuotaStatus {
+  has_ai_access: boolean;
+  limit: number;
+  remaining: number;
+  next_reset_at: string | null;
+  in_welcome_burst: boolean;
+  burst_messages_remaining: number;
 }
 
 // ─── Forum (Le Marché) ────────────────────────────────────────────────────────
