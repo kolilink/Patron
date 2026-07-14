@@ -279,12 +279,16 @@ export default function AlphaScreen() {
           </View>
         ) : (
           <>
-            {quota && !quota.in_welcome_burst && !quota.has_ai_access && (
+            {quota && !quota.in_welcome_burst && (
               <View style={styles.quotaRow}>
                 <Text variant="caption" color="secondary">
-                  {quota.remaining > 0
-                    ? `${quota.remaining} question${quota.remaining > 1 ? 's' : ''} gratuite${quota.remaining > 1 ? 's' : ''} restante${quota.remaining > 1 ? 's' : ''}`
-                    : `Prochaine question gratuite dans ${formatCountdown(quota.next_reset_at)}`}
+                  {quota.has_ai_access
+                    ? quota.remaining > 0
+                      ? `${quota.remaining} question${quota.remaining > 1 ? 's' : ''} restante${quota.remaining > 1 ? 's' : ''} aujourd'hui`
+                      : `Prochaine question dans ${formatCountdown(quota.next_reset_at)}`
+                    : quota.remaining > 0
+                      ? `${quota.remaining} question${quota.remaining > 1 ? 's' : ''} gratuite${quota.remaining > 1 ? 's' : ''} restante${quota.remaining > 1 ? 's' : ''}`
+                      : `Prochaine question gratuite dans ${formatCountdown(quota.next_reset_at)}`}
                 </Text>
               </View>
             )}
