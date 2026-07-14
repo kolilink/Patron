@@ -45,9 +45,9 @@ const FALLBACK_MONTHLY_PRICE = '2,99$';
 // break than a concrete, generous-sounding number up front (Hormozi:
 // specificity sells better than vague hype, and never oversell what you
 // can't back). Mirrors send_alpha_message/get_alpha_quota_status's paid-tier
-// v_limit (db/migration_v135.sql) — bump this alongside that SQL constant if
+// v_limit (db/migration_v146.sql) — bump this alongside that SQL constant if
 // it ever changes.
-const PAID_DAILY_LIMIT = 20;
+const PAID_DAILY_LIMIT = 100;
 
 // Delay before the breathing CTA (below) starts pulsing — overridden down
 // from an initial reading-time-based estimate (~18s, based on ~73 words of

@@ -24,7 +24,7 @@ import {
 // ============================================================
 
 const PRICE_GNF = 24000;
-const PAID_DAILY_LIMIT = 20; // mirrors src/components/PaywallScreen.tsx
+const PAID_DAILY_LIMIT = 100; // mirrors src/components/PaywallScreen.tsx
 
 const corsHeaders = {
   'Access-Control-Allow-Origin': '*',
