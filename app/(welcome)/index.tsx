@@ -59,7 +59,7 @@ export default function WelcomeScreen() {
           />
           {!session && (
             <Button
-              label="J'ai déjà un compte"
+              label="Se connecter"
               variant="ghost"
               onPress={() => router.push('/(welcome)/connexion')}
               fullWidth

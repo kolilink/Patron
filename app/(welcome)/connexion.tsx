@@ -203,7 +203,7 @@ export default function ConnexionScreen() {
             </View>
           ) : (
             <View style={[styles.form, styles.formCentered]}>
-              <OtpInput key={otpKey} onComplete={handleOtpComplete} disabled={loading} autoFocus />
+              <OtpInput key={otpKey} onComplete={handleOtpComplete} disabled={loading} autoFocus whatsappAutofill />
               <Button
                 label={resendCooldown.isDone ? 'Renvoyer le code' : `Renvoyer le code (${formatCountdown(resendCooldown.secondsLeft)})`}
                 variant="ghost"

@@ -8,10 +8,10 @@ import {
 import { router } from 'expo-router';
 import { Screen } from '@/src/components/ui/Screen';
 import { Button } from '@/src/components/ui/Button';
-import { Input } from '@/src/components/ui/Input';
 import { OtpInput } from '@/src/components/ui/OtpInput';
 import { Text } from '@/src/components/ui/Text';
 import { PhoneInput } from '@/src/components/ui/PhoneInput';
+import { JoinCodeStep } from '@/src/components/JoinCodeStep';
 import { useTheme, radius, spacing } from '@/src/theme';
 import type { Palette } from '@/src/theme';
 import { useAuthStore } from '@/stores/auth';
@@ -22,24 +22,18 @@ export default function RejoindreScreen() {
   const { palette } = useTheme();
   const styles = useMemo(() => makeStyles(palette), [palette]);
   const { createPhoneVerification, verifyPhoneCode, upgradePhone, joinBusiness, loading, error, clearError } = useAuthStore();
-  const memberships = useAuthStore(s => s.session?.memberships) ?? [];
-  const joinedCount = memberships.filter(m => m.role !== 'administrateur').length;
-  const joinLimitReached = joinedCount >= 3;
   const hasPhone = Boolean(useAuthStore.getState().session?.user.phone);
   const [step, setStep] = useState<Step>(hasPhone ? 'code' : 'phone');
   const [phone, setPhone] = useState('');
   const [phoneComplete, setPhoneComplete] = useState(false);
   const [resetKey, setResetKey] = useState(0);
   const [otpKey, setOtpKey]     = useState(0);
-  const [inviteCode, setInviteCode] = useState('');
 
   const verificationIdRef = useRef('');
   const phoneRef = useRef('');
 
-  const handleJoin = async () => {
+  const handleJoin = async (code: string) => {
     clearError();
-    const code = inviteCode.trim();
-    if (!code) return;
     await joinBusiness(code);
     if (!useAuthStore.getState().error) {
       router.replace('/(app)/(tabs)/');
@@ -113,22 +107,24 @@ export default function RejoindreScreen() {
             <Text variant="body" color="secondary" style={styles.sub}>{SUBS[step]}</Text>
           </View>
 
-          {error === 'PHONE_EXISTS' ? (
-            <View style={styles.errorBox}>
-              <Text variant="bodySmall" color="danger" style={{ marginBottom: spacing[3] }}>
-                Ce numéro est déjà associé à un compte. Connectez-vous d'abord.
-              </Text>
-              <Button
-                label="Se connecter"
-                onPress={() => { clearError(); router.replace('/(welcome)/connexion'); }}
-                fullWidth
-              />
-            </View>
-          ) : error ? (
-            <View style={styles.errorBox}>
-              <Text variant="bodySmall" color="danger">{error}</Text>
-            </View>
-          ) : null}
+          {step !== 'code' && (
+            error === 'PHONE_EXISTS' ? (
+              <View style={styles.errorBox}>
+                <Text variant="bodySmall" color="danger" style={{ marginBottom: spacing[3] }}>
+                  Ce numéro est déjà associé à un compte. Connectez-vous d'abord.
+                </Text>
+                <Button
+                  label="Se connecter"
+                  onPress={() => { clearError(); router.replace('/(welcome)/connexion'); }}
+                  fullWidth
+                />
+              </View>
+            ) : error ? (
+              <View style={styles.errorBox}>
+                <Text variant="bodySmall" color="danger">{error}</Text>
+              </View>
+            ) : null
+          )}
 
           {step === 'phone' && (
             <View style={styles.form}>
@@ -144,7 +140,7 @@ export default function RejoindreScreen() {
 
           {step === 'otp' && (
             <View style={[styles.form, styles.formCentered]}>
-              <OtpInput key={otpKey} onComplete={handleOtpComplete} disabled={loading} autoFocus />
+              <OtpInput key={otpKey} onComplete={handleOtpComplete} disabled={loading} autoFocus whatsappAutofill />
               <Button label="Renvoyer le code" variant="ghost" loading={loading} onPress={handleResendRejoindre} />
               <Button
                 label="Changer de numéro"
@@ -161,31 +157,7 @@ export default function RejoindreScreen() {
           )}
 
           {step === 'code' && (
-            joinLimitReached ? (
-              <View style={styles.lockedBox}>
-                <Text variant="body" style={styles.lockedText}>
-                  Vous avez rejoint 3 commerces.
-                </Text>
-                <Text variant="bodySmall" color="secondary" style={{ textAlign: 'center' }}>
-                  Bientôt, vous pourrez en rejoindre davantage depuis Patron.
-                </Text>
-              </View>
-            ) : (
-              <View style={styles.form}>
-                <Input
-                  label="Code d'invitation"
-                  value={inviteCode}
-                  onChangeText={v => setInviteCode(v.toUpperCase())}
-                  placeholder="MANGO-47"
-                  autoCapitalize="characters"
-                  autoCorrect={false}
-                  returnKeyType="done"
-                  onSubmitEditing={handleJoin}
-                  autoFocus
-                />
-                <Button label="Rejoindre" loading={loading} onPress={handleJoin} fullWidth size="lg" />
-              </View>
-            )
+            <JoinCodeStep loading={loading} error={error} onSubmit={handleJoin} autoFocus />
           )}
         </View>
       </KeyboardAvoidingView>
@@ -204,15 +176,5 @@ function makeStyles(p: Palette) {
     form: { gap: spacing[4] },
     formCentered: { alignItems: 'center' },
     errorBox: { backgroundColor: p.dangerLight, borderRadius: radius.md, padding: spacing[3] },
-    lockedBox: {
-      backgroundColor: p.surface,
-      borderRadius: radius.md,
-      borderWidth: 1,
-      borderColor: p.border,
-      padding: spacing[5],
-      gap: spacing[2],
-      alignItems: 'center',
-    },
-    lockedText: { textAlign: 'center', fontWeight: '600' },
   });
 }

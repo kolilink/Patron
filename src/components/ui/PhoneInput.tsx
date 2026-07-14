@@ -2,6 +2,7 @@ import { useEffect, useMemo, useRef, useState } from 'react';
 import {
   Animated,
   FlatList,
+  InteractionManager,
   Modal,
   Platform,
   Pressable,
@@ -106,10 +107,15 @@ export function PhoneInput({ onChange, label, autoFocus, resetKey, strict = true
   }, [localNumber, country]);
 
   useEffect(() => {
-    if (autoFocus) {
-      const t = setTimeout(() => inputRef.current?.focus(), 200);
-      return () => clearTimeout(t);
-    }
+    if (!autoFocus) return;
+    // A flat setTimeout here used to fire mid-screen-transition (React
+    // Navigation's slide animation runs ~350ms on iOS) — iOS then queues the
+    // keyboard's own raise animation until that transition's animation block
+    // finishes, so the keyboard visibly lagged behind the screen settling
+    // instead of feeling like one motion. InteractionManager ties the focus
+    // call to the actual end of the transition instead of a guessed delay.
+    const task = InteractionManager.runAfterInteractions(() => inputRef.current?.focus());
+    return () => task.cancel();
   }, [autoFocus]);
 
   const handleChangeText = (t: string) => {

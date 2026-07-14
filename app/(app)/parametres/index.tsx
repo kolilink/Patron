@@ -1,5 +1,6 @@
 import { useEffect, useMemo, useRef, useState } from 'react';
-import { Alert, Animated, KeyboardAvoidingView, Linking, Platform, Pressable, ScrollView, StyleSheet, TextInput, View } from 'react-native';
+import { Alert, Animated, KeyboardAvoidingView, Linking, Platform, Pressable, ScrollView, Share, StyleSheet, TextInput, View } from 'react-native';
+import * as Clipboard from 'expo-clipboard';
 import { Screen } from '@/src/components/ui/Screen';
 import { router } from 'expo-router';
 import { Ionicons } from '@expo/vector-icons';
@@ -15,6 +16,7 @@ import { generateFallbackName } from '@/lib/id';
 import { supabase } from '@/lib/supabase';
 import { haptics } from '@/lib/haptics';
 import { toast } from '@/stores/toast';
+import { toUnicodeBold } from '@/src/utils/format';
 import type { Business } from '@/src/types';
 
 // Must match the list in creer.tsx — all currencies we support
@@ -34,7 +36,7 @@ const CURRENCY_NAMES: Record<string, string> = {
 export default function ParametresScreen() {
   const { palette, colorScheme, setColorScheme } = useTheme();
   const styles = useMemo(() => makeStyles(palette), [palette]);
-  const { session, sendEmailOtp, linkRecoveryEmail, emailOtpLoading, error: authError, clearError } = useAuthStore();
+  const { session, sendEmailOtp, linkRecoveryEmail, emailOtpLoading, error: authError, clearError, lock } = useAuthStore();
   const business = session?.activeBusiness;
   const userId   = session?.user.id ?? '';
   const role     = session?.activeMembership?.role;
@@ -345,6 +347,40 @@ export default function ParametresScreen() {
             </Card>
           )}
 
+          {/* Inviter un ami — admin only, referral_code lives on businesses (migration_v130) */}
+          {isAdmin && business?.referral_code && (
+            <Card style={styles.section}>
+              <Text variant="label" color="secondary">Inviter un ami</Text>
+              <Text variant="bodySmall" color="secondary">
+                Inviter un ami et profiter chacun de 30 jours gratuits
+              </Text>
+              <Pressable
+                onPress={async () => {
+                  await Clipboard.setStringAsync(business.referral_code!);
+                  haptics.success();
+                  toast.success('Code copié');
+                }}
+                style={styles.referralCodeBox}
+              >
+                <Text variant="h3" style={{ color: palette.primary, letterSpacing: 2 }}>
+                  {business.referral_code}
+                </Text>
+                <Text variant="caption" color="secondary">Toucher pour copier</Text>
+              </Pressable>
+              <Pressable
+                onPress={() => {
+                  Share.share({
+                    message: `Essaie Patron pour gérer ton commerce plus facilement 🙂\n\nUtilise mon code ${toUnicodeBold(business.referral_code!)} en t'inscrivant pour qu'on gagne chacun 1 mois gratuit`,
+                  }).catch(() => {});
+                }}
+                style={styles.linkRow}
+              >
+                <Text variant="body" style={{ color: palette.primary }}>Partager mon code</Text>
+                <Text variant="caption" color="secondary">›</Text>
+              </Pressable>
+            </Card>
+          )}
+
           {/* Mon profil — all roles */}
           <Card style={styles.section}>
             <Text variant="label" color="secondary">Mon profil</Text>
@@ -462,8 +498,20 @@ export default function ParametresScreen() {
           {/* Sécurité */}
           <Card style={styles.section}>
             <Text variant="label" color="secondary">Sécurité</Text>
-            <Pressable onPress={() => router.push('/(auth)/creer-pin')} style={styles.linkRow}>
-              <Text variant="body">Modifier mon code PIN</Text>
+            <Pressable
+              onPress={() => {
+                Alert.alert(
+                  'Verrouiller Patron ?',
+                  'Vous pourrez revenir avec Face ID / Touch ID, sans nouveau code WhatsApp.',
+                  [
+                    { text: 'Annuler', style: 'cancel' },
+                    { text: 'Verrouiller', onPress: () => { void lock(); } },
+                  ],
+                );
+              }}
+              style={styles.linkRow}
+            >
+              <Text variant="body">Verrouiller</Text>
               <Text variant="caption" color="secondary">›</Text>
             </Pressable>
           </Card>
@@ -584,6 +632,12 @@ function makeStyles(p: Palette) {
     },
 
     linkRow: { flexDirection: 'row', alignItems: 'center', justifyContent: 'space-between', paddingVertical: spacing[2] },
+
+    referralCodeBox: {
+      alignItems: 'center', gap: spacing[1],
+      paddingVertical: spacing[4],
+      backgroundColor: p.primaryLight, borderRadius: radius.md,
+    },
 
     emailRow: { flexDirection: 'row', alignItems: 'center', justifyContent: 'space-between', paddingVertical: spacing[2] },
     emailBox: { gap: spacing[3], paddingTop: spacing[1] },

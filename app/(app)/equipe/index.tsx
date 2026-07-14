@@ -3,7 +3,7 @@ import { Alert, Animated, Easing, FlatList, Linking, Modal, Pressable, ScrollVie
 import { Ionicons } from '@expo/vector-icons';
 import { SafeAreaView, useSafeAreaInsets } from 'react-native-safe-area-context';
 import { Screen } from '@/src/components/ui/Screen';
-import { router } from 'expo-router';
+import { router, useFocusEffect } from 'expo-router';
 import { AppSheet } from '@/src/components/ui/AppSheet';
 import { SkeletonList } from '@/src/components/ui/SkeletonPlaceholder';
 import { OfflineNotice } from '@/src/components/ui/OfflineNotice';
@@ -108,7 +108,6 @@ function ProductScopePicker({ visible, onClose, products, selectedIds, onConfirm
 
         {/* Search */}
         <View style={styles.pickerSearch}>
-          <Ionicons name="search-outline" size={16} color={palette.textSecondary} />
           <TextInput
             style={[styles.pickerSearchInput, { color: palette.textPrimary }]}
             placeholder="Rechercher un produit…"
@@ -927,12 +926,14 @@ export default function EquipeScreen() {
 
   const hasManager = membres.some(m => m.role === 'manager');
 
-  useEffect(() => {
-    if (!businessId) return;
-    fetchMembres(businessId);
-    fetchCodes(businessId);
-    if (products.length === 0) fetchProducts(businessId, userId);
-  }, [businessId]);
+  useFocusEffect(
+    useCallback(() => {
+      if (!businessId) return;
+      fetchMembres(businessId);
+      fetchCodes(businessId);
+      if (products.length === 0) fetchProducts(businessId, userId);
+    }, [businessId]),
+  );
 
   if (role && role !== 'administrateur') return null;
 

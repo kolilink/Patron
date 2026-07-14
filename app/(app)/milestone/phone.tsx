@@ -105,7 +105,7 @@ export default function MilestonePhoneScreen() {
             </View>
           ) : (
             <View style={[styles.form, styles.formCentered]}>
-              <OtpInput onComplete={handleOtpComplete} disabled={loading} />
+              <OtpInput onComplete={handleOtpComplete} disabled={loading} whatsappAutofill />
               <Button
                 label="Changer de numéro"
                 variant="ghost"

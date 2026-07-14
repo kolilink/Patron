@@ -26,7 +26,8 @@
         "NSFaceIDUsageDescription": "Utilisé pour déverrouiller votre session en toute sécurité.",
         "NSMicrophoneUsageDescription": "Utilisé pour envoyer des messages vocaux à votre équipe.",
         "ITSAppUsesNonExemptEncryption": false,
-        "UIBackgroundModes": ["remote-notification"]
+        "UIBackgroundModes": ["remote-notification"],
+        "LSApplicationQueriesSchemes": ["googlegmail", "message"]
       },
       "privacyManifests": {
         "NSPrivacyAccessedAPITypes": [
