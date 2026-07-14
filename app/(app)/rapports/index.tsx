@@ -1,7 +1,7 @@
-import { useEffect, useMemo, useRef, useState } from 'react';
+import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { Animated, Easing, Pressable, ScrollView, StyleSheet, View } from 'react-native';
 import { Screen } from '@/src/components/ui/Screen';
-import { router } from 'expo-router';
+import { router, useFocusEffect } from 'expo-router';
 import { Card } from '@/src/components/ui/Card';
 import { SkeletonKpiGrid } from '@/src/components/ui/SkeletonPlaceholder';
 import { OfflineNotice } from '@/src/components/ui/OfflineNotice';
@@ -126,13 +126,15 @@ export default function RapportsScreen() {
 
   const [period, setPeriod] = useState<Period>('mois');
 
-  useEffect(() => {
-    if (!businessId || !role) return;
-    fetchReportsSnapshot(businessId, PERIOD_DAYS[period], role, userId);
-    if (role !== 'investisseur' && role !== 'vendeur') {
-      fetchStockVelocity(businessId);
-    }
-  }, [businessId, role, userId, period]);
+  useFocusEffect(
+    useCallback(() => {
+      if (!businessId || !role) return;
+      fetchReportsSnapshot(businessId, PERIOD_DAYS[period], role, userId);
+      if (role !== 'investisseur' && role !== 'vendeur') {
+        fetchStockVelocity(businessId);
+      }
+    }, [businessId, role, userId, period]),
+  );
 
   // ── Snapshot values (display units, already ÷100 by the store) ────────────
   const revenue            = snapshot?.revenue            ?? 0;

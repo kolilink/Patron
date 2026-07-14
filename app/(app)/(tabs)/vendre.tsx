@@ -25,7 +25,6 @@ import { Card } from '@/src/components/ui/Card';
 import { Input } from '@/src/components/ui/Input';
 import { Text } from '@/src/components/ui/Text';
 import { PhoneInput } from '@/src/components/ui/PhoneInput';
-import { SaleSuccessOverlay } from '@/src/components/ui/SaleSuccessOverlay';
 import { SaleReceiptView, type ReceiptData, type ReceiptItem } from '@/src/components/ui/SaleReceiptView';
 import { DatePickerField } from '@/src/components/ui/DatePickerField';
 import { useTheme, radius, spacing, CLIENT_AVATAR_PALETTE } from '@/src/theme';
@@ -203,7 +202,10 @@ function PaymentModal({
   const [step, setStep] = useState<PayStep>(initialStep);
   const [payMethod, setPayMethod] = useState<'especes' | 'orange' | 'mtn' | 'digital'>('especes');
   const [amountInput, setAmountInput] = useState('');
-  const [disambig, setDisambig] = useState<Disambig>(null);
+  // Defaults to 'credit' rather than undecided — a short payment in this
+  // market is overwhelmingly "they'll pay the rest later," not a discount.
+  // The seller still sees both options and can switch to 'rabais' in one tap.
+  const [disambig, setDisambig] = useState<Disambig>('credit');
   const [creditDiscountInput, setCreditDiscountInput] = useState('');
   const [creditUpfrontInput, setCreditUpfrontInput] = useState('');
   const [creditPayMethod, setCreditPayMethod] = useState<'especes' | 'orange' | 'mtn' | 'digital'>('especes');
@@ -231,7 +233,7 @@ function PaymentModal({
       setStep(initialStep);
       setPayMethod('especes');
       setAmountInput(formatAmountInput(String(Math.round(total))));
-      setDisambig(null);
+      setDisambig('credit');
       setCreditDiscountInput('');
       setCreditUpfrontInput('');
       setCreditPayMethod('especes');
@@ -341,7 +343,7 @@ function PaymentModal({
 
   const handleAmountChange = (val: string) => {
     setAmountInput(formatAmountInput(val));
-    setDisambig(null);
+    setDisambig('credit');
   };
 
   const requiresClient = disambig === 'credit';
@@ -635,7 +637,6 @@ function PaymentModal({
                 {/* Search bar — hidden while new client form is open */}
                 {!showNewClientForm && (
                   <View style={styles.clientSearchRow}>
-                    <Ionicons name="search-outline" size={15} color={palette.textSecondary} />
                     <TextInput
                       ref={clientSearchRef}
                       value={clientSearch}
@@ -1081,11 +1082,12 @@ export default function VendreScreen() {
   const [search, setSearch] = useState('');
   const [showPayment, setShowPayment] = useState(false);
   const [payStep, setPayStep] = useState<PayStep>('pay');
-  const [offlineMsg, setOfflineMsg] = useState('');
   const [showConfirmSheet, setShowConfirmSheet] = useState(false);
+  // Whether the sale just confirmed was queued offline rather than synced —
+  // same confirm+share sheet either way, just a small "en attente" badge.
+  const [confirmQueued, setConfirmQueued] = useState(false);
   const [variantPickerProduct, setVariantPickerProduct] = useState<Product | null>(null);
   const [lastReceipt, setLastReceipt] = useState<ReceiptData | null>(null);
-  const currencyConfirmedRef = useRef(false);
   const receiptViewRef = useRef<View>(null);
   const pendingReceiptRef = useRef<ReceiptData | null>(null);
   const cartScrollRef = useRef<ScrollView>(null);
@@ -1286,29 +1288,6 @@ export default function VendreScreen() {
       const total = cartTotal;
       const isCredit = payment === null;
 
-      // Before the very first sale, confirm the currency lock
-      if (!currencyConfirmedRef.current) {
-        const { count } = await supabase
-          .from('sale_orders')
-          .select('id', { count: 'exact', head: true })
-          .eq('business_id', businessId);
-
-        if ((count ?? 1) === 0) {
-          const confirmed = await new Promise<boolean>(resolve =>
-            Alert.alert(
-              `Confirmer votre monnaie :)`,
-              `Ceci sera votre monnaie officielle — ${currency} :)`,
-              [
-                { text: 'Annuler', style: 'cancel', onPress: () => resolve(false) },
-                { text: `Continuer en ${currency}`, onPress: () => resolve(true) },
-              ],
-            ),
-          );
-          if (!confirmed) return;
-        }
-        currencyConfirmedRef.current = true;
-      }
-
       // When merchant sells above catalog price, use their typed amount as the actual sale total
       const effectiveTotal = payment && payment.amount > total + 0.5 ? payment.amount : total;
       // Scale item unit prices so they sum to the effective total — avoids a mismatch on the receipt
@@ -1338,13 +1317,9 @@ export default function VendreScreen() {
         setShowPayment(false);
         setSearch('');
         const queued = useSalesStore.getState().lastSubmitQueued;
-        if (!queued) {
-          fetchProducts(businessId, userId, membershipId, role);
-          setShowConfirmSheet(true);
-        } else {
-          setOfflineMsg('Vente enregistrée hors ligne ⏳');
-          setTimeout(() => setOfflineMsg(''), 4000);
-        }
+        if (!queued) fetchProducts(businessId, userId, membershipId, role);
+        setConfirmQueued(queued);
+        setShowConfirmSheet(true);
       } else {
         // Sale failed — show a blocking alert so the merchant knows the sale was NOT saved
         const errMsg = useSalesStore.getState().error ?? 'Une erreur est survenue. La vente n\'a pas été enregistrée.';
@@ -1761,6 +1736,11 @@ export default function VendreScreen() {
               <Text variant="h3" style={{ textAlign: 'center' }}>
                 {confirmIsCredit ? 'Crédit enregistré' : 'Vente enregistrée'}
               </Text>
+              {confirmQueued && (
+                <Text variant="caption" color="secondary" style={{ textAlign: 'center' }}>
+                  En attente de synchronisation ⏳
+                </Text>
+              )}
               {lastReceipt && (
                 <Text variant="h4" style={{ color: palette.primary, textAlign: 'center' }}>
                   {formatAmount(confirmNet, lastReceipt.currency)}
@@ -1796,9 +1776,6 @@ export default function VendreScreen() {
           </View>
         </View>
       </Modal>
-
-      {/* Offline-only fallback overlay */}
-      <SaleSuccessOverlay visible={!!offlineMsg} message={offlineMsg} />
     </Screen>
   );
 }
@@ -2004,7 +1981,7 @@ function makeStyles(p: Palette) {
       borderWidth: 1, borderColor: `${p.primary}30`,
     },
     clientSearchRow: {
-      flexDirection: 'row', alignItems: 'center', gap: spacing[2],
+      flexDirection: 'row', alignItems: 'center',
       paddingHorizontal: spacing[3], paddingVertical: spacing[2],
       borderWidth: 1, borderColor: p.border, borderRadius: radius.md,
       backgroundColor: p.surface, marginBottom: spacing[1],

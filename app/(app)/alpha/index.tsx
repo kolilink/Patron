@@ -82,15 +82,6 @@ export default function AlphaScreen() {
     return () => task.cancel();
   }, []));
 
-  // Pre-filled from the home-screen "Demandez Alpha…" bar — auto-sends once
-  // so the merchant doesn't have to retype what they already wrote.
-  useEffect(() => {
-    if (autoSentRef.current) return;
-    if (!businessId || !params.q) return;
-    autoSentRef.current = true;
-    void sendMessage({ businessId, content: params.q });
-  }, [businessId, params.q]);
-
   const reversedMessages = useMemo(
     () => messages.slice().reverse().map(m => ({ ...m, sender_id: m.role })),
     [messages],
@@ -127,6 +118,37 @@ export default function AlphaScreen() {
     setWaitBlocked(false);
     await sendMessage({ businessId, content: trimmed });
   };
+
+  // Pre-filled from the home-screen "Demandez Alpha…" bar — auto-sends once
+  // so the merchant doesn't have to retype what they already wrote. Routed
+  // through handleSend (not a direct sendMessage call) so it's subject to
+  // the same free/paid quota check a manual send gets — this used to call
+  // sendMessage() directly, bypassing handleSend's exhaustion check
+  // entirely, so an already-exhausted free user landing here via the pill
+  // hit the raw server rejection instead of the upgrade popup / wait card.
+  //
+  // fetchQuota runs fire-and-forget inside load() (stores/alpha.ts), so
+  // `quota` is still null on the very first render here — wait for it
+  // before deciding, otherwise freeQuotaExhausted always reads false.
+  // Bounded by a timeout so a failed quota fetch (fetchQuota silently
+  // no-ops on error — see stores/alpha.ts) can't strand the pre-filled
+  // question forever.
+  useEffect(() => {
+    if (autoSentRef.current) return;
+    if (!businessId || !params.q) return;
+
+    if (quota === null && !offline) {
+      const timer = setTimeout(() => {
+        if (autoSentRef.current) return;
+        autoSentRef.current = true;
+        void handleSend(params.q);
+      }, 4000);
+      return () => clearTimeout(timer);
+    }
+
+    autoSentRef.current = true;
+    void handleSend(params.q);
+  }, [businessId, params.q, quota, offline]);
 
   const handlePurchased = async () => {
     const q = pendingQuestion;
