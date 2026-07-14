@@ -152,8 +152,10 @@ const PAGE_HTML = `<!doctype html>
   .cta-btn:disabled { opacity: 0.6; }
   .pay-row { display: flex; align-items: center; gap: 6px; }
 
-  .msg { font-size: 13px; border-radius: 10px; padding: 10px 12px; margin-top: 12px; }
-  .msg.warn { color: var(--warning); background: var(--warning-light); }
+  .msg { font-size: 13px; margin-top: 8px; }
+  .msg.warn { color: var(--warning); }
+  .phone-input-tight { margin-bottom: 6px; }
+  .msg.hint { margin: 0 0 16px; }
 
   .footer-links { display: flex; justify-content: center; padding-top: 24px; }
   .footer-links a { font-size: 11px; color: var(--text-secondary); text-decoration: none; }
@@ -188,6 +190,8 @@ const PAGE_HTML = `<!doctype html>
           </div>
         </div>
         <input id="phone" class="phone-input" type="tel" inputmode="tel" placeholder="Numéro utilisé sur Patron" autocomplete="tel" />
+        <input id="orange-phone" class="phone-input phone-input-tight" type="tel" inputmode="tel" placeholder="Numéro Orange Money" autocomplete="tel" />
+        <div class="msg warn hint">Entrez le numéro Orange Money lié à votre compte</div>
         <button id="pay-btn" class="cta-btn">
           <span class="pay-row">
             <span>Payer via</span>
@@ -232,6 +236,13 @@ const PAGE_HTML = `<!doctype html>
 <script>
   const params = new URLSearchParams(location.search);
   const ref = params.get('ref');
+  // Personalized-link mode: ?biz=<per-business token> (see
+  // migration_v142.sql) identifies the business by itself, so the
+  // "Numéro utilisé sur Patron" lookup field is unnecessary — only
+  // sent via a future WhatsApp reminder, one link per business. Absent
+  // this param (the generic patron.kolilink.com/abonnement link
+  // anyone can share/bookmark), both fields stay as the fallback.
+  const bizToken = params.get('biz');
 
   function show(id) {
     ['form-view', 'wait-view', 'done-view'].forEach((v) => {
@@ -274,22 +285,56 @@ const PAGE_HTML = `<!doctype html>
     poll();
   }
 
+  // Convenience prefill, not a hard link between the two fields: the
+  // common case is the same person paying with their own Orange number,
+  // so typing it twice would be pure friction. Only fills while the
+  // Orange field is still untouched/empty, so overriding it for "pay
+  // with someone else's Orange number" (a family member's, an
+  // employee's) always works — see CLAUDE.md for why these are two
+  // separate fields at all: the Patron-lookup number and the Djomi
+  // payerNumber never had to be the same number, and forcing them to be
+  // silently broke that second case entirely.
+  const phoneEl = document.getElementById('phone');
+  const orangePhoneEl = document.getElementById('orange-phone');
+
+  if (bizToken) {
+    phoneEl.style.display = 'none';
+  } else {
+    phoneEl.addEventListener('blur', () => {
+      if (!orangePhoneEl.value.trim()) {
+        orangePhoneEl.value = phoneEl.value.trim();
+      }
+    });
+  }
+
   const btn = document.getElementById('pay-btn');
   const errEl = document.getElementById('error');
   btn.addEventListener('click', async () => {
-    const phone = document.getElementById('phone').value.trim();
+    const orangePhone = orangePhoneEl.value.trim();
     errEl.classList.add('hidden');
-    if (!phone) {
-      errEl.textContent = 'Entrez votre numéro de téléphone.';
+    if (!orangePhone) {
+      errEl.textContent = 'Entrez le numéro Orange Money qui va payer.';
       errEl.classList.remove('hidden');
       return;
+    }
+    const payload = { payerPhone: orangePhone };
+    if (bizToken) {
+      payload.bizToken = bizToken;
+    } else {
+      const phone = phoneEl.value.trim();
+      if (!phone) {
+        errEl.textContent = 'Entrez votre numéro de téléphone.';
+        errEl.classList.remove('hidden');
+        return;
+      }
+      payload.phone = phone;
     }
     btn.disabled = true;
     try {
       const resp = await fetch(location.pathname, {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ phone }),
+        body: JSON.stringify(payload),
       });
       const data = await resp.json();
       if (!resp.ok || !data.payment_url) {
@@ -381,8 +426,18 @@ Deno.serve(async (req) => {
       throw new Error('Configuration Djomi incomplète.');
     }
 
-    const { phone, returnOrigin } = await req.json();
-    if (!phone) {
+    // `phone` (manual entry) or `bizToken` (from a personalized
+    // ?biz=<token> link — migration_v142.sql) identifies which Patron
+    // business is subscribing; `payerPhone` is the actual Orange Money
+    // number Djomi will charge. These are deliberately separate from
+    // the business-identifying value, not the same field reused twice
+    // — a Patron account's login number doesn't have to be an Orange
+    // number at all, and even when it is, the merchant may want to pay
+    // with a different Orange line (a family member's, an employee's).
+    // Conflating them into one field made that second, common case
+    // impossible.
+    const { phone, bizToken, payerPhone, returnOrigin } = await req.json();
+    if (!payerPhone || (!phone && !bizToken)) {
       return new Response(JSON.stringify({ error: 'Numéro manquant.' }), {
         status: 400, headers: { ...corsHeaders, 'Content-Type': 'application/json' },
       });
@@ -390,15 +445,18 @@ Deno.serve(async (req) => {
 
     const supabase = djomiServiceClient();
 
-    // Resolves to the business this phone administers — see
-    // resolve_business_for_djomi_checkout in migration_v140.sql.
-    // NULL covers both "no match" and "ambiguous match" on purpose,
-    // so this page never has to explain which case occurred.
-    const { data: businessId, error: rpcError } = await supabase
-      .rpc('resolve_business_for_djomi_checkout', { p_phone: phone });
+    // Resolves to the business this phone administers, or the business
+    // this personalized-link token belongs to — see
+    // resolve_business_for_djomi_checkout / resolve_business_by_djomi_
+    // checkout_token in migration_v140.sql / migration_v142.sql. NULL
+    // covers "no match" (and, for the phone path, "ambiguous match")
+    // on purpose, so this page never has to explain which case occurred.
+    const { data: businessId, error: rpcError } = bizToken
+      ? await supabase.rpc('resolve_business_by_djomi_checkout_token', { p_token: bizToken })
+      : await supabase.rpc('resolve_business_for_djomi_checkout', { p_phone: phone });
 
     if (rpcError) {
-      console.error('resolve_business_for_djomi_checkout error:', rpcError);
+      console.error('business resolution error:', rpcError);
       throw new Error('server_error');
     }
     if (!businessId) {
@@ -442,7 +500,7 @@ Deno.serve(async (req) => {
         description: 'Abonnement Patron — Alpha Pro (1 mois)',
         returnUrl,
         cancelUrl: returnUrl,
-        payerNumber: formatPayerNumber(phone),
+        payerNumber: formatPayerNumber(payerPhone),
       }),
     });
     const paymentData = await paymentResp.json();
