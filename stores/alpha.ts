@@ -116,29 +116,40 @@ export const useAlphaStore = create<AlphaStore>((set, get) => ({
       }));
       void get().fetchQuota(businessId);
 
-      // Awaited, not fire-and-forget — the user is watching this conversation
-      // live, unlike generate-support-draft which is invisible until the
-      // founder manually opens the inbox.
-      try {
-        const { data: invokeData } = await supabase.functions.invoke('alpha-chat', {
-          body: { conversation_id: realMsg.conversation_id, business_id: businessId },
-        });
-        const replyMsg = (invokeData as { message?: AlphaMessage } | null)?.message;
-        if (replyMsg) get().appendMessage(replyMsg);
-        set({ sending: false });
-      } catch (invokeErr) {
-        // The user's own message already succeeded via the RPC above — only
-        // the reply failed to generate. Never roll back the user's message here.
-        set({
-          sending: false,
-          error: isNetworkError(invokeErr)
-            ? 'Pas de connexion — réessayez.'
-            : translateError(invokeErr, "Alpha n'a pas pu répondre"),
-        });
-      }
-      // The user's own message round-tripped successfully even if the AI
-      // reply above failed — that's a "retry the reply", not "retype the
-      // question", so this still resolves true.
+      // Detached from the returned promise on purpose (bug fix — this used
+      // to be awaited before returning, which meant handleSend's
+      // `if (ok) setText('')` in app/(app)/alpha/index.tsx didn't fire until
+      // Alpha's reply ALSO finished, leaving the composer showing the
+      // already-sent text for the entire "Alpha réfléchit…" duration.
+      // Detaching lets the composer clear the moment the user's own message
+      // is confirmed, which is the only thing that actually needs to have
+      // happened for that. Still fully tracked, not truly fire-and-forget —
+      // this IIFE awaits the invoke itself and updates the same shared
+      // `messages`/`sending`/`error` state the screen already subscribes to
+      // reactively, so the user still watches the reply arrive live; only
+      // the caller's `await sendMessage(...)` no longer blocks on it.
+      (async () => {
+        try {
+          const { data: invokeData } = await supabase.functions.invoke('alpha-chat', {
+            body: { conversation_id: realMsg.conversation_id, business_id: businessId },
+          });
+          const replyMsg = (invokeData as { message?: AlphaMessage } | null)?.message;
+          if (replyMsg) get().appendMessage(replyMsg);
+          set({ sending: false });
+        } catch (invokeErr) {
+          // The user's own message already succeeded via the RPC above — only
+          // the reply failed to generate. Never roll back the user's message here.
+          set({
+            sending: false,
+            error: isNetworkError(invokeErr)
+              ? 'Pas de connexion — réessayez.'
+              : translateError(invokeErr, "Alpha n'a pas pu répondre"),
+          });
+        }
+      })();
+
+      // Resolves as soon as the user's OWN message is confirmed — Alpha's
+      // reply continues in the background above regardless of this return.
       return true;
     } catch (err) {
       // Alpha has no offline queue (unlike support chat's sendMessage, which
