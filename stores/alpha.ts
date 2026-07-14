@@ -26,7 +26,11 @@ interface AlphaStore {
   offline: boolean;
 
   load: (businessId: string) => Promise<void>;
-  sendMessage: (params: { businessId: string; content: string }) => Promise<void>;
+  // Resolves false on failure (network or otherwise) so the caller can
+  // decide whether to restore the composer text — Alpha has no offline
+  // queue (unlike support chat's sendMessage), so a failed send must never
+  // silently swallow what the merchant typed.
+  sendMessage: (params: { businessId: string; content: string }) => Promise<boolean>;
   appendMessage: (msg: AlphaMessage) => void;
   fetchQuota: (businessId: string) => Promise<void>;
   reset: () => void;
@@ -75,7 +79,7 @@ export const useAlphaStore = create<AlphaStore>((set, get) => ({
 
   sendMessage: async ({ businessId, content }) => {
     const trimmed = content.trim();
-    if (!trimmed) return;
+    if (!trimmed) return false;
     set({ sending: true, error: null });
 
     const localId = `optimistic-${Date.now()}`;
@@ -101,6 +105,7 @@ export const useAlphaStore = create<AlphaStore>((set, get) => ({
       const realMsg = data as AlphaMessage;
       set(state => ({
         messages: dedupeAppend(state.messages.filter(m => m.id !== localId), realMsg),
+        offline: false,
       }));
       void get().fetchQuota(businessId);
 
@@ -124,7 +129,18 @@ export const useAlphaStore = create<AlphaStore>((set, get) => ({
             : translateError(invokeErr, "Alpha n'a pas pu répondre"),
         });
       }
+      // The user's own message round-tripped successfully even if the AI
+      // reply above failed — that's a "retry the reply", not "retype the
+      // question", so this still resolves true.
+      return true;
     } catch (err) {
+      // Alpha has no offline queue (unlike support chat's sendMessage, which
+      // falls back to a KV queue on a network error) — a network failure
+      // here is a real, immediate failure. Flagged via `offline` (not just
+      // `error`) so the composer disables itself instead of inviting a
+      // second doomed attempt, and given its own clear message rather than
+      // falling through to translateError's generic fallback.
+      const netErr = isNetworkError(err);
       // Fallback is the raw message itself (not a fixed generic string) — a
       // custom SECURITY DEFINER RAISE EXCEPTION (e.g. the quota message from
       // send_alpha_message) is already French and should pass through
@@ -135,8 +151,12 @@ export const useAlphaStore = create<AlphaStore>((set, get) => ({
       set(state => ({
         messages: state.messages.filter(m => m.id !== localId),
         sending: false,
-        error: translateError(err, raw ?? "Erreur d'envoi"),
+        offline: netErr ? true : state.offline,
+        error: netErr
+          ? 'Pas de connexion — Alpha nécessite une connexion internet.'
+          : translateError(err, raw ?? "Erreur d'envoi"),
       }));
+      return false;
     }
   },
 

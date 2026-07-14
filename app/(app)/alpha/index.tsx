@@ -114,9 +114,13 @@ export default function AlphaScreen() {
       return;
     }
 
-    setText('');
     setWaitBlocked(false);
-    await sendMessage({ businessId, content: trimmed });
+    // Only clear the composer once the send actually succeeds — Alpha has
+    // no offline queue, so clearing eagerly (as the pre-send-success code
+    // used to) meant a network failure silently erased what the merchant
+    // typed, forcing a retype instead of a simple retry.
+    const ok = await sendMessage({ businessId, content: trimmed });
+    if (ok && content === undefined) setText('');
   };
 
   // Pre-filled from the home-screen "Demandez Alpha…" bar — auto-sends once
@@ -176,7 +180,9 @@ export default function AlphaScreen() {
       <KeyboardAvoidingView style={{ flex: 1 }} behavior={Platform.OS === 'ios' ? 'padding' : 'height'}>
         {offline && (
           <View style={{ paddingHorizontal: spacing[4], paddingTop: spacing[1] }}>
-            <Text variant="caption" color="secondary">Pas de connexion</Text>
+            <Text variant="caption" color="secondary">
+              Pas de connexion — Alpha nécessite une connexion internet
+            </Text>
           </View>
         )}
 
@@ -266,10 +272,10 @@ export default function AlphaScreen() {
             <View style={styles.inputRow}>
               <TextInput
                 ref={inputRef}
-                style={styles.input}
+                style={[styles.input, offline && { opacity: 0.5 }]}
                 value={text}
                 onChangeText={setText}
-                placeholder="Parler avec Alpha…"
+                placeholder={offline ? 'Alpha nécessite une connexion internet…' : 'Parler avec Alpha…'}
                 placeholderTextColor={palette.textSecondary}
                 multiline
                 maxLength={500}
@@ -277,12 +283,13 @@ export default function AlphaScreen() {
                 returnKeyType="send"
                 blurOnSubmit={false}
                 autoFocus
+                editable={!offline}
               />
               {text.trim().length > 0 && (
                 <Pressable
                   onPress={() => handleSend()}
-                  disabled={sending}
-                  style={({ pressed }) => [styles.sendBtn, pressed && { opacity: 0.6 }]}
+                  disabled={sending || offline}
+                  style={({ pressed }) => [styles.sendBtn, (pressed || offline) && { opacity: 0.6 }]}
                 >
                   <Ionicons name="arrow-forward" size={20} color={palette.textInverse} />
                 </Pressable>
