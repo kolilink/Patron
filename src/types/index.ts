@@ -16,6 +16,8 @@ export type SubscriptionTier = 'gratuit' | 'starter' | 'business' | 'pro';
 
 export type SubscriptionStatus = 'trialing' | 'active' | 'cancelled' | 'expired';
 
+export type PaymentProvider = 'stripe' | 'apple' | 'google' | 'promotional';
+
 export type ExpenseStatus = 'en_attente' | 'approuve' | 'rejete';
 
 // ─── Base ─────────────────────────────────────────────────────────────────────
@@ -57,6 +59,11 @@ export interface Business {
   trial_ends_at: string | null;
   stripe_customer_id: string | null;
   subscription_expires_at: string | null;
+  payment_provider: PaymentProvider | null;
+  revenuecat_customer_id: string | null;
+  bonus_access_until: string | null;
+  referred_by_business_id: string | null;
+  referral_code: string | null;
   created_at: string;
   updated_at: string;
   created_by: string;
@@ -69,7 +76,6 @@ export interface Membership {
   user_id: string;
   business_id: string;
   role: Role;
-  pin_hash: string | null;
   joined_at: string;
   milestone_reached: boolean;
   user?: User;
@@ -171,6 +177,7 @@ export interface SaleOrder extends Base {
   due_date?: string | null;
   total_amount: number;
   discount_amount: number;
+  cancelled_by_id?: string | null;
   lines?: SOLine[];
   payments?: Payment[];
 }
@@ -184,6 +191,7 @@ export interface SOLine {
   is_bulk: boolean;
   variant_id?: string | null;
   variant_name?: string | null;
+  product_name?: string | null;
   product?: Product;
 }
 
@@ -230,6 +238,9 @@ export interface Expense {
   created_at: string;
   updated_at: string;
   creator_name?: string;
+  product_id?: string | null;
+  product_name?: string | null;
+  purchase_order_id?: string | null;
 }
 
 // ─── Change Proposal ──────────────────────────────────────────────────────────
@@ -295,6 +306,97 @@ export interface ChatMessage {
   reply_to_id?: string | null;
   reply_to_content?: string | null;
   reply_to_sender_name?: string | null;
+  // Voice messages (v90)
+  message_type?: 'text' | 'voice' | 'image';
+  voice_url?: string | null;
+  voice_duration?: number | null;       // seconds
+  voice_waveform?: number[] | null;     // amplitude samples 0.0–1.0
+  // Image messages (v132)
+  image_url?: string | null;
+  image_width?: number | null;
+  image_height?: number | null;
+}
+
+// ─── Support chat (merchant ↔ founder) ─────────────────────────────────────────
+
+export type SupportConversationStatus = 'open' | 'closed';
+export type SupportSenderRole = 'merchant' | 'founder';
+
+export interface SupportConversation {
+  id: string;
+  business_id: string;
+  merchant_user_id: string | null;
+  merchant_name: string | null;
+  status: SupportConversationStatus;
+  last_message_at: string;
+  last_message_preview: string | null;
+  founder_last_read_at: string | null;
+  merchant_last_read_at: string | null;
+  rating: number | null;
+  rated_at: string | null;
+  created_at: string;
+  updated_at: string;
+  business_name?: string; // joined in for the founder inbox list only
+}
+
+export interface SupportMessage {
+  id: string;
+  conversation_id: string;
+  business_id: string;
+  sender_id: string;
+  sender_role: SupportSenderRole;
+  sender_name: string;
+  content: string;
+  used_ai_draft: boolean;
+  created_at: string;
+  // Image messages (v132)
+  message_type?: 'text' | 'image';
+  image_url?: string | null;
+  image_width?: number | null;
+  image_height?: number | null;
+}
+
+export interface SupportAiDraft {
+  id: string;
+  conversation_id: string;
+  based_on_message_id: string | null;
+  draft_content: string | null;
+  status: 'pending' | 'ready' | 'failed';
+  error_note: string | null;
+  model: string | null;
+  created_at: string;
+  updated_at: string;
+}
+
+// ─── Alpha (AI business advisor) ────────────────────────────────────────────
+
+export interface AlphaConversation {
+  id: string;
+  business_id: string;
+  user_id: string;
+  last_message_at: string;
+  created_at: string;
+  updated_at: string;
+}
+
+export interface AlphaMessage {
+  id: string;
+  conversation_id: string;
+  role: 'user' | 'assistant';
+  content: string;
+  status: 'ready' | 'failed';
+  error_note: string | null;
+  model: string | null;
+  created_at: string;
+}
+
+export interface AlphaQuotaStatus {
+  has_ai_access: boolean;
+  limit: number;
+  remaining: number;
+  next_reset_at: string | null;
+  in_welcome_burst: boolean;
+  burst_messages_remaining: number;
 }
 
 // ─── Forum (Le Marché) ────────────────────────────────────────────────────────
@@ -324,6 +426,7 @@ export interface MarketComment {
   content: string;
   likes_count: number;
   created_at: string;
+  edited_at?: string | null;
   author_level?: number;
 }
 
@@ -345,4 +448,61 @@ export interface AppSession {
   activeBusiness: Business | null;
   activeMembership: Membership | null;
   memberships: Membership[];
+  isDemoMode?: boolean;
+}
+
+// ─── Business Partnerships (Amis) ─────────────────────────────────────────────
+
+export type PartnershipStatus = 'pending' | 'accepted' | 'declined' | 'blocked';
+
+export interface BusinessPartnership {
+  id: string;
+  requester_id: string;
+  recipient_id: string;
+  status: PartnershipStatus;
+  requester_shares_stock: boolean;
+  recipient_shares_stock: boolean;
+  requester_nickname: string | null;
+  recipient_nickname: string | null;
+  created_at: string;
+  updated_at: string;
+}
+
+export interface PartnerData {
+  partnership_id: string;
+  partner_business_id: string;
+  partner_business_name: string;
+  display_name: string; // custom nickname ?? business name
+  is_requester: boolean;
+  i_share_stock: boolean;   // whether I allow them to see my stock
+  they_share_stock: boolean; // whether they allow me to see their stock
+  dm_room_id: string | null;
+  last_message: string | null;
+  last_message_at: string | null;
+  unread_count: number;
+}
+
+export interface PendingRequest {
+  id: string;
+  requester_business_id: string;
+  requester_business_name: string;
+  created_at: string;
+}
+
+export interface PartnerProduct {
+  name: string;
+  category: string | null;
+  stock_qty: number;
+  in_stock: boolean;
+  unit: string;
+}
+
+export interface PartnerStockResult {
+  business_name: string;
+  products: PartnerProduct[] | null;
+}
+
+export interface PartnerInviteCode {
+  code: string;
+  expires_at: string; // ISO string — 24h from creation
 }

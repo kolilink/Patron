@@ -10,12 +10,12 @@ import {
 } from 'react-native';
 import * as Haptics from 'expo-haptics';
 import { router } from 'expo-router';
-import { SafeAreaView } from 'react-native-safe-area-context';
+import { Screen } from '@/src/components/ui/Screen';
 import { Button } from '@/src/components/ui/Button';
 import { Text } from '@/src/components/ui/Text';
 import { useTheme, radius, spacing } from '@/src/theme';
 import type { Palette } from '@/src/theme';
-import { formatAmount } from '@/src/utils/format';
+import { formatAmount, formatAmountInput, parseAmountInput } from '@/src/utils/format';
 import { useAuthStore } from '@/stores/auth';
 import { useSalesStore } from '@/stores/sales';
 import { generateId } from '@/lib/id';
@@ -48,7 +48,7 @@ export default function CarnetScreen() {
 
   const handleAdd = () => {
     const trimmedName = name.trim();
-    const parsed = parseInt(amount.replace(/\s/g, ''), 10);
+    const parsed = Math.round(parseAmountInput(amount, currency));
     if (!trimmedName || isNaN(parsed) || parsed <= 0) return;
 
     setEntries(prev => [...prev, { id: generateId(), name: trimmedName, amountCents: parsed * 100 }]);
@@ -79,10 +79,10 @@ export default function CarnetScreen() {
     router.replace('/(app)/(tabs)/');
   };
 
-  const canAdd = name.trim().length > 0 && parseInt(amount.replace(/\s/g, ''), 10) > 0;
+  const canAdd = name.trim().length > 0 && parseAmountInput(amount, currency) > 0;
 
   return (
-    <SafeAreaView style={styles.safe} edges={['top', 'bottom']}>
+    <Screen>
       <KeyboardAvoidingView
         behavior={Platform.OS === 'ios' ? 'padding' : 'height'}
         style={{ flex: 1 }}
@@ -116,7 +116,7 @@ export default function CarnetScreen() {
             placeholder="Montant"
             placeholderTextColor={palette.textDisabled}
             value={amount}
-            onChangeText={setAmount}
+            onChangeText={v => setAmount(formatAmountInput(v, currency))}
             keyboardType="numeric"
             returnKeyType="done"
             onSubmitEditing={handleAdd}
@@ -126,7 +126,7 @@ export default function CarnetScreen() {
             onPress={handleAdd}
             disabled={!canAdd}
           >
-            <Text variant="label" style={{ color: '#fff' }}>+</Text>
+            <Text variant="label" style={{ color: palette.textInverse }}>+</Text>
           </Pressable>
         </View>
 
@@ -179,7 +179,7 @@ export default function CarnetScreen() {
           />
         </View>
       </KeyboardAvoidingView>
-    </SafeAreaView>
+    </Screen>
   );
 }
 
@@ -208,7 +208,7 @@ function makeStyles(p: Palette) {
       width: 44, height: 44, borderRadius: radius.md,
       alignItems: 'center', justifyContent: 'center',
     },
-    divider: { height: 1, backgroundColor: '#0000001A', marginHorizontal: spacing[5] },
+    divider: { height: 1, backgroundColor: 'rgba(0,0,0,0.1)', marginHorizontal: spacing[5] },
     list:      { paddingBottom: spacing[4] },
     emptyList: { flex: 1, alignItems: 'center', justifyContent: 'center', padding: spacing[8] },
     entryRow: {

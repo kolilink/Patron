@@ -1,16 +1,23 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import {
+  Animated as RNAnimated,
   FlatList,
   Keyboard,
   KeyboardAvoidingView,
+  Linking,
   Modal,
   Platform,
   Pressable,
   ScrollView,
+  Share,
   StyleSheet,
   TextInput,
+  useWindowDimensions,
   View,
 } from 'react-native';
+import type { Audio } from 'expo-av';
+import * as ImagePicker from 'expo-image-picker';
+import * as Clipboard from 'expo-clipboard';
 import { Gesture, GestureDetector } from 'react-native-gesture-handler';
 import Animated, {
   useSharedValue,
@@ -20,19 +27,40 @@ import Animated, {
   runOnJS,
 } from 'react-native-reanimated';
 import { SafeAreaView, useSafeAreaInsets } from 'react-native-safe-area-context';
+import { Screen } from '@/src/components/ui/Screen';
 import { router, useFocusEffect } from 'expo-router';
 import { Ionicons } from '@expo/vector-icons';
 import { Text } from '@/src/components/ui/Text';
+import { VoiceMessageBubble, LiveWaveformBars } from '@/src/components/ui/VoiceMessageBubble';
+import { ImageMessageBubble } from '@/src/components/ui/ImageMessageBubble';
 import { haptics } from '@/lib/haptics';
-import { colors, useTheme, fontFamily as FF, radius, spacing } from '@/src/theme';
+import { toast } from '@/stores/toast';
+import { useTheme, fontFamily as FF, radius, spacing, AVATAR_PALETTE } from '@/src/theme';
 import type { Palette } from '@/src/theme';
+import {
+  isSep, buildGroupedItems, bubbleMargins, bubbleRadius, showsMeta,
+} from '@/src/lib/chatGrouping';
+import type { GroupPos, GroupedItem } from '@/src/lib/chatGrouping';
 import { useAuthStore } from '@/stores/auth';
 import { useChatStore } from '@/stores/chat';
 import { useMarketStore } from '@/stores/market';
+import { usePartnershipsStore } from '@/stores/partnerships';
+import { useEquipeStore } from '@/stores/equipe';
 import { SkeletonList } from '@/src/components/ui/SkeletonPlaceholder';
 import { supabase } from '@/lib/supabase';
 import { generateFallbackName } from '@/lib/id';
 import type { ChatMessage, MarketPost, MarketCategory } from '@/src/types';
+
+// expo-av's native module only exists once the app has been rebuilt with this
+// dependency linked in — requiring it eagerly would crash older binaries that
+// receive this code via an OTA update. Load it lazily so they degrade silently.
+function getAudio(): typeof Audio | null {
+  try {
+    return require('expo-av').Audio;
+  } catch {
+    return null;
+  }
+}
 
 // ─── Forum constants ──────────────────────────────────────────────────────────
 
@@ -45,147 +73,46 @@ const CAT_LABEL: Record<string, string> = {
   general: 'Général',
   annonce: 'Annonce',
 };
-const CAT_BG: Record<string, string> = {
-  suggestion: colors.primary[100],
-  entraide:   colors.success[50],
-  general:    '#F3F4F6',
-  annonce:    '#FEF3C7',
-};
-const CAT_FG: Record<string, string> = {
-  suggestion: colors.primary[700],
-  entraide:   '#166534',
-  general:    '#374151',
-  annonce:    '#92400E',
-};
+function catBg(category: string, p: Palette): string {
+  const map: Record<string, string> = { suggestion: p.primaryLight, entraide: p.successLight, general: p.surface, annonce: p.warningLight };
+  return map[category] ?? p.surface;
+}
+function catFg(category: string, p: Palette): string {
+  const map: Record<string, string> = { suggestion: p.primaryDark, entraide: p.success, general: p.textSecondary, annonce: p.warning };
+  return map[category] ?? p.textSecondary;
+}
 
 // ─── Types ────────────────────────────────────────────────────────────────────
 
-type Tab       = 'boutique' | 'marche';
-type GroupPos  = 'standalone' | 'first' | 'middle' | 'last';
+type Tab = 'boutique' | 'amis' | 'marche';
 
-type SeparatorItem  = { _sep: true; label: string; id: string };
 type ChatBubbleItem = ChatMessage & { _pos: GroupPos };
-type ListItem = ChatBubbleItem | SeparatorItem;
-
-function isSep(item: ListItem): item is SeparatorItem {
-  return '_sep' in item;
-}
+type ListItem = GroupedItem<ChatMessage>;
 
 // ─── Date helpers ─────────────────────────────────────────────────────────────
 
 const LOCALE = Intl.DateTimeFormat().resolvedOptions().locale;
 
-function sameDay(a: Date, b: Date): boolean {
-  return a.getFullYear() === b.getFullYear()
-    && a.getMonth() === b.getMonth()
-    && a.getDate() === b.getDate();
-}
-
 // Relative time for forum post cards (device-locale calendar format).
 function relativeTime(iso: string): string {
   const d      = new Date(iso);
   const diffMs = Date.now() - d.getTime();
+  const diffM  = Math.floor(diffMs / 60_000);
   const diffH  = Math.floor(diffMs / 3_600_000);
   const diffD  = Math.floor(diffMs / 86_400_000);
-  if (diffH < 1)  return '1h';
+  if (diffM < 1)  return 'maintenant';
+  if (diffM < 60) return `${diffM}min`;
   if (diffH < 24) return `${diffH}h`;
   if (diffD <= 7) return `${diffD}j`;
   return new Intl.DateTimeFormat('fr-FR', { day: 'numeric', month: 'short' }).format(d);
 }
 
-// ─── Message grouping ─────────────────────────────────────────────────────────
-
-const GROUP_GAP_MS = 5 * 60_000; // same group if < 5 min apart
-
-function sameGroup(a: ChatMessage, b: ChatMessage): boolean {
-  return a.sender_id === b.sender_id
-    && Math.abs(new Date(a.created_at).getTime() - new Date(b.created_at).getTime()) < GROUP_GAP_MS;
-}
-
-const FR_DAYS   = ['Dimanche', 'Lundi', 'Mardi', 'Mercredi', 'Jeudi', 'Vendredi', 'Samedi'];
-const FR_MONTHS = ['jan', 'fév', 'mars', 'avr', 'mai', 'juin', 'juil', 'août', 'sept', 'oct', 'nov', 'déc'];
-
-function timeSepLabel(iso: string): string {
-  const d         = new Date(iso);
-  const today     = new Date();
-  const yesterday = new Date(today); yesterday.setDate(today.getDate() - 1);
-  if (sameDay(d, today))     return "Aujourd'hui";
-  if (sameDay(d, yesterday)) return 'Hier';
-  const daysDiff = Math.floor((today.getTime() - d.getTime()) / (24 * 60 * 60 * 1000));
-  if (daysDiff < 7) return FR_DAYS[d.getDay()];
-  return `${d.getDate()} ${FR_MONTHS[d.getMonth()]}`;
-}
-
-// msgs is newest-first; FlatList is inverted so index 0 renders at the bottom.
-// Visual order: 'first' = topmost (oldest in group), 'last' = bottommost (newest).
-function buildGroupedItems(msgs: ChatMessage[]): ListItem[] {
-  if (msgs.length === 0) return [];
-
-  const bubbles: ChatBubbleItem[] = msgs.map((msg, i) => {
-    const newer    = msgs[i - 1]; // lower index → newer → visually below
-    const older    = msgs[i + 1]; // higher index → older → visually above
-    const withNewer = newer ? sameGroup(msg, newer) : false;
-    const withOlder = older ? sameGroup(msg, older) : false;
-    let pos: GroupPos;
-    if (!withNewer && !withOlder)  pos = 'standalone';
-    else if (!withNewer && withOlder) pos = 'last';   // visually bottom of group
-    else if (withNewer && !withOlder) pos = 'first';  // visually top of group
-    else                              pos = 'middle';
-    return { ...msg, _pos: pos } as ChatBubbleItem;
-  });
-
-  const out: ListItem[] = [];
-  for (let i = 0; i < bubbles.length; i++) {
-    out.push(bubbles[i]);
-    const nextMsg = msgs[i + 1];
-    // Insert one separator per calendar-day boundary.
-    // Label is msgs[i]'s day (the newer side) — separator marks the top of that day's section.
-    if (nextMsg && !sameDay(new Date(msgs[i].created_at), new Date(nextMsg.created_at))) {
-      out.push({ _sep: true, label: timeSepLabel(msgs[i].created_at), id: `tsep-${msgs[i].id}` });
-    }
-  }
-  // Always cap the top with a label for the oldest day group
-  out.push({ _sep: true, label: timeSepLabel(msgs[msgs.length - 1].created_at), id: 'tsep-oldest' });
-  return out;
-}
-
-// ─── Bubble geometry ──────────────────────────────────────────────────────────
-
-function bubbleMargins(pos: GroupPos): { marginTop: number; marginBottom: number } {
-  switch (pos) {
-    case 'standalone': return { marginTop: 8, marginBottom: 8 };
-    case 'first':      return { marginTop: 8, marginBottom: 2 };
-    case 'middle':     return { marginTop: 2, marginBottom: 2 };
-    case 'last':       return { marginTop: 2, marginBottom: 8 };
-  }
-}
-
-function bubbleRadius(isOwn: boolean, pos: GroupPos) {
-  if (pos === 'standalone') return { borderRadius: 16 };
-  if (isOwn) {
-    return {
-      borderTopLeftRadius:     16,
-      borderBottomLeftRadius:  16,
-      borderTopRightRadius:    pos === 'first' ? 16 : 4,
-      borderBottomRightRadius: pos === 'last'  ? 16 : 4,
-    };
-  }
-  return {
-    borderTopLeftRadius:     pos === 'first' ? 16 : 4,
-    borderBottomLeftRadius:  pos === 'last'  ? 16 : 4,
-    borderTopRightRadius:    16,
-    borderBottomRightRadius: 16,
-  };
-}
-
 // ─── Sender colour palette ────────────────────────────────────────────────────
-
-const SENDER_COLORS = ['#6366F1', '#10B981', '#F59E0B', '#8B5CF6', '#06B6D4', '#EC4899'];
 
 function senderColor(senderId: string): string {
   let h = 0;
   for (let i = 0; i < senderId.length; i++) h = (h * 31 + senderId.charCodeAt(i)) & 0xFFFFFF;
-  return SENDER_COLORS[Math.abs(h) % SENDER_COLORS.length];
+  return AVATAR_PALETTE[Math.abs(h) % AVATAR_PALETTE.length];
 }
 
 // ─── MessageBubble ────────────────────────────────────────────────────────────
@@ -193,7 +120,7 @@ function senderColor(senderId: string): string {
 const SWIPE_THRESHOLD = 52;
 
 function MessageBubble({
-  msg, isOwn, pos, isRead, onReply, onEdit,
+  msg, isOwn, pos, isRead, onReply, onEdit, onScrollToReply, isHighlighted, displayedName,
 }: {
   msg: ChatMessage;
   isOwn: boolean;
@@ -201,6 +128,9 @@ function MessageBubble({
   isRead: boolean | null;
   onReply: () => void;
   onEdit: (() => void) | null;
+  onScrollToReply?: () => void;
+  isHighlighted?: boolean;
+  displayedName?: string;
 }) {
   const { palette } = useTheme();
   const styles = useMemo(() => makeStyles(palette), [palette]);
@@ -209,9 +139,13 @@ function MessageBubble({
   const margins    = bubbleMargins(pos);
   const showAvatar = !isOwn && (pos === 'standalone' || pos === 'last');
   const showName   = !isOwn && (pos === 'standalone' || pos === 'first');
-  const name       = msg.sender_name || generateFallbackName(msg.sender_id);
+  // One timestamp per cluster, not one per bubble — shown only on the last
+  // (visually bottommost) message of a group, same place WhatsApp/iMessage put it.
+  const showMeta   = showsMeta(pos);
+  const name       = displayedName || msg.sender_name || generateFallbackName(msg.sender_id);
   const initial    = name.charAt(0).toUpperCase();
   const color      = senderColor(msg.sender_id);
+  const isImage    = msg.message_type === 'image' && !!msg.image_url;
 
   const translateX = useSharedValue(0);
 
@@ -234,6 +168,19 @@ function MessageBubble({
       translateX.value = withSpring(0, { damping: 20, stiffness: 400 });
     });
 
+  // Double-tap the bubble to edit (own text messages, within the 15-minute window).
+  // Raced against `pan` so a horizontal swipe still wins for the reply gesture.
+  const doubleTap = Gesture.Tap()
+    .enabled(!!onEdit)
+    .numberOfTaps(2)
+    .maxDuration(250)
+    .onEnd(() => {
+      if (!onEdit) return;
+      runOnJS(onEdit)();
+      runOnJS(haptics.tap)();
+    });
+
+  const bubbleGesture = Gesture.Race(pan, doubleTap);
 
   const slideAnim = useAnimatedStyle(() => ({
     transform: [{ translateX: translateX.value }],
@@ -245,8 +192,8 @@ function MessageBubble({
   }));
 
   return (
-    // Outer detector: pan only — type is always Pan, never changes between renders
-    <GestureDetector gesture={pan}>
+    // Outer detector: swipe-to-reply raced against double-tap-to-edit
+    <GestureDetector gesture={bubbleGesture}>
       <View style={[margins, { overflow: 'visible' }]}>
 
         {/* Reply icon — absolute, revealed as row slides right */}
@@ -270,14 +217,28 @@ function MessageBubble({
             </View>
           )}
 
-          {/* Bubble — tap the pencil icon to edit (onPress works inside GestureDetector; onLongPress doesn't) */}
-          <View style={[styles.bubble, isOwn ? styles.bubbleOwn : styles.bubbleOther, br]}>
+          {/* Bubble — double-tap to edit (own messages, within the 15-minute window) */}
+          <View style={[
+            styles.bubble,
+            isImage ? (isOwn ? styles.bubbleImageOwn : styles.bubbleImageOther) : (isOwn ? styles.bubbleOwn : styles.bubbleOther),
+            isImage && styles.bubbleImage,
+            br,
+            isHighlighted && styles.bubbleHighlighted,
+          ]}>
             {showName && (
-              <Text style={[styles.senderName, { color }]}>{name}</Text>
+              <Text style={[styles.senderName, { color }, isImage && styles.imageHeaderPad]}>{name}</Text>
             )}
 
             {msg.reply_to_id ? (
-              <View style={[styles.replyPill, isOwn ? styles.replyPillOwn : styles.replyPillOther]}>
+              <Pressable
+                onPress={onScrollToReply}
+                style={({ pressed }) => [
+                  styles.replyPill,
+                  isOwn ? styles.replyPillOwn : styles.replyPillOther,
+                  isImage && !showName && styles.imageReplyPad,
+                  pressed && { opacity: 0.65 },
+                ]}
+              >
                 <View style={[styles.replyAccent, { backgroundColor: isOwn ? 'rgba(255,255,255,0.6)' : color }]} />
                 <View style={styles.replyPillContent}>
                   <Text style={[styles.replyPillName, isOwn ? styles.replyPillNameOwn : { color }]} numberOfLines={1}>
@@ -287,27 +248,60 @@ function MessageBubble({
                     {msg.reply_to_content}
                   </Text>
                 </View>
-              </View>
+              </Pressable>
             ) : null}
 
-            <Text style={[styles.bubbleText, isOwn && styles.bubbleTextOwn]}>{msg.content}</Text>
-
-            <View style={styles.bubbleMeta}>
-              {msg.edited_at ? (
-                <Text style={[styles.ts, isOwn ? styles.tsOwn : styles.tsOther]}>modifié · </Text>
-              ) : null}
-              <Text style={[styles.ts, isOwn ? styles.tsOwn : styles.tsOther]}>{time}</Text>
-              {onEdit && (
-                <Pressable onPress={onEdit} hitSlop={10} style={{ marginLeft: 4 }}>
-                  <Ionicons name="pencil-outline" size={11} color="rgba(255,255,255,0.55)" />
-                </Pressable>
-              )}
-              {isOwn && isRead !== null && (
-                <Text style={[styles.receipt, isRead && styles.receiptRead]}>
-                  {isRead ? ' ✓✓' : ' ✓'}
+            {msg.message_type === 'voice' ? (
+              <>
+                <VoiceMessageBubble msg={msg} isOwn={isOwn} />
+                {showMeta && (
+                  <View style={styles.bubbleMeta}>
+                    {msg.edited_at ? (
+                      <Text style={[styles.ts, isOwn ? styles.tsOwn : styles.tsOther]}>modifié · </Text>
+                    ) : null}
+                    <Text style={[styles.ts, isOwn ? styles.tsOwn : styles.tsOther]}>{time}</Text>
+                  </View>
+                )}
+              </>
+            ) : isImage ? (
+              <>
+                {/* Sent "naked" — no padded/colored canvas, corners match the bubble group shape */}
+                <ImageMessageBubble msg={msg} imageStyle={br} />
+                {(!!msg.content || showMeta) && (
+                  <View style={styles.imageCaptionWrap}>
+                    {!!msg.content && (
+                      <Text style={[styles.bubbleText, isOwn && styles.bubbleTextOwn]}>
+                        {msg.content}
+                      </Text>
+                    )}
+                    {showMeta && (
+                      <View style={[styles.bubbleMeta, !msg.content && { marginTop: 0 }]}>
+                        <Text style={[styles.ts, isOwn ? styles.tsOwn : styles.tsOther]}>{time}</Text>
+                      </View>
+                    )}
+                  </View>
+                )}
+              </>
+            ) : (
+              <>
+                <Text style={[styles.bubbleText, isOwn && styles.bubbleTextOwn]}>
+                  {msg.content}
                 </Text>
-              )}
-            </View>
+                {showMeta && (
+                  <View style={styles.bubbleMeta}>
+                    {msg.edited_at ? (
+                      <Text style={[styles.ts, isOwn ? styles.tsOwn : styles.tsOther]}>modifié · </Text>
+                    ) : null}
+                    <Text style={[styles.ts, isOwn ? styles.tsOwn : styles.tsOther]}>{time}</Text>
+                    {isOwn && isRead !== null && (
+                      <Text style={[styles.receipt, isRead && styles.receiptRead]}>
+                        {isRead ? ' ✓✓' : ' ✓'}
+                      </Text>
+                    )}
+                  </View>
+                )}
+              </>
+            )}
           </View>
 
         </Animated.View>
@@ -317,14 +311,6 @@ function MessageBubble({
 }
 
 // ─── PostCard ─────────────────────────────────────────────────────────────────
-
-const AVATAR_PALETTE = [
-  colors.primary[500],
-  '#10B981',
-  '#F59E0B',
-  '#EC4899',
-  '#8B5CF6',
-];
 
 function PostCard({ post, isNew, isLiked, isOwnPost, onPress, onLike }: {
   post: MarketPost;
@@ -353,8 +339,8 @@ function PostCard({ post, isNew, isLiked, isOwnPost, onPress, onLike }: {
           <View style={styles.pcMeta}>
             <Text style={styles.pcTimestamp}>{relativeTime(post.created_at)}</Text>
             <Text style={styles.pcMetaDot}>·</Text>
-            <View style={[styles.catBadge, { backgroundColor: CAT_BG[post.category] ?? '#F3F4F6' }]}>
-              <Text style={[styles.catBadgeText, { color: CAT_FG[post.category] ?? '#374151' }]}>
+            <View style={[styles.catBadge, { backgroundColor: catBg(post.category, palette) }]}>
+              <Text style={[styles.catBadgeText, { color: catFg(post.category, palette) }]}>
                 {CAT_LABEL[post.category] ?? post.category}
               </Text>
             </View>
@@ -409,7 +395,7 @@ function PostCard({ post, isNew, isLiked, isOwnPost, onPress, onLike }: {
           onPress={e => { e.stopPropagation(); onPress(); }}
           hitSlop={8}
         >
-          <Text style={styles.pcActionVerified}>Répondre</Text>
+          <Ionicons name="arrow-undo-outline" size={17} color={palette.primary} />
         </Pressable>
       </View>
 
@@ -423,26 +409,41 @@ export default function DiscussionsScreen() {
   const { palette } = useTheme();
   const styles = useMemo(() => makeStyles(palette), [palette]);
   const insets      = useSafeAreaInsets();
+  const { width: screenWidth } = useWindowDimensions();
   const session     = useAuthStore(s => s.session);
-  const businessId  = session?.activeBusiness?.id ?? '';
-  const userId      = session?.user.id ?? '';
-  const userName    = session?.user.name || generateFallbackName(userId);
-  const role        = session?.activeMembership?.role;
+  const businessId   = session?.activeBusiness?.id ?? '';
+  const userId       = session?.user.id ?? '';
+  const userName     = session?.user.name || generateFallbackName(userId);
+  const businessName = session?.activeBusiness?.name ?? '';
+  const role         = session?.activeMembership?.role;
+  const isAdminOrManager = role === 'administrateur' || role === 'manager';
+  const membres     = useEquipeStore(s => s.membres);
 
   // ─── Chat store (Ma Boutique — untouched) ─────────────────────────────────
   const {
     boutiqueRoom, globalRoom, messages,
     loading, sending, error,
     boutiqueUnread,
-    load, sendMessage, editMessage, appendMessage, updateMessage, markRead,
+    offline: chatOffline,
+    load, sendMessage, sendVoiceMessage, sendImageMessage, editMessage, appendMessage, updateMessage, markRead,
   } = useChatStore();
+
+  // ─── Partnerships store (Amis tab) ─────────────────────────────────────────
+  const {
+    partners, pending: partnerPending,
+    loading: partnersLoading, error: partnersError,
+    inviteCode, inviteCodeLoading,
+    offline: partnersOffline,
+    loadPartnerships, loadInviteCode, regenerateInviteCode,
+    sendPartnerRequest, acceptRequest, declineRequest,
+  } = usePartnershipsStore();
 
   // ─── Market store (Le Marché forum — independent) ─────────────────────────
   const {
     posts, loading: marketLoading, creating, error: marketError,
     fetchPosts, createPost, prependPost, markVisited,
     likedPostIds, lastVisitedAt, toggleLike,
-    userLevel,
+    userLevel, offline: marketOffline,
   } = useMarketStore();
 
   // ─── Shared state ─────────────────────────────────────────────────────────
@@ -453,8 +454,32 @@ export default function DiscussionsScreen() {
   const [replyingTo, setReplyingTo] = useState<ChatMessage | null>(null);
   const [editingMsg, setEditingMsg] = useState<ChatMessage | null>(null);
   const [partnerLastRead, setPartnerLastRead] = useState<Date | null>(null);
+  const [highlightedMsgId, setHighlightedMsgId] = useState<string | null>(null);
+  const [keyboardVisible, setKeyboardVisible] = useState(false);
+  const boutiqueFlatListRef = useRef<FlatList<ListItem>>(null);
   const boutiqueChannelRef = useRef<ReturnType<typeof supabase.channel> | null>(null);
   const marcheChannelRef   = useRef<ReturnType<typeof supabase.channel> | null>(null);
+
+  // ─── Voice recording state ────────────────────────────────────────────────
+  const [isRecording, setIsRecording]       = useState(false);
+  const [recDuration, setRecDuration]       = useState(0); // seconds
+  const [recAmplitudes, setRecAmplitudes]   = useState<number[]>([]);
+  const recordingRef   = useRef<Audio.Recording | null>(null);
+  const recTimerRef    = useRef<ReturnType<typeof setInterval> | null>(null);
+  const pulseAnim      = useRef(new RNAnimated.Value(1)).current;
+
+  // Pulsing red dot animation while recording
+  useEffect(() => {
+    if (!isRecording) { pulseAnim.setValue(1); return; }
+    const loop = RNAnimated.loop(
+      RNAnimated.sequence([
+        RNAnimated.timing(pulseAnim, { toValue: 0.3, duration: 600, useNativeDriver: true }),
+        RNAnimated.timing(pulseAnim, { toValue: 1,   duration: 600, useNativeDriver: true }),
+      ]),
+    );
+    loop.start();
+    return () => loop.stop();
+  }, [isRecording]);
 
   // ─── Forum state ──────────────────────────────────────────────────────────
   const [selectedCat, setSelectedCat] = useState<'tout' | MarketCategory>('tout');
@@ -464,6 +489,13 @@ export default function DiscussionsScreen() {
   const [newCategory, setNewCategory] = useState<MarketCategory | null>(null);
   const [postError, setPostError] = useState('');
   const marketChannelRef = useRef<ReturnType<typeof supabase.channel> | null>(null);
+
+  // ─── Amis state ───────────────────────────────────────────────────────────
+  const [showAddPartner, setShowAddPartner] = useState(false);
+  const [partnerCodeInput, setPartnerCodeInput] = useState('');
+  const [addPartnerLoading, setAddPartnerLoading] = useState(false);
+  const [addPartnerError, setAddPartnerError] = useState('');
+  const [addPartnerSuccess, setAddPartnerSuccess] = useState('');
 
   // ─── Fade transition between tabs ─────────────────────────────────────────
   const contentAlpha = useSharedValue(1);
@@ -482,10 +514,17 @@ export default function DiscussionsScreen() {
     markVisited();
   }, [activeTab, userId, selectedCat]);
 
+  // ─── Load partnerships + invite code when amis tab becomes active ──────────
+  useEffect(() => {
+    if (activeTab !== 'amis' || !businessId || !userId || !isAdminOrManager) return;
+    loadPartnerships(businessId, userId);
+    loadInviteCode(businessId);
+  }, [activeTab, businessId, userId, isAdminOrManager]);
+
   // ─── Mark chat read when rooms load ──────────────────────────────────────
   useEffect(() => {
     if (!boutiqueRoom || !globalRoom || !businessId) return;
-    markRead(activeTab, businessId);
+    if (activeTab === 'boutique' || activeTab === 'marche') markRead(activeTab, businessId);
   }, [boutiqueRoom?.id, globalRoom?.id]);
 
   // ─── Chat channels (both always active for unread counting) ───────────────
@@ -639,7 +678,7 @@ export default function DiscussionsScreen() {
   // ─── Handlers ─────────────────────────────────────────────────────────────
   const switchTabAndFadeIn = useCallback((tab: Tab) => {
     setActiveTab(tab);
-    if (businessId) markRead(tab, businessId);
+    if (businessId && (tab === 'boutique' || tab === 'marche')) markRead(tab as 'boutique' | 'marche', businessId);
     contentAlpha.value = withTiming(1, { duration: 140 });
   }, [businessId]);
 
@@ -649,9 +688,168 @@ export default function DiscussionsScreen() {
     });
   }, [switchTabAndFadeIn]);
 
+  const scrollToMessage = useCallback((msgId: string) => {
+    const index = listItems.findIndex(item => !isSep(item) && item.id === msgId);
+    if (index === -1) return;
+    boutiqueFlatListRef.current?.scrollToIndex({ index, animated: true, viewPosition: 0.5 });
+    setHighlightedMsgId(msgId);
+    setTimeout(() => setHighlightedMsgId(null), 1500);
+  }, [listItems]);
+
   const cancelEdit = () => {
     setEditingMsg(null);
     setText('');
+  };
+
+  // ─── Amis handlers ────────────────────────────────────────────────────────
+  const handleShareMyCode = useCallback(async () => {
+    const code = inviteCode?.code ?? '';
+    if (!code) return;
+    const msg = `Salut 👋 Je t'invite sur mon Patron.\n\nPour m'ajouter → ouvre Discussions, onglet Amis, puis le + en haut à droite. Entre ce code :\n\n${code}\n\n⏱ Il expire dans 24h.`;
+    try {
+      await Linking.openURL(`whatsapp://send?text=${encodeURIComponent(msg)}`);
+    } catch {
+      Share.share({ message: msg });
+    }
+  }, [inviteCode?.code]);
+
+  const handleCopyMyCode = useCallback(async () => {
+    const code = inviteCode?.code ?? '';
+    if (!code) return;
+    await Clipboard.setStringAsync(code);
+    haptics.tap();
+    toast.success('Code copié');
+  }, [inviteCode?.code]);
+
+  const handleSendPartnerRequest = useCallback(async () => {
+    if (!partnerCodeInput.trim()) return;
+    setAddPartnerLoading(true);
+    setAddPartnerError('');
+    setAddPartnerSuccess('');
+    try {
+      const partnerName = await sendPartnerRequest(partnerCodeInput, businessId, businessName);
+      setAddPartnerSuccess(`Demande envoyée à ${partnerName} !`);
+      setPartnerCodeInput('');
+    } catch (err: unknown) {
+      const msg = err instanceof Error ? err.message : 'Erreur lors de l\'envoi';
+      setAddPartnerError(msg);
+    } finally {
+      setAddPartnerLoading(false);
+    }
+  }, [partnerCodeInput, businessId, businessName, sendPartnerRequest]);
+
+  const handleAcceptRequest = useCallback(async (partnershipId: string, requesterBusinessId: string, requesterName: string) => {
+    try {
+      await acceptRequest(partnershipId, businessId, businessName, requesterBusinessId);
+      await loadPartnerships(businessId, userId);
+    } catch {
+      // silent — user can retry
+    }
+  }, [businessId, businessName, userId, acceptRequest, loadPartnerships]);
+
+  const handleDeclineRequest = useCallback(async (partnershipId: string) => {
+    try {
+      await declineRequest(partnershipId, businessId);
+    } catch {
+      // silent
+    }
+  }, [businessId, declineRequest]);
+
+  const startRecording = async () => {
+    try {
+      const A = getAudio();
+      if (!A) return;
+
+      const { granted } = await A.requestPermissionsAsync();
+      if (!granted) return;
+
+      await A.setAudioModeAsync({ allowsRecordingIOS: true, playsInSilentModeIOS: true });
+
+      const rec = new A.Recording();
+      await rec.prepareToRecordAsync({
+        isMeteringEnabled: true,
+        android: {
+          extension: '.m4a',
+          outputFormat: A.AndroidOutputFormat.MPEG_4,
+          audioEncoder: A.AndroidAudioEncoder.AAC,
+          sampleRate: 16000,   // voice range — enables codec-level voice filtering
+          numberOfChannels: 1,
+          bitRate: 32000,      // ample for speech; smaller file, faster upload
+        },
+        ios: {
+          extension: '.m4a',
+          outputFormat: A.IOSOutputFormat.MPEG4AAC,
+          audioQuality: A.IOSAudioQuality.MEDIUM,
+          sampleRate: 16000,
+          numberOfChannels: 1,
+          bitRate: 32000,
+          linearPCMBitDepth: 16,
+          linearPCMIsBigEndian: false,
+          linearPCMIsFloat: false,
+        },
+        web: {},
+      });
+
+      // Sample amplitude every 100ms for waveform
+      rec.setOnRecordingStatusUpdate(status => {
+        if (status.isRecording && status.metering !== undefined) {
+          // Map -50 dB (floor) → 0 dB (max) to 0–1, then compress with power curve
+          // so normal speech (~-20 dB) sits at ~45% height instead of 80%
+          const raw = Math.max(0, Math.min(1, (status.metering + 50) / 50));
+          const amp = Math.pow(raw, 1.5);
+          setRecAmplitudes(prev => [...prev, amp]);
+        }
+      });
+      await rec.setProgressUpdateInterval(100);
+      await rec.startAsync();
+
+      recordingRef.current = rec;
+      setIsRecording(true);
+      setRecDuration(0);
+      setRecAmplitudes([]);
+
+      // Tick every second for the timer display
+      recTimerRef.current = setInterval(() => setRecDuration(d => d + 1), 1000);
+      haptics.tap();
+    } catch {
+      // Permission denied or device error — silent
+    }
+  };
+
+  const stopRecording = async (send: boolean) => {
+    if (recTimerRef.current) { clearInterval(recTimerRef.current); recTimerRef.current = null; }
+    const rec = recordingRef.current;
+    recordingRef.current = null;
+
+    if (!rec) { setIsRecording(false); return; }
+
+    try {
+      await rec.stopAndUnloadAsync();
+    } catch { /* already stopped */ }
+
+    await getAudio()?.setAudioModeAsync({ allowsRecordingIOS: false, playsInSilentModeIOS: true });
+
+    const finalDuration = recDuration;
+    const finalAmplitudes = recAmplitudes;
+    setIsRecording(false);
+    setRecDuration(0);
+    setRecAmplitudes([]);
+
+    if (!send || finalDuration < 1 || !boutiqueRoom?.id) return;
+
+    const uri = rec.getURI();
+    if (!uri) return;
+
+    haptics.success();
+    await sendVoiceMessage({
+      roomId:     boutiqueRoom.id,
+      senderId:   userId,
+      senderName: userName,
+      businessId,
+      fileUri:    uri,
+      duration:   finalDuration,
+      waveform:   finalAmplitudes,
+    });
   };
 
   const handleSend = async () => {
@@ -686,6 +884,24 @@ export default function DiscussionsScreen() {
     });
   };
 
+  const handlePickImage = async () => {
+    if (!boutiqueRoom?.id) return;
+    const { status } = await ImagePicker.requestMediaLibraryPermissionsAsync();
+    if (status !== 'granted') return;
+    const result = await ImagePicker.launchImageLibraryAsync({ mediaTypes: ['images'], quality: 1 });
+    if (result.canceled || !result.assets?.[0]) return;
+    const asset = result.assets[0];
+    haptics.success();
+    await sendImageMessage({
+      roomId: boutiqueRoom.id,
+      senderId: userId,
+      senderName: userName,
+      fileUri: asset.uri,
+      sourceWidth: asset.width,
+      sourceHeight: asset.height,
+    });
+  };
+
   const closeNewPost = () => {
     setShowNewPost(false);
     setNewTitle('');
@@ -711,12 +927,33 @@ export default function DiscussionsScreen() {
   const isAdmin = role === 'administrateur';
   const canPost = isAdmin || userLevel >= 2;
 
+  if (session?.isDemoMode) {
+    return (
+      <Screen style={{ justifyContent: 'center', alignItems: 'center', gap: spacing[4], paddingHorizontal: spacing[8] }}>
+        <Text style={{ fontSize: 36 }}>💬</Text>
+        <Text variant="h3" style={{ textAlign: 'center' }}>Les discussions sont réservées aux vrais commerces</Text>
+        <Text variant="body" color="secondary" style={{ textAlign: 'center', lineHeight: 22 }}>
+          Créez votre commerce gratuitement pour discuter avec votre équipe et rejoindre la communauté Patron.
+        </Text>
+        <Pressable
+          onPress={() => router.push('/(welcome)/creer')}
+          style={{ backgroundColor: palette.primary, borderRadius: 14, paddingVertical: spacing[4], paddingHorizontal: spacing[8], marginTop: spacing[2] }}
+        >
+          <Text style={{ color: palette.textInverse, fontWeight: '700', fontSize: 16 }}>Sauvegarder ma boutique →</Text>
+        </Pressable>
+        <Pressable onPress={() => router.back()}>
+          <Text variant="bodySmall" color="secondary">Retour</Text>
+        </Pressable>
+      </Screen>
+    );
+  }
+
   return (
     <KeyboardAvoidingView
       style={{ flex: 1, backgroundColor: palette.background }}
       behavior={Platform.OS === 'ios' ? 'padding' : 'height'}
     >
-    <SafeAreaView style={styles.safe} edges={['top']}>
+    <Screen edges={['top']}>
 
       <View style={styles.header}>
         <Pressable onPress={() => router.back()}>
@@ -739,6 +976,19 @@ export default function DiscussionsScreen() {
               {boutiqueUnread > 0 && <View style={styles.unreadDot} />}
             </View>
           </Pressable>
+          {isAdminOrManager && (
+            <Pressable
+              onPress={() => handleTabChange('amis')}
+              style={[styles.tabSeg, activeTab === 'amis' && styles.tabSegActive]}
+            >
+              <View style={styles.tabLabelRow}>
+                <Text style={[styles.tabSegText, activeTab === 'amis' && styles.tabSegTextActive]}>
+                  Amis
+                </Text>
+                {partners.some(p => p.unread_count > 0) && <View style={styles.unreadDot} />}
+              </View>
+            </Pressable>
+          )}
           <Pressable
             onPress={() => handleTabChange('marche')}
             style={[styles.tabSeg, activeTab === 'marche' && styles.tabSegActive]}
@@ -752,6 +1002,12 @@ export default function DiscussionsScreen() {
 
       <Animated.View style={[{ flex: 1 }, contentStyle]}>
       {/* Category chips — outside KAV so they sit flush under the tab row */}
+      {activeTab === 'marche' && marketOffline && (
+        <View style={{ paddingHorizontal: spacing[4], paddingTop: spacing[1] }}>
+          <Text variant="caption" color="secondary">Hors ligne — dernières données connues</Text>
+        </View>
+      )}
+
       {activeTab === 'marche' && (
         <View style={styles.catScrollWrap}>
           <ScrollView
@@ -775,12 +1031,25 @@ export default function DiscussionsScreen() {
               </Pressable>
             ))}
           </ScrollView>
+          {canPost && (
+            <Pressable
+              onPress={() => setShowNewPost(true)}
+              style={({ pressed }) => [styles.composeBtn, pressed && { opacity: 0.65 }]}
+            >
+              <Ionicons name="create-outline" size={20} color={palette.primary} />
+            </Pressable>
+          )}
         </View>
       )}
 
         {activeTab === 'boutique' ? (
-          /* ── Ma Boutique (chat — completely unchanged) ── */
+          /* ── Ma Boutique ── */
           <>
+            {chatOffline && (
+              <View style={{ paddingHorizontal: spacing[4], paddingTop: spacing[1] }}>
+                <Text variant="caption" color="secondary">Hors ligne — dernières données connues</Text>
+              </View>
+            )}
             {loading && !boutiqueRoom ? (
               <SkeletonList count={6} />
             ) : !boutiqueRoom ? (
@@ -796,6 +1065,8 @@ export default function DiscussionsScreen() {
               </View>
             ) : (
               <FlatList<ListItem>
+                ref={boutiqueFlatListRef}
+                onScrollToIndexFailed={() => {}}
                 data={listItems}
                 keyExtractor={item => item.id}
                 inverted
@@ -819,17 +1090,23 @@ export default function DiscussionsScreen() {
                       && new Date(msg.created_at) <= partnerLastRead;
                   }
 
-                  // Editable if own message AND sent within the last 15 minutes (WhatsApp rule)
+                  // Editable if own text message sent within the last 15 minutes (WhatsApp rule)
+                  // Voice notes are never editable — there's no content to change
                   const canEdit = isOwn &&
+                    msg.message_type !== 'voice' &&
                     Date.now() - new Date(msg.created_at).getTime() < 15 * 60 * 1000;
 
+                  const senderMembre = membres.find(mb => mb.user_id === msg.sender_id);
                   return (
                     <MessageBubble
                       msg={msg}
                       isOwn={isOwn}
                       pos={msg._pos}
                       isRead={isRead}
+                      isHighlighted={msg.id === highlightedMsgId}
+                      displayedName={senderMembre?.display_name ?? undefined}
                       onReply={() => setReplyingTo(msg)}
+                      onScrollToReply={msg.reply_to_id ? () => scrollToMessage(msg.reply_to_id!) : undefined}
                       onEdit={canEdit ? () => {
                         setReplyingTo(null);
                         setEditingMsg(msg);
@@ -874,33 +1151,240 @@ export default function DiscussionsScreen() {
               </View>
             ) : null}
 
-            <View style={[styles.inputRow, { paddingBottom: Math.max(insets.bottom, spacing[3]) }]}>
-              <TextInput
-                style={styles.input}
-                value={text}
-                onChangeText={setText}
-                placeholder="Écrire à l'équipe…"
-                placeholderTextColor={palette.textSecondary}
-                multiline
-                maxLength={1000}
-                returnKeyType="default"
-              />
-              {(!!text.trim() || !!editingMsg) && (
-                <Pressable
-                  onPress={handleSend}
-                  disabled={sending}
-                  style={({ pressed }) => [
-                    styles.sendBtn,
-                    pressed && { opacity: 0.75 },
-                  ]}
-                >
-                  <Ionicons name={editingMsg ? 'checkmark' : 'arrow-forward'} size={20} color={palette.textInverse} />
+            {isRecording ? (
+              /* ── Recording UI ── */
+              <View style={[styles.inputRow, styles.recordingRow, { paddingBottom: keyboardVisible ? spacing[3] : Math.max(insets.bottom, spacing[3]) }]}>
+                {/* Cancel */}
+                <Pressable onPress={() => stopRecording(false)} hitSlop={10}>
+                  <Ionicons name="trash-outline" size={22} color={palette.warning} />
                 </Pressable>
-              )}
+
+                {/* Breathing dot + timer + live waveform — amber, not red: recording isn't an alarm */}
+                <RNAnimated.View style={{ opacity: pulseAnim, width: 8, height: 8, borderRadius: 4, backgroundColor: palette.warning }} />
+                <Text style={[styles.recTimer, { color: palette.textPrimary }]}>
+                  {Math.floor(recDuration / 60)}:{String(recDuration % 60).padStart(2, '0')}
+                </Text>
+                <View style={{ flex: 1 }}>
+                  <LiveWaveformBars samples={recAmplitudes} />
+                </View>
+
+                {/* Send */}
+                <Pressable
+                  onPress={() => stopRecording(true)}
+                  style={[styles.sendBtn, { backgroundColor: palette.success }]}
+                >
+                  <Ionicons name="checkmark" size={20} color={palette.textInverse} />
+                </Pressable>
+              </View>
+            ) : (
+              /* ── Normal input row ── */
+              <View style={[styles.inputRow, { paddingBottom: keyboardVisible ? spacing[3] : Math.max(insets.bottom, spacing[3]) }]}>
+                {!editingMsg && (
+                  <Pressable onPress={handlePickImage} hitSlop={10} style={({ pressed }) => [styles.imgBtn, pressed && { opacity: 0.75 }]}>
+                    <Ionicons name="image-outline" size={22} color={palette.primary} />
+                  </Pressable>
+                )}
+                <TextInput
+                  style={styles.input}
+                  value={text}
+                  onChangeText={setText}
+                  autoFocus
+                  multiline
+                  maxLength={1000}
+                  returnKeyType="default"
+                />
+                {(!!text.trim() || !!editingMsg) ? (
+                  <Pressable
+                    onPress={handleSend}
+                    disabled={sending}
+                    style={({ pressed }) => [styles.sendBtn, pressed && { opacity: 0.75 }]}
+                  >
+                    <Ionicons name={editingMsg ? 'checkmark' : 'arrow-forward'} size={20} color={palette.textInverse} />
+                  </Pressable>
+                ) : (
+                  /* Mic button — only when nothing typed */
+                  <Pressable
+                    onPress={startRecording}
+                    style={({ pressed }) => [styles.sendBtn, styles.micBtn, pressed && { opacity: 0.75 }]}
+                  >
+                    <Ionicons name="mic-outline" size={20} color={palette.primary} />
+                  </Pressable>
+                )}
+              </View>
+            )}
+          </>
+        ) : activeTab === 'amis' ? (
+          /* ── Amis ── */
+          <>
+            {partnersOffline && (
+              <View style={{ paddingHorizontal: spacing[4], paddingTop: spacing[1] }}>
+                <Text variant="caption" color="secondary">Hors ligne — dernières données connues</Text>
+              </View>
+            )}
+            {/* Minimal toolbar: add partner only */}
+            <View style={styles.amisHeader}>
+              <View style={styles.amisIconBtn} />
+              <View style={{ flex: 1 }} />
+              <Pressable
+                onPress={() => { setShowAddPartner(true); setAddPartnerError(''); setAddPartnerSuccess(''); }}
+                style={styles.amisIconBtn}
+                hitSlop={8}
+              >
+                <Ionicons name="person-add-outline" size={22} color={palette.primary} />
+              </Pressable>
             </View>
+
+            {partnersLoading && partners.length === 0 && partnerPending.length === 0 ? (
+              <View style={styles.empty}>
+                <Text variant="body" color="secondary">Chargement…</Text>
+              </View>
+            ) : partners.length === 0 && partnerPending.length === 0 ? (
+              /* ── Empty: code is the hero ── */
+              <View style={{ flex: 1 }}>
+                {/* Optical center: 38% from top */}
+                <View style={{ flex: 38 }} />
+                <View style={styles.amisInviteState}>
+                  <Text style={[styles.amisCodeLabel, { color: palette.textSecondary }]}>Mon code</Text>
+                  <View style={{ width: screenWidth - spacing[5] * 4 }}>
+                    <Text
+                      style={[styles.amisCodeValue, { color: palette.textPrimary }]}
+                      adjustsFontSizeToFit
+                      minimumFontScale={0.4}
+                      numberOfLines={1}
+                    >
+                      {inviteCodeLoading ? '…' : (inviteCode?.code ? inviteCode.code.toUpperCase().split('').join(' ') : '…')}
+                    </Text>
+                    <Pressable
+                      onPress={handleCopyMyCode}
+                      disabled={!inviteCode?.code || inviteCodeLoading}
+                      hitSlop={10}
+                      style={({ pressed }) => [
+                        styles.amisCopyBtn,
+                        (!inviteCode?.code || inviteCodeLoading) && { opacity: 0.3 },
+                        pressed && { opacity: 0.6 },
+                      ]}
+                    >
+                      <Ionicons name="copy-outline" size={18} color={palette.textSecondary} />
+                    </Pressable>
+                  </View>
+                  <Text style={[styles.amisCodeMeta, { color: palette.textSecondary }]}>
+                    24h · usage unique
+                  </Text>
+
+                  <Pressable
+                    onPress={handleShareMyCode}
+                    disabled={!inviteCode?.code || inviteCodeLoading}
+                    style={({ pressed }) => [
+                      styles.amisShareBtn,
+                      (!inviteCode?.code || inviteCodeLoading) && { opacity: 0.4 },
+                      pressed && { opacity: 0.7 },
+                    ]}
+                  >
+                    <Ionicons name="logo-whatsapp" size={18} color={palette.textInverse} />
+                    <Text style={{ color: palette.textInverse, fontWeight: '600', fontSize: 16 }}>Partager</Text>
+                  </Pressable>
+
+                  <Pressable
+                    onPress={() => regenerateInviteCode(businessId)}
+                    disabled={inviteCodeLoading}
+                    hitSlop={12}
+                  >
+                    <Text style={[styles.amisRenewLink, { color: palette.textSecondary }]}>
+                      Renouveler le code
+                    </Text>
+                  </Pressable>
+                </View>
+                <View style={{ flex: 62 }} />
+              </View>
+            ) : (
+              /* ── Has partners ── */
+              <ScrollView style={{ flex: 1 }} contentContainerStyle={{ paddingBottom: 32 }}>
+                {partnerPending.length > 0 && (
+                  <>
+                    <Text variant="caption" color="secondary" style={styles.amisSectionLabel}>
+                      Demandes reçues
+                    </Text>
+                    {partnerPending.map(req => (
+                      <View key={req.id} style={styles.amisRequestRow}>
+                        <View style={[styles.amisAvatar, { backgroundColor: `${palette.primary}22` }]}>
+                          <Text style={[styles.amisAvatarText, { color: palette.primary }]}>
+                            {req.requester_business_name.charAt(0).toUpperCase()}
+                          </Text>
+                        </View>
+                        <View style={{ flex: 1 }}>
+                          <Text variant="body" style={{ fontWeight: '600' }}>{req.requester_business_name}</Text>
+                          <Text variant="caption" color="secondary">Demande de connexion</Text>
+                        </View>
+                        <View style={styles.amisRequestBtns}>
+                          <Pressable
+                            onPress={() => handleAcceptRequest(req.id, req.requester_business_id, req.requester_business_name)}
+                            style={({ pressed }) => [styles.amisAcceptBtn, pressed && { opacity: 0.75 }]}
+                          >
+                            <Text variant="caption" style={{ color: palette.textInverse, fontWeight: '600' }}>Accepter</Text>
+                          </Pressable>
+                          <Pressable
+                            onPress={() => handleDeclineRequest(req.id)}
+                            style={({ pressed }) => [styles.amisDeclineBtn, pressed && { opacity: 0.6 }]}
+                          >
+                            <Text variant="caption" color="secondary">Refuser</Text>
+                          </Pressable>
+                        </View>
+                      </View>
+                    ))}
+                  </>
+                )}
+
+                {partners.length > 0 && (
+                  <>
+                    {partnerPending.length > 0 && (
+                      <Text variant="caption" color="secondary" style={styles.amisSectionLabel}>
+                        Mes amis
+                      </Text>
+                    )}
+                    {partners.map(p => (
+                      <Pressable
+                        key={p.partnership_id}
+                        style={({ pressed }) => [styles.amisPartnerRow, pressed && { opacity: 0.7 }]}
+                        onPress={async () => {
+                          try {
+                            const { getOrCreateDmRoom } = usePartnershipsStore.getState();
+                            const roomId = await getOrCreateDmRoom(p.partnership_id, businessId);
+                            router.push(`/(app)/messages/${roomId}?partnership_id=${p.partnership_id}`);
+                          } catch { /* silent */ }
+                        }}
+                      >
+                        <View style={[styles.amisAvatar, { backgroundColor: `${palette.primary}22` }]}>
+                          <Text style={[styles.amisAvatarText, { color: palette.primary }]}>
+                            {p.display_name.charAt(0).toUpperCase()}
+                          </Text>
+                        </View>
+                        <View style={{ flex: 1, minWidth: 0 }}>
+                          <Text variant="body" style={{ fontWeight: '600' }} numberOfLines={1}>{p.display_name}</Text>
+                          <Text variant="caption" color="secondary" numberOfLines={1}>
+                            {p.last_message ?? 'Appuyez pour écrire'}
+                          </Text>
+                        </View>
+                        <View style={{ alignItems: 'flex-end', gap: 4 }}>
+                          {p.last_message_at && (
+                            <Text variant="caption" color="secondary">{relativeTime(p.last_message_at)}</Text>
+                          )}
+                          {p.unread_count > 0 && <View style={styles.unreadDot} />}
+                        </View>
+                      </Pressable>
+                    ))}
+                  </>
+                )}
+
+                {partnersError ? (
+                  <View style={styles.errorStrip}>
+                    <Text variant="caption" style={{ color: palette.warning }}>{partnersError}</Text>
+                  </View>
+                ) : null}
+              </ScrollView>
+            )}
           </>
         ) : (
-          /* ── Le Marché (forum — new) ── */
+          /* ── Le Marché (forum) ── */
           <>
             {/* Post list */}
             {marketLoading && posts.length === 0 ? (
@@ -937,15 +1421,10 @@ export default function DiscussionsScreen() {
               </View>
             ) : null}
 
-            {/* Bottom bar */}
-            {canPost ? (
-              <Pressable onPress={() => setShowNewPost(true)} style={styles.newPostBtn}>
-                <Text style={styles.newPostBtnText}>+ Nouveau post</Text>
-              </Pressable>
-            ) : (
+            {!canPost && (
               <View style={styles.minimalUnlockBanner}>
                 <Text style={styles.minimalUnlockText}>
-                  💬 Participez aux discussions ! Vous pourrez bientôt publier vos propres messages.
+                  Participez aux discussions ! Vous pourrez bientôt publier vos propres messages.
                 </Text>
               </View>
             )}
@@ -1026,7 +1505,55 @@ export default function DiscussionsScreen() {
         </KeyboardAvoidingView>
       </Modal>
 
-    </SafeAreaView>
+      {/* ── Add partner modal ── */}
+      <Modal visible={showAddPartner} animationType="slide" onRequestClose={() => setShowAddPartner(false)}>
+        <KeyboardAvoidingView style={{ flex: 1, backgroundColor: palette.background }} behavior={Platform.OS === 'ios' ? 'padding' : 'height'}>
+          <SafeAreaView style={styles.modalSafe} edges={['bottom']}>
+            <View style={[styles.modalHeader, { paddingTop: insets.top + spacing[4] }]}>
+              <Pressable onPress={() => { setShowAddPartner(false); setPartnerCodeInput(''); setAddPartnerError(''); setAddPartnerSuccess(''); }} hitSlop={8}>
+                <Text variant="body" color="secondary">Fermer</Text>
+              </Pressable>
+              <Text variant="h4">Ajouter un ami</Text>
+              <View style={{ width: 60 }} />
+            </View>
+            <View style={styles.modalContent}>
+              <TextInput
+                style={styles.amisCodeInput}
+                value={partnerCodeInput}
+                onChangeText={t => { setPartnerCodeInput(t.toLowerCase().trim()); setAddPartnerError(''); setAddPartnerSuccess(''); }}
+                placeholder="Code de votre ami"
+                placeholderTextColor={palette.textSecondary}
+                autoCapitalize="none"
+                autoCorrect={false}
+                autoFocus
+                returnKeyType="send"
+                onSubmitEditing={handleSendPartnerRequest}
+              />
+              {addPartnerError ? (
+                <Text variant="caption" style={{ color: palette.warning }}>{addPartnerError}</Text>
+              ) : null}
+              {addPartnerSuccess ? (
+                <Text variant="caption" style={{ color: palette.success }}>{addPartnerSuccess}</Text>
+              ) : null}
+              <Pressable
+                onPress={handleSendPartnerRequest}
+                disabled={addPartnerLoading || !partnerCodeInput.trim()}
+                style={({ pressed }) => [
+                  styles.amisModalBtn,
+                  (addPartnerLoading || !partnerCodeInput.trim()) && { opacity: 0.4 },
+                  pressed && { opacity: 0.75 },
+                ]}
+              >
+                <Text style={{ color: palette.textInverse, fontWeight: '600', fontSize: 16 }}>
+                  {addPartnerLoading ? 'Envoi…' : 'Envoyer la demande'}
+                </Text>
+              </Pressable>
+            </View>
+          </SafeAreaView>
+        </KeyboardAvoidingView>
+      </Modal>
+
+    </Screen>
     </KeyboardAvoidingView>
   );
 }
@@ -1072,7 +1599,7 @@ function makeStyles(p: Palette) {
     width: 6,
     height: 6,
     borderRadius: 3,
-    backgroundColor: colors.warning[500],
+    backgroundColor: p.warning,
   },
 
   listContent: { paddingHorizontal: 6, paddingVertical: spacing[3] },
@@ -1088,22 +1615,32 @@ function makeStyles(p: Palette) {
   // Avatar
   avatarCol: { width: 36, alignItems: 'center', justifyContent: 'flex-end' },
   avatar: { width: 28, height: 28, borderRadius: 14, alignItems: 'center', justifyContent: 'center' },
-  avatarText: { fontSize: 12, fontWeight: '700' as const, color: '#fff' },
+  avatarText: { fontSize: 12, fontWeight: '700' as const, color: p.textInverse },
   avatarSpacer: { width: 28 },
 
   senderName: { fontSize: 12, fontWeight: '700' as const, marginBottom: 3 },
 
   // Bubble
-  bubble: { borderRadius: 16, paddingVertical: 8, paddingHorizontal: 10, marginHorizontal: 4 },
-  bubbleOwn: { backgroundColor: p.primary, maxWidth: '72%' },
+  bubble: { borderRadius: 18, marginHorizontal: 4 },
+  bubbleOwn: { backgroundColor: p.primary, maxWidth: '68%', paddingVertical: 9, paddingHorizontal: 12 },
   bubbleOther: {
     backgroundColor: p.surface,
     borderWidth: 1,
     borderColor: p.border,
-    maxWidth: '82%',
+    maxWidth: '72%',
+    paddingVertical: 9,
+    paddingHorizontal: 12,
   },
+  // Image messages get no padded/colored canvas — the image itself IS the bubble.
+  bubbleImage: { overflow: 'hidden' as const },
+  bubbleImageOwn: { maxWidth: '68%' },
+  bubbleImageOther: { maxWidth: '72%' },
+  imageHeaderPad: { paddingHorizontal: 12, paddingTop: 9 },
+  imageReplyPad: { marginHorizontal: 12, marginTop: 9 },
+  imageCaptionWrap: { paddingHorizontal: 12, paddingTop: 6, paddingBottom: 8 },
+  bubbleHighlighted: { borderWidth: 2, borderColor: p.primary },
   bubbleText:    { fontSize: 15, lineHeight: 21, color: p.textPrimary },
-  bubbleTextOwn: { color: '#fff' },
+  bubbleTextOwn: { color: p.textInverse },
 
   // Timestamp inside bubble
   bubbleMeta: { flexDirection: 'row' as const, justifyContent: 'flex-end' as const, marginTop: 4, gap: 2 },
@@ -1111,7 +1648,7 @@ function makeStyles(p: Palette) {
   tsOther: { color: p.textSecondary },
   tsOwn:   { color: 'rgba(255,255,255,0.7)' },
   receipt:     { fontSize: 11, color: 'rgba(255,255,255,0.7)' },
-  receiptRead: { color: '#fff', fontWeight: '600' as const },
+  receiptRead: { color: p.textInverse, fontWeight: '600' as const },
 
   // Reply pill inside bubble
   replyPill: {
@@ -1221,6 +1758,11 @@ function makeStyles(p: Palette) {
     color: p.textPrimary,
     backgroundColor: p.background,
   },
+  imgBtn: {
+    width: 40, height: 40,
+    alignItems: 'center',
+    justifyContent: 'center',
+  },
   sendBtn: {
     width: 40, height: 40,
     borderRadius: radius.full,
@@ -1228,17 +1770,38 @@ function makeStyles(p: Palette) {
     alignItems: 'center',
     justifyContent: 'center',
   },
+  micBtn: {
+    backgroundColor: `${p.primary}18`,
+  },
+  recordingRow: {
+    gap: spacing[3],
+    alignItems: 'center',
+  },
+  recTimer: {
+    fontSize: 15,
+    fontWeight: '600' as const,
+    minWidth: 36,
+    textAlign: 'center' as const,
+  },
 
   // Forum: category filter wrapper
   catScrollWrap: {
     height: 48,
-    justifyContent: 'center' as const,
+    flexDirection: 'row' as const,
+    alignItems: 'center' as const,
     backgroundColor: p.background,
     borderBottomWidth: 1,
     borderBottomColor: p.border,
     marginBottom: 8,
   },
-  catScroll: { flexGrow: 0 },
+  catScroll: { flex: 1 },
+  composeBtn: {
+    width: 44,
+    height: 44,
+    alignItems: 'center' as const,
+    justifyContent: 'center' as const,
+    paddingRight: spacing[1],
+  },
   catScrollContent: {
     paddingHorizontal: spacing[4],
     paddingRight: spacing[8],
@@ -1258,12 +1821,12 @@ function makeStyles(p: Palette) {
 
   // Forum: shared badge styles
   newBadge: {
-    backgroundColor: colors.success[100],
+    backgroundColor: p.successLight,
     borderRadius: radius.full,
     paddingHorizontal: spacing[2],
     paddingVertical: 1,
   },
-  newBadgeText: { fontSize: 10, color: '#166534', fontWeight: '700' as const },
+  newBadgeText: { fontSize: 10, color: p.success, fontWeight: '700' as const },
   catBadge: { borderRadius: radius.full, paddingHorizontal: spacing[2], paddingVertical: 2 },
   catBadgeText: { fontSize: 11, fontWeight: '600' as const },
 
@@ -1289,7 +1852,7 @@ function makeStyles(p: Palette) {
     justifyContent: 'center' as const,
     flexShrink: 0,
   },
-  pcAvatarText: { fontSize: 14, fontWeight: '700' as const, color: '#fff' },
+  pcAvatarText: { fontSize: 14, fontWeight: '700' as const, color: p.textInverse },
   pcAuthorInfo: { flex: 1, minWidth: 0 },
   pcAuthorName: { fontSize: 14, fontWeight: '600' as const, color: p.textPrimary },
   pcMeta: { flexDirection: 'row' as const, alignItems: 'center' as const, gap: 4, marginTop: 1, flexWrap: 'wrap' as const },
@@ -1309,16 +1872,6 @@ function makeStyles(p: Palette) {
   pcActionVerified: { fontSize: 13, color: p.primary, fontWeight: '600' as const },
   pcActionSave: { fontSize: 13, color: p.textSecondary, fontWeight: '500' as const },
   marketListContent: { paddingBottom: spacing[6] },
-
-  // Forum: new post button
-  newPostBtn: {
-    margin: spacing[4],
-    borderRadius: radius.md,
-    backgroundColor: p.primary,
-    paddingVertical: spacing[3],
-    alignItems: 'center',
-  },
-  newPostBtnText: { color: p.textInverse, fontWeight: '600', fontSize: 15 },
 
   // Modal
   modalSafe: { flex: 1, backgroundColor: p.background },
@@ -1372,5 +1925,139 @@ function makeStyles(p: Palette) {
     backgroundColor: p.surface,
   },
   modalCatChipActive: { backgroundColor: p.primary, borderColor: p.primary },
+
+  // Amis tab
+  amisHeader: {
+    flexDirection: 'row' as const,
+    alignItems: 'center' as const,
+    paddingHorizontal: spacing[4],
+    paddingVertical: spacing[3],
+    borderBottomWidth: StyleSheet.hairlineWidth,
+    borderBottomColor: p.border,
+    backgroundColor: p.background,
+  },
+  amisIconBtn: {
+    width: 40,
+    height: 40,
+    alignItems: 'center' as const,
+    justifyContent: 'center' as const,
+  },
+  amisSectionLabel: {
+    paddingHorizontal: spacing[5],
+    paddingTop: spacing[4],
+    paddingBottom: spacing[2],
+    textTransform: 'uppercase' as const,
+    letterSpacing: 0.5,
+  },
+  amisRequestRow: {
+    flexDirection: 'row' as const,
+    alignItems: 'center' as const,
+    gap: spacing[3],
+    paddingHorizontal: spacing[5],
+    paddingVertical: spacing[3],
+    borderBottomWidth: StyleSheet.hairlineWidth,
+    borderBottomColor: p.border,
+    backgroundColor: p.background,
+  },
+  amisPartnerRow: {
+    flexDirection: 'row' as const,
+    alignItems: 'center' as const,
+    gap: spacing[3],
+    paddingHorizontal: spacing[5],
+    paddingVertical: spacing[4],
+    borderBottomWidth: StyleSheet.hairlineWidth,
+    borderBottomColor: p.border,
+    backgroundColor: p.background,
+  },
+  amisAvatar: {
+    width: 44,
+    height: 44,
+    borderRadius: 22,
+    alignItems: 'center' as const,
+    justifyContent: 'center' as const,
+    flexShrink: 0,
+  },
+  amisAvatarText: {
+    fontSize: 18,
+    fontWeight: '700' as const,
+  },
+  amisRequestBtns: {
+    flexDirection: 'row' as const,
+    gap: spacing[2],
+    flexShrink: 0,
+  },
+  // Accept is the one bold action here; decline stays quiet — one clear
+  // affordance per decision instead of two competing outlined pills.
+  amisAcceptBtn: {
+    paddingHorizontal: spacing[4],
+    paddingVertical: spacing[2],
+    borderRadius: radius.full,
+    backgroundColor: p.primary,
+  },
+  amisDeclineBtn: {
+    paddingHorizontal: spacing[3],
+    paddingVertical: spacing[2],
+    borderRadius: radius.full,
+  },
+  amisInviteState: {
+    alignItems: 'center' as const,
+    paddingHorizontal: spacing[5],
+  },
+  amisCodeLabel: {
+    fontSize: 13,
+    fontWeight: '500' as const,
+    letterSpacing: 0.5,
+    marginBottom: spacing[3],
+  },
+  amisCodeValue: {
+    fontFamily: 'DMSans_700Bold',
+    fontSize: 32,
+    lineHeight: 44,
+    paddingTop: 6,
+    letterSpacing: 0,
+    marginBottom: spacing[2],
+    textAlign: 'center' as const,
+  },
+  amisCodeMeta: {
+    fontSize: 12,
+    marginBottom: spacing[8],
+  },
+  amisCopyBtn: {
+    position: 'absolute' as const,
+    top: 0,
+    right: 0,
+  },
+  amisShareBtn: {
+    flexDirection: 'row' as const,
+    alignItems: 'center' as const,
+    gap: spacing[2],
+    backgroundColor: p.primary,
+    borderRadius: radius.full,
+    paddingHorizontal: spacing[7],
+    paddingVertical: spacing[4],
+    marginBottom: spacing[5],
+  },
+  amisRenewLink: {
+    fontSize: 13,
+    textDecorationLine: 'underline' as const,
+  },
+  amisCodeInput: {
+    height: 56,
+    borderWidth: 1,
+    borderColor: p.border,
+    borderRadius: radius.xl,
+    paddingHorizontal: spacing[5],
+    fontSize: 18,
+    letterSpacing: 2,
+    color: p.textPrimary,
+    backgroundColor: p.surface,
+  },
+  amisModalBtn: {
+    height: 52,
+    borderRadius: radius.full,
+    backgroundColor: p.primary,
+    alignItems: 'center' as const,
+    justifyContent: 'center' as const,
+  },
   });
 }

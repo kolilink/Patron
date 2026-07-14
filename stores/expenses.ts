@@ -5,6 +5,9 @@ import { generateId } from '@/lib/id';
 import { enqueue, getQueueCount, saveExpenseCache, getExpenseCache, getCacheTimestamp } from '@/lib/db';
 import { isNetworkError } from '@/lib/sync';
 import { useSyncStore } from '@/stores/sync';
+import { notifyEvent } from '@/src/utils/notifications';
+import { useAuthStore } from '@/stores/auth';
+import { formatAmount } from '@/src/utils/format';
 import type { Expense, ExpenseStatus } from '@/src/types';
 
 export interface CreateExpenseData {
@@ -14,6 +17,7 @@ export interface CreateExpenseData {
   date: string;
   due_date?: string | null;
   note?: string | null;
+  product_id?: string | null;
 }
 
 interface ExpensesStore {
@@ -46,7 +50,7 @@ export const useExpensesStore = create<ExpensesStore>((set, get) => ({
     try {
       const { data, error } = await supabase
         .from('expenses')
-        .select('*')
+        .select('*, product:products(name)')
         .eq('business_id', businessId)
         .order('date', { ascending: false })
         .order('created_at', { ascending: false });
@@ -67,9 +71,16 @@ export const useExpensesStore = create<ExpensesStore>((set, get) => ({
         const pm: Record<string, string> = {};
         for (const p of (profiles ?? [])) pm[(p as { id: string; name: string }).id] = (p as { id: string; name: string }).name;
 
-        result = expenses.map(e => ({ ...fromCents(e), creator_name: pm[e.created_by] ?? 'Inconnu' }));
+        result = expenses.map(e => ({
+          ...fromCents(e),
+          creator_name: pm[e.created_by] ?? 'Inconnu',
+          product_name: (e as any).product?.name ?? null,
+        }));
       } else {
-        result = expenses.map(e => fromCents(e));
+        result = expenses.map(e => ({
+          ...fromCents(e),
+          product_name: (e as any).product?.name ?? null,
+        }));
       }
       void saveExpenseCache(businessId, result as unknown[]);
       set({ expenses: result, loading: false, offline: false, offlineSince: null });
@@ -103,6 +114,7 @@ export const useExpensesStore = create<ExpensesStore>((set, get) => ({
       date: data.date,
       due_date: data.due_date || null,
       note: data.note?.trim() || null,
+      product_id: data.product_id ?? null,
       status: isManager ? 'approuve' : 'en_attente',
       created_by: userId,
     };
@@ -111,6 +123,25 @@ export const useExpensesStore = create<ExpensesStore>((set, get) => ({
       if (error) throw error;
       await get().fetchExpenses(businessId);
       set({ saving: false });
+      // Notify admins/managers when a vendeur submits an expense pending approval
+      if (!isManager) {
+        const _session = useAuthStore.getState().session;
+        if (_session && !_session.isDemoMode) {
+          const currency = _session.activeBusiness?.currency ?? 'GNF';
+          notifyEvent({
+            businessId,
+            eventType: 'expense_submitted',
+            payload: {
+              name: _session.user.name || 'Vendeur',
+              amount: formatAmount(data.amount, currency),
+              description: data.description.trim(),
+              expense_id: payload.id,   // needed for inline Valider/Refuser action
+              business_id: businessId,
+            },
+            targetRoles: ['administrateur', 'manager'],
+          });
+        }
+      }
       return true;
     } catch (err) {
       if (isNetworkError(err)) {
@@ -134,6 +165,7 @@ export const useExpensesStore = create<ExpensesStore>((set, get) => ({
       date: data.date,
       due_date: data.due_date || null,
       note: data.note?.trim() || null,
+      product_id: data.product_id ?? null,
     };
     try {
       const { error } = await supabase.from('expenses').update(patch).eq('id', id);
@@ -164,6 +196,7 @@ export const useExpensesStore = create<ExpensesStore>((set, get) => ({
 
   approveExpense: async (id, userId) => {
     set({ saving: true });
+    const _expense = get().expenses.find(e => e.id === id);
     const now = new Date().toISOString();
     const patch = { status: 'approuve' as ExpenseStatus, approved_by: userId, approved_at: now };
     try {
@@ -173,6 +206,15 @@ export const useExpensesStore = create<ExpensesStore>((set, get) => ({
         expenses: state.expenses.map(e => e.id === id ? { ...e, ...patch } : e),
         saving: false,
       }));
+      if (_expense?.created_by && _expense.created_by !== userId) {
+        const currency = useAuthStore.getState().session?.activeBusiness?.currency ?? 'GNF';
+        notifyEvent({
+          businessId: _expense.business_id,
+          eventType: 'expense_approved',
+          payload: { amount: formatAmount(_expense.amount, currency), description: _expense.description ?? '' },
+          targetUserIds: [_expense.created_by],
+        });
+      }
       return true;
     } catch (err) {
       if (isNetworkError(err)) {
@@ -192,6 +234,7 @@ export const useExpensesStore = create<ExpensesStore>((set, get) => ({
 
   rejectExpense: async (id, userId) => {
     set({ saving: true, error: null });
+    const _expense = get().expenses.find(e => e.id === id);
     const now = new Date().toISOString();
     const patch = { status: 'rejete' as ExpenseStatus, approved_by: userId, approved_at: now };
     try {
@@ -201,6 +244,15 @@ export const useExpensesStore = create<ExpensesStore>((set, get) => ({
         expenses: state.expenses.map(e => e.id === id ? { ...e, ...patch } : e),
         saving: false,
       }));
+      if (_expense?.created_by && _expense.created_by !== userId) {
+        const currency = useAuthStore.getState().session?.activeBusiness?.currency ?? 'GNF';
+        notifyEvent({
+          businessId: _expense.business_id,
+          eventType: 'expense_rejected',
+          payload: { amount: formatAmount(_expense.amount, currency), description: _expense.description ?? '' },
+          targetUserIds: [_expense.created_by],
+        });
+      }
       return true;
     } catch (err) {
       if (isNetworkError(err)) {

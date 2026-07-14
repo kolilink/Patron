@@ -6,6 +6,21 @@ const corsHeaders = {
   'Access-Control-Allow-Headers': 'authorization, x-client-info, apikey, content-type',
 };
 
+const MAX_FAILED_ATTEMPTS = 5;
+
+// Constant-time comparison — prevents timing-based brute-force of the code.
+function timingSafeEqual(a: string, b: string): boolean {
+  const enc = new TextEncoder();
+  const aBytes = enc.encode(a);
+  const bBytes = enc.encode(b);
+  const len = Math.max(aBytes.length, bBytes.length);
+  let diff = aBytes.length ^ bBytes.length;
+  for (let i = 0; i < len; i++) {
+    diff |= (aBytes[i] ?? 0) ^ (bBytes[i] ?? 0);
+  }
+  return diff === 0;
+}
+
 serve(async (req) => {
   if (req.method === 'OPTIONS') return new Response('ok', { headers: corsHeaders });
 
@@ -56,7 +71,7 @@ serve(async (req) => {
     // Fetch the row by ID only — check each condition separately for clear errors
     const { data: verif, error: verifErr } = await serviceClient
       .from('email_verifications')
-      .select('id, email, token, status, expires_at')
+      .select('id, email, token, status, expires_at, failed_attempts')
       .eq('id', verificationId)
       .maybeSingle();
 
@@ -82,6 +97,12 @@ serve(async (req) => {
       });
     }
 
+    if (verif.failed_attempts >= MAX_FAILED_ATTEMPTS) {
+      return new Response(JSON.stringify({ error: 'Trop de tentatives incorrectes. Renvoyez le code.' }), {
+        status: 401, headers: { ...corsHeaders, 'Content-Type': 'application/json' },
+      });
+    }
+
     if (verif.email !== normalizedEmail) {
       console.error('link-recovery-email: email mismatch stored=', verif.email, 'got=', normalizedEmail);
       return new Response(JSON.stringify({ error: 'Code invalide.' }), {
@@ -89,8 +110,12 @@ serve(async (req) => {
       });
     }
 
-    if (verif.token !== normalizedCode) {
+    if (!timingSafeEqual(verif.token, normalizedCode)) {
       console.error('link-recovery-email: token mismatch stored=', verif.token, 'got=', normalizedCode);
+      await serviceClient
+        .from('email_verifications')
+        .update({ failed_attempts: verif.failed_attempts + 1 })
+        .eq('id', verificationId);
       return new Response(JSON.stringify({ error: 'Code incorrect. Réessayez.' }), {
         status: 401, headers: { ...corsHeaders, 'Content-Type': 'application/json' },
       });

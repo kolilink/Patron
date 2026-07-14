@@ -6,6 +6,9 @@ import { trackEvent } from '@/lib/analytics';
 import { saveVentesCache, getVentesCache, getCacheTimestamp, enqueue, getQueueCount } from '@/lib/db';
 import { isNetworkError } from '@/lib/sync';
 import { useSyncStore } from '@/stores/sync';
+import { notifyEvent } from '@/src/utils/notifications';
+import { useAuthStore } from '@/stores/auth';
+import { formatAmount } from '@/src/utils/format';
 
 export interface VenteLigne {
   id: string;
@@ -130,14 +133,18 @@ export const useVentesStore = create<VentesStore>((set, get) => ({
     )];
     const allProfileIds = [...new Set([...sellerIds, ...cancellerIds])];
 
-    const [profilesRes, linesRes, paysRes] = await Promise.all([
+    const allMemberIds = [...new Set([...sellerIds, ...cancellerIds])];
+    const [profilesRes, linesRes, paysRes, membershipsRes] = await Promise.all([
       supabase.from('profiles').select('id, name').in('id', allProfileIds),
       supabase
         .from('so_lines')
-        .select('order_id, qty, unit_price, product:products(cost_price), variant:product_variants(cost_price)')
+        .select('order_id, qty, cost_price_at_sale, product:products(cost_price), variant:product_variants(cost_price)')
         .in('order_id', orderIds),
       orderIds.length > 0
         ? supabase.from('payments').select('order_id, amount').in('order_id', orderIds)
+        : Promise.resolve({ data: [] }),
+      allMemberIds.length > 0
+        ? supabase.from('memberships').select('user_id, display_name').eq('business_id', businessId).in('user_id', allMemberIds)
         : Promise.resolve({ data: [] }),
     ]);
 
@@ -146,16 +153,29 @@ export const useVentesStore = create<VentesStore>((set, get) => ({
       pm[(p as { id: string; name: string }).id] = (p as { id: string; name: string }).name;
     }
 
-    const profitByOrder: Record<string, number> = {};
+    // display_name set by manager overrides profile name for seller display
+    const dm: Record<string, string> = {};
+    for (const m of ((membershipsRes as { data: { user_id: string; display_name: string | null }[] | null }).data ?? [])) {
+      if (m.display_name) dm[m.user_id] = m.display_name;
+    }
+
+    // Accumulate COGS per order using the snapshotted cost (added v81).
+    // Falls back to current product/variant cost_price for rows written before v81.
+    // Profit is then computed at the order level: (total_amount - discount_amount) - COGS.
+    // This correctly handles discounts, above-catalog overrides, and cost-price changes.
+    const cogsByOrder: Record<string, number> = {};
     const hasCostByOrder: Record<string, boolean> = {};
     for (const l of (linesRes.data ?? [])) {
-      const line = l as unknown as { order_id: string; qty: number; unit_price: number; product: { cost_price: number } | null; variant: { cost_price: number } | null };
-      // Use variant cost_price when available — variant products price per-variant not on the parent
-      const costPrice = (line.variant?.cost_price ?? line.product?.cost_price ?? 0) / 100;
-      const unitPrice = line.unit_price / 100;
-      if (costPrice > 0) hasCostByOrder[line.order_id] = true;
-      profitByOrder[line.order_id] = (profitByOrder[line.order_id] ?? 0)
-        + (unitPrice - costPrice) * line.qty;
+      const line = l as unknown as {
+        order_id: string;
+        qty: number;
+        cost_price_at_sale: number | null;
+        product: { cost_price: number } | null;
+        variant: { cost_price: number } | null;
+      };
+      const costCents = line.cost_price_at_sale ?? line.variant?.cost_price ?? line.product?.cost_price ?? 0;
+      if (costCents > 0) hasCostByOrder[line.order_id] = true;
+      cogsByOrder[line.order_id] = (cogsByOrder[line.order_id] ?? 0) + (costCents * line.qty) / 100;
     }
 
     // Sum payments per order to compute amount_paid (used for credit + discounted sales)
@@ -169,10 +189,15 @@ export const useVentesStore = create<VentesStore>((set, get) => ({
       const totalAmount = (s.total_amount as number) / 100;
       const hasDiscount = discount > 0;
       const isCreditStatus = s.status === 'credit';
+      // Revenue = total_amount (already reflects any above-catalog override) minus discount.
+      // Subtract COGS to get true gross profit per sale.
+      const profit = hasCostByOrder[s.id as string]
+        ? (totalAmount - discount) - (cogsByOrder[s.id as string] ?? 0)
+        : null;
       return {
         ...s,
         total_amount: totalAmount,
-        seller_name: pm[s.seller_id as string] || generateFallbackName(s.seller_id as string),
+        seller_name: dm[s.seller_id as string] || pm[s.seller_id as string] || generateFallbackName(s.seller_id as string),
         is_credit: (s.is_credit as boolean) ?? false,
         discount_amount: discount,
         client_id: (s.client_id as string | null) ?? null,
@@ -180,9 +205,9 @@ export const useVentesStore = create<VentesStore>((set, get) => ({
         cancellation_reason: (s.cancellation_reason as string | null) ?? null,
         cancelled_by_id: (s.cancelled_by_id as string | null) ?? null,
         cancelled_by_name: s.cancelled_by_id
-          ? (pm[s.cancelled_by_id as string] || generateFallbackName(s.cancelled_by_id as string))
+          ? (dm[s.cancelled_by_id as string] || pm[s.cancelled_by_id as string] || generateFallbackName(s.cancelled_by_id as string))
           : undefined,
-        profit: hasCostByOrder[s.id as string] ? (profitByOrder[s.id as string] ?? null) : null,
+        profit,
         amount_paid: (isCreditStatus || hasDiscount) ? (paidByOrder[s.id as string] ?? 0) : undefined,
       } as Vente;
     });
@@ -214,8 +239,8 @@ export const useVentesStore = create<VentesStore>((set, get) => ({
       qty: l.qty as number,
       unit_price: (l.unit_price as number) / 100,
       is_bulk: (l.is_bulk as boolean) ?? false,
-      // Prefer variant cost_price when present (variant products store cost per variant)
-      cost_price: ((l.variant as VariantJoin)?.cost_price ?? (l.product as ProductJoin)?.cost_price ?? 0) / 100,
+      // Use snapshotted cost (v81+); fall back to live variant/product cost for pre-v81 rows
+      cost_price: ((l.cost_price_at_sale as number | null) ?? (l.variant as VariantJoin)?.cost_price ?? (l.product as ProductJoin)?.cost_price ?? 0) / 100,
     }));
 
     const payments: VentePayment[] = (paysRes.data ?? []).map((p: Record<string, unknown>) => ({
@@ -244,19 +269,11 @@ export const useVentesStore = create<VentesStore>((set, get) => ({
     const newAmountPaid = alreadyPaid + amount;
     const fullyPaid = newAmountPaid >= owed - 0.01;
     const now = new Date().toISOString();
-
-    const paymentRow = {
-      id: generateId(),
-      order_id: saleId,
-      customer_name: sale.customer_name,
-      business_id: sale.business_id,
-      method,
-      amount: Math.round(amount * 100),
-      date,
-    };
+    const paymentId = generateId();
+    const amountCents = Math.round(amount * 100);
 
     const applyOptimistic = () => {
-      const newPaymentEntry: VentePayment = { id: paymentRow.id, method, amount, date };
+      const newPaymentEntry: VentePayment = { id: paymentId, method, amount, date };
       set(state => ({
         sales: state.sales.map(s =>
           s.id === saleId
@@ -273,30 +290,27 @@ export const useVentesStore = create<VentesStore>((set, get) => ({
       }));
     };
 
-    try {
-      const { error: payErr } = await supabase.from('payments').insert(paymentRow);
-      if (payErr) throw payErr;
+    // record_payment() re-checks the real remaining balance server-side and
+    // rejects the insert if it would overpay — the on-device `owed`/`fullyPaid`
+    // figures above are only used for the optimistic UI update, never trusted
+    // for the actual write. This is what stops the same debt being settled
+    // twice by two payments that each looked valid on their own device.
+    const rpcPayload = {
+      p_sale_id:     saleId,
+      p_business_id: sale.business_id,
+      p_amount:      amountCents,
+      p_method:      method,
+      p_date:        date,
+    };
 
-      if (fullyPaid) {
-        const { error: statusErr } = await supabase
-          .from('sale_orders')
-          .update({ status: 'paye', paid_at: now })
-          .eq('id', saleId)
-          .eq('business_id', sale.business_id);
-        if (statusErr) {
-          applyOptimistic();
-          set({ error: translateError(statusErr, 'Paiement enregistré, mais le statut n\'a pas pu être mis à jour.') });
-          return { ok: true, fullyPaid: true };
-        }
-      }
+    try {
+      const { data, error: rpcErr } = await supabase.rpc('record_payment', rpcPayload);
+      if (rpcErr) throw rpcErr;
       applyOptimistic();
-      return { ok: true, fullyPaid };
+      return { ok: true, fullyPaid: data as boolean };
     } catch (err) {
       if (isNetworkError(err)) {
-        await enqueue('record_payment', {
-          payments: [paymentRow],
-          fully_paid_ids: fullyPaid ? [saleId] : [],
-        });
+        await enqueue('record_payment', rpcPayload);
         const count = await getQueueCount();
         useSyncStore.setState({ pendingCount: count });
         applyOptimistic();
@@ -326,7 +340,6 @@ export const useVentesStore = create<VentesStore>((set, get) => ({
     }
 
     let toAllocate = amount;
-    const paymentRows: object[] = [];
     const storeUpdates: { id: string; newAmountPaid: number; fullyPaid: boolean; paidAt: string }[] = [];
     const now = new Date().toISOString();
 
@@ -340,21 +353,9 @@ export const useVentesStore = create<VentesStore>((set, get) => ({
       const newAmountPaid = (sale.amount_paid ?? 0) + allocated;
       const fullyPaid = newAmountPaid >= saleOwed - 0.01;
 
-      paymentRows.push({
-        id: generateId(),
-        order_id: sale.id,
-        customer_name: customerName,
-        business_id: businessId,
-        method,
-        amount: Math.round(allocated * 100),
-        date,
-      });
-
       storeUpdates.push({ id: sale.id, newAmountPaid, fullyPaid, paidAt: now });
       toAllocate -= allocated;
     }
-
-    const fullyPaidIds = storeUpdates.filter(u => u.fullyPaid).map(u => u.id);
 
     const applyOptimistic = () => {
       set(state => ({
@@ -373,21 +374,25 @@ export const useVentesStore = create<VentesStore>((set, get) => ({
     };
 
     let fullySettled = false;
+    // Server-side atomic allocation with row locks prevents double-payment —
+    // both online and queued-offline replay go through this same RPC, so a
+    // second payment that arrives after the debt is already settled finds
+    // nothing left to allocate against instead of recording extra cash nowhere.
+    const rpcPayload = {
+      p_business_id:   businessId,
+      p_customer_name: customerName,
+      p_amount:        Math.round(amount * 100),
+      p_method:        method,
+      p_date:          date,
+    };
     try {
-      // Online: server-side atomic allocation with row locks prevents double-payment
-      const { data: rpcData, error: rpcErr } = await supabase.rpc('record_client_payment', {
-        p_business_id:   businessId,
-        p_customer_name: customerName,
-        p_amount:        Math.round(amount * 100),
-        p_method:        method,
-        p_date:          date,
-      });
+      const { data: rpcData, error: rpcErr } = await supabase.rpc('record_client_payment', rpcPayload);
       if (rpcErr) throw rpcErr;
       applyOptimistic();
       fullySettled = (rpcData as { fully_settled: boolean }).fully_settled;
     } catch (err) {
       if (isNetworkError(err)) {
-        await enqueue('record_payment', { payments: paymentRows, fully_paid_ids: fullyPaidIds });
+        await enqueue('record_client_payment', rpcPayload);
         const count = await getQueueCount();
         useSyncStore.setState({ pendingCount: count });
         applyOptimistic();
@@ -401,11 +406,21 @@ export const useVentesStore = create<VentesStore>((set, get) => ({
     }
 
     trackEvent('debt_payment_recorded', businessId, null, { fully_settled: fullySettled });
+    if (fullySettled) {
+      const currency = useAuthStore.getState().session?.activeBusiness?.currency ?? 'GNF';
+      notifyEvent({
+        businessId,
+        eventType: 'credit_paid',
+        payload: { customer: customerName, amount: formatAmount(amount, currency) },
+        targetRoles: ['administrateur', 'manager'],
+      });
+    }
     return { ok: true, fullySettled };
   },
 
   cancelSale: async (saleId, businessId, userId, reason) => {
     set({ saving: true, error: null });
+    const _cancelledSale = get().sales.find(s => s.id === saleId);
     const now = new Date().toISOString();
     const { data: profileData } = await supabase.from('profiles').select('name').eq('id', userId).single();
     const cancellerName = profileData?.name || generateFallbackName(userId);
@@ -427,6 +442,21 @@ export const useVentesStore = create<VentesStore>((set, get) => ({
         sales: state.sales.map(s => s.id === saleId ? { ...s, ...cancelPatch } : s),
         saving: false,
       }));
+      // Notify original seller (if different from canceller) and admins
+      if (_cancelledSale) {
+        const currency = useAuthStore.getState().session?.activeBusiness?.currency ?? 'GNF';
+        const targetUserIds: string[] = [];
+        if (_cancelledSale.seller_id && _cancelledSale.seller_id !== userId) {
+          targetUserIds.push(_cancelledSale.seller_id);
+        }
+        notifyEvent({
+          businessId,
+          eventType: 'sale_cancelled',
+          payload: { amount: formatAmount(_cancelledSale.total_amount, currency), reason },
+          targetUserIds: targetUserIds.length > 0 ? targetUserIds : undefined,
+          targetRoles: ['administrateur'],
+        });
+      }
       return true;
     } catch (err) {
       if (isNetworkError(err)) {

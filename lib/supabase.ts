@@ -48,12 +48,51 @@ const fetchWithTimeout: typeof fetch = (input, init) => {
     .finally(() => clearTimeout(timer));
 };
 
+// Matches the key the SDK would derive on its own (`sb-<project-ref>-auth-token`)
+// but set explicitly so this file is the single source of truth — the
+// belt-and-suspenders clear below must always agree with what's actually
+// persisted. Kept identical to the implicit default so existing sessions on
+// devices already in the field aren't invalidated by this change.
+const AUTH_STORAGE_KEY = 'sb-jnxpujsyvbenqgjbvifh-auth-token';
+
 export const supabase = createClient(SUPABASE_URL, SUPABASE_ANON_KEY, {
   auth: {
     storage: LargeSecureStore,
+    storageKey: AUTH_STORAGE_KEY,
     autoRefreshToken: true,
     persistSession: true,
     detectSessionInUrl: false,
   },
   global: { fetch: fetchWithTimeout },
 });
+
+// Force-clears the Supabase auth token directly from SecureStore.
+// Used as a belt-and-suspenders after signOut() — the Supabase client can return
+// early without calling _removeSession() when the server returns a non-standard
+// error (e.g. network timeout). That leaves the JWT in SecureStore so the next
+// app launch would restore the session even though the user logged out.
+export async function clearSupabaseLocalSession(): Promise<void> {
+  try {
+    await LargeSecureStore.removeItem(AUTH_STORAGE_KEY);
+  } catch {}
+}
+
+// Directly calls the same endpoint supabase.auth.signOut() would, but using a
+// bearer token captured up front rather than whatever session the client has
+// loaded — so logout() can retry this later even after the local session has
+// already been wiped. scope=global revokes the whole refresh-token family,
+// matching signOut()'s default. Returns whether it actually reached the server.
+export async function revokeAccessToken(accessToken: string): Promise<boolean> {
+  try {
+    const res = await fetchWithTimeout(`${SUPABASE_URL}/auth/v1/logout?scope=global`, {
+      method: 'POST',
+      headers: {
+        apikey: SUPABASE_ANON_KEY,
+        Authorization: `Bearer ${accessToken}`,
+      },
+    });
+    return res.ok || res.status === 401 || res.status === 403; // already-invalid token counts as done
+  } catch {
+    return false;
+  }
+}

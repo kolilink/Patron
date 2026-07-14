@@ -3,7 +3,7 @@
     "name": "Patron",
     "slug": "patron",
     "scheme": "patron",
-    "version": "1.0.2",
+    "version": "1.0.3",
     "orientation": "portrait",
     "icon": "./assets/icon.png",
     "userInterfaceStyle": "automatic",
@@ -11,7 +11,12 @@
     "splash": {
       "image": "./assets/splash.png",
       "resizeMode": "cover",
-      "backgroundColor": "#F5F7FA"
+      "backgroundColor": "#F5F7FA",
+      "dark": {
+        "image": "./assets/splash-dark.png",
+        "resizeMode": "cover",
+        "backgroundColor": "#000000"
+      }
     },
     "ios": {
       "supportsTablet": false,
@@ -19,7 +24,10 @@
       "buildNumber": "1",
       "infoPlist": {
         "NSFaceIDUsageDescription": "Utilisé pour déverrouiller votre session en toute sécurité.",
-        "ITSAppUsesNonExemptEncryption": false
+        "NSMicrophoneUsageDescription": "Utilisé pour envoyer des messages vocaux à votre équipe.",
+        "ITSAppUsesNonExemptEncryption": false,
+        "UIBackgroundModes": ["remote-notification"],
+        "LSApplicationQueriesSchemes": ["googlegmail", "message"]
       },
       "privacyManifests": {
         "NSPrivacyAccessedAPITypes": [
@@ -51,9 +59,20 @@
         "foregroundImage": "./assets/adaptive-icon.png",
         "backgroundColor": "#ffffff"
       },
+      "splash": {
+        "image": "./assets/splash.png",
+        "resizeMode": "cover",
+        "backgroundColor": "#F5F7FA",
+        "dark": {
+          "image": "./assets/splash-dark.png",
+          "resizeMode": "cover",
+          "backgroundColor": "#000000"
+        }
+      },
       "edgeToEdgeEnabled": true,
       "predictiveBackGestureEnabled": false,
-      "softwareKeyboardLayoutMode": "pan"
+      "softwareKeyboardLayoutMode": "pan",
+      "permissions": ["android.permission.RECORD_AUDIO"]
     },
     "web": {
       "favicon": "./assets/favicon.png"
@@ -65,7 +84,7 @@
       "fallbackToCacheTimeout": 0
     },
     "runtimeVersion": {
-      "policy": "appVersion"
+      "policy": "fingerprint"
     },
     "plugins": [
       "expo-router",
@@ -75,7 +94,15 @@
       "@react-native-community/datetimepicker",
       "expo-updates",
       "@sentry/react-native",
-      "expo-localization"
+      "expo-localization",
+      ["expo-notifications", {
+        "icon": "./assets/notification-icon.png",
+        "color": "#6366F1",
+        "sounds": [
+          "./assets/sounds/patron_default.wav",
+          "./assets/sounds/patron_urgent.wav"
+        ]
+      }]
     ],
     "extra": {
       "router": {},

@@ -1,15 +1,19 @@
-import { useCallback, useEffect, useMemo } from 'react';
-import { FlatList, Pressable, StyleSheet, View } from 'react-native';
+import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
+import { FlatList, KeyboardAvoidingView, Linking, Platform, Pressable, StyleSheet, TextInput, View } from 'react-native';
 import { Ionicons } from '@expo/vector-icons';
-import { SafeAreaView } from 'react-native-safe-area-context';
+import { Screen } from '@/src/components/ui/Screen';
 import { router, useFocusEffect } from 'expo-router';
+import { Button } from '@/src/components/ui/Button';
 import { Card } from '@/src/components/ui/Card';
 import { Text } from '@/src/components/ui/Text';
-import { useTheme, spacing, colors, radius } from '@/src/theme';
+import { useTheme, spacing, radius } from '@/src/theme';
 import type { Palette } from '@/src/theme';
 import { useAuthStore } from '@/stores/auth';
 import { useVentesStore } from '@/stores/ventes';
+import { useSalesStore } from '@/stores/sales';
+import { formatAmountInput, parseAmountInput } from '@/src/utils/format';
 import { SkeletonList } from '@/src/components/ui/SkeletonPlaceholder';
+import { OfflineNotice } from '@/src/components/ui/OfflineNotice';
 
 function fmt(n: number, cur: string) { return `${Math.round(n).toLocaleString('fr-FR')} ${cur}`; }
 
@@ -46,8 +50,46 @@ export default function CreditsScreen() {
   const currency = session?.activeBusiness?.currency ?? 'GNF';
   const role = session?.activeMembership?.role;
   const isVendeur = role === 'vendeur';
+  const isInvestisseur = role === 'investisseur';
 
-  const { sales, loading, error, fetchSales } = useVentesStore();
+  const businessName = session?.activeBusiness?.name ?? 'notre boutique';
+  const { sales, loading, error, offline, offlineSince, fetchSales } = useVentesStore();
+  const { submitCarnetDebt } = useSalesStore();
+
+  const [showAddForm, setShowAddForm] = useState(false);
+  const [addName, setAddName] = useState('');
+  const [addAmount, setAddAmount] = useState('');
+  const [addSaving, setAddSaving] = useState(false);
+  const addNameRef = useRef<TextInput>(null);
+  const addAmountRef = useRef<TextInput>(null);
+
+  const handleAddDebt = async () => {
+    const trimmedName = addName.trim();
+    const parsed = Math.round(parseAmountInput(addAmount, currency));
+    if (!trimmedName || isNaN(parsed) || parsed <= 0) return;
+    setAddSaving(true);
+    const ok = await submitCarnetDebt(businessId, userId, trimmedName, parsed * 100);
+    setAddSaving(false);
+    if (ok) {
+      setAddName('');
+      setAddAmount('');
+      setShowAddForm(false);
+      fetchSales(businessId, isVendeur ? userId : undefined);
+    }
+  };
+
+  const sendWhatsAppReminder = (debtor: DebtorClient) => {
+    const msg = [
+      `Bonjour ${debtor.name},`,
+      ``,
+      `J'espère que tout va bien de votre côté.`,
+      ``,
+      `Votre solde chez nous est de *${fmt(debtor.totalOwed, currency)}* — dès que c'est possible pour vous, on est là.`,
+      ``,
+      `${businessName}`,
+    ].join('\n');
+    Linking.openURL(`https://wa.me/?text=${encodeURIComponent(msg)}`).catch(() => {});
+  };
 
   useFocusEffect(
     useCallback(() => {
@@ -103,12 +145,14 @@ export default function CreditsScreen() {
     router.push(`/clients/${encodeURIComponent(name)}`);
 
   return (
-    <SafeAreaView style={styles.safe} edges={['top']}>
+    <Screen>
       <View style={styles.header}>
         <Pressable onPress={() => router.back()}><Text variant="body" color="secondary">‹ Retour</Text></Pressable>
         <Text variant="h4">Clients qui vous doivent</Text>
         <View style={{ width: 60 }} />
       </View>
+
+      {offline && <OfflineNotice offlineSince={offlineSince} />}
 
       {/* Total outstanding — hidden when nothing is owed */}
       {debtors.length > 0 && <Card style={styles.totalCard}>
@@ -137,19 +181,66 @@ export default function CreditsScreen() {
         </View>
       ) : debtors.length === 0 ? (
         <View style={styles.empty}>
-          <View style={styles.emptyBadge}>
-            <Ionicons name="checkmark-circle" size={36} color={palette.success} />
-          </View>
-          <Text variant="h4" style={{ textAlign: 'center', marginBottom: spacing[2] }}>Comptes soldés</Text>
-          <Text variant="body" color="secondary" style={{ textAlign: 'center' }}>
-            Des gens vous doivent de l'argent ?{'\n'}Notez-le ici — sans créer de produits.
-          </Text>
-          <Pressable
-            onPress={() => router.push('/(app)/onboarding/carnet')}
-            style={({ pressed }) => [styles.carnetCta, { opacity: pressed ? 0.7 : 1, borderColor: palette.primary }]}
-          >
-            <Text variant="label" style={{ color: palette.primary }}>Ajouter une dette</Text>
-          </Pressable>
+          {!showAddForm ? (
+            <>
+              <View style={styles.emptyBadge}>
+                <Ionicons name="checkmark-circle" size={36} color={palette.success} />
+              </View>
+              <Text variant="h4" style={{ textAlign: 'center', marginBottom: spacing[4] }}>Tout est soldé</Text>
+              <Pressable
+                onPress={() => { setShowAddForm(true); setTimeout(() => addNameRef.current?.focus(), 80); }}
+                style={({ pressed }) => [styles.carnetCta, { opacity: pressed ? 0.7 : 1, borderColor: palette.primary }]}
+              >
+                <Text variant="label" style={{ color: palette.primary }}>Ajouter une dette</Text>
+              </Pressable>
+            </>
+          ) : (
+            <KeyboardAvoidingView behavior={Platform.OS === 'ios' ? 'padding' : 'height'} style={{ width: '100%' }}>
+              <View style={{ gap: spacing[3] }}>
+                <Text variant="label" color="secondary" style={{ textAlign: 'center', marginBottom: spacing[1] }}>
+                  Qui vous doit de l'argent ?
+                </Text>
+                <View style={{ flexDirection: 'row', gap: spacing[2] }}>
+                  <TextInput
+                    ref={addNameRef}
+                    style={[styles.addInput, { flex: 1, color: palette.textPrimary, borderColor: palette.border }]}
+                    placeholder="Nom"
+                    placeholderTextColor={palette.textDisabled}
+                    value={addName}
+                    onChangeText={setAddName}
+                    returnKeyType="next"
+                    onSubmitEditing={() => addAmountRef.current?.focus()}
+                    autoCapitalize="words"
+                  />
+                  <TextInput
+                    ref={addAmountRef}
+                    style={[styles.addInput, { width: 110, color: palette.textPrimary, borderColor: palette.border }]}
+                    placeholder="Montant"
+                    placeholderTextColor={palette.textDisabled}
+                    value={addAmount}
+                    onChangeText={v => setAddAmount(formatAmountInput(v, currency))}
+                    keyboardType="numeric"
+                    returnKeyType="done"
+                    onSubmitEditing={handleAddDebt}
+                  />
+                </View>
+                <Button
+                  label={addSaving ? '…' : 'Ajouter'}
+                  onPress={handleAddDebt}
+                  loading={addSaving}
+                  fullWidth
+                  size="lg"
+                  disabled={!addName.trim() || parseAmountInput(addAmount, currency) <= 0}
+                />
+                <Pressable
+                  onPress={() => { setShowAddForm(false); setAddName(''); setAddAmount(''); }}
+                  style={{ alignItems: 'center', paddingVertical: spacing[2] }}
+                >
+                  <Text variant="caption" color="secondary">Annuler</Text>
+                </Pressable>
+              </View>
+            </KeyboardAvoidingView>
+          )}
         </View>
       ) : (
         <FlatList
@@ -161,21 +252,13 @@ export default function CreditsScreen() {
             return (
               <Pressable onPress={() => navToLedger(item.name)}
                 style={({ pressed }) => [styles.row, pressed && { opacity: 0.75 }]}>
-                <View style={[styles.avatar, { backgroundColor: urgent ? colors.danger[50] : colors.warning[50] }]}>
-                  <Text variant="label" style={{ color: urgent ? palette.danger : palette.warning }}>
+                <View style={[styles.avatar, { backgroundColor: palette.warningLight }]}>
+                  <Text variant="label" style={{ color: palette.warning }}>
                     {item.name[0]?.toUpperCase()}
                   </Text>
                 </View>
                 <View style={{ flex: 1, gap: 2 }}>
-                  <View style={{ flexDirection: 'row', alignItems: 'center', gap: spacing[1] }}>
-                    {urgent && <Text variant="caption" style={{ color: palette.danger }}>⚠️</Text>}
-                    <Text variant="label" numberOfLines={1}>{item.name}</Text>
-                  </View>
-                  <Text variant="caption" color="secondary">
-                    {item.nbSales} vente{item.nbSales > 1 ? 's' : ''} à crédit
-                    {' · '}
-                    {item.daysOldest === 0 ? "aujourd'hui" : `il y a ${item.daysOldest} j`}
-                  </Text>
+                  <Text variant="label" numberOfLines={1}>{item.name}</Text>
                   {item.nearestDueDate && (
                     <Text variant="caption" style={{
                       color: new Date(item.nearestDueDate + 'T00:00:00') < new Date() ? palette.warning : palette.textSecondary,
@@ -189,9 +272,18 @@ export default function CreditsScreen() {
                     </Text>
                   )}
                 </View>
-                <View style={{ alignItems: 'flex-end', gap: 2 }}>
+                <View style={{ alignItems: 'flex-end', gap: 6 }}>
                   <Text variant="label" style={{ color: palette.warning }}>{fmt(item.totalOwed, currency)}</Text>
-                  <Text variant="caption" color="secondary">›</Text>
+                  {!isInvestisseur && (
+                    <Pressable
+                      onPress={() => sendWhatsAppReminder(item)}
+                      hitSlop={8}
+                      style={({ pressed }) => [styles.waBtn, { opacity: pressed ? 0.6 : 1 }]}
+                    >
+                      <Ionicons name="logo-whatsapp" size={14} color={palette.primary} />
+                      <Text variant="caption" style={styles.waBtnText}>Rappeler</Text>
+                    </Pressable>
+                  )}
                 </View>
               </Pressable>
             );
@@ -199,7 +291,7 @@ export default function CreditsScreen() {
           ItemSeparatorComponent={() => <View style={{ height: 1, backgroundColor: palette.border }} />}
         />
       )}
-    </SafeAreaView>
+    </Screen>
   );
 }
 
@@ -226,10 +318,21 @@ function makeStyles(p: Palette) {
   empty: { flex: 1, alignItems: 'center', justifyContent: 'center', paddingHorizontal: spacing[8] },
   emptyBadge: { width: 88, height: 88, borderRadius: 44, backgroundColor: p.successLight, alignItems: 'center', justifyContent: 'center', marginBottom: spacing[5] },
   carnetCta: {
-    marginTop: spacing[4],
     paddingVertical: spacing[3], paddingHorizontal: spacing[6],
     borderWidth: 1, borderRadius: radius.md,
   },
+  addInput: {
+    borderWidth: 1, borderRadius: radius.md,
+    paddingHorizontal: spacing[3], paddingVertical: spacing[3],
+    fontSize: 15,
+  },
   center: { textAlign: 'center', marginTop: spacing[10] },
+  waBtn: {
+    flexDirection: 'row', alignItems: 'center', gap: 4,
+    paddingHorizontal: spacing[2], paddingVertical: 3,
+    borderRadius: radius.sm, borderWidth: 1, borderColor: p.primary + '40',
+    backgroundColor: p.primary + '12',
+  },
+  waBtnText: { color: p.primary, fontSize: 11 },
   });
 }

@@ -1,11 +1,11 @@
 import { useCallback, useMemo, useState } from 'react';
 import { FlatList, Pressable, StyleSheet, View } from 'react-native';
-import { SafeAreaView } from 'react-native-safe-area-context';
+import { Screen } from '@/src/components/ui/Screen';
 import { router, useFocusEffect } from 'expo-router';
 import { Ionicons } from '@expo/vector-icons';
 import { Text } from '@/src/components/ui/Text';
 import { Input } from '@/src/components/ui/Input';
-import { useTheme, spacing, radius } from '@/src/theme';
+import { useTheme, spacing, radius, AVATAR_PALETTE } from '@/src/theme';
 import type { Palette } from '@/src/theme';
 import { useAuthStore } from '@/stores/auth';
 import { useVentesStore } from '@/stores/ventes';
@@ -33,13 +33,17 @@ interface Client {
   sellers: string[];
 }
 
-type FilterType = 'tous' | 'doivent' | 'recents';
+type FilterType = 'tous' | 'doivent' | 'actifs';
 
 const FILTERS: { key: FilterType; label: string }[] = [
   { key: 'tous', label: 'Tous' },
   { key: 'doivent', label: 'Doivent' },
-  { key: 'recents', label: 'Récents' },
+  { key: 'actifs', label: 'Actifs' },
 ];
+
+function avatarColor(name: string): string {
+  return AVATAR_PALETTE[(name.charCodeAt(0) || 0) % AVATAR_PALETTE.length];
+}
 
 export default function ClientsScreen() {
   const { palette } = useTheme();
@@ -92,7 +96,7 @@ export default function ClientsScreen() {
   const displayedClients = useMemo<Client[]>(() => {
     let list = allClients;
     if (filter === 'doivent') list = list.filter(c => c.totalCredit > 0);
-    if (filter === 'recents') list = [...list].sort((a, b) => b.lastSaleDate.localeCompare(a.lastSaleDate));
+    if (filter === 'actifs') list = [...list].sort((a, b) => b.lastSaleDate.localeCompare(a.lastSaleDate));
     const q = search.trim().toLowerCase();
     if (q) list = list.filter(c => c.name.toLowerCase().includes(q));
     return list;
@@ -109,7 +113,7 @@ export default function ClientsScreen() {
       : '');
 
   return (
-    <SafeAreaView style={styles.safe} edges={['top']}>
+    <Screen>
       <View style={styles.hdr}>
         <Pressable onPress={() => router.back()}><Text variant="body" color="secondary">‹ Retour</Text></Pressable>
         <View style={{ alignItems: 'center' }}>
@@ -180,8 +184,8 @@ export default function ClientsScreen() {
             <Pressable
               onPress={() => router.push(`/clients/${encodeURIComponent(item.clientId ?? item.name)}`)}
               style={({ pressed }) => [styles.clientRow, pressed && { opacity: 0.75 }]}>
-              <View style={[styles.avatar, { backgroundColor: item.totalCredit > 0 ? '#FEF3C7' : '#F0FDF4' }]}>
-                <Text variant="label" style={{ color: item.totalCredit > 0 ? '#D97706' : '#16A34A' }}>
+              <View style={[styles.avatar, { backgroundColor: avatarColor(item.name) + '20' }]}>
+                <Text variant="label" style={{ color: avatarColor(item.name) }}>
                   {item.name[0]?.toUpperCase()}
                 </Text>
               </View>
@@ -200,11 +204,11 @@ export default function ClientsScreen() {
               </View>
               <View style={{ flexDirection: 'row', alignItems: 'center', justifyContent: 'flex-end' }}>
                 {item.totalCredit > 0 ? (
-                  <Text variant="label" style={{ color: '#B45309', marginRight: 8 }}>
+                  <Text variant="label" style={{ color: palette.warning, marginRight: 8 }}>
                     {fmt(item.totalCredit, currency)}
                   </Text>
                 ) : (
-                  <Text variant="caption" style={{ color: '#16A34A', fontWeight: '600', marginRight: 8 }}>À jour</Text>
+                  <Text variant="caption" style={{ color: palette.success, fontWeight: '600', marginRight: 8 }}>À jour</Text>
                 )}
                 <Text variant="caption" color="secondary">›</Text>
               </View>
@@ -213,7 +217,7 @@ export default function ClientsScreen() {
           ItemSeparatorComponent={() => <View style={{ height: 1, backgroundColor: palette.border }} />}
         />
       )}
-    </SafeAreaView>
+    </Screen>
   );
 }
 

@@ -3,16 +3,18 @@ import { Alert, Animated, Linking, Modal, Pressable, ScrollView, StyleSheet, Tex
 import { Ionicons } from '@expo/vector-icons';
 import { haptics } from '@/lib/haptics';
 import { SafeAreaView } from 'react-native-safe-area-context';
+import { Screen } from '@/src/components/ui/Screen';
 import { router, useLocalSearchParams } from 'expo-router';
 import { Card } from '@/src/components/ui/Card';
 import { Text } from '@/src/components/ui/Text';
 import { Button } from '@/src/components/ui/Button';
 import { Input } from '@/src/components/ui/Input';
-import { useTheme, spacing, colors, radius } from '@/src/theme';
+import { useTheme, spacing, radius } from '@/src/theme';
 import type { Palette } from '@/src/theme';
 import { useAuthStore } from '@/stores/auth';
 import { useVentesStore, type Vente } from '@/stores/ventes';
 import { supabase } from '@/lib/supabase';
+import { formatAmountInput, parseAmountInput } from '@/src/utils/format';
 
 function fmt(n: number, cur: string) { return `${Math.round(n).toLocaleString('fr-FR')} ${cur}`; }
 
@@ -146,7 +148,7 @@ function PayModal({
 
   useEffect(() => {
     if (visible) {
-      setAmountStr(Math.round(totalOwed).toString());
+      setAmountStr(formatAmountInput(String(Math.round(totalOwed)), currency));
       setMethod('especes');
       setDate(todayISO());
       setAllocation('fifo');
@@ -154,7 +156,7 @@ function PayModal({
     }
   }, [visible, totalOwed]);
 
-  const amount = parseFloat(amountStr.replace(/\s/g, '')) || 0;
+  const amount = parseAmountInput(amountStr, currency);
 
   const saleRemaining = (id: string) => {
     const sale = creditSales.find(s => s.id === id);
@@ -206,14 +208,14 @@ function PayModal({
               <TextInput
                 style={styles.amountInput}
                 value={amountStr}
-                onChangeText={setAmountStr}
+                onChangeText={v => setAmountStr(formatAmountInput(v, currency))}
                 keyboardType="numeric"
                 placeholderTextColor={palette.textDisabled}
                 selectTextOnFocus
               />
               <Pressable
                 style={styles.solderBtn}
-                onPress={() => setAmountStr(Math.round(totalOwed).toString())}
+                onPress={() => setAmountStr(formatAmountInput(String(Math.round(totalOwed)), currency))}
               >
                 <Text variant="label" style={{ color: palette.primary }}>Tout régler</Text>
               </Pressable>
@@ -375,6 +377,11 @@ export default function ClientLedgerScreen() {
     [clientSales],
   );
 
+  const everHadCredit = useMemo(
+    () => clientSales.some(s => s.is_credit),
+    [clientSales],
+  );
+
   const debtAge = useMemo(() => {
     if (creditSales.length === 0) return 0;
     const oldest = creditSales[0].sale_date ?? creditSales[0].created_at.split('T')[0];
@@ -454,7 +461,8 @@ export default function ClientLedgerScreen() {
     if (result.ok) {
       setShowPayModal(false);
       haptics.success();
-      setSuccessPayment({ amount });
+      const paidInFull = specificSaleId ? result.fullyPaid : result.fullySettled;
+      if (!paidInFull) setSuccessPayment({ amount });
       loadLedgerPayments();
     }
   }, [displayName, businessId, recordPayment, recordClientPayment]);
@@ -469,7 +477,7 @@ export default function ClientLedgerScreen() {
 
   if (loadingLocal && loading) {
     return (
-      <SafeAreaView style={styles.safe} edges={['top']}>
+      <Screen>
         <View style={styles.hdr}>
           <Pressable onPress={() => router.back()}><Text variant="body" color="secondary">‹ Retour</Text></Pressable>
           <Text variant="h4" style={{ flex: 1, textAlign: 'center' }} numberOfLines={1}>{displayName}</Text>
@@ -478,12 +486,12 @@ export default function ClientLedgerScreen() {
         <Text variant="body" color="secondary" style={{ textAlign: 'center', marginTop: spacing[8] }}>
           Chargement…
         </Text>
-      </SafeAreaView>
+      </Screen>
     );
   }
 
   return (
-    <SafeAreaView style={styles.safe} edges={['top']}>
+    <Screen>
       {/* Header */}
       <View style={styles.hdr}>
         <Pressable onPress={() => router.back()}><Text variant="body" color="secondary">‹ Retour</Text></Pressable>
@@ -501,36 +509,33 @@ export default function ClientLedgerScreen() {
 
         {/* Status banner */}
         {totalOwed > 0 ? (
-          <View style={styles.bannerOrange}>
+          <View style={styles.debtCard}>
             <Text style={styles.bannerLabel}>{displayName} vous doit</Text>
             <Text style={styles.bannerAmount}>{fmt(totalOwed, currency)}</Text>
-            <RNText style={[styles.bannerAge, { color: debtAge >= 30 ? palette.danger : debtAge >= 7 ? '#B45309' : '#9CA3AF' }]}>
+            <RNText style={[styles.bannerAge, debtAge >= 30 && { color: palette.warning }]}>
               {debtAge === 0 ? "depuis aujourd'hui" : `depuis ${debtAge} jour${debtAge > 1 ? 's' : ''}`}
             </RNText>
-            {totalSold > 0 && totalPaid > 0 && (
-              <>
-                <View style={styles.progressTrack}>
-                  <View style={[styles.progressFill, { width: `${Math.min(100, Math.round((totalPaid / totalSold) * 100))}%` }]} />
-                </View>
-                <RNText style={styles.progressLabel}>A déjà remboursé {fmt(totalPaid, currency)}</RNText>
-              </>
+            {totalPaid > 0 && (
+              <RNText style={styles.repaidLine}>
+                {fmt(totalPaid, currency)} remboursé sur {fmt(totalSold, currency)}
+              </RNText>
             )}
             <Pressable
               onPress={() => setShowPayModal(true)}
               style={({ pressed }) => [styles.bannerBtn, pressed && { opacity: 0.85 }]}
             >
-              <Text style={styles.bannerBtnText}>+ Enregistrer un paiement</Text>
+              <Text style={styles.bannerBtnText}>Enregistrer un paiement</Text>
             </Pressable>
           </View>
-        ) : (
+        ) : everHadCredit ? (
           <View style={styles.bannerGreen}>
-            <Ionicons name="checkmark-circle" size={22} color={colors.success[700]} />
+            <Ionicons name="checkmark-circle" size={22} color={palette.success} />
             <View style={{ flex: 1 }}>
-              <RNText style={{ fontSize: 14, fontWeight: '700', color: colors.success[700] }}>{displayName} ne vous doit plus rien</RNText>
-              <RNText style={{ fontSize: 12, color: colors.success[600], marginTop: 2 }}>Compte soldé · tout est à jour</RNText>
+              <RNText style={{ fontSize: 14, fontWeight: '700', color: palette.success }}>{displayName} ne vous doit plus rien</RNText>
+              <RNText style={{ fontSize: 12, color: palette.success, marginTop: 2 }}>Compte soldé · tout est à jour</RNText>
             </View>
           </View>
-        )}
+        ) : null}
 
         {/* Contact row */}
         {clientRecord?.phone && (
@@ -568,8 +573,8 @@ export default function ClientLedgerScreen() {
                   <View style={styles.daySummary}>
                     {group.sales.length > 0 && (
                       <View style={styles.summaryRow}>
-                        <View style={[styles.summaryIcon, { backgroundColor: '#F3F4F6' }]}>
-                          <Ionicons name="cart-outline" size={12} color="#6B7280" />
+                        <View style={[styles.summaryIcon, { backgroundColor: palette.background }]}>
+                          <Ionicons name="cart-outline" size={12} color={palette.textSecondary} />
                         </View>
                         <Text style={[styles.summaryText, { color: palette.textSecondary }]}>
                           {group.sales.length} vente{group.sales.length > 1 ? 's' : ''} · {fmt(group.salesTotal, currency)}
@@ -578,10 +583,10 @@ export default function ClientLedgerScreen() {
                     )}
                     {group.unpaidCount > 0 && (
                       <View style={styles.summaryRow}>
-                        <View style={[styles.summaryIcon, { backgroundColor: '#FEF3C7' }]}>
-                          <Ionicons name="alert-circle-outline" size={12} color="#D97706" />
+                        <View style={[styles.summaryIcon, { backgroundColor: palette.warningLight }]}>
+                          <Ionicons name="alert-circle-outline" size={12} color={palette.warning} />
                         </View>
-                        <Text style={[styles.summaryText, { color: '#B45309' }]}>
+                        <Text style={[styles.summaryText, { color: palette.warning }]}>
                           {group.unpaidCount} impayé{group.unpaidCount > 1 ? 's' : ''} · {fmt(group.unpaidTotal, currency)}
                         </Text>
                       </View>
@@ -591,7 +596,9 @@ export default function ClientLedgerScreen() {
                   {/* "Voir le détail" toggle when collapsed */}
                   {!expanded && total > 0 && (
                     <Pressable style={styles.seeDetailBtn} onPress={() => toggleDay(group.dateKey)}>
-                      <Text style={styles.seeDetailText}>Voir les {total} transaction{total > 1 ? 's' : ''} ›</Text>
+                      <Text style={styles.seeDetailText}>
+                        {total === 1 ? 'Voir la transaction ›' : `Voir les ${total} transactions ›`}
+                      </Text>
                     </Pressable>
                   )}
 
@@ -603,8 +610,8 @@ export default function ClientLedgerScreen() {
                         const isLast = idx === group.sales.length - 1 && group.payments.length === 0;
                         return (
                           <View key={`s-${s.id}`} style={[styles.detailRow, !isLast && styles.detailBorder]}>
-                            <View style={[styles.rowIcon, { backgroundColor: isCredit ? '#FEF3C7' : '#F3F4F6' }]}>
-                              <Ionicons name="cart-outline" size={14} color={isCredit ? '#D97706' : '#9CA3AF'} />
+                            <View style={[styles.rowIcon, { backgroundColor: isCredit ? palette.warningLight : palette.background }]}>
+                              <Ionicons name="cart-outline" size={14} color={isCredit ? palette.warning : palette.textDisabled} />
                             </View>
                             <View style={{ flex: 1 }}>
                               <Text variant="body" numberOfLines={1} style={!isCredit && { textDecorationLine: 'line-through', color: palette.textSecondary }}>
@@ -628,13 +635,13 @@ export default function ClientLedgerScreen() {
                         const isLast = idx === group.payments.length - 1;
                         return (
                           <View key={`p-${p.id}`} style={[styles.detailRow, !isLast && styles.detailBorder]}>
-                            <View style={[styles.rowIcon, { backgroundColor: '#F0FDF4' }]}>
-                              <Ionicons name="arrow-down-circle-outline" size={14} color="#16A34A" />
+                            <View style={[styles.rowIcon, { backgroundColor: palette.successLight }]}>
+                              <Ionicons name="arrow-down-circle-outline" size={14} color={palette.success} />
                             </View>
                             <View style={{ flex: 1 }}>
                               <Text variant="body">{methodLabel(p.method)}</Text>
                             </View>
-                            <Text variant="label" style={{ color: '#16A34A' }}>+{fmt(p.amount, currency)}</Text>
+                            <Text variant="label" style={{ color: palette.success }}>+{fmt(p.amount, currency)}</Text>
                           </View>
                         );
                       })}
@@ -678,7 +685,7 @@ export default function ClientLedgerScreen() {
       {successPayment && (
         <View style={styles.successOverlay}>
           <Animated.View style={[styles.successBadge, { transform: [{ scale: checkScale }] }]}>
-            <Ionicons name="checkmark" size={44} color="#16A34A" />
+            <Ionicons name="checkmark" size={44} color={palette.success} />
           </Animated.View>
           <Text style={styles.successHeadline}>C'est réglé !</Text>
           <Text style={styles.successSubtitle}>
@@ -692,7 +699,7 @@ export default function ClientLedgerScreen() {
           </Pressable>
         </View>
       )}
-    </SafeAreaView>
+    </Screen>
   );
 }
 
@@ -705,31 +712,25 @@ function makeStyles(p: Palette) {
     },
     content: { paddingHorizontal: spacing[5], paddingTop: 12, paddingBottom: spacing[10], gap: spacing[4] },
 
-    bannerOrange: {
-      backgroundColor: colors.warning[50], borderRadius: radius.lg,
-      borderWidth: 1, borderColor: colors.warning[100],
-      flexDirection: 'column', alignItems: 'center', justifyContent: 'flex-start',
-      paddingHorizontal: 16, paddingTop: 16, paddingBottom: 16,
+    debtCard: {
+      backgroundColor: p.surface, borderRadius: radius.lg,
+      borderWidth: 1, borderColor: p.border,
+      alignItems: 'center', paddingHorizontal: 20, paddingTop: 24, paddingBottom: 20,
     },
-    bannerLabel: { fontSize: 14, color: p.textSecondary, textAlign: 'center', fontWeight: '400' },
-    bannerAmount: { fontSize: 32, fontWeight: '700', lineHeight: 44, color: p.warning, textAlign: 'center', marginVertical: 4 },
+    bannerLabel: { fontSize: 14, color: p.textSecondary, textAlign: 'center', fontWeight: '400', marginBottom: 4 },
+    bannerAmount: { fontSize: 40, fontWeight: '700', lineHeight: 52, color: p.textPrimary, textAlign: 'center' },
     bannerBtn: {
       width: '100%', backgroundColor: p.primary, borderRadius: 12,
-      paddingVertical: 12, alignItems: 'center', justifyContent: 'center', marginTop: 12,
+      paddingVertical: 14, alignItems: 'center', justifyContent: 'center', marginTop: 16,
     },
     bannerBtnText: { fontSize: 16, fontWeight: '600', color: p.textInverse },
     bannerGreen: {
-      backgroundColor: colors.success[50], borderRadius: radius.lg,
-      borderWidth: 1, borderColor: colors.success[100],
+      backgroundColor: p.successLight, borderRadius: radius.lg,
+      borderWidth: 1, borderColor: p.success,
       padding: spacing[4], flexDirection: 'row', alignItems: 'center', justifyContent: 'flex-start', gap: 8,
     },
-    bannerAge: { fontSize: 12, textAlign: 'center', marginBottom: 6 },
-    progressTrack: {
-      width: '100%', height: 4, backgroundColor: p.border,
-      borderRadius: 2, overflow: 'hidden', marginBottom: 4,
-    },
-    progressFill: { height: '100%', backgroundColor: p.success, borderRadius: 2 },
-    progressLabel: { fontSize: 12, color: p.textSecondary, textAlign: 'center', marginBottom: 8 },
+    bannerAge: { fontSize: 12, color: p.textSecondary, textAlign: 'center', marginTop: 4, marginBottom: 8 },
+    repaidLine: { fontSize: 13, color: p.textSecondary, textAlign: 'center', marginBottom: 4 },
     rowIcon: { width: 28, height: 28, borderRadius: 8, alignItems: 'center', justifyContent: 'center' },
     contactRow: { flexDirection: 'row', alignItems: 'center', justifyContent: 'space-between' },
 
@@ -786,7 +787,7 @@ function makeStyles(p: Palette) {
     chipActive: { backgroundColor: p.primary, borderColor: p.primary },
     successOverlay: {
       ...StyleSheet.absoluteFillObject,
-      backgroundColor: p.successLight,
+      backgroundColor: p.background,
       alignItems: 'center',
       justifyContent: 'center',
       padding: 32,
@@ -794,7 +795,7 @@ function makeStyles(p: Palette) {
     },
     successBadge: {
       width: 80, height: 80, borderRadius: 40,
-      backgroundColor: colors.success[100],
+      backgroundColor: p.successLight,
       alignItems: 'center', justifyContent: 'center',
       marginBottom: 24,
     },

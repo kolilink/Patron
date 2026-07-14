@@ -1,6 +1,7 @@
 import { useEffect, useMemo, useRef, useState } from 'react';
-import { Alert, Animated, KeyboardAvoidingView, Linking, Platform, Pressable, ScrollView, StyleSheet, TextInput, View } from 'react-native';
-import { SafeAreaView } from 'react-native-safe-area-context';
+import { Alert, Animated, KeyboardAvoidingView, Linking, Platform, Pressable, ScrollView, Share, StyleSheet, TextInput, View } from 'react-native';
+import * as Clipboard from 'expo-clipboard';
+import { Screen } from '@/src/components/ui/Screen';
 import { router } from 'expo-router';
 import { Ionicons } from '@expo/vector-icons';
 import { Card } from '@/src/components/ui/Card';
@@ -15,6 +16,7 @@ import { generateFallbackName } from '@/lib/id';
 import { supabase } from '@/lib/supabase';
 import { haptics } from '@/lib/haptics';
 import { toast } from '@/stores/toast';
+import { toUnicodeBold } from '@/src/utils/format';
 import type { Business } from '@/src/types';
 
 // Must match the list in creer.tsx — all currencies we support
@@ -31,10 +33,13 @@ const CURRENCY_NAMES: Record<string, string> = {
   EUR: 'Euro',
 };
 
+// "Inviter un ami" turned off for now — flip back to true to re-enable.
+const SHOW_REFERRAL = false;
+
 export default function ParametresScreen() {
   const { palette, colorScheme, setColorScheme } = useTheme();
   const styles = useMemo(() => makeStyles(palette), [palette]);
-  const { session, sendEmailOtp, linkRecoveryEmail, emailOtpLoading, error: authError, clearError } = useAuthStore();
+  const { session, sendEmailOtp, linkRecoveryEmail, emailOtpLoading, error: authError, clearError, lock } = useAuthStore();
   const business = session?.activeBusiness;
   const userId   = session?.user.id ?? '';
   const role     = session?.activeMembership?.role;
@@ -43,6 +48,15 @@ export default function ParametresScreen() {
   const defaultPhone = business?.phone ?? session?.user.phone ?? '';
   const [bizName,  setBizName]  = useState(business?.name ?? '');
   const [bizPhone, setBizPhone] = useState(defaultPhone);
+
+  // PhoneInput fires onChange on mount — skip that first fire so it doesn't reset
+  // bizPhone to '' when the stored number's digit count doesn't match exactly.
+  const bizPhoneInitKeyRef = useRef(defaultPhone);
+  const bizPhoneSkipRef    = useRef(true);
+  if (bizPhoneInitKeyRef.current !== defaultPhone) {
+    bizPhoneInitKeyRef.current = defaultPhone;
+    bizPhoneSkipRef.current    = true;
+  }
   const [currency, setCurrency] = useState(business?.currency ?? '');
   const [userName, setUserName] = useState(session?.user.name ?? '');
   const [saving,   setSaving]   = useState(false);
@@ -264,7 +278,7 @@ export default function ParametresScreen() {
   };
 
   return (
-    <SafeAreaView style={styles.safe} edges={['top']}>
+    <Screen>
 
       {/* Header */}
       <View style={styles.hdr}>
@@ -300,7 +314,10 @@ export default function ParametresScreen() {
                 label="Numéro du commerce"
                 initialValue={defaultPhone || undefined}
                 strict={false}
-                onChange={(e164, isComplete) => setBizPhone(isComplete ? e164 : '')}
+                onChange={(e164, isComplete) => {
+                  if (bizPhoneSkipRef.current) { bizPhoneSkipRef.current = false; return; }
+                  setBizPhone(isComplete ? e164 : '');
+                }}
               />
               <View style={{ gap: spacing[2] }}>
                 <Text variant="label">Monnaie</Text>
@@ -333,11 +350,45 @@ export default function ParametresScreen() {
             </Card>
           )}
 
+          {/* Inviter un ami — admin only, referral_code lives on businesses (migration_v130) */}
+          {SHOW_REFERRAL && isAdmin && business?.referral_code && (
+            <Card style={styles.section}>
+              <Text variant="label" color="secondary">Inviter un ami</Text>
+              <Text variant="bodySmall" color="secondary">
+                Inviter un ami et profiter chacun de 30 jours gratuits
+              </Text>
+              <Pressable
+                onPress={async () => {
+                  await Clipboard.setStringAsync(business.referral_code!);
+                  haptics.success();
+                  toast.success('Code copié');
+                }}
+                style={styles.referralCodeBox}
+              >
+                <Text variant="h3" style={{ color: palette.primary, letterSpacing: 2 }}>
+                  {business.referral_code}
+                </Text>
+                <Text variant="caption" color="secondary">Toucher pour copier</Text>
+              </Pressable>
+              <Pressable
+                onPress={() => {
+                  Share.share({
+                    message: `Essaie Patron pour gérer ton commerce plus facilement 🙂\n\nUtilise mon code ${toUnicodeBold(business.referral_code!)} en t'inscrivant pour qu'on gagne chacun 1 mois gratuit`,
+                  }).catch(() => {});
+                }}
+                style={styles.linkRow}
+              >
+                <Text variant="body" style={{ color: palette.primary }}>Partager mon code</Text>
+                <Text variant="caption" color="secondary">›</Text>
+              </Pressable>
+            </Card>
+          )}
+
           {/* Mon profil — all roles */}
           <Card style={styles.section}>
             <Text variant="label" color="secondary">Mon profil</Text>
             <Input
-              label="Nom affiché"
+              label="Votre nom"
               value={userName}
               onChangeText={setUserName}
               placeholder={generateFallbackName(userId)}
@@ -346,14 +397,26 @@ export default function ParametresScreen() {
 
             {/* Email de récupération */}
             {emailStep === 'idle' && (
-              <Pressable onPress={() => setEmailStep('input')} style={styles.emailRow}>
+              <Pressable
+                onPress={() => setEmailStep('input')}
+                style={[
+                  styles.emailRow,
+                  !session?.user.recovery_email && {
+                    borderWidth: 1.5,
+                    borderColor: palette.warning,
+                    backgroundColor: palette.warning + '12',
+                    borderRadius: radius.md,
+                    paddingHorizontal: spacing[3],
+                    paddingVertical: spacing[3],
+                  },
+                ]}
+              >
                 <View style={{ flex: 1 }}>
                   <Text variant="label">Email de récupération</Text>
-                  <Text variant="caption" color="secondary">
-                    {session?.user.recovery_email ?? 'Non configuré'}
-                  </Text>
+                  {session?.user.recovery_email ? (
+                    <Text variant="caption" color="secondary">{session.user.recovery_email}</Text>
+                  ) : null}
                 </View>
-                <Text variant="caption" color="secondary">›</Text>
               </Pressable>
             )}
 
@@ -374,8 +437,9 @@ export default function ParametresScreen() {
                   onChangeText={setEmailInput}
                   placeholder="vous@exemple.com"
                   keyboardType="email-address"
+                  textContentType="emailAddress"
+                  autoComplete="email"
                   autoCapitalize="none"
-                  autoCorrect={false}
                   returnKeyType="done"
                   onSubmitEditing={handleSendEmailCode}
                   autoFocus
@@ -432,6 +496,27 @@ export default function ParametresScreen() {
                 </View>
               </View>
             )}
+          </Card>
+
+          {/* Sécurité */}
+          <Card style={styles.section}>
+            <Text variant="label" color="secondary">Sécurité</Text>
+            <Pressable
+              onPress={() => {
+                Alert.alert(
+                  'Verrouiller Patron ?',
+                  'Vous pourrez revenir avec Face ID / Touch ID, sans nouveau code WhatsApp.',
+                  [
+                    { text: 'Annuler', style: 'cancel' },
+                    { text: 'Verrouiller', onPress: () => { void lock(); } },
+                  ],
+                );
+              }}
+              style={styles.linkRow}
+            >
+              <Text variant="body">Verrouiller</Text>
+              <Text variant="caption" color="secondary">›</Text>
+            </Pressable>
           </Card>
 
           {/* À propos */}
@@ -521,7 +606,7 @@ export default function ParametresScreen() {
 
         </ScrollView>
       </KeyboardAvoidingView>
-    </SafeAreaView>
+    </Screen>
   );
 }
 
@@ -550,6 +635,12 @@ function makeStyles(p: Palette) {
     },
 
     linkRow: { flexDirection: 'row', alignItems: 'center', justifyContent: 'space-between', paddingVertical: spacing[2] },
+
+    referralCodeBox: {
+      alignItems: 'center', gap: spacing[1],
+      paddingVertical: spacing[4],
+      backgroundColor: p.primaryLight, borderRadius: radius.md,
+    },
 
     emailRow: { flexDirection: 'row', alignItems: 'center', justifyContent: 'space-between', paddingVertical: spacing[2] },
     emailBox: { gap: spacing[3], paddingTop: spacing[1] },

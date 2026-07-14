@@ -6,6 +6,12 @@ const corsHeaders = {
   'Access-Control-Allow-Headers': 'authorization, x-client-info, apikey, content-type',
 };
 
+// Client IP as seen by the edge (Supabase forwards this header).
+function getClientIp(req: Request): string {
+  const fwd = req.headers.get('x-forwarded-for');
+  return fwd ? fwd.split(',')[0].trim() : 'unknown';
+}
+
 serve(async (req) => {
   if (req.method === 'OPTIONS') return new Response('ok', { headers: corsHeaders });
 
@@ -39,11 +45,34 @@ serve(async (req) => {
       );
     }
 
+    // Secondary limit scoped per IP — the per-email limit above doesn't stop
+    // an attacker rotating through many email addresses to run up email costs.
+    const clientIp = getClientIp(req);
+    const { count: ipCount } = await serviceClient
+      .from('ip_verification_attempts')
+      .select('*', { count: 'exact', head: true })
+      .eq('ip', clientIp)
+      .eq('endpoint', 'email')
+      .gt('attempted_at', new Date(Date.now() - 60 * 60 * 1000).toISOString());
+
+    if ((ipCount ?? 0) >= 20) {
+      return new Response(
+        JSON.stringify({ error: 'Trop de tentatives. Réessayez plus tard.' }),
+        { status: 429, headers: { ...corsHeaders, 'Content-Type': 'application/json' } },
+      );
+    }
+
     await serviceClient.from('email_verification_attempts').insert({ email: normalizedEmail });
+    await serviceClient.from('ip_verification_attempts').insert({ ip: clientIp, endpoint: 'email' });
 
     // Clean up old attempts older than 1 hour
     await serviceClient
       .from('email_verification_attempts')
+      .delete()
+      .lt('attempted_at', new Date(Date.now() - 60 * 60 * 1000).toISOString());
+
+    await serviceClient
+      .from('ip_verification_attempts')
       .delete()
       .lt('attempted_at', new Date(Date.now() - 60 * 60 * 1000).toISOString());
 

@@ -6,26 +6,13 @@ import { Ionicons } from '@expo/vector-icons';
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
 import { useAuthStore } from '@/stores/auth';
 import { useChatStore } from '@/stores/chat';
-import { colors, useTheme } from '@/src/theme';
+import { useTheme, ROLE_COLORS as ROLE_COLORS_LIGHT, ROLE_COLORS_DARK } from '@/src/theme';
 import { Text } from '@/src/components/ui/Text';
 import { generateFallbackName } from '@/lib/id';
 import { trackEvent } from '@/lib/analytics';
 
 type IoniconName = React.ComponentProps<typeof Ionicons>['name'];
 
-const ROLE_COLORS_LIGHT: Record<string, string> = {
-  administrateur: colors.role.administrateur,
-  manager:        colors.role.manager,
-  vendeur:        colors.role.vendeur,
-  investisseur:   colors.role.investisseur,
-};
-
-const ROLE_COLORS_DARK: Record<string, string> = {
-  administrateur: '#818CF8',
-  manager:        '#38BDF8',
-  vendeur:        '#4ADE80',
-  investisseur:   '#FCD34D',
-};
 
 function ProfileTabIcon({ focused, size }: { focused: boolean; size: number }) {
   const session = useAuthStore(s => s.session);
@@ -110,7 +97,7 @@ export default function TabsLayout() {
       screenOptions={{
         headerShown: false,
         tabBarActiveTintColor: palette.primary,
-        tabBarInactiveTintColor: '#8E8E93',
+        tabBarInactiveTintColor: palette.tabBarInactive,
         tabBarLabelStyle: {
           fontSize: 11,
           fontWeight: '500',

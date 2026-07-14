@@ -1,10 +1,11 @@
-import { useEffect, useMemo, useRef, useState } from 'react';
+import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import {
-  Alert, KeyboardAvoidingView, Linking, Modal,
+  Alert, ActivityIndicator, KeyboardAvoidingView, Linking, Modal,
   Platform, Pressable, ScrollView, StyleSheet, View,
 } from 'react-native';
 import { Ionicons } from '@expo/vector-icons';
 import { SafeAreaView } from 'react-native-safe-area-context';
+import { Screen } from '@/src/components/ui/Screen';
 import { router, useLocalSearchParams } from 'expo-router';
 import { Button } from '@/src/components/ui/Button';
 import { Card } from '@/src/components/ui/Card';
@@ -14,12 +15,15 @@ import { useTheme, spacing, radius } from '@/src/theme';
 import type { Palette } from '@/src/theme';
 import { useAuthStore } from '@/stores/auth';
 import { useProductStore } from '@/stores/products';
+import { supabase } from '@/lib/supabase';
 import {
   useFournisseursStore,
   type CommandeAchat,
   type Fournisseur,
+  type SupplierPayment,
 } from '@/stores/fournisseurs';
 import type { Product } from '@/src/types';
+import { formatAmountInput, parseAmountInput } from '@/src/utils/format';
 
 function fmt(n: number, cur: string) {
   return `${Math.round(n).toLocaleString('fr-FR')} ${cur}`;
@@ -39,38 +43,112 @@ function getStatusColor(status: string, p: Palette): string {
 
 // ── Commande Form ─────────────────────────────────────────────────────────────
 
+type POLine = {
+  product_id: string;
+  product_name: string;
+  qty: string;
+  total_cost: string;
+  variant_id?: string;
+};
+
 function CommandeForm({
-  visible, fournisseur, products, currency, saving, onClose, onSave,
+  visible, fournisseur, products, currency, saving, businessId, onClose, onSave,
 }: {
   visible: boolean; fournisseur: Fournisseur; products: Product[];
-  currency: string; saving: boolean; onClose: () => void;
+  currency: string; saving: boolean; businessId: string; onClose: () => void;
   onSave: (lines: { product_id: string; product_name: string; qty: number; unit_cost: number }[], amountPaid: number) => Promise<void>;
 }) {
   const { palette } = useTheme();
   const styles = useMemo(() => makeStyles(palette), [palette]);
-  const [lines, setLines] = useState<{ product_id: string; product_name: string; qty: string; total_cost: string }[]>([]);
+  const { fetchVariants, variantsByProduct } = useProductStore();
+  const [lines, setLines] = useState<POLine[]>([]);
   const [showPicker, setShowPicker] = useState(false);
   const [paymentInput, setPaymentInput] = useState('');
+  const [seeding, setSeeding] = useState(false);
   const seededRef = useRef<string | null>(null);
 
+  const addProductToLines = useCallback(async (p: Product) => {
+    if (p.has_variants) {
+      const cached = variantsByProduct[p.id];
+      const variants = cached?.length ? cached : await fetchVariants(p.id, businessId);
+      if (variants.length > 0) {
+        setLines(prev => [
+          ...prev,
+          ...variants.map(v => ({
+            product_id: p.id,
+            product_name: `${p.name} (${v.name})`,
+            qty: '1',
+            total_cost: v.cost_price > 0 ? formatAmountInput(String(v.cost_price), currency) : '',
+            variant_id: v.id,
+          })),
+        ]);
+        return;
+      }
+    }
+    setLines(prev => [...prev, {
+      product_id: p.id, product_name: p.name, qty: '1',
+      total_cost: p.cost_price > 0 ? formatAmountInput(String(p.cost_price), currency) : '',
+    }]);
+  }, [businessId, fetchVariants, variantsByProduct]);
+
   useEffect(() => {
-    if (!visible) { seededRef.current = null; setPaymentInput(''); return; }
+    if (!visible) { seededRef.current = null; setPaymentInput(''); setLines([]); return; }
     const fId = fournisseur.id;
     if (seededRef.current === fId && lines.length > 0) return;
     seededRef.current = fId;
     setShowPicker(false);
-    const linked = products.filter(p => p.supplier_id === fId && !p.archived);
-    setLines(linked.map(p => ({ product_id: p.id, product_name: p.name, qty: '1', total_cost: p.cost_price > 0 ? String(p.cost_price) : '' })));
-  }, [visible, products, fournisseur.id]);
+    setSeeding(true);
 
-  const total = lines.reduce((s, l) => s + (parseFloat(l.total_cost) || 0), 0);
+    (async () => {
+      // Fetch extra product-supplier links beyond products.supplier_id
+      const { data: psData } = await supabase
+        .from('product_suppliers')
+        .select('product_id')
+        .eq('supplier_id', fId);
+      const extraIds = new Set((psData ?? []).map(r => r.product_id as string));
+
+      const linked = products.filter(p =>
+        (p.supplier_id === fId || extraIds.has(p.id)) && !p.archived,
+      );
+
+      const seedLines: POLine[] = [];
+      for (const p of linked) {
+        if (p.has_variants) {
+          const cached = variantsByProduct[p.id];
+          const variants = cached?.length ? cached : await fetchVariants(p.id, businessId);
+          if (variants.length > 0) {
+            for (const v of variants) {
+              seedLines.push({
+                product_id: p.id,
+                product_name: `${p.name} (${v.name})`,
+                qty: '1',
+                total_cost: v.cost_price > 0 ? formatAmountInput(String(v.cost_price), currency) : '',
+                variant_id: v.id,
+              });
+            }
+            continue;
+          }
+        }
+        seedLines.push({
+          product_id: p.id, product_name: p.name, qty: '1',
+          total_cost: p.cost_price > 0 ? formatAmountInput(String(p.cost_price), currency) : '',
+        });
+      }
+      // Only set if still the same fournisseur (guard against race)
+      if (seededRef.current === fId) setLines(seedLines);
+      setSeeding(false);
+    })();
+  }, [visible, fournisseur.id]);
+
+  const total = lines.reduce((s, l) => s + parseAmountInput(l.total_cost, currency), 0);
   const parsedPaid = paymentInput.trim() === ''
     ? total
-    : (parseFloat(paymentInput.replace(/\s/g, '').replace(',', '.')) || 0);
+    : parseAmountInput(paymentInput, currency);
   const owed = Math.max(0, total - parsedPaid);
-  const lineIds = new Set(lines.map(l => l.product_id));
+  // A product is "in the order" if any of its lines (possibly variant lines) are present
+  const lineProductIds = new Set(lines.map(l => l.product_id));
   const pickerProducts = [...products]
-    .filter(p => !lineIds.has(p.id) && !p.archived)
+    .filter(p => !lineProductIds.has(p.id) && !p.archived)
     .sort((a, b) => (a.supplier_id === fournisseur.id ? -1 : 0) - (b.supplier_id === fournisseur.id ? -1 : 0));
 
   return (
@@ -81,10 +159,17 @@ function CommandeForm({
           <Text variant="h4">Nouvelle commande</Text>
           <View style={{ width: 60 }} />
         </View>
+        <KeyboardAvoidingView
+          style={{ flex: 1 }}
+          behavior={Platform.OS === 'ios' ? 'padding' : 'height'}
+          keyboardVerticalOffset={0}
+        >
         <ScrollView contentContainerStyle={styles.mpad} keyboardShouldPersistTaps="handled">
           <Text variant="label" color="secondary">{fournisseur.name}</Text>
 
-          {(lines.length === 0 || showPicker) && (
+          {seeding ? (
+            <ActivityIndicator size="small" color={palette.primary} style={{ marginVertical: 20 }} />
+          ) : (lines.length === 0 || showPicker) && (
             <>
               <Text variant="label">{lines.length === 0 ? 'Produits à commander' : 'Ajouter depuis le catalogue'}</Text>
               {pickerProducts.length > 0 ? (
@@ -92,10 +177,7 @@ function CommandeForm({
                   {pickerProducts.map(p => (
                     <Pressable
                       key={p.id}
-                      onPress={() => {
-                        setLines(prev => [...prev, { product_id: p.id, product_name: p.name, qty: '1', total_cost: p.cost_price > 0 ? String(p.cost_price) : '' }]);
-                        setShowPicker(false);
-                      }}
+                      onPress={() => { void addProductToLines(p); setShowPicker(false); }}
                       style={[styles.prodChip, p.supplier_id === fournisseur.id && styles.prodChipLinked]}>
                       <Text variant="caption" numberOfLines={1}
                         style={{ color: p.supplier_id === fournisseur.id ? palette.primary : palette.textPrimary }}>
@@ -126,13 +208,13 @@ function CommandeForm({
                 </View>
                 <View style={{ flex: 2 }}>
                   <Input label={`Coût total (${currency})`} value={l.total_cost}
-                    onChangeText={v => setLines(prev => prev.map((x, j) => j === i ? { ...x, total_cost: v } : x))}
+                    onChangeText={v => setLines(prev => prev.map((x, j) => j === i ? { ...x, total_cost: formatAmountInput(v, currency) } : x))}
                     keyboardType="decimal-pad" />
                 </View>
               </View>
               {(() => {
                 const qty = parseInt(l.qty) || 0;
-                const tc = parseFloat(l.total_cost) || 0;
+                const tc = parseAmountInput(l.total_cost, currency);
                 const unit = qty > 0 && tc > 0 ? fmt(tc / qty, currency) : '—';
                 return (
                   <Text variant="caption" color="secondary">
@@ -160,14 +242,14 @@ function CommandeForm({
               <Input
                 label={`Montant payé (${currency})`}
                 value={paymentInput}
-                onChangeText={setPaymentInput}
+                onChangeText={v => setPaymentInput(formatAmountInput(v, currency))}
                 keyboardType="decimal-pad"
                 placeholder={total > 0 ? String(Math.round(total)) : '0'}
               />
 
               {owed > 0 && (
                 <Card style={styles.owedBanner}>
-                  <Ionicons name="time-outline" size={16} color="#92400E" />
+                  <Ionicons name="time-outline" size={16} color={palette.warning} />
                   <Text style={styles.owedText}>
                     Ce solde de {fmt(owed, currency)} sera enregistré comme crédit auprès de ce fournisseur
                   </Text>
@@ -175,7 +257,7 @@ function CommandeForm({
               )}
               {paymentInput.trim() !== '' && owed === 0 && parsedPaid >= total && total > 0 && (
                 <Card style={styles.paidBanner}>
-                  <Ionicons name="checkmark-circle-outline" size={16} color="#065F46" />
+                  <Ionicons name="checkmark-circle-outline" size={16} color={palette.success} />
                   <Text style={styles.paidText}>Commande entièrement payée</Text>
                 </Card>
               )}
@@ -185,11 +267,11 @@ function CommandeForm({
         <View style={styles.mfooter}>
           <Button
             label={saving ? '…' : 'Passer la commande'} loading={saving} fullWidth size="lg"
-            disabled={lines.length === 0}
+            disabled={lines.length === 0 || seeding}
             onPress={() => {
               const parsed = lines.map(l => {
                 const qty = parseInt(l.qty) || 0;
-                const tc = parseFloat(l.total_cost) || 0;
+                const tc = parseAmountInput(l.total_cost, currency);
                 return {
                   product_id: l.product_id, product_name: l.product_name,
                   qty, unit_cost: qty > 0 ? tc / qty : 0,
@@ -202,6 +284,7 @@ function CommandeForm({
             }}
           />
         </View>
+        </KeyboardAvoidingView>
       </SafeAreaView>
     </Modal>
   );
@@ -256,16 +339,26 @@ export default function FournisseurProfile() {
   const businessId = session?.activeBusiness?.id ?? '';
   const currency   = session?.activeBusiness?.currency ?? 'GNF';
   const userId     = session?.user.id ?? '';
+  const role       = session?.activeMembership?.role;
 
   const { products, fetchProducts } = useProductStore();
   const {
-    fournisseurs, commandes, debts, saving,
-    fetchFournisseurs, fetchCommandes,
+    fournisseurs, commandes, debts, payments, saving,
+    fetchFournisseurs, fetchCommandes, fetchPayments,
     createCommande, loadCommandeLines, deleteFournisseur, payDebt,
   } = useFournisseursStore();
 
   const fournisseur    = fournisseurs.find(f => f.id === id);
-  const linkedProducts = products.filter(p => p.supplier_id === id && !p.archived);
+
+  // Extra product links from the many-to-many product_suppliers table
+  const [extraProductIds, setExtraProductIds] = useState<Set<string>>(new Set());
+  const [showProductLink, setShowProductLink] = useState(false);
+  const [linkingProducts, setLinkingProducts] = useState(false);
+
+  const linkedProducts = products.filter(p =>
+    (p.supplier_id === id || extraProductIds.has(p.id)) && !p.archived,
+  );
+
   const supplierOrders = commandes
     .filter(c => c.supplier_id === id)
     .sort((a, b) => new Date(b.ordered_at).getTime() - new Date(a.ordered_at).getTime());
@@ -280,11 +373,34 @@ export default function FournisseurProfile() {
   const [detailOrder, setDetailOrder]   = useState<CommandeAchat | null>(null);
 
   useEffect(() => {
-    if (!businessId) return;
+    if (!businessId || !id) return;
     if (fournisseurs.length === 0) fetchFournisseurs(businessId);
     if (products.length === 0) fetchProducts(businessId, userId);
     fetchCommandes(businessId);
-  }, [businessId]);
+    fetchPayments(businessId, id);
+  }, [businessId, id]);
+
+  useEffect(() => {
+    if (!id) return;
+    supabase.from('product_suppliers').select('product_id').eq('supplier_id', id)
+      .then(({ data }) => {
+        setExtraProductIds(new Set((data ?? []).map(r => r.product_id as string)));
+      });
+  }, [id]);
+
+  const linkProduct = async (productId: string) => {
+    setLinkingProducts(true);
+    const { error } = await supabase.from('product_suppliers').insert({ product_id: productId, supplier_id: id });
+    if (!error) setExtraProductIds(prev => new Set([...prev, productId]));
+    setLinkingProducts(false);
+    setShowProductLink(false);
+  };
+
+  const unlinkProduct = async (productId: string) => {
+    const { error } = await supabase.from('product_suppliers')
+      .delete().eq('product_id', productId).eq('supplier_id', id);
+    if (!error) setExtraProductIds(prev => { const s = new Set(prev); s.delete(productId); return s; });
+  };
 
   const handleDelete = () => {
     Alert.alert(
@@ -305,7 +421,7 @@ export default function FournisseurProfile() {
   };
 
   const handlePay = async () => {
-    const amount = parseFloat(payAmount.replace(/\s/g, '').replace(',', '.'));
+    const amount = parseAmountInput(payAmount, currency);
     if (isNaN(amount) || amount <= 0) { Alert.alert('Vérifiez le montant :)'); return; }
     if (amount > totalOwed + 0.01) {
       Alert.alert('Montant trop élevé', `Vous ne devez que ${fmt(totalOwed, currency)}.`);
@@ -326,7 +442,7 @@ export default function FournisseurProfile() {
 
   if (!fournisseur) {
     return (
-      <SafeAreaView style={styles.safe} edges={['top', 'bottom']}>
+      <Screen>
         <View style={styles.header}>
           <Pressable onPress={() => router.back()}>
             <Text variant="body" color="secondary">‹ Retour</Text>
@@ -335,7 +451,7 @@ export default function FournisseurProfile() {
         <View style={{ flex: 1, alignItems: 'center', justifyContent: 'center' }}>
           <Text variant="body" color="secondary">Fournisseur introuvable</Text>
         </View>
-      </SafeAreaView>
+      </Screen>
     );
   }
 
@@ -345,7 +461,7 @@ export default function FournisseurProfile() {
     .join('');
 
   return (
-    <SafeAreaView style={styles.safe} edges={['top']}>
+    <Screen>
 
       {/* ── Header ── */}
       <View style={styles.header}>
@@ -384,16 +500,49 @@ export default function FournisseurProfile() {
 
         {/* ── Products ── */}
         <View style={styles.section}>
-          <Text variant="label" color="secondary" style={{ marginBottom: spacing[3] }}>Produits fournis</Text>
+          <View style={{ flexDirection: 'row', justifyContent: 'space-between', alignItems: 'center', marginBottom: spacing[3] }}>
+            <Text variant="label" color="secondary">Produits fournis</Text>
+            {(role === 'administrateur' || role === 'manager') && (
+              <Pressable onPress={() => setShowProductLink(v => !v)} hitSlop={8}>
+                <Text variant="caption" style={{ color: palette.primary }}>
+                  {showProductLink ? 'Fermer' : '+ Lier'}
+                </Text>
+              </Pressable>
+            )}
+          </View>
+
+          {showProductLink && (
+            <ScrollView horizontal showsHorizontalScrollIndicator={false} style={{ flexGrow: 0, marginBottom: spacing[3] }}>
+              {products.filter(p => !p.archived && !linkedProducts.some(lp => lp.id === p.id)).map(p => (
+                <Pressable
+                  key={p.id}
+                  onPress={() => { void linkProduct(p.id); }}
+                  disabled={linkingProducts}
+                  style={[styles.chip, { marginRight: spacing[2], opacity: linkingProducts ? 0.5 : 1 }]}>
+                  <Text style={styles.chipText}>{p.name}</Text>
+                </Pressable>
+              ))}
+            </ScrollView>
+          )}
+
           {linkedProducts.length === 0 ? (
             <Text variant="caption" color="secondary">Aucun produit lié</Text>
           ) : (
             <View style={styles.chipWrap}>
-              {linkedProducts.map(p => (
-                <View key={p.id} style={styles.chip}>
-                  <Text style={styles.chipText}>{p.name}</Text>
-                </View>
-              ))}
+              {linkedProducts.map(p => {
+                const isPrimary = p.supplier_id === id;
+                const canUnlink = !isPrimary && (role === 'administrateur' || role === 'manager');
+                return (
+                  <View key={p.id} style={[styles.chip, canUnlink && { paddingRight: 6 }]}>
+                    <Text style={styles.chipText}>{p.name}</Text>
+                    {canUnlink && (
+                      <Pressable onPress={() => { void unlinkProduct(p.id); }} hitSlop={4} style={{ marginLeft: 4 }}>
+                        <Text style={{ color: palette.primary, fontSize: 13, fontWeight: '700' }}>×</Text>
+                      </Pressable>
+                    )}
+                  </View>
+                );
+              })}
             </View>
           )}
         </View>
@@ -411,12 +560,32 @@ export default function FournisseurProfile() {
           </View>
         )}
 
+        {/* ── Payment history ── */}
+        {(() => {
+          const supplierPayments = payments.filter((p: SupplierPayment) => p.supplier_id === id);
+          if (supplierPayments.length === 0) return null;
+          return (
+            <View style={styles.section}>
+              <Text variant="label" color="secondary" style={{ marginBottom: spacing[3] }}>Paiements effectués</Text>
+              {supplierPayments.map((p: SupplierPayment) => (
+                <View key={p.id} style={styles.orderRow}>
+                  <View style={{ flex: 1 }}>
+                    <Text variant="body">
+                      {new Date(p.paid_at).toLocaleDateString('fr-FR', { day: 'numeric', month: 'long', year: 'numeric' })}
+                    </Text>
+                    {p.note ? <Text variant="caption" color="secondary">{p.note}</Text> : null}
+                  </View>
+                  <Text variant="label" style={{ color: palette.success }}>{fmt(p.amount, currency)}</Text>
+                </View>
+              ))}
+            </View>
+          );
+        })()}
+
         {/* ── Order history ── */}
-        <View style={styles.section}>
+        {supplierOrders.length > 0 && <View style={styles.section}>
           <Text variant="label" color="secondary" style={{ marginBottom: spacing[3] }}>Historique des commandes</Text>
-          {supplierOrders.length === 0 ? (
-            <Text variant="caption" color="secondary">Aucune commande enregistrée</Text>
-          ) : supplierOrders.map(order => (
+          {supplierOrders.map(order => (
             <Pressable
               key={order.id}
               onPress={() => openOrderDetail(order)}
@@ -435,7 +604,7 @@ export default function FournisseurProfile() {
               <Ionicons name="chevron-forward" size={14} color={palette.textDisabled} style={{ marginLeft: 4 }} />
             </Pressable>
           ))}
-        </View>
+        </View>}
 
       </ScrollView>
 
@@ -451,6 +620,7 @@ export default function FournisseurProfile() {
         products={products}
         currency={currency}
         saving={saving}
+        businessId={businessId}
         onClose={() => setShowCommande(false)}
         onSave={async (lines, amountPaid) => {
           const ok = await createCommande(businessId, userId, { supplierId: fournisseur.id, lines, amountPaid });
@@ -480,7 +650,7 @@ export default function FournisseurProfile() {
               <Input
                 label={`Montant payé (${currency})`}
                 value={payAmount}
-                onChangeText={setPayAmount}
+                onChangeText={v => setPayAmount(formatAmountInput(v, currency))}
                 keyboardType="decimal-pad"
               />
             </ScrollView>
@@ -498,7 +668,7 @@ export default function FournisseurProfile() {
       {detailOrder && (
         <OrderDetail order={detailOrder} currency={currency} onClose={() => setDetailOrder(null)} />
       )}
-    </SafeAreaView>
+    </Screen>
   );
 }
 
@@ -522,7 +692,7 @@ function makeStyles(p: Palette) {
 
     // Products
     chipWrap: { flexDirection: 'row', flexWrap: 'wrap', gap: spacing[2] },
-    chip:     { backgroundColor: p.primaryLight, paddingHorizontal: 12, paddingVertical: 6, borderRadius: 16 },
+    chip:     { flexDirection: 'row' as const, alignItems: 'center' as const, backgroundColor: p.primaryLight, paddingHorizontal: 12, paddingVertical: 6, borderRadius: 16 },
     chipText: { fontSize: 13, fontWeight: '500' as const, color: p.primary },
 
     // Debt

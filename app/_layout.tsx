@@ -1,5 +1,6 @@
 import * as Sentry from '@sentry/react-native';
 import { useEffect, useRef } from 'react';
+import { GestureHandlerRootView } from 'react-native-gesture-handler';
 import { Stack, usePathname, useGlobalSearchParams } from 'expo-router';
 import * as SplashScreen from 'expo-splash-screen';
 import { useFonts } from 'expo-font';
@@ -16,6 +17,7 @@ import { openDb } from '@/lib/db';
 import { ThemeProvider } from '@/src/theme';
 import { posthog } from '@/lib/posthog';
 import { identifyUser, resetAnalytics } from '@/lib/analytics';
+import { configurePurchases } from '@/lib/purchases';
 
 // Only active when EXPO_PUBLIC_SENTRY_DSN is set (no-op in local dev without it)
 if (process.env.EXPO_PUBLIC_SENTRY_DSN) {
@@ -25,6 +27,11 @@ if (process.env.EXPO_PUBLIC_SENTRY_DSN) {
     tracesSampleRate: 0.2,
   });
 }
+
+// Only active once EXPO_PUBLIC_REVENUECAT_API_KEY_IOS/_ANDROID are set — see
+// lib/purchases.ts. No-op in the meantime so the app runs fine before the
+// RevenueCat/App Store Connect/Play Console setup exists.
+configurePurchases();
 
 SplashScreen.preventAutoHideAsync();
 
@@ -72,7 +79,7 @@ function RootLayout() {
 
   useEffect(() => {
     if (!fontsLoaded) return;
-    const timeout = setTimeout(() => SplashScreen.hideAsync(), 5000);
+    const timeout = setTimeout(() => SplashScreen.hideAsync(), 2000);
     Promise.all([initialize(), openDb()]).finally(() => {
       clearTimeout(timeout);
       SplashScreen.hideAsync();
@@ -80,11 +87,13 @@ function RootLayout() {
   }, [fontsLoaded]);
 
   return (
-    <PostHogProvider client={posthog} autocapture>
-      <ThemeProvider>
-        <Stack screenOptions={{ headerShown: false, animation: 'fade' }} />
-      </ThemeProvider>
-    </PostHogProvider>
+    <GestureHandlerRootView style={{ flex: 1 }}>
+      <PostHogProvider client={posthog} autocapture>
+        <ThemeProvider>
+          <Stack screenOptions={{ headerShown: false, animation: 'fade' }} />
+        </ThemeProvider>
+      </PostHogProvider>
+    </GestureHandlerRootView>
   );
 }
 

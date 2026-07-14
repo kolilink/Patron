@@ -7,12 +7,14 @@ export default function Index() {
   const { palette } = useTheme();
   const session = useAuthStore(s => s.session);
   const loading = useAuthStore(s => s.loading);
+  const locked = useAuthStore(s => s.locked);
   const removedBusinessesOnLogin = useAuthStore(s => s.removedBusinessesOnLogin);
 
   if (loading) {
     return <View style={{ flex: 1, backgroundColor: palette.background }} />;
   }
 
+  if (locked) return <Redirect href="/(auth)/verrouille" />;
   if (!session) return <Redirect href="/(welcome)/" />;
   if (!session.activeBusiness) {
     if (removedBusinessesOnLogin?.length) {

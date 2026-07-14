@@ -311,6 +311,60 @@ async function migrate(db: SQLite.SQLiteDatabase): Promise<void> {
     );
     await db.execAsync('INSERT OR IGNORE INTO _migrations (version) VALUES (14)');
   }
+
+  if (current < 15) {
+    // rapports_cache: last successful reports snapshot per business, so the
+    // Rapports screen can show real numbers offline instead of silent zeros.
+    await db.execAsync(
+      `CREATE TABLE IF NOT EXISTS rapports_cache (
+        business_id TEXT PRIMARY KEY,
+        data        TEXT NOT NULL,
+        cached_at   INTEGER NOT NULL
+      )`,
+    );
+    await db.execAsync('INSERT OR IGNORE INTO _migrations (version) VALUES (15)');
+  }
+
+  if (current < 16) {
+    // investor_cache / equipe_cache / partnerships_cache: same offline-fallback
+    // treatment as products/ventes/rapports — these screens had none, so they
+    // went blank or silently stale offline instead of showing last-known data.
+    await db.execAsync(
+      `CREATE TABLE IF NOT EXISTS investor_cache (
+        cache_key TEXT PRIMARY KEY,
+        data      TEXT NOT NULL,
+        cached_at INTEGER NOT NULL
+      )`,
+    );
+    await db.execAsync(
+      `CREATE TABLE IF NOT EXISTS equipe_cache (
+        business_id TEXT PRIMARY KEY,
+        data        TEXT NOT NULL,
+        cached_at   INTEGER NOT NULL
+      )`,
+    );
+    await db.execAsync(
+      `CREATE TABLE IF NOT EXISTS partnerships_cache (
+        business_id TEXT PRIMARY KEY,
+        data        TEXT NOT NULL,
+        cached_at   INTEGER NOT NULL
+      )`,
+    );
+    await db.execAsync('INSERT OR IGNORE INTO _migrations (version) VALUES (16)');
+  }
+
+  if (current < 17) {
+    // apports_cache: capital injections had no offline read cache at all —
+    // going offline showed a raw error instead of the last-known data.
+    await db.execAsync(
+      `CREATE TABLE IF NOT EXISTS apports_cache (
+        business_id TEXT PRIMARY KEY,
+        data        TEXT NOT NULL,
+        cached_at   INTEGER NOT NULL
+      )`,
+    );
+    await db.execAsync('INSERT OR IGNORE INTO _migrations (version) VALUES (17)');
+  }
 }
 
 export async function getKV(key: string): Promise<string | null> {
@@ -462,6 +516,118 @@ export async function getDashboardKpiCache(businessId: string): Promise<unknown 
     const db = await openDb();
     const row = await db.getFirstAsync<{ data: string }>(
       'SELECT data FROM dashboard_kpi_cache WHERE business_id = ?',
+      [businessId],
+    );
+    if (!row) return null;
+    const decrypted = await decrypt(row.data);
+    return JSON.parse(decrypted);
+  } catch {
+    return null;
+  }
+}
+
+// ─── Rapports snapshot cache ────────────────────────────────────────────────────
+
+export async function saveRapportsCache(businessId: string, snapshot: unknown): Promise<void> {
+  try {
+    const db = await openDb();
+    const encrypted = await encrypt(JSON.stringify(snapshot));
+    await db.runAsync(
+      'INSERT OR REPLACE INTO rapports_cache (business_id, data, cached_at) VALUES (?, ?, ?)',
+      [businessId, encrypted, Date.now()],
+    );
+  } catch { }
+}
+
+export async function getRapportsCache(businessId: string): Promise<unknown | null> {
+  try {
+    const db = await openDb();
+    const row = await db.getFirstAsync<{ data: string }>(
+      'SELECT data FROM rapports_cache WHERE business_id = ?',
+      [businessId],
+    );
+    if (!row) return null;
+    const decrypted = await decrypt(row.data);
+    return JSON.parse(decrypted);
+  } catch {
+    return null;
+  }
+}
+
+// ─── Investor balance/payouts cache ────────────────────────────────────────────
+
+export async function saveInvestorCache(cacheKey: string, data: unknown): Promise<void> {
+  try {
+    const db = await openDb();
+    const encrypted = await encrypt(JSON.stringify(data));
+    await db.runAsync(
+      'INSERT OR REPLACE INTO investor_cache (cache_key, data, cached_at) VALUES (?, ?, ?)',
+      [cacheKey, encrypted, Date.now()],
+    );
+  } catch { }
+}
+
+export async function getInvestorCache(cacheKey: string): Promise<unknown | null> {
+  try {
+    const db = await openDb();
+    const row = await db.getFirstAsync<{ data: string }>(
+      'SELECT data FROM investor_cache WHERE cache_key = ?',
+      [cacheKey],
+    );
+    if (!row) return null;
+    const decrypted = await decrypt(row.data);
+    return JSON.parse(decrypted);
+  } catch {
+    return null;
+  }
+}
+
+// ─── Equipe (team) cache ───────────────────────────────────────────────────────
+
+export async function saveEquipeCache(businessId: string, membres: unknown): Promise<void> {
+  try {
+    const db = await openDb();
+    const encrypted = await encrypt(JSON.stringify(membres));
+    await db.runAsync(
+      'INSERT OR REPLACE INTO equipe_cache (business_id, data, cached_at) VALUES (?, ?, ?)',
+      [businessId, encrypted, Date.now()],
+    );
+  } catch { }
+}
+
+export async function getEquipeCache(businessId: string): Promise<unknown | null> {
+  try {
+    const db = await openDb();
+    const row = await db.getFirstAsync<{ data: string }>(
+      'SELECT data FROM equipe_cache WHERE business_id = ?',
+      [businessId],
+    );
+    if (!row) return null;
+    const decrypted = await decrypt(row.data);
+    return JSON.parse(decrypted);
+  } catch {
+    return null;
+  }
+}
+
+// ─── Partnerships cache ────────────────────────────────────────────────────────
+
+export async function savePartnershipsCache(businessId: string, data: unknown): Promise<void> {
+  try {
+    const db = await openDb();
+    const encrypted = await encrypt(JSON.stringify(data));
+    await db.runAsync(
+      'INSERT OR REPLACE INTO partnerships_cache (business_id, data, cached_at) VALUES (?, ?, ?)',
+      [businessId, encrypted, Date.now()],
+    );
+  } catch { }
+}
+
+export async function getPartnershipsCache(businessId: string): Promise<unknown | null> {
+  try {
+    const db = await openDb();
+    const row = await db.getFirstAsync<{ data: string }>(
+      'SELECT data FROM partnerships_cache WHERE business_id = ?',
       [businessId],
     );
     if (!row) return null;
@@ -666,6 +832,34 @@ export async function getMarketCache(): Promise<unknown[] | null> {
   }
 }
 
+// ─── Apports (capital injections) read cache ───────────────────────────────────
+
+export async function saveApportsCache(businessId: string, data: unknown[]): Promise<void> {
+  try {
+    const db = await openDb();
+    const encrypted = await encrypt(JSON.stringify(data));
+    await db.runAsync(
+      'INSERT OR REPLACE INTO apports_cache (business_id, data, cached_at) VALUES (?, ?, ?)',
+      [businessId, encrypted, Date.now()],
+    );
+  } catch { }
+}
+
+export async function getApportsCache(businessId: string): Promise<unknown[] | null> {
+  try {
+    const db = await openDb();
+    const row = await db.getFirstAsync<{ data: string }>(
+      'SELECT data FROM apports_cache WHERE business_id = ?',
+      [businessId],
+    );
+    if (!row) return null;
+    const decrypted = await decrypt(row.data);
+    return JSON.parse(decrypted) as unknown[];
+  } catch {
+    return null;
+  }
+}
+
 // ─── Cache timestamp helper ─────────────────────────────────────────────────────
 // Returns the epoch-ms timestamp when a cache table was last written for a given key.
 // Used by stores to expose staleness info to the UI.
@@ -678,7 +872,12 @@ type CacheTable =
   | 'commande_cache'
   | 'dashboard_kpi_cache'
   | 'chat_cache'
-  | 'market_cache';
+  | 'market_cache'
+  | 'rapports_cache'
+  | 'investor_cache'
+  | 'equipe_cache'
+  | 'partnerships_cache'
+  | 'apports_cache';
 
 export async function getCacheTimestamp(table: CacheTable, key?: string): Promise<number | null> {
   try {
@@ -687,7 +886,7 @@ export async function getCacheTimestamp(table: CacheTable, key?: string): Promis
       const row = await db.getFirstAsync<{ cached_at: number }>('SELECT cached_at FROM market_cache WHERE id = 1');
       return row?.cached_at ?? null;
     }
-    const keyCol = table === 'ventes_cache' ? 'cache_key' : 'business_id';
+    const keyCol = (table === 'ventes_cache' || table === 'investor_cache') ? 'cache_key' : 'business_id';
     const row = await db.getFirstAsync<{ cached_at: number }>(
       `SELECT cached_at FROM ${table} WHERE ${keyCol} = ?`,
       [key ?? ''],

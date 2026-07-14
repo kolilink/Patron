@@ -53,7 +53,7 @@ describe('drainQueue', () => {
   it('returns {synced: 0, failed: 0} when the queue is empty', async () => {
     mockGetPendingOps.mockResolvedValueOnce([]);
     const result = await drainQueue();
-    expect(result).toEqual({ synced: 0, failed: 0 });
+    expect(result).toEqual({ synced: 0, failed: 0, rejectedPayments: [] });
     expect(supabase.rpc).not.toHaveBeenCalled();
   });
 
@@ -63,7 +63,7 @@ describe('drainQueue', () => {
 
     const result = await drainQueue();
 
-    expect(result).toEqual({ synced: 1, failed: 0 });
+    expect(result).toEqual({ synced: 1, failed: 0, rejectedPayments: [] });
     expect(supabase.rpc).toHaveBeenCalledWith('submit_sale', expect.objectContaining({
       p_business_id: 'biz-1',
     }));
@@ -90,8 +90,35 @@ describe('drainQueue', () => {
 
     const result = await drainQueue();
 
-    expect(result).toEqual({ synced: 1, failed: 1 });
+    expect(result).toEqual({ synced: 1, failed: 1, rejectedPayments: [] });
     expect(mockMarkAttemptFailed).toHaveBeenCalledWith(1, expect.any(String));
     expect(mockDeleteQueueItem).toHaveBeenCalledWith(2);
+  });
+
+  it('surfaces a rejected record_payment as rejectedPayments instead of a silent failure', async () => {
+    const paymentOp = {
+      id: 5,
+      operation: 'record_payment',
+      payload: JSON.stringify({
+        p_sale_id: 'sale-1',
+        p_business_id: 'biz-1',
+        p_amount: 1650000,
+        p_method: 'especes',
+        p_date: '2026-06-30',
+      }),
+      created_at: '2026-06-30T00:00:00Z',
+      attempts: 0,
+      last_error: null,
+    };
+    mockGetPendingOps.mockResolvedValueOnce([paymentOp]);
+    (supabase.rpc as jest.Mock).mockResolvedValueOnce({
+      error: { message: 'Le montant dépasse le solde restant dû' },
+    });
+
+    const result = await drainQueue();
+
+    expect(result.failed).toBe(1);
+    expect(result.rejectedPayments).toEqual(['Le montant dépasse le solde restant dû']);
+    expect(mockMarkAttemptFailed).toHaveBeenCalledWith(5, 'Le montant dépasse le solde restant dû');
   });
 });

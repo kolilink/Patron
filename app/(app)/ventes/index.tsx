@@ -3,6 +3,7 @@ import { Alert, Animated, Easing, FlatList, Modal, Pressable, ScrollView, StyleS
 import { captureRef } from 'react-native-view-shot';
 import * as Sharing from 'expo-sharing';
 import { SafeAreaView } from 'react-native-safe-area-context';
+import { Screen } from '@/src/components/ui/Screen';
 import { Ionicons } from '@expo/vector-icons';
 import { router, useFocusEffect } from 'expo-router';
 import { Card } from '@/src/components/ui/Card';
@@ -10,13 +11,14 @@ import { Text } from '@/src/components/ui/Text';
 import { Button } from '@/src/components/ui/Button';
 import { DatePickerField } from '@/src/components/ui/DatePickerField';
 import { OfflineNotice } from '@/src/components/ui/OfflineNotice';
-import { useTheme, spacing, radius, colors } from '@/src/theme';
+import { useTheme, spacing, radius } from '@/src/theme';
 import type { Palette } from '@/src/theme';
-import { formatAmount } from '@/src/utils/format';
+import { formatAmount, formatAmountInput, parseAmountInput } from '@/src/utils/format';
 import { useAuthStore } from '@/stores/auth';
 import { useVentesStore, type Vente } from '@/stores/ventes';
 import { SaleReceiptView, type ReceiptData, type ReceiptItem } from '@/src/components/ui/SaleReceiptView';
 import { haptics } from '@/lib/haptics';
+import { supabase } from '@/lib/supabase';
 import { SkeletonList } from '@/src/components/ui/SkeletonPlaceholder';
 
 function fmt(n: number, cur: string) { return formatAmount(n, cur); }
@@ -96,11 +98,6 @@ function methodLabel(m: string) {
 function fmtDate(iso: string) {
   const d = iso.includes('T') ? new Date(iso) : new Date(iso + 'T00:00:00');
   return d.toLocaleDateString('fr-FR', { day: 'numeric', month: 'short', year: 'numeric' });
-}
-
-function fmtDateLong(iso: string) {
-  const d = iso.includes('T') ? new Date(iso) : new Date(iso + 'T00:00:00');
-  return d.toLocaleDateString('fr-FR', { day: 'numeric', month: 'long', year: 'numeric' });
 }
 
 function todayISO() { return new Date().toISOString().split('T')[0]; }
@@ -192,7 +189,7 @@ function buildGroupedList(sales: Vente[], currency: string): ListItem[] {
 
     const stats = dayStats.get(key)!;
     const ds = getSaleDisplayState(sale);
-    stats.count++;
+    if (ds !== 'annule') stats.count++;
     if (ds !== 'annule') stats.total += sale.total_amount - (sale.discount_amount ?? 0);
     if (ds === 'credit' || ds === 'partiel') stats.hasCredit = true;
     daysSales.get(key)!.push(sale);
@@ -231,14 +228,14 @@ function PaymentSheet({ visible, sale, currency, onClose, onConfirm, saving }: P
 
   useEffect(() => {
     if (visible) {
-      setAmountStr(String(Math.round(remaining)));
+      setAmountStr(formatAmountInput(String(Math.round(remaining)), currency));
       setMethod('especes');
       setDate(todayISO());
     }
   }, [visible]);
 
   const handleConfirm = () => {
-    const amt = parseFloat(amountStr.replace(/\s/g, '').replace(',', '.'));
+    const amt = parseAmountInput(amountStr, currency);
     if (!amt || amt <= 0) { Alert.alert('Vérifiez le montant :)'); return; }
     if (amt > remaining + 0.01) {
       Alert.alert('Le montant dépasse le total :)');
@@ -276,14 +273,14 @@ function PaymentSheet({ visible, sale, currency, onClose, onConfirm, saving }: P
               <TextInput
                 style={styles.amountInput}
                 value={amountStr}
-                onChangeText={setAmountStr}
+                onChangeText={v => setAmountStr(formatAmountInput(v, currency))}
                 keyboardType="numeric"
                 placeholderTextColor={palette.textSecondary}
                 selectTextOnFocus
               />
               <Pressable
                 style={styles.solderBtn}
-                onPress={() => setAmountStr(String(Math.round(remaining)))}
+                onPress={() => setAmountStr(formatAmountInput(String(Math.round(remaining)), currency))}
               >
                 <Text variant="label" style={{ color: palette.primary }}>Tout régler</Text>
               </Pressable>
@@ -399,8 +396,7 @@ function DetailModal({ sale, currency, businessName, singleVendor, role, onClose
   const displayState = getSaleDisplayState(sale);
 
   const saleIso = sale.sale_date ?? sale.created_at;
-  const shortDate = fmtDate(saleIso);
-  const longDate = fmtDateLong(saleIso);
+  const headerDate = fmtDate(saleIso);
 
   const hasProfit = !!(sale.lines?.some(l => l.cost_price > 0));
   const totalCost = sale.lines?.reduce((s, l) => s + l.cost_price * l.qty, 0) ?? 0;
@@ -444,11 +440,19 @@ function DetailModal({ sale, currency, businessName, singleVendor, role, onClose
     );
   };
 
+  const canCancel = displayState !== 'annule' && role !== 'investisseur';
+  const showMenuButton = role === 'administrateur' || role === 'manager' || canCancel;
+
   const showMenu = () => {
-    Alert.alert('Options', undefined, [
-      { text: 'Modifier le client', onPress: () => setShowEditClient(true) },
-      { text: 'Fermer', style: 'cancel' },
-    ]);
+    const options: { text: string; onPress?: () => void; style?: 'cancel' | 'destructive' }[] = [];
+    if (role === 'administrateur' || role === 'manager') {
+      options.push({ text: 'Modifier le client', onPress: () => setShowEditClient(true) });
+    }
+    if (canCancel) {
+      options.push({ text: 'Annuler cette vente', onPress: () => setShowCancelForm(true), style: 'destructive' });
+    }
+    options.push({ text: 'Fermer', style: 'cancel' });
+    Alert.alert('Options', undefined, options);
   };
 
   const realPayments = sale.payments?.filter(p => p.method !== 'credit') ?? [];
@@ -456,26 +460,25 @@ function DetailModal({ sale, currency, businessName, singleVendor, role, onClose
   return (
     <Modal visible animationType="slide" presentationStyle="pageSheet" onRequestClose={onClose}>
       <SafeAreaView style={styles.modalSafe} edges={['bottom']}>
-        {toast ? (
-          <View style={styles.toast}>
-            <Text variant="label" style={{ color: '#fff' }}>{toast}</Text>
-          </View>
-        ) : null}
-
         <View style={styles.modalHeader}>
           <Pressable onPress={onClose}>
             <Text variant="body" color="secondary">Fermer</Text>
           </Pressable>
-          <Text variant="h4">Vente du {shortDate}</Text>
-          {(role === 'administrateur' || role === 'manager') && (
+          <Text variant="h4">Vente du {headerDate}</Text>
+          {showMenuButton ? (
             <Pressable onPress={showMenu} style={{ minWidth: 40, alignItems: 'flex-end' }}>
               <Text variant="body" color="secondary">⋯</Text>
             </Pressable>
-          )}
-          {role !== 'administrateur' && role !== 'manager' && (
+          ) : (
             <View style={{ minWidth: 40 }} />
           )}
         </View>
+
+        {toast ? (
+          <View style={styles.toast}>
+            <Text variant="label" style={{ color: palette.textInverse }}>{toast}</Text>
+          </View>
+        ) : null}
 
         <ScrollView contentContainerStyle={styles.pad}>
           {/* Status banner */}
@@ -486,117 +489,117 @@ function DetailModal({ sale, currency, businessName, singleVendor, role, onClose
           )}
 
           {(displayState === 'credit' || displayState === 'partiel') && (
-            <View style={[styles.banner, styles.bannerOrange]}>
-              <View style={{ gap: spacing[1], flex: 1, minWidth: 0 }}>
-                <Text variant="caption" style={{ color: palette.warning }}>⏳ Reste à payer</Text>
-                <Text
-                  variant="amountLarge"
-                  style={{ color: palette.warning }}
-                  adjustsFontSizeToFit
-                  numberOfLines={1}
-                >
-                  {fmt(displayState === 'partiel' ? remaining : sale.total_amount - discount, currency)}
+            <View style={styles.heroCredit}>
+              <Text variant="caption" color="secondary">Reste à payer</Text>
+              <Text
+                variant="amountLarge"
+                style={styles.heroCreditAmount}
+                adjustsFontSizeToFit
+                numberOfLines={1}
+              >
+                {fmt(displayState === 'partiel' ? remaining : sale.total_amount - discount, currency)}
+              </Text>
+              {displayState === 'partiel' && (
+                <Text variant="caption" color="secondary">
+                  sur {fmt(sale.total_amount - discount, currency)}
                 </Text>
-                {displayState === 'partiel' && (
-                  <Text variant="caption" style={{ color: palette.warning }}>
-                    sur {fmt(sale.total_amount - discount, currency)}
-                  </Text>
-                )}
-              </View>
+              )}
               <Button
-                label="+ Enregistrer un paiement"
+                label="Enregistrer un paiement"
                 onPress={() => setShowPaymentSheet(true)}
-                variant="outline"
-                style={{ flexShrink: 0 }}
+                fullWidth
+                size="lg"
+                style={{ marginTop: spacing[2] }}
               />
             </View>
           )}
 
           {displayState === 'annule' && (
             <View style={[styles.banner, styles.bannerRed]}>
-              <Text variant="label" style={{ color: palette.danger }}>✕ Vente annulée</Text>
-              {sale.cancelled_by_name ? (
-                <Text variant="caption" style={{ color: palette.danger, opacity: 0.9 }}>
-                  Annulée par : {sale.cancelled_by_name}
-                </Text>
-              ) : null}
-              {sale.cancellation_reason ? (
-                <Text variant="caption" style={{ color: palette.danger, opacity: 0.7 }}>
-                  {sale.cancellation_reason}
-                </Text>
-              ) : null}
+              <Text variant="label" style={{ color: palette.danger }}>
+                {[
+                  '✕',
+                  sale.cancelled_by_name ? `Annulée par ${sale.cancelled_by_name}` : 'Annulée',
+                  sale.cancellation_reason,
+                ].filter(Boolean).join(' · ')}
+              </Text>
             </View>
           )}
 
           {!sale.lines ? <DetailSkeleton /> : (
           <View style={displayState === 'annule' ? { opacity: 0.5 } : undefined}>
-            {/* Articles + rabais */}
-            {sale.lines && sale.lines.length > 0 && (
-              <Card style={{ gap: spacing[2] }}>
-                <Text variant="label" color="secondary">Articles</Text>
-                {sale.lines.map(l => (
-                  <View key={l.id} style={styles.lineRow}>
-                    <Text variant="body" style={{ flex: 1 }}>{l.product_name}{l.variant_name ? ` · ${l.variant_name}` : ''}</Text>
-                    <Text variant="caption" color="secondary">×{l.qty}</Text>
-                    <Text variant="label">{fmt(l.unit_price * l.qty, currency)}</Text>
-                  </View>
-                ))}
-
-                {/* Rabais line — only when a discount was applied */}
-                {discount > 0 && (
-                  <>
-                    <View style={styles.divider} />
-                    <View style={styles.lineRow}>
-                      <Text variant="body" style={{ flex: 1, color: colors.warning[600] }}>Rabais accordé</Text>
-                      <Text variant="label" style={{ color: colors.warning[600] }}>
-                        − {fmt(discount, currency)}
-                      </Text>
+            {/* Single unified card — articles, info, payments, profit */}
+            <Card style={{ gap: 0, overflow: 'hidden', padding: 0 }}>
+              {/* Articles */}
+              {sale.lines && sale.lines.length > 0 && (
+                <View style={[styles.cardSection, { gap: spacing[2] }]}>
+                  <Text variant="label" color="secondary">Articles</Text>
+                  {sale.lines.map(l => (
+                    <View key={l.id} style={styles.lineRow}>
+                      <Text variant="body" style={{ flex: 1 }}>{l.product_name}{l.variant_name ? ` · ${l.variant_name}` : ''}</Text>
+                      <Text variant="caption" color="secondary">×{l.qty}</Text>
+                      <Text variant="label">{fmt(l.unit_price * l.qty, currency)}</Text>
                     </View>
-                    <View style={styles.divider} />
-                    <View style={styles.lineRow}>
-                      <Text variant="label" style={{ flex: 1 }}>Payé</Text>
-                      <Text variant="label" style={{ color: palette.success }}>
-                        {fmt(amountPaid, currency)}
-                      </Text>
-                    </View>
-                  </>
-                )}
-              </Card>
-            )}
-
-            {/* Info block */}
-            <Card style={{ gap: spacing[2] }}>
-              {sale.customer_name ? (
-                <View style={styles.row}>
-                  <Text variant="caption" color="secondary">Client</Text>
-                  <Text variant="label">{sale.customer_name}</Text>
+                  ))}
+                  {discount > 0 && (
+                    <>
+                      <View style={styles.divider} />
+                      <View style={styles.lineRow}>
+                        <Text variant="body" style={{ flex: 1, color: palette.warning }}>Rabais accordé</Text>
+                        <Text variant="label" style={{ color: palette.warning }}>− {fmt(discount, currency)}</Text>
+                      </View>
+                    </>
+                  )}
                 </View>
-              ) : null}
-              <View style={styles.row}>
-                <Text variant="caption" color="secondary">Date</Text>
-                <Text variant="label">{longDate}</Text>
+              )}
+
+              {/* Info */}
+              <View style={[styles.cardSection, styles.cardSectionBorder, { gap: spacing[2] }]}>
+                {sale.customer_name ? (
+                  <View style={styles.row}>
+                    <Text variant="caption" color="secondary">Client</Text>
+                    <Text variant="label">{sale.customer_name}</Text>
+                  </View>
+                ) : null}
+                {!singleVendor && (
+                  <View style={styles.row}>
+                    <Text variant="caption" color="secondary">Vendeur</Text>
+                    <Text variant="label">{sale.seller_name}</Text>
+                  </View>
+                )}
               </View>
-              {!singleVendor && (
-                <View style={styles.row}>
-                  <Text variant="caption" color="secondary">Vendeur</Text>
-                  <Text variant="label">{sale.seller_name}</Text>
+
+              {/* Paiements reçus */}
+              {realPayments.length > 0 && (
+                <View style={[styles.cardSection, styles.cardSectionBorder, { gap: spacing[2] }]}>
+                  <Text variant="label" color="secondary">Paiements reçus</Text>
+                  {realPayments.map((p, i) => (
+                    <View key={i} style={styles.lineRow}>
+                      <Text variant="body" style={{ flex: 1 }}>{methodLabel(p.method)}</Text>
+                      <Text variant="caption" color="secondary">{fmtDate(p.date)}</Text>
+                      <Text variant="label">{fmt(p.amount, currency)}</Text>
+                    </View>
+                  ))}
+                </View>
+              )}
+
+              {/* Bénéfice — only shown once the sale is fully paid */}
+              {hasProfit && displayState !== 'credit' && displayState !== 'partiel' && (
+                <View style={[styles.cardSection, styles.cardSectionBorder, { gap: spacing[2] }]}>
+                  <Text variant="label" color="secondary">Bénéfice</Text>
+                  <View style={styles.row}>
+                    <Text variant="caption" color="secondary">Coût d'achat</Text>
+                    <Text variant="label">{fmt(totalCost, currency)}</Text>
+                  </View>
+                  <View style={[styles.row, { paddingTop: spacing[1], borderTopWidth: 1, borderTopColor: palette.border }]}>
+                    <Text variant="label">Bénéfice net</Text>
+                    <Text variant="label" style={{ color: totalProfit >= 0 ? palette.success : palette.warning }}>
+                      {totalProfit >= 0 ? '+' : ''}{fmt(totalProfit, currency)} ({margin.toFixed(0)}%)
+                    </Text>
+                  </View>
                 </View>
               )}
             </Card>
-
-            {/* Paiements reçus */}
-            {realPayments.length > 0 && (
-              <Card style={{ gap: spacing[2] }}>
-                <Text variant="label" color="secondary">Paiements reçus</Text>
-                {realPayments.map((p, i) => (
-                  <View key={i} style={styles.lineRow}>
-                    <Text variant="body" style={{ flex: 1 }}>{methodLabel(p.method)}</Text>
-                    <Text variant="caption" color="secondary">{fmtDate(p.date)}</Text>
-                    <Text variant="label">{fmt(p.amount, currency)}</Text>
-                  </View>
-                ))}
-              </Card>
-            )}
 
             {/* Edit client inline */}
             {showEditClient && (
@@ -621,69 +624,31 @@ function DetailModal({ sale, currency, businessName, singleVendor, role, onClose
               </Card>
             )}
 
-            {/* Bénéfice — shown only when cost data exists */}
-            {hasProfit && (
-              (displayState === 'credit' || displayState === 'partiel') ? (
-                <Card style={{ gap: spacing[2] }}>
-                  <Text variant="label" color="secondary">Bénéfice</Text>
-                  <Text variant="caption" style={{ color: palette.warning }}>
-                    ⏳ En attente de paiement
-                  </Text>
-                </Card>
-              ) : (
-                <Card style={{ gap: spacing[2] }}>
-                  <Text variant="label" color="secondary">Bénéfice</Text>
-                  <View style={styles.row}>
-                    <Text variant="caption" color="secondary">Coût d'achat</Text>
-                    <Text variant="label">{fmt(totalCost, currency)}</Text>
-                  </View>
-                  {discount > 0 && (
-                    <View style={styles.row}>
-                      <Text variant="caption" color="secondary">Rabais accordé</Text>
-                      <Text variant="label" style={{ color: colors.warning[600] }}>− {fmt(discount, currency)}</Text>
-                    </View>
-                  )}
-                  <View style={[styles.row, { paddingTop: spacing[1], borderTopWidth: 1, borderTopColor: palette.border }]}>
-                    <Text variant="label">Bénéfice net</Text>
-                    <Text variant="label" style={{ color: totalProfit >= 0 ? palette.success : palette.danger }}>
-                      {totalProfit >= 0 ? '+' : ''}{fmt(totalProfit, currency)} ({margin.toFixed(0)}%)
-                    </Text>
-                  </View>
-                </Card>
-              )
-            )}
-
-            {/* Cancel — hidden for investisseurs who have no write access */}
-            {displayState !== 'annule' && role !== 'investisseur' && (
-              showCancelForm ? (
-                <Card style={{ gap: spacing[3], borderColor: palette.danger + '40', borderWidth: 1 }}>
-                  <Text variant="caption" color="secondary">
-                    Le stock sera restauré. Entrez un motif.
-                  </Text>
-                  <TextInput
-                    style={styles.textInput}
-                    value={cancelReason}
-                    onChangeText={setCancelReason}
-                    placeholder="Raison de l'annulation"
-                    placeholderTextColor={palette.textDisabled}
-                    multiline
+            {/* Cancel reason form — triggered from the "⋯" menu */}
+            {canCancel && showCancelForm && (
+              <Card style={{ gap: spacing[3], borderColor: palette.danger + '40', borderWidth: 1 }}>
+                <Text variant="caption" color="secondary">
+                  Le stock sera restauré. Entrez un motif.
+                </Text>
+                <TextInput
+                  style={styles.textInput}
+                  value={cancelReason}
+                  onChangeText={setCancelReason}
+                  placeholder="Raison de l'annulation"
+                  placeholderTextColor={palette.textDisabled}
+                  multiline
+                />
+                <View style={{ flexDirection: 'row', gap: spacing[2] }}>
+                  <Button label="Retour" onPress={() => setShowCancelForm(false)} variant="outline" style={{ flex: 1 }} />
+                  <Button
+                    label={saving ? 'Annulation…' : "Confirmer l'annulation"}
+                    onPress={handleCancel}
+                    loading={saving}
+                    variant="danger"
+                    style={{ flex: 1 }}
                   />
-                  <View style={{ flexDirection: 'row', gap: spacing[2] }}>
-                    <Button label="Retour" onPress={() => setShowCancelForm(false)} variant="outline" style={{ flex: 1 }} />
-                    <Button
-                      label={saving ? 'Annulation…' : "Confirmer l'annulation"}
-                      onPress={handleCancel}
-                      loading={saving}
-                      variant="danger"
-                      style={{ flex: 1 }}
-                    />
-                  </View>
-                </Card>
-              ) : (
-                <Pressable onPress={() => setShowCancelForm(true)} style={{ alignItems: 'center', paddingVertical: spacing[3] }}>
-                  <Text variant="caption" style={{ color: palette.danger }}>Annuler cette vente</Text>
-                </Pressable>
-              )
+                </View>
+              </Card>
             )}
           </View>
           )}
@@ -710,6 +675,92 @@ function DetailModal({ sale, currency, businessName, singleVendor, role, onClose
           onConfirm={handlePaymentSubmit}
           saving={saving}
         />
+      </SafeAreaView>
+    </Modal>
+  );
+}
+
+// ─── Filter sheet ──────────────────────────────────────────────────────────────
+
+interface FilterSheetProps {
+  visible: boolean;
+  availableProducts: string[];
+  loadingProducts: boolean;
+  selectedProducts: string[];
+  dateFrom: string;
+  dateTo: string;
+  onToggleProduct: (name: string) => void;
+  onChangeFrom: (v: string) => void;
+  onChangeTo: (v: string) => void;
+  onReset: () => void;
+  onClose: () => void;
+  onApply: () => void;
+  loading: boolean;
+}
+
+function FilterSheet({ visible, availableProducts, loadingProducts, selectedProducts, dateFrom, dateTo, onToggleProduct, onChangeFrom, onChangeTo, onReset, onClose, onApply, loading }: FilterSheetProps) {
+  const { palette } = useTheme();
+  const styles = useMemo(() => makeStyles(palette), [palette]);
+  const hasAny = selectedProducts.length > 0 || dateFrom !== '' || dateTo !== '';
+
+  return (
+    <Modal visible={visible} animationType="slide" presentationStyle="formSheet" onRequestClose={onClose}>
+      <SafeAreaView style={styles.modalSafe} edges={['bottom']}>
+        <View style={styles.sheetHeader}>
+          <Pressable onPress={onClose} style={{ minWidth: 60 }}>
+            <Text variant="body" color="secondary">Fermer</Text>
+          </Pressable>
+          <Text variant="h4" style={{ flex: 1, textAlign: 'center' }}>Filtrer</Text>
+          <Pressable onPress={onReset} style={{ minWidth: 60, alignItems: 'flex-end' }} disabled={!hasAny}>
+            <Text variant="body" style={{ color: hasAny ? palette.primary : palette.textDisabled }}>Effacer</Text>
+          </Pressable>
+        </View>
+
+        <ScrollView style={{ flex: 1 }} contentContainerStyle={styles.sheetContent} keyboardShouldPersistTaps="handled">
+          <View style={{ gap: spacing[2] }}>
+            <Text variant="label">
+              {selectedProducts.length > 0 ? `Produits · ${selectedProducts.length} sélectionné${selectedProducts.length > 1 ? 's' : ''}` : 'Produits'}
+            </Text>
+            {loadingProducts ? (
+              <Text variant="caption" color="secondary">Chargement…</Text>
+            ) : availableProducts.length === 0 ? (
+              <Text variant="caption" color="secondary">Aucun produit trouvé</Text>
+            ) : (
+              <View style={styles.chipWrap}>
+                {availableProducts.map(name => {
+                  const active = selectedProducts.includes(name);
+                  return (
+                    <Pressable
+                      key={name}
+                      onPress={() => onToggleProduct(name)}
+                      style={[styles.chip, active && styles.chipActive]}
+                    >
+                      <Text variant="caption" style={{ color: active ? palette.textInverse : palette.textPrimary }}>
+                        {name}
+                      </Text>
+                    </Pressable>
+                  );
+                })}
+              </View>
+            )}
+          </View>
+
+          <View style={{ gap: spacing[2] }}>
+            <Text variant="label">Période</Text>
+            <DatePickerField label="Du" value={dateFrom} onChange={onChangeFrom} />
+            <DatePickerField label="Au" value={dateTo} onChange={onChangeTo} />
+          </View>
+        </ScrollView>
+
+        <View style={styles.sheetFooter}>
+          <Button
+            label={loading ? 'Recherche…' : 'Appliquer'}
+            onPress={onApply}
+            loading={loading}
+            fullWidth
+            size="lg"
+          />
+        </View>
       </SafeAreaView>
     </Modal>
   );
@@ -755,7 +806,78 @@ export default function VentesScreen() {
   const [filter, setFilter] = useState<'all' | 'paye' | 'credit' | 'annule'>('all');
   const [showAll, setShowAll] = useState(false);
 
-  const [expandedDays, setExpandedDays] = useState<Set<string>>(() => new Set());
+  // Advanced filter state
+  const [showFilterSheet, setShowFilterSheet] = useState(false);
+  const [selectedProductNames, setSelectedProductNames] = useState<string[]>([]);
+  const [dateFrom, setDateFrom] = useState('');
+  const [dateTo, setDateTo] = useState('');
+  const [productMatchIds, setProductMatchIds] = useState<Set<string> | null>(null);
+  const [filterLoading, setFilterLoading] = useState(false);
+  const [availableProducts, setAvailableProducts] = useState<string[]>([]);
+  const [loadingProducts, setLoadingProducts] = useState(false);
+  // Draft state for the filter sheet (only committed on "Appliquer")
+  const [draftSelectedProducts, setDraftSelectedProducts] = useState<string[]>([]);
+  const [draftFrom, setDraftFrom] = useState('');
+  const [draftTo, setDraftTo] = useState('');
+
+  const hasActiveFilter = selectedProductNames.length > 0 || dateFrom !== '' || dateTo !== '';
+
+  const openFilterSheet = async () => {
+    setDraftSelectedProducts(selectedProductNames);
+    setDraftFrom(dateFrom);
+    setDraftTo(dateTo);
+    setShowFilterSheet(true);
+
+    setLoadingProducts(true);
+    const orderIds = sales.map(s => s.id);
+    if (orderIds.length > 0) {
+      const { data } = await supabase
+        .from('so_lines')
+        .select('product_name')
+        .in('order_id', orderIds);
+      const unique = [...new Set<string>((data ?? []).map((r: { product_name: string }) => r.product_name))]
+        .sort((a, b) => a.localeCompare(b, 'fr'));
+      setAvailableProducts(unique);
+    } else {
+      setAvailableProducts([]);
+    }
+    setLoadingProducts(false);
+  };
+
+  const toggleDraftProduct = (name: string) => {
+    setDraftSelectedProducts(prev =>
+      prev.includes(name) ? prev.filter(p => p !== name) : [...prev, name],
+    );
+  };
+
+  const applyFilters = async () => {
+    setSelectedProductNames(draftSelectedProducts);
+    setDateFrom(draftFrom);
+    setDateTo(draftTo);
+
+    if (draftSelectedProducts.length > 0) {
+      setFilterLoading(true);
+      const orderIds = sales.map(s => s.id);
+      if (orderIds.length > 0) {
+        const { data } = await supabase
+          .from('so_lines')
+          .select('order_id')
+          .in('order_id', orderIds)
+          .in('product_name', draftSelectedProducts);
+        setProductMatchIds(new Set<string>((data ?? []).map((r: { order_id: string }) => r.order_id)));
+      } else {
+        setProductMatchIds(new Set<string>());
+      }
+      setFilterLoading(false);
+    } else {
+      setProductMatchIds(null);
+    }
+
+    setShowFilterSheet(false);
+  };
+
+  const todayKey = `${new Date().getFullYear()}-${String(new Date().getMonth() + 1).padStart(2, '0')}-${String(new Date().getDate()).padStart(2, '0')}`;
+  const [expandedDays, setExpandedDays] = useState<Set<string>>(() => new Set([todayKey]));
   const toggleDay = (key: string) => setExpandedDays(prev => {
     const next = new Set(prev);
     if (next.has(key)) next.delete(key); else next.add(key);
@@ -779,13 +901,28 @@ export default function VentesScreen() {
   }, [showAll]);
 
   const filtered = useMemo(() => {
-    if (filter === 'all') return sales;
-    if (filter === 'credit') {
-      // Credit filter: both full-credit and partial sales
-      return sales.filter(s => s.status === 'credit');
+    let result = sales;
+
+    if (filter !== 'all') {
+      result = filter === 'credit'
+        ? result.filter(s => s.status === 'credit')
+        : result.filter(s => s.status === filter);
     }
-    return sales.filter(s => s.status === filter);
-  }, [sales, filter]);
+
+    if (productMatchIds !== null) {
+      result = result.filter(s => productMatchIds.has(s.id));
+    }
+
+    if (dateFrom) {
+      result = result.filter(s => (s.sale_date ?? s.created_at).split('T')[0] >= dateFrom);
+    }
+
+    if (dateTo) {
+      result = result.filter(s => (s.sale_date ?? s.created_at).split('T')[0] <= dateTo);
+    }
+
+    return result;
+  }, [sales, filter, productMatchIds, dateFrom, dateTo]);
 
   // Hide vendor column when all sales belong to the same seller
   const singleVendor = useMemo(() => new Set(sales.map(s => s.seller_id)).size <= 1, [sales]);
@@ -832,11 +969,14 @@ export default function VentesScreen() {
   );
 
   return (
-    <SafeAreaView style={styles.safe} edges={['top']}>
+    <Screen>
       <View style={styles.header}>
         <Pressable onPress={() => router.back()}><Text variant="body" color="secondary">‹ Retour</Text></Pressable>
         <Text variant="h4">Ventes</Text>
-        <View style={{ width: 60 }} />
+        <Pressable onPress={openFilterSheet} style={styles.filterIconBtn}>
+          <Ionicons name="funnel-outline" size={20} color={hasActiveFilter ? palette.primary : palette.textSecondary} />
+          {hasActiveFilter && <View style={styles.filterDot} />}
+        </Pressable>
       </View>
 
       {/* Inline summary line */}
@@ -985,6 +1125,22 @@ export default function VentesScreen() {
         />
       )}
 
+      <FilterSheet
+        visible={showFilterSheet}
+        availableProducts={availableProducts}
+        loadingProducts={loadingProducts}
+        selectedProducts={draftSelectedProducts}
+        dateFrom={draftFrom}
+        dateTo={draftTo}
+        onToggleProduct={toggleDraftProduct}
+        onChangeFrom={setDraftFrom}
+        onChangeTo={setDraftTo}
+        onReset={() => { setDraftSelectedProducts([]); setDraftFrom(''); setDraftTo(''); }}
+        onClose={() => setShowFilterSheet(false)}
+        onApply={applyFilters}
+        loading={filterLoading}
+      />
+
       {canSell && !selected && (
         <Animated.View style={[styles.fabContainer, { transform: [{ scale: fabScale }], opacity: fabOpacity }]}>
           <Pressable
@@ -997,7 +1153,7 @@ export default function VentesScreen() {
           </Pressable>
         </Animated.View>
       )}
-    </SafeAreaView>
+    </Screen>
   );
 }
 
@@ -1007,6 +1163,8 @@ function makeStyles(p: Palette) {
   return StyleSheet.create({
   safe: { flex: 1, backgroundColor: p.background },
   header: { flexDirection: 'row', alignItems: 'center', justifyContent: 'space-between', paddingHorizontal: spacing[5], paddingVertical: spacing[4] },
+  filterIconBtn: { width: 60, alignItems: 'flex-end', justifyContent: 'center' },
+  filterDot: { position: 'absolute', top: -3, right: -3, width: 7, height: 7, borderRadius: 3.5, backgroundColor: p.primary },
   summaryLine: { paddingHorizontal: spacing[5], paddingBottom: spacing[2] },
   filterRow: { flexDirection: 'row', paddingHorizontal: spacing[5], gap: spacing[2], marginBottom: spacing[3] },
   filterTab: { flex: 1, alignItems: 'center', paddingHorizontal: spacing[2], paddingVertical: spacing[1.5], borderRadius: radius.full, backgroundColor: p.surface, borderWidth: 1, borderColor: p.border },
@@ -1032,7 +1190,7 @@ function makeStyles(p: Palette) {
     width: 56, height: 56, borderRadius: radius.full,
     backgroundColor: p.primary,
     alignItems: 'center', justifyContent: 'center',
-    shadowColor: colors.neutral[900],
+    shadowColor: p.textPrimary,
     shadowOffset: { width: 0, height: 4 }, shadowOpacity: 0.18, shadowRadius: 8,
     elevation: 8,
   },
@@ -1054,8 +1212,14 @@ function makeStyles(p: Palette) {
     flexDirection: 'row', alignItems: 'center', justifyContent: 'space-between',
   },
   bannerGreen: { backgroundColor: p.success + '20', borderWidth: 1, borderColor: p.success + '40' },
-  bannerOrange: { backgroundColor: p.warning + '15', borderWidth: 1, borderColor: p.warning + '40' },
-  bannerRed: { backgroundColor: p.danger + '15', borderWidth: 1, borderColor: p.danger + '40', flexDirection: 'column', alignItems: 'flex-start' },
+  bannerRed: { backgroundColor: p.danger + '15', borderWidth: 1, borderColor: p.danger + '40' },
+
+  heroCredit: {
+    alignItems: 'center', gap: spacing[1], paddingVertical: spacing[3],
+  },
+  heroCreditAmount: {
+    fontSize: 44, lineHeight: 56, color: p.textPrimary, textAlign: 'center',
+  },
 
   toast: {
     backgroundColor: p.primary, paddingHorizontal: spacing[5], paddingVertical: spacing[3],
@@ -1065,6 +1229,8 @@ function makeStyles(p: Palette) {
   row: { flexDirection: 'row', alignItems: 'center', justifyContent: 'space-between' },
   lineRow: { flexDirection: 'row', alignItems: 'center', gap: spacing[3] },
   divider: { height: 1, backgroundColor: p.border, marginVertical: spacing[1] },
+  cardSection: { padding: spacing[4] },
+  cardSectionBorder: { borderTopWidth: 1, borderTopColor: p.border },
 
   textInput: {
     paddingHorizontal: spacing[4], paddingVertical: spacing[3],
@@ -1096,6 +1262,7 @@ function makeStyles(p: Palette) {
     borderRadius: radius.md, borderWidth: 1, borderColor: p.primary,
   },
   methodRow: { flexDirection: 'row', flexWrap: 'wrap', gap: spacing[2] },
+  chipWrap: { flexDirection: 'row', flexWrap: 'wrap', gap: spacing[2] },
   chip: { paddingHorizontal: spacing[3], paddingVertical: spacing[1.5], borderRadius: radius.full, borderWidth: 1, borderColor: p.border, backgroundColor: p.surface },
   chipActive: { backgroundColor: p.primary, borderColor: p.primary },
   });

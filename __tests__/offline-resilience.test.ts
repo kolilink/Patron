@@ -154,7 +154,7 @@ describe('products store — offline cache fallback (Fix 2)', () => {
     expect(state.loading).toBe(false);
   });
 
-  it('sets error (not offline) when network fails and no cache exists', async () => {
+  it('sets offline + error when network fails and no cache exists (cold start)', async () => {
     (supabase.from as jest.Mock).mockReturnValueOnce(
       makeFromChain({ data: null, error: { message: 'Network request failed' } }),
     );
@@ -164,7 +164,7 @@ describe('products store — offline cache fallback (Fix 2)', () => {
 
     const state = useProductStore.getState();
     expect(state.products).toEqual([]);
-    expect(state.offline).toBe(false);
+    expect(state.offline).toBe(true);
     expect(state.error).not.toBeNull();
   });
 

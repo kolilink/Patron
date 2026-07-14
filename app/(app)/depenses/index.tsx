@@ -1,6 +1,8 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { Alert, Animated, Easing, Modal, Pressable, ScrollView, StyleSheet, View } from 'react-native';
+import { Ionicons } from '@expo/vector-icons';
 import { SafeAreaView } from 'react-native-safe-area-context';
+import { Screen } from '@/src/components/ui/Screen';
 import { router } from 'expo-router';
 import { Button } from '@/src/components/ui/Button';
 import { Card } from '@/src/components/ui/Card';
@@ -8,14 +10,16 @@ import { Input } from '@/src/components/ui/Input';
 import { Text } from '@/src/components/ui/Text';
 import { DatePickerField } from '@/src/components/ui/DatePickerField';
 import { OfflineNotice } from '@/src/components/ui/OfflineNotice';
-import { colors, useTheme, spacing, radius } from '@/src/theme';
+import { useTheme, spacing, radius, INFO_TAG } from '@/src/theme';
 import type { Palette } from '@/src/theme';
 import { useAuthStore } from '@/stores/auth';
 import { useExpensesStore, type CreateExpenseData } from '@/stores/expenses';
+import { useProductStore } from '@/stores/products';
 import type { Expense } from '@/src/types';
 import { haptics } from '@/lib/haptics';
 import { toast } from '@/stores/toast';
 import { SkeletonList } from '@/src/components/ui/SkeletonPlaceholder';
+import { formatAmountInput, parseAmountInput } from '@/src/utils/format';
 
 function fmt(n: number, cur: string) { return `${n.toLocaleString('fr-FR')} ${cur}`; }
 function todayIso() {
@@ -37,20 +41,36 @@ interface ExpenseFormProps {
   onSave: (data: CreateExpenseData) => Promise<void>;
   saving: boolean;
   currency: string;
+  businessId: string;
+  userId: string;
 }
 
-function ExpenseFormModal({ visible, editing, onClose, onSave, saving, currency }: ExpenseFormProps) {
+function ExpenseFormModal({ visible, editing, onClose, onSave, saving, currency, businessId, userId }: ExpenseFormProps) {
   const { palette } = useTheme();
   const styles = useMemo(() => makeStyles(palette), [palette]);
   const [amount, setAmount] = useState('');
   const [description, setDescription] = useState('');
   const [date, setDate] = useState(todayIso());
   const [dateMode, setDateMode] = useState<'hier' | 'aujourdhui' | 'autre'>('aujourdhui');
+  const [selectedProductId, setSelectedProductId] = useState<string | null>(null);
+
+  const { products, fetchProducts } = useProductStore();
+  const activeProducts = useMemo(
+    () => products.filter(p => !p.archived),
+    [products],
+  );
+
+  useEffect(() => {
+    if (visible && products.length === 0 && businessId) {
+      void fetchProducts(businessId, userId);
+    }
+  }, [visible, businessId]);
 
   useEffect(() => {
     if (visible) {
-      setAmount(editing ? String(editing.amount) : '');
+      setAmount(editing ? formatAmountInput(String(editing.amount), currency) : '');
       setDescription(editing?.description ?? '');
+      setSelectedProductId(editing?.product_id ?? null);
       const today = todayIso();
       const yesterday = yesterdayIso();
       const d = editing?.date ?? today;
@@ -60,10 +80,10 @@ function ExpenseFormModal({ visible, editing, onClose, onSave, saving, currency 
   }, [visible, editing]);
 
   const handleSave = async () => {
-    const amt = parseFloat(amount);
+    const amt = parseAmountInput(amount, currency);
     if (!description.trim()) { Alert.alert('Écrivez un petit mot :)'); return; }
-    if (isNaN(amt) || amt <= 0) { Alert.alert('Vérifiez le montant :)'); return; }
-    await onSave({ amount: amt, description, category: null, date, due_date: null, note: null });
+    if (!amt || amt <= 0) { Alert.alert('Vérifiez le montant :)'); return; }
+    await onSave({ amount: amt, description, category: null, date, due_date: null, note: null, product_id: selectedProductId });
   };
 
   const isEdit = !!editing;
@@ -81,7 +101,7 @@ function ExpenseFormModal({ visible, editing, onClose, onSave, saving, currency 
           <Input
             label={`Montant (${currency})`}
             value={amount}
-            onChangeText={setAmount}
+            onChangeText={v => setAmount(formatAmountInput(v, currency))}
             keyboardType="decimal-pad"
           />
 
@@ -91,6 +111,32 @@ function ExpenseFormModal({ visible, editing, onClose, onSave, saving, currency 
             onChangeText={setDescription}
             placeholder="Carburant, loyer, salaire du gardien"
           />
+
+          {activeProducts.length > 0 && (
+            <View style={{ gap: spacing[2] }}>
+              <Text variant="label">Produit concerné <Text variant="caption" color="secondary">(optionnel)</Text></Text>
+              <ScrollView horizontal showsHorizontalScrollIndicator={false} style={{ flexGrow: 0 }}>
+                {activeProducts.map(p => {
+                  const active = selectedProductId === p.id;
+                  return (
+                    <Pressable
+                      key={p.id}
+                      onPress={() => setSelectedProductId(active ? null : p.id)}
+                      style={[styles.productChip, active && styles.productChipActive]}
+                    >
+                      <Text
+                        variant="caption"
+                        numberOfLines={1}
+                        style={{ color: active ? palette.textInverse : palette.textPrimary }}
+                      >
+                        {p.name}
+                      </Text>
+                    </Pressable>
+                  );
+                })}
+              </ScrollView>
+            </View>
+          )}
 
           <View style={{ gap: spacing[2] }}>
             <Text variant="label">Date de la dépense</Text>
@@ -160,6 +206,18 @@ function ExpenseCard({ expense, currency, isManager, canEdit, onApprove, onRejec
       <View style={styles.expTop}>
         <View style={{ flex: 1 }}>
           <Text variant="label" numberOfLines={1}>{expense.description}</Text>
+          {expense.category === 'transport_achat' ? (
+            <View style={[styles.productTag, { backgroundColor: INFO_TAG.bg, flexDirection: 'row', alignItems: 'center', gap: 4 }]}>
+              <Ionicons name="cube-outline" size={11} color={INFO_TAG.text} />
+              <Text variant="caption" style={{ color: INFO_TAG.text }}>
+                {expense.product_name ? `Fret · ${expense.product_name}` : 'Fret'}
+              </Text>
+            </View>
+          ) : expense.product_name ? (
+            <View style={styles.productTag}>
+              <Text variant="caption" style={{ color: palette.primary }}>{expense.product_name}</Text>
+            </View>
+          ) : null}
           {expense.note ? (
             <Text variant="caption" color="secondary" numberOfLines={2}>{expense.note}</Text>
           ) : null}
@@ -360,7 +418,7 @@ export default function DepensesScreen() {
   const isEmpty = expenses.length === 0;
 
   return (
-    <SafeAreaView style={styles.safe} edges={['top']}>
+    <Screen>
       <View style={styles.hdr}>
         <Pressable onPress={() => router.back()}><Text variant="body" color="secondary">‹ Retour</Text></Pressable>
         <Text variant="h4">Dépenses</Text>
@@ -429,6 +487,8 @@ export default function DepensesScreen() {
         onSave={handleSave}
         saving={saving}
         currency={currency}
+        businessId={businessId}
+        userId={userId}
       />
 
       <Animated.View style={[styles.fabContainer, { opacity: fabOpacity, transform: [{ scale: fabScale }] }]}>
@@ -441,7 +501,7 @@ export default function DepensesScreen() {
           <Text style={styles.fabIcon}>+</Text>
         </Pressable>
       </Animated.View>
-    </SafeAreaView>
+    </Screen>
   );
 }
 
@@ -501,6 +561,19 @@ function makeStyles(p: Palette) {
   // Empty
   empty: { flex: 1, alignItems: 'center', justifyContent: 'center', gap: spacing[3] },
 
+  // Product chip picker
+  productChip: {
+    paddingHorizontal: spacing[3], paddingVertical: spacing[2],
+    marginRight: spacing[2], borderRadius: radius.full,
+    borderWidth: 1.5, borderColor: p.border, backgroundColor: p.surface, maxWidth: 160,
+  },
+  productChipActive: { backgroundColor: p.primary, borderColor: p.primary },
+  productTag: {
+    alignSelf: 'flex-start', marginTop: 2,
+    paddingHorizontal: spacing[2], paddingVertical: 1,
+    borderRadius: radius.sm, backgroundColor: p.primaryLight,
+  },
+
   // Date pills
   datePills: { flexDirection: 'row', gap: spacing[2] },
   datePill: {
@@ -515,7 +588,7 @@ function makeStyles(p: Palette) {
   fab: {
     width: 56, height: 56, borderRadius: radius.full,
     backgroundColor: p.primary, alignItems: 'center', justifyContent: 'center',
-    shadowColor: colors.neutral[900], shadowOffset: { width: 0, height: 4 },
+    shadowColor: p.textPrimary, shadowOffset: { width: 0, height: 4 },
     shadowOpacity: 0.18, shadowRadius: 8, elevation: 8,
   },
   fabIcon: { fontSize: 28, lineHeight: 32, fontWeight: '300' as const, color: p.textInverse, marginTop: -2 },

@@ -2,7 +2,8 @@ import { create } from 'zustand';
 import { supabase } from '@/lib/supabase';
 import { translateError } from '@/lib/errors';
 import { isNetworkError } from '@/lib/sync';
-import { getKV, setKV, saveMarketCache, getMarketCache } from '@/lib/db';
+import { getKV, setKV, saveMarketCache, getMarketCache, getCacheTimestamp } from '@/lib/db';
+import { toast } from '@/stores/toast';
 import type { MarketPost, MarketComment, MarketCategory } from '@/src/types';
 
 const MARKET_VISIT_KEY = 'market_last_visit';
@@ -22,6 +23,8 @@ interface MarketStore {
   comments: MarketComment[];
   loadingDetail: boolean;
   sendingComment: boolean;
+  offline: boolean;
+  offlineSince: number | null;
 
   fetchPosts: (userId: string, category?: MarketCategory) => Promise<void>;
   prependPost: (post: MarketPost) => void;
@@ -52,6 +55,8 @@ const initialState = {
   comments: [],
   loadingDetail: false,
   sendingComment: false,
+  offline: false,
+  offlineSince: null as number | null,
 };
 
 export const useMarketStore = create<MarketStore>((set, get) => ({
@@ -86,7 +91,26 @@ export const useMarketStore = create<MarketStore>((set, get) => ({
 
       if (postsRes.error) throw postsRes.error;
 
-      const posts = (postsRes.data ?? []) as MarketPost[];
+      let posts = (postsRes.data ?? []) as MarketPost[];
+
+      // Resolve current author names so old posts reflect name changes
+      const authorIds = [...new Set(posts.map(p => p.author_id))];
+      if (authorIds.length > 0) {
+        const { data: authorProfiles } = await supabase
+          .from('profiles')
+          .select('id, name')
+          .in('id', authorIds);
+        if (authorProfiles && authorProfiles.length > 0) {
+          const nameMap: Record<string, string | null> = Object.fromEntries(
+            authorProfiles.map(p => [p.id, (p.name as string | null) ?? null]),
+          );
+          posts = posts.map(p => ({
+            ...p,
+            author_name: nameMap[p.author_id] ?? p.author_name,
+          }));
+        }
+      }
+
       void saveMarketCache(posts);
 
       set({
@@ -97,15 +121,18 @@ export const useMarketStore = create<MarketStore>((set, get) => ({
         userLevel: profileRes.data?.community_level ?? 1,
         lastVisitedAt: visitTs ? new Date(visitTs) : null,
         loading: false,
+        offline: false,
+        offlineSince: null,
       });
     } catch (err) {
       if (isNetworkError(err)) {
         const cached = await getMarketCache() as MarketPost[] | null;
         if (cached) {
-          set({ posts: cached, loading: false, error: null });
+          const ts = await getCacheTimestamp('market_cache');
+          set({ posts: cached, loading: false, error: null, offline: true, offlineSince: ts });
           return;
         }
-        set({ loading: false, error: null }); // show empty state, not an error
+        set({ loading: false, error: null, offline: true, offlineSince: null }); // show empty state, not an error
         return;
       }
       set({ loading: false, error: translateError(err, 'Erreur de chargement') });
@@ -163,7 +190,7 @@ export const useMarketStore = create<MarketStore>((set, get) => ({
   fetchPostDetail: async (postId, userId) => {
     set({ loadingDetail: true, activePost: null, comments: [] });
     try {
-      const [postRes, commentsRes, commentLikesRes] = await Promise.all([
+      const [postRes, commentsRes, commentLikesRes, postLikesRes] = await Promise.all([
         supabase.from('market_posts').select('*').eq('id', postId).single(),
         supabase
           .from('market_comments')
@@ -171,18 +198,44 @@ export const useMarketStore = create<MarketStore>((set, get) => ({
           .eq('post_id', postId)
           .order('created_at', { ascending: true }),
         supabase.from('comment_likes').select('comment_id').eq('user_id', userId),
+        supabase.from('post_likes').select('post_id').eq('user_id', userId),
       ]);
       if (postRes.error) throw postRes.error;
       if (commentsRes.error) throw commentsRes.error;
-      const comments = (commentsRes.data ?? []).map((c: any) => ({
+      let comments = (commentsRes.data ?? []).map((c: any) => ({
         ...c,
         author_level: c.author?.community_level ?? 1,
         author: undefined,
       })) as MarketComment[];
+
+      // Resolve current names for post + comments
+      const allAuthorIds = [...new Set([
+        (postRes.data as MarketPost).author_id,
+        ...comments.map(c => c.author_id),
+      ])];
+      if (allAuthorIds.length > 0) {
+        const { data: authorProfiles } = await supabase
+          .from('profiles')
+          .select('id, name')
+          .in('id', allAuthorIds);
+        if (authorProfiles && authorProfiles.length > 0) {
+          const nameMap: Record<string, string | null> = Object.fromEntries(
+            authorProfiles.map(p => [p.id, (p.name as string | null) ?? null]),
+          );
+          const post = postRes.data as MarketPost;
+          (post as any).author_name = nameMap[post.author_id] ?? post.author_name;
+          comments = comments.map(c => ({
+            ...c,
+            author_name: nameMap[c.author_id] ?? c.author_name,
+          }));
+        }
+      }
+
       set({
         activePost: postRes.data as MarketPost,
         comments,
         likedCommentIds: (commentLikesRes.data ?? []).map(l => l.comment_id),
+        likedPostIds: (postLikesRes.data ?? []).map(l => l.post_id),
         loadingDetail: false,
       });
     } catch (err) {
@@ -234,48 +287,36 @@ export const useMarketStore = create<MarketStore>((set, get) => ({
   },
 
   toggleLike: async (postId, userId) => {
-    const { likedPostIds, posts } = get();
+    const { likedPostIds, posts, activePost } = get();
     const isLiked = likedPostIds.includes(postId);
+    const delta = isLiked ? -1 : 1;
+
+    // Snapshots for revert
+    const prevLikedPostIds = likedPostIds;
+    const prevPosts = posts;
+    const prevActivePost = activePost;
 
     // Optimistic update
     set({
-      likedPostIds: isLiked
-        ? likedPostIds.filter(id => id !== postId)
-        : [...likedPostIds, postId],
+      likedPostIds: isLiked ? likedPostIds.filter(id => id !== postId) : [...likedPostIds, postId],
       posts: posts.map(p => p.id === postId
-        ? { ...p, likes_count: Math.max(0, p.likes_count + (isLiked ? -1 : 1)) }
-        : p),
-      activePost: get().activePost?.id === postId
-        ? {
-          ...get().activePost!,
-          likes_count: Math.max(0, get().activePost!.likes_count + (isLiked ? -1 : 1)),
-        }
-        : get().activePost,
+        ? { ...p, likes_count: Math.max(0, p.likes_count + delta) } : p),
+      activePost: activePost?.id === postId
+        ? { ...activePost, likes_count: Math.max(0, activePost.likes_count + delta) }
+        : activePost,
     });
 
     try {
       const { error } = await supabase.rpc('toggle_post_like', { p_post_id: postId });
-      if (error) {
-        // Revert on error
-        set({
-          likedPostIds: isLiked
-            ? [...get().likedPostIds, postId]
-            : get().likedPostIds.filter(id => id !== postId),
-          posts: get().posts.map(p => p.id === postId
-            ? { ...p, likes_count: Math.max(0, p.likes_count + (isLiked ? 1 : -1)) }
-            : p),
-        });
+      if (error) throw error;
+    } catch (err) {
+      set({ likedPostIds: prevLikedPostIds, posts: prevPosts, activePost: prevActivePost });
+      const msg = err instanceof Error ? err.message : '';
+      if (msg.includes('quotidienne')) {
+        toast.warning('Limite atteinte — vous avez déjà beaucoup aimé ce contributeur aujourd\'hui.');
+      } else if (!msg.includes('Auto-upvotes')) {
+        toast.warning('Impossible d\'enregistrer le like. Réessayez.');
       }
-    } catch {
-      // Revert optimistic update
-      set({
-        likedPostIds: isLiked
-          ? [...get().likedPostIds, postId]
-          : get().likedPostIds.filter(id => id !== postId),
-        posts: get().posts.map(p => p.id === postId
-          ? { ...p, likes_count: Math.max(0, p.likes_count + (isLiked ? 1 : -1)) }
-          : p),
-      });
     }
   },
 

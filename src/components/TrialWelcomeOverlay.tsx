@@ -1,10 +1,12 @@
-import React, { useEffect, useRef, useMemo } from 'react';
+import React, { useEffect, useRef, useMemo, useState } from 'react';
 import { Animated, Modal, ScrollView, StyleSheet, View } from 'react-native';
 import { SafeAreaView } from 'react-native-safe-area-context';
+import Purchases from 'react-native-purchases';
 import { Text } from '@/src/components/ui/Text';
 import { Button } from '@/src/components/ui/Button';
 import { useTheme, colors, radius, spacing } from '@/src/theme';
 import type { Palette } from '@/src/theme';
+import { isPurchasesConfigured } from '@/lib/purchases';
 
 interface Props {
   businessName: string;
@@ -12,10 +14,25 @@ interface Props {
   onStart: () => void;
 }
 
+// Shown until RevenueCat Offerings are configured — see PaywallScreen.tsx's
+// identical fallback and CLAUDE.md's IAP setup checklist.
+const FALLBACK_MONTHLY_PRICE = '2,99$';
+
 export function TrialWelcomeOverlay({ businessName, onStart }: Props) {
   const { palette } = useTheme();
   const styles = useMemo(() => makeStyles(palette), [palette]);
   const breathAnim = useRef(new Animated.Value(1)).current;
+  const [monthlyPrice, setMonthlyPrice] = useState(FALLBACK_MONTHLY_PRICE);
+
+  useEffect(() => {
+    if (!isPurchasesConfigured()) return;
+    Purchases.getOfferings()
+      .then(offerings => {
+        const price = offerings.current?.monthly?.product.priceString;
+        if (price) setMonthlyPrice(price);
+      })
+      .catch(() => {});
+  }, []);
 
   useEffect(() => {
     const pulse = Animated.loop(
@@ -65,7 +82,7 @@ export function TrialWelcomeOverlay({ businessName, onStart }: Props) {
             Une seule dette récupérée ce mois et Patron se paye tout seul
           </Text>
           <Text style={styles.priceText}>
-            Ensuite : 4,99$ / mois — sans engagement
+            Ensuite : {monthlyPrice} / mois — sans engagement
           </Text>
 
         </ScrollView>

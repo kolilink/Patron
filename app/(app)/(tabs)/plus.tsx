@@ -1,12 +1,12 @@
 import { Alert, ScrollView, StyleSheet, View } from 'react-native';
 import { useEffect, useMemo, useState } from 'react';
 import { router } from 'expo-router';
-import { SafeAreaView } from 'react-native-safe-area-context';
+import { Screen } from '@/src/components/ui/Screen';
 import { Ionicons } from '@expo/vector-icons';
 import { Button } from '@/src/components/ui/Button';
 import { Card } from '@/src/components/ui/Card';
 import { Text } from '@/src/components/ui/Text';
-import { colors, useTheme, spacing } from '@/src/theme';
+import { useTheme, spacing, ROLE_COLORS as ROLE_COLORS_LIGHT, ROLE_COLORS_DARK } from '@/src/theme';
 import type { Palette } from '@/src/theme';
 import { useAuthStore } from '@/stores/auth';
 import { generateFallbackName } from '@/lib/id';
@@ -14,19 +14,6 @@ import { type KnownBusiness, getKnownBusinesses, dismissRemovedBusiness } from '
 
 type IoniconName = React.ComponentProps<typeof Ionicons>['name'];
 
-const ROLE_COLORS_LIGHT: Record<string, string> = {
-  administrateur: colors.role.administrateur,
-  manager: colors.role.manager,
-  vendeur: colors.role.vendeur,
-  investisseur: colors.role.investisseur,
-};
-
-const ROLE_COLORS_DARK: Record<string, string> = {
-  administrateur: '#818CF8',
-  manager: '#38BDF8',
-  vendeur: '#4ADE80',
-  investisseur: '#FCD34D',
-};
 
 interface MenuRowProps {
   iconName: IoniconName;
@@ -75,18 +62,22 @@ export default function PlusScreen() {
   const isVendeur = role === 'vendeur';
   const isInvestisseur = role === 'investisseur';
 
+  // A quick re-lock (biometric-recoverable, no OTP needed) is available from
+  // Paramètres → "Verrouiller" — this button is for a real sign-out, which now
+  // that PIN is gone always requires a fresh WhatsApp OTP to come back.
   const handleLogout = () => {
-    Alert.alert('Déconnexion', 'Voulez-vous vraiment vous déconnecter ?', [
-      { text: 'Annuler', style: 'cancel' },
-      {
-        text: 'Déconnecter', style: 'destructive',
-        onPress: async () => { await logout(); router.replace('/(welcome)/'); },
-      },
-    ]);
+    Alert.alert(
+      'Se déconnecter ?',
+      'Vous devrez recevoir un nouveau code WhatsApp pour vous reconnecter.',
+      [
+        { text: 'Annuler', style: 'cancel' },
+        { text: 'Se déconnecter', style: 'destructive', onPress: () => { void logout(); } },
+      ],
+    );
   };
 
   return (
-    <SafeAreaView style={styles.safe} edges={['top']}>
+    <Screen tab>
       <ScrollView contentContainerStyle={styles.content} showsVerticalScrollIndicator={false}>
         {/* User + business */}
         <Card style={styles.profileCard}>
@@ -119,6 +110,7 @@ export default function PlusScreen() {
             <MenuRow iconName="card-outline" label="Clients qui doivent" sub="Voir qui vous doit de l'argent" onPress={() => router.push('/credits')} />
             <MenuRow iconName="people-outline" label="Mes clients" sub="Mes clients et crédits" onPress={() => router.push('/clients')} />
             <MenuRow iconName="cash-outline" label="Dépenses" sub="Noter une dépense" onPress={() => router.push('/depenses')} />
+            <MenuRow iconName="arrow-down-circle-outline" label="Mes apports" sub="Capital que j'ai injecté" onPress={() => router.push('/apports')} />
           </View>
         )}
 
@@ -127,6 +119,7 @@ export default function PlusScreen() {
           <View style={styles.section}>
             <Text variant="overline" color="secondary">Vue d'ensemble</Text>
             <MenuRow iconName="bar-chart-outline" label="Rapports" sub="Vos chiffres" onPress={() => router.push('/rapports')} />
+            <MenuRow iconName="arrow-down-circle-outline" label="Capital investi" sub="Apports de fonds" onPress={() => router.push('/apports')} />
           </View>
         )}
 
@@ -143,6 +136,7 @@ export default function PlusScreen() {
             <View style={styles.section}>
               <Text variant="overline" color="secondary">Finances</Text>
               <MenuRow iconName="cash-outline" label="Dépenses" sub="Suivre vos dépenses" onPress={() => router.push('/depenses')} />
+              <MenuRow iconName="arrow-down-circle-outline" label="Capital investi" sub="Apports de fonds" onPress={() => router.push('/apports')} />
             </View>
 
             <View style={styles.section}>
@@ -206,9 +200,11 @@ export default function PlusScreen() {
           </View>
         )}
 
-        <Button label="Se déconnecter" variant="danger" onPress={handleLogout} fullWidth />
+        <View style={styles.section}>
+          <Button label="Se déconnecter" variant="danger" onPress={handleLogout} fullWidth />
+        </View>
       </ScrollView>
-    </SafeAreaView>
+    </Screen>
   );
 }
 

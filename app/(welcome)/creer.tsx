@@ -1,97 +1,30 @@
 import { useEffect, useMemo, useRef, useState } from 'react';
 import {
   KeyboardAvoidingView,
+  Linking,
   Platform,
-  Pressable,
   ScrollView,
   StyleSheet,
   View,
 } from 'react-native';
-import { router } from 'expo-router';
-import { SafeAreaView } from 'react-native-safe-area-context';
-import { Ionicons } from '@expo/vector-icons';
+import { router, useLocalSearchParams } from 'expo-router';
+import { Screen } from '@/src/components/ui/Screen';
 import { Button } from '@/src/components/ui/Button';
-import { Input } from '@/src/components/ui/Input';
 import { OtpInput } from '@/src/components/ui/OtpInput';
 import { Text } from '@/src/components/ui/Text';
 import { PhoneInput } from '@/src/components/ui/PhoneInput';
-import { useTheme, radius, spacing } from '@/src/theme';
+import { BusinessDetailsStep } from '@/src/components/BusinessDetailsStep';
+import { useTheme, spacing } from '@/src/theme';
 import type { Palette } from '@/src/theme';
 import { useAuthStore } from '@/stores/auth';
+import { useCountdown } from '@/src/hooks/useCountdown';
+import { formatCountdown } from '@/src/utils/format';
+import { inferCurrency } from '@/src/constants/currency';
 
-const CURRENCY_LIST = [
-  // West Africa
-  { code: 'GNF', flag: '🇬🇳', name: 'Franc Guinéen',       sub: 'Guinée' },
-  { code: 'XOF', flag: '🌍',  name: 'Franc CFA (UEMOA)',   sub: "Sénégal · Mali · Côte d'Ivoire…" },
-  { code: 'XAF', flag: '🌍',  name: 'Franc CFA (CEMAC)',   sub: 'Cameroun · Congo · Gabon…' },
-  { code: 'NGN', flag: '🇳🇬', name: 'Naira',               sub: 'Nigeria' },
-  { code: 'GHS', flag: '🇬🇭', name: 'Cedi',                sub: 'Ghana' },
-  // North Africa
-  { code: 'MAD', flag: '🇲🇦', name: 'Dirham marocain',    sub: 'Maroc' },
-  { code: 'DZD', flag: '🇩🇿', name: 'Dinar algérien',     sub: 'Algérie' },
-  { code: 'TND', flag: '🇹🇳', name: 'Dinar tunisien',     sub: 'Tunisie' },
-  { code: 'EGP', flag: '🇪🇬', name: 'Livre égyptienne',   sub: 'Égypte' },
-  // East & Southern Africa
-  { code: 'KES', flag: '🇰🇪', name: 'Shilling kényan',    sub: 'Kenya' },
-  { code: 'ZAR', flag: '🇿🇦', name: 'Rand',               sub: 'Afrique du Sud' },
-  { code: 'ETB', flag: '🇪🇹', name: 'Birr éthiopien',     sub: 'Éthiopie' },
-  // Middle East
-  { code: 'AED', flag: '🇦🇪', name: 'Dirham (EAU)',       sub: 'Émirats arabes unis' },
-  { code: 'SAR', flag: '🇸🇦', name: 'Riyal saoudien',     sub: 'Arabie Saoudite' },
-  // International
-  { code: 'USD', flag: '🇺🇸', name: 'Dollar américain',   sub: 'États-Unis · diaspora…' },
-  { code: 'EUR', flag: '🇪🇺', name: 'Euro',                sub: 'Europe' },
-  { code: 'GBP', flag: '🇬🇧', name: 'Livre sterling',     sub: 'Royaume-Uni' },
-  { code: 'CNY', flag: '🇨🇳', name: 'Yuan',               sub: 'Chine' },
-  { code: 'CAD', flag: '🇨🇦', name: 'Dollar canadien',    sub: 'Canada' },
-  { code: 'CHF', flag: '🇨🇭', name: 'Franc suisse',       sub: 'Suisse' },
-  { code: 'INR', flag: '🇮🇳', name: 'Roupie indienne',    sub: 'Inde' },
-];
+const SUPPORT_WA_URL = `https://wa.me/16094454809?text=${encodeURIComponent("Bonjour ! J'ai une question sur Patron 🙂")}`;
 
-// Ordered longest-prefix-first so +224 matches before +2
-const PREFIX_MAP: [string, string][] = [
-  ['+352', 'EUR'], // Luxembourg
-  ['+971', 'AED'], // EAU
-  ['+966', 'SAR'], // Arabie Saoudite
-  ['+254', 'KES'], // Kenya
-  ['+251', 'ETB'], // Éthiopie
-  ['+224', 'GNF'], // Guinée
-  ['+221', 'XOF'], // Sénégal
-  ['+223', 'XOF'], // Mali
-  ['+225', 'XOF'], // Côte d'Ivoire
-  ['+226', 'XOF'], // Burkina Faso
-  ['+227', 'XOF'], // Niger
-  ['+228', 'XOF'], // Togo
-  ['+229', 'XOF'], // Bénin
-  ['+237', 'XAF'], // Cameroun
-  ['+236', 'XAF'], // Centrafrique
-  ['+241', 'XAF'], // Gabon
-  ['+242', 'XAF'], // Congo Brazzaville
-  ['+235', 'XAF'], // Tchad
-  ['+240', 'XAF'], // Guinée équatoriale
-  ['+234', 'NGN'], // Nigeria
-  ['+233', 'GHS'], // Ghana
-  ['+212', 'MAD'], // Maroc
-  ['+213', 'DZD'], // Algérie
-  ['+216', 'TND'], // Tunisie
-  ['+20',  'EGP'], // Égypte
-  ['+27',  'ZAR'], // Afrique du Sud
-  ['+33',  'EUR'], // France
-  ['+32',  'EUR'], // Belgique
-  ['+41',  'CHF'], // Suisse
-  ['+44',  'GBP'], // Royaume-Uni
-  ['+86',  'CNY'], // Chine
-  ['+91',  'INR'], // Inde
-  ['+1',   'USD'], // États-Unis / Canada
-];
-
-function inferCurrency(phone: string): string {
-  const available = CURRENCY_LIST.map(c => c.code);
-  for (const [prefix, code] of PREFIX_MAP) {
-    if (phone.startsWith(prefix) && available.includes(code)) return code;
-  }
-  return 'GNF';
-}
+const OTP_VALIDITY_SECONDS = 600;
+const RESEND_COOLDOWN_SECONDS = 60;
 
 type Step = 'phone' | 'otp' | 'details';
 
@@ -99,31 +32,22 @@ export default function CreerScreen() {
   const { palette } = useTheme();
   const styles = useMemo(() => makeStyles(palette), [palette]);
   const { createPhoneVerification, verifyPhoneCode, upgradePhone, createBusiness, loading, error, clearError } = useAuthStore();
+  const { prefillPhone } = useLocalSearchParams<{ prefillPhone?: string }>();
   const hasPhone = Boolean(useAuthStore.getState().session?.user.phone);
   const [step, setStep] = useState<Step>(hasPhone ? 'details' : 'phone');
   const [phone, setPhone] = useState('');
   const [phoneComplete, setPhoneComplete] = useState(false);
   const [resetKey, setResetKey] = useState(0);
   const [otpKey, setOtpKey]     = useState(0);
-  const [businessName, setBusinessName] = useState('');
-  const [currency, setCurrency] = useState('GNF');
-  const [pickerOpen, setPickerOpen] = useState(false);
 
   const verificationIdRef = useRef('');
   const phoneRef = useRef('');
+  const otpValidity = useCountdown();
+  const resendCooldown = useCountdown();
 
-  // Pre-select currency as soon as we have a valid phone number
-  useEffect(() => {
-    if (phone) setCurrency(inferCurrency(phone));
-  }, [phone]);
-
-  const selectedC = CURRENCY_LIST.find(c => c.code === currency) ?? CURRENCY_LIST[0];
-
-  const handleCreate = async () => {
+  const handleCreate = async (data: { name: string; currency: string }) => {
     clearError();
-    const name = businessName.trim();
-    if (!name) return;
-    await createBusiness({ name, currency });
+    await createBusiness({ name: data.name, currency: data.currency });
     if (!useAuthStore.getState().error) {
       router.replace('/(app)/(tabs)/');
     }
@@ -140,6 +64,8 @@ export default function CreerScreen() {
       verificationIdRef.current = result.verificationId;
       phoneRef.current = normalized;
       setStep('otp');
+      otpValidity.start(OTP_VALIDITY_SECONDS);
+      resendCooldown.start(RESEND_COOLDOWN_SECONDS);
     }
   };
 
@@ -156,10 +82,15 @@ export default function CreerScreen() {
   };
 
   const handleResendCreer = async () => {
+    if (!resendCooldown.isDone) return;
     clearError();
     setOtpKey(k => k + 1);
     const result = await createPhoneVerification(phoneRef.current);
-    if (result) verificationIdRef.current = result.verificationId;
+    if (result) {
+      verificationIdRef.current = result.verificationId;
+      otpValidity.start(OTP_VALIDITY_SECONDS);
+      resendCooldown.start(RESEND_COOLDOWN_SECONDS);
+    }
   };
 
   const TITLES: Record<Step, string> = {
@@ -169,13 +100,15 @@ export default function CreerScreen() {
   };
 
   const SUBS: Record<Step, string> = {
-    phone: 'Pas de mot de passe à retenir. Votre numéro est votre identité.',
-    otp: 'Votre code Patron a été envoyé par SMS. Il est valable 30 min.',
+    phone: 'Entrez votre numéro, on vous enverra un code',
+    otp: otpValidity.secondsLeft > 0
+      ? `Votre code Patron a été envoyé par WhatsApp. Valable encore pour ${formatCountdown(otpValidity.secondsLeft)}`
+      : 'Le code a expiré. Demandez-en un nouveau ci-dessous',
     details: 'Pour commencer donnez un nom à votre commerce  :)',
   };
 
   return (
-    <SafeAreaView style={styles.safe}>
+    <Screen>
       <KeyboardAvoidingView behavior={Platform.OS === 'ios' ? 'padding' : 'height'} style={styles.kav}>
         <ScrollView
           contentContainerStyle={styles.scrollContent}
@@ -199,18 +132,23 @@ export default function CreerScreen() {
               <Text variant="body" color="secondary" style={styles.sub}>{SUBS[step]}</Text>
             </View>
 
-            {error === 'PHONE_EXISTS' ? (
-              <View style={styles.errorBox}>
-                <Text variant="bodySmall" color="danger" style={{ marginBottom: spacing[3] }}>
-                  Ce numéro est déjà associé à un compte. Connectez-vous plutôt.
-                </Text>
-                <Button label="Se connecter" onPress={() => { clearError(); router.replace('/(welcome)/connexion'); }} fullWidth />
-              </View>
-            ) : error ? (
-              <View style={styles.errorBox}>
-                <Text variant="bodySmall" color="danger">{error}</Text>
-              </View>
-            ) : null}
+            {step !== 'details' && (
+              error === 'PHONE_EXISTS' ? (
+                <View style={styles.infoBlock}>
+                  <Text variant="bodySmall" color="secondary" style={styles.infoText}>
+                    Ce numéro a déjà un compte
+                  </Text>
+                  <Button
+                    label="Se connecter"
+                    variant="secondary"
+                    onPress={() => { clearError(); router.replace({ pathname: '/(welcome)/connexion', params: { prefillPhone: phone } }); }}
+                    fullWidth
+                  />
+                </View>
+              ) : error ? (
+                <Text variant="bodySmall" color="secondary" style={styles.infoText}>{error}</Text>
+              ) : null
+            )}
 
             {step === 'phone' && (
               <View style={styles.form}>
@@ -219,6 +157,8 @@ export default function CreerScreen() {
                   onChange={(e164, complete) => { setPhone(e164); setPhoneComplete(complete); }}
                   autoFocus
                   resetKey={resetKey}
+                  initialValue={prefillPhone}
+                  autofillOwnNumber
                 />
                 <Button label="Continuer" loading={loading} onPress={handleContinuer} fullWidth size="lg" disabled={!phoneComplete} />
               </View>
@@ -226,8 +166,14 @@ export default function CreerScreen() {
 
             {step === 'otp' && (
               <View style={[styles.form, styles.formCentered]}>
-                <OtpInput key={otpKey} onComplete={handleOtpComplete} disabled={loading} />
-                <Button label="Renvoyer le code" variant="ghost" loading={loading} onPress={handleResendCreer} />
+                <OtpInput key={otpKey} onComplete={handleOtpComplete} disabled={loading} autoFocus whatsappAutofill />
+                <Button
+                  label={resendCooldown.isDone ? 'Renvoyer le code' : `Renvoyer le code (${formatCountdown(resendCooldown.secondsLeft)})`}
+                  variant="ghost"
+                  loading={loading}
+                  disabled={!resendCooldown.isDone}
+                  onPress={handleResendCreer}
+                />
                 <Button
                   label="Changer de numéro"
                   variant="ghost"
@@ -237,87 +183,28 @@ export default function CreerScreen() {
                     verificationIdRef.current = ''; phoneRef.current = '';
                   }}
                 />
+                <Button
+                  label="Besoin d'aide ? Contactez le support"
+                  variant="ghost"
+                  onPress={() => Linking.openURL(SUPPORT_WA_URL)}
+                />
               </View>
             )}
 
             {step === 'details' && (
-              <View style={styles.form}>
-                <Input
-                  label="Nom de votre commerce"
-                  value={businessName}
-                  onChangeText={setBusinessName}
-                  placeholder="Boutique Mamadou"
-                  autoCapitalize="words"
-                  returnKeyType="done"
-                  onSubmitEditing={handleCreate}
-                  autoFocus
-                />
-
-                {/* Currency — collapsed pill, tap to expand */}
-                <View style={{ gap: spacing[2] }}>
-                  <Text variant="label">Monnaie</Text>
-
-                  {/* Trigger — shows selected currency */}
-                  <Pressable style={styles.currencyTrigger} onPress={() => setPickerOpen(v => !v)}>
-                    <Text style={styles.currencyFlag}>{selectedC.flag}</Text>
-                    <View style={{ flex: 1 }}>
-                      <Text variant="label" style={{ color: palette.primary }}>{selectedC.name}</Text>
-                      <Text variant="caption" color="secondary">{selectedC.sub}</Text>
-                    </View>
-                    <Ionicons
-                      name={pickerOpen ? 'chevron-up' : 'chevron-down'}
-                      size={18}
-                      color={palette.primary}
-                    />
-                  </Pressable>
-
-                  {/* Dropdown — only visible when open */}
-                  {pickerOpen && (
-                    <View style={styles.currencyList}>
-                      {CURRENCY_LIST.map((c, i) => {
-                        const selected = currency === c.code;
-                        const isLast   = i === CURRENCY_LIST.length - 1;
-                        return (
-                          <Pressable
-                            key={c.code}
-                            onPress={() => { setCurrency(c.code); setPickerOpen(false); }}
-                            style={[
-                              styles.currencyRow,
-                              selected && styles.currencyRowSelected,
-                              !isLast && styles.currencyRowBorder,
-                            ]}>
-                            <Text style={styles.currencyFlag}>{c.flag}</Text>
-                            <View style={{ flex: 1 }}>
-                              <Text variant="label" style={selected ? { color: palette.primary } : undefined}>
-                                {c.name}
-                              </Text>
-                              <Text variant="caption" color="secondary">{c.sub}</Text>
-                            </View>
-                            {selected && (
-                              <Ionicons name="checkmark" size={18} color={palette.primary} />
-                            )}
-                          </Pressable>
-                        );
-                      })}
-                    </View>
-                  )}
-
-                  <View style={styles.lockNote}>
-                    <Ionicons name="checkmark-outline" size={13} color={palette.textDisabled} />
-                    <Text variant="caption" color="secondary" style={{ flex: 1 }}>
-                      Ceci sera votre monnaie officielle
-                    </Text>
-                  </View>
-                </View>
-
-                <Button label="Créer mon commerce" loading={loading} onPress={handleCreate} fullWidth size="lg" />
-              </View>
+              <BusinessDetailsStep
+                loading={loading}
+                error={error}
+                initialCurrency={inferCurrency(phoneRef.current || phone)}
+                onSubmit={handleCreate}
+                autoFocusName
+              />
             )}
 
           </View>
         </ScrollView>
       </KeyboardAvoidingView>
-    </SafeAreaView>
+    </Screen>
   );
 }
 
@@ -333,22 +220,7 @@ function makeStyles(p: Palette) {
     sub:           { lineHeight: 22 },
     form:          { gap: spacing[4] },
     formCentered:  { alignItems: 'center' },
-    errorBox:      { backgroundColor: p.dangerLight, borderRadius: radius.md, padding: spacing[3] },
-
-    currencyTrigger: {
-      flexDirection: 'row', alignItems: 'center', gap: spacing[3],
-      paddingHorizontal: spacing[4], paddingVertical: spacing[3],
-      backgroundColor: p.primaryLight,
-      borderRadius: radius.md,
-      borderWidth: 1, borderColor: p.primary + '50',
-    },
-
-    currencyList:        { borderRadius: radius.md, borderWidth: 1, borderColor: p.border, overflow: 'hidden' },
-    currencyRow:         { flexDirection: 'row', alignItems: 'center', gap: spacing[3], paddingHorizontal: spacing[4], paddingVertical: spacing[3], backgroundColor: p.surface },
-    currencyRowSelected: { backgroundColor: p.primaryLight },
-    currencyRowBorder:   { borderBottomWidth: StyleSheet.hairlineWidth, borderBottomColor: p.border },
-    currencyFlag:        { fontSize: 22, width: 30, textAlign: 'center' as const },
-
-    lockNote: { flexDirection: 'row', alignItems: 'center', gap: spacing[2], paddingHorizontal: spacing[1] },
+    infoBlock:     { gap: spacing[3] },
+    infoText:      { textAlign: 'center', lineHeight: 20 },
   });
 }

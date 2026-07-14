@@ -161,7 +161,7 @@ export function SaleReceiptView({ data }: { data: ReceiptData }) {
 const styles = StyleSheet.create({
   receipt: {
     width: W,
-    backgroundColor: '#ffffff',
+    backgroundColor: colors.neutral[0],
     overflow: 'hidden',
   },
   header: {

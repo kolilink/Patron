@@ -4,8 +4,7 @@ import { useSafeAreaInsets } from 'react-native-safe-area-context';
 import { Ionicons } from '@expo/vector-icons';
 import { Text } from './Text';
 import { useToastStore } from '@/stores/toast';
-import { useTheme } from '@/src/theme';
-import { radius, spacing } from '@/src/theme';
+import { palette, useTheme, radius, spacing } from '@/src/theme';
 
 type IoniconName = React.ComponentProps<typeof Ionicons>['name'];
 
@@ -89,7 +88,7 @@ const styles = StyleSheet.create({
     paddingHorizontal: spacing[4],
     paddingVertical: spacing[3],
     borderRadius: radius.lg,
-    shadowColor: '#000',
+    shadowColor: palette.shadow,
     shadowOffset: { width: 0, height: 2 },
     shadowOpacity: 0.1,
     shadowRadius: 8,

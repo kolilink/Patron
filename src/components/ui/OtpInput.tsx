@@ -1,17 +1,22 @@
-import React, { useMemo, useRef, useState } from 'react';
+import React, { useEffect, useMemo, useRef, useState } from 'react';
 import { Platform, Pressable, StyleSheet, TextInput, View } from 'react-native';
 import { Text } from './Text';
 import { useTheme } from '@/src/theme';
 import type { Palette } from '@/src/theme';
+import { addSmsReceivedListener, startSmsRetriever, stopSmsRetriever } from '@/modules/sms-retriever';
 
 interface Props {
   length?: number;
   onComplete: (code: string) => void;
   disabled?: boolean;
   autoFocus?: boolean;
+  // Android only — starts the SMS Retriever broadcast listener that WhatsApp's one-tap/zero-tap
+  // authentication template autofill delivers the code through. Only pass this for OTP screens
+  // where the code is actually sent via WhatsApp (not email/local-PIN screens).
+  whatsappAutofill?: boolean;
 }
 
-export function OtpInput({ length = 6, onComplete, disabled = false, autoFocus = false }: Props) {
+export function OtpInput({ length = 6, onComplete, disabled = false, autoFocus = false, whatsappAutofill = false }: Props) {
   const { palette } = useTheme();
   const styles = useMemo(() => makeStyles(palette), [palette]);
   const [value, setValue] = useState('');
@@ -25,6 +30,22 @@ export function OtpInput({ length = 6, onComplete, disabled = false, autoFocus =
     setValue(cleaned);
     if (cleaned.length === length) onComplete(cleaned);
   }
+
+  useEffect(() => {
+    if (!whatsappAutofill || Platform.OS !== 'android' || disabled) return;
+
+    startSmsRetriever();
+    const sub = addSmsReceivedListener(({ message }) => {
+      const match = message.match(new RegExp(`\\d{${length}}`));
+      if (match) handleChange(match[0]);
+    });
+
+    return () => {
+      sub?.remove();
+      stopSmsRetriever();
+    };
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [whatsappAutofill, disabled, length]);
 
   // On some Android OEM keyboards (OPPO, Xiaomi) calling focus() on an already-focused
   // input doesn't re-show the keyboard. Blur first then re-focus reliably re-opens it.

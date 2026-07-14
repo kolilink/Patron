@@ -36,6 +36,8 @@ function makeBusiness(id: string, name: string): Business {
     status: 'actif', subscription_tier: 'gratuit',
     subscription_status: 'trialing', trial_ends_at: null,
     stripe_customer_id: null, subscription_expires_at: null, phone: null,
+    payment_provider: null, revenuecat_customer_id: null, bonus_access_until: null,
+    referred_by_business_id: null, referral_code: null,
     created_at: '2026-01-01T00:00:00Z', updated_at: '2026-01-01T00:00:00Z', created_by: 'user-1',
   };
 }
@@ -43,7 +45,7 @@ function makeBusiness(id: string, name: string): Business {
 function makeMembership(id: string, businessId: string, business: Business, role: Membership['role']): Membership {
   return {
     id, user_id: 'user-1', business_id: businessId, role,
-    pin_hash: null, joined_at: '2026-01-01T00:00:00Z',
+    joined_at: '2026-01-01T00:00:00Z',
     milestone_reached: false, business,
   };
 }
