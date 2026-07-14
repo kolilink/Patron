@@ -7,10 +7,22 @@
 <!--
   Static mirror of supabase/functions/djomi-checkout's page, served
   from patron.kolilink.com/abonnement via GitHub Pages (see
-  .github/workflows/static.yml — this repo is deployed as a plain
-  static site, not Cloudflare Pages; there is no server-side code
-  execution here, so this can only ever be a static page that talks
-  to the real backend cross-origin, never a proxy).
+  .github/workflows/static.yml). Deliberately restyled to match
+  src/components/PaywallScreen.tsx's full-screen (non-inline) dark
+  layout pixel-for-pixel (colors/spacing/typography pulled directly
+  from src/theme/colors.ts, spacing.ts, typography.ts) — same
+  "ALPHA PRO" header panel, muted radio plan tile, breathing-free CTA
+  — except the CTA reads "Payer via [Orange Money] Orange Money"
+  instead of "Payer via [Apple] Pay", and the price is 24 000 GNF, not
+  RevenueCat's fallback display price. Dark-only, no light variant —
+  the reference screenshot this was built from is dark, and the app's
+  own theme-aware light/dark split doesn't map cleanly onto a page
+  with no ThemeProvider.
+
+  No official Orange Money logo asset is embedded (trademark/asset-
+  sourcing reasons) — the small circular "OM" badge below is a plain,
+  safe stand-in that still reads as "this is the payment brand", the
+  same way the Apple/Google Play icon does in the app's own version.
 
   Every fetch() call below goes straight to the djomi-checkout Supabase
   Edge Function (already CORS-open: Access-Control-Allow-Origin: *),
@@ -24,53 +36,92 @@
   PAGE_HTML by hand — there's no shared build step between a Deno Edge
   Function and a plain static GitHub Pages file.
 -->
+<link rel="preconnect" href="https://fonts.googleapis.com" />
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
+<link href="https://fonts.googleapis.com/css2?family=DM+Sans:wght@400;500;600;700;800&display=swap" rel="stylesheet" />
 <style>
   :root {
-    --bg: #F8FAFC; --surface: #FFFFFF; --border: #E2E8F0;
-    --text: #0F172A; --text-secondary: #64748B;
-    --primary: #4F46E5; --primary-light: #EEF2FF;
-    --warning: #D97706; --warning-light: #FFFBEB;
-    --success: #16A34A; --success-light: #F0FDF4;
-  }
-  @media (prefers-color-scheme: dark) {
-    :root {
-      --bg: #0F1117; --surface: #1A1D27; --border: rgba(255,255,255,0.08);
-      --text: #F1F5F9; --text-secondary: #94A3B8;
-      --primary: #818CF8; --primary-light: rgba(129,140,248,0.14);
-      --warning: #FCD34D; --warning-light: rgba(252,211,77,0.14);
-      --success: #4ADE80; --success-light: rgba(74,222,128,0.14);
-    }
+    --bg: #0F1117; --surface: #1A1D27; --border: rgba(255,255,255,0.08);
+    --text: #F1F5F9; --text-secondary: #94A3B8; --text-inverse: #0F1117;
+    --primary: #818CF8;
+    --warning: #FCD34D; --warning-light: rgba(252,211,77,0.14);
   }
   * { box-sizing: border-box; }
+  html, body { height: 100%; }
   body {
-    margin: 0; min-height: 100vh; display: flex; align-items: center; justify-content: center;
-    background: var(--bg); color: var(--text); padding: 24px;
-    font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif;
+    margin: 0; background: var(--bg); color: var(--text);
+    font-family: 'DM Sans', -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif;
+    display: flex; flex-direction: column; min-height: 100vh;
   }
-  .card {
-    width: 100%; max-width: 400px; background: var(--surface); border: 1px solid var(--border);
-    border-radius: 20px; padding: 28px 24px; text-align: center;
+  .screen { display: flex; flex-direction: column; flex: 1; min-height: 100vh; }
+  .hidden { display: none !important; }
+
+  .header-panel {
+    position: relative; display: flex; flex-direction: column; align-items: center;
+    background: var(--surface); border-bottom: 1px solid var(--border);
+    padding: 48px 24px 24px;
   }
-  .wordmark { font-size: 15px; font-weight: 700; color: var(--text-secondary); margin-bottom: 20px; letter-spacing: 0.5px; }
-  .label { font-size: 12px; font-weight: 700; color: var(--text-secondary); letter-spacing: 0.5px; margin-bottom: 8px; }
-  .plan { font-size: 20px; font-weight: 700; margin-bottom: 4px; }
-  .price { font-size: 28px; font-weight: 800; margin-bottom: 2px; }
-  .price span { font-size: 15px; font-weight: 400; color: var(--text-secondary); }
-  .limit { font-size: 13px; color: var(--text-secondary); margin-bottom: 24px; }
-  input {
+  .close-btn {
+    position: absolute; top: 12px; left: 16px; background: none; border: none;
+    color: var(--text-secondary); font-size: 22px; line-height: 1; padding: 8px; cursor: pointer;
+  }
+  .icon-badge {
+    width: 56px; height: 56px; border-radius: 14px; background: var(--primary); color: var(--text-inverse);
+    display: flex; align-items: center; justify-content: center;
+    font-size: 26px; font-weight: 800; margin-bottom: 8px;
+  }
+  .brand-name { font-size: 12px; font-weight: 600; letter-spacing: 1.5px; color: var(--text-secondary); }
+  .header-tagline {
+    text-align: center; font-size: 15px; font-weight: 700; color: var(--text);
+    margin-top: 8px; padding: 0 24px; max-width: 340px;
+  }
+
+  .container {
+    flex: 1; display: flex; flex-direction: column; justify-content: center;
+    padding: 32px 24px; max-width: 420px; width: 100%; margin: 0 auto;
+  }
+  .container.center { align-items: center; text-align: center; }
+
+  .section-label { font-size: 11px; font-weight: 600; letter-spacing: 0.5px; color: var(--text-secondary); margin-bottom: 8px; }
+  .plan-tile {
+    display: flex; align-items: center; gap: 12px;
+    border: 1px solid var(--border); border-radius: 14px; padding: 16px; margin-bottom: 16px;
+  }
+  .radio-outer {
+    width: 20px; height: 20px; border-radius: 10px; border: 2px solid var(--text-secondary);
+    display: flex; align-items: center; justify-content: center; flex-shrink: 0;
+  }
+  .radio-inner { width: 10px; height: 10px; border-radius: 5px; background: var(--text-secondary); }
+  .plan-text { flex: 1; }
+  .plan-name { font-size: 11px; font-weight: 600; letter-spacing: 0.5px; text-transform: uppercase; color: var(--text-secondary); margin-bottom: 4px; }
+  .plan-price { font-size: 20px; font-weight: 600; color: var(--text); margin-bottom: 4px; }
+  .plan-price span { font-size: 15px; font-weight: 400; color: var(--text-secondary); }
+  .plan-limit { font-size: 12px; color: var(--text-secondary); }
+
+  .phone-input {
     width: 100%; padding: 14px 16px; border-radius: 12px; border: 1px solid var(--border);
-    background: var(--bg); color: var(--text); font-size: 16px; margin-bottom: 12px;
+    background: var(--surface); color: var(--text); font-size: 16px; margin-bottom: 16px; font-family: inherit;
   }
-  input:focus { outline: none; border-color: var(--primary); }
-  button {
-    width: 100%; padding: 14px; border-radius: 12px; border: none; background: var(--primary);
-    color: #fff; font-size: 16px; font-weight: 700; cursor: pointer;
+  .phone-input::placeholder { color: var(--text-secondary); }
+  .phone-input:focus { outline: none; border-color: var(--primary); }
+
+  .cta-btn {
+    width: 100%; min-height: 56px; padding: 16px 24px; border-radius: 10px; border: none;
+    background: var(--primary); color: var(--text-inverse); font-size: 15px; font-weight: 600;
+    letter-spacing: 0.1px; cursor: pointer; display: flex; align-items: center; justify-content: center;
+    font-family: inherit;
   }
-  button:disabled { opacity: 0.6; }
-  .hint { font-size: 12px; color: var(--text-secondary); margin-top: 12px; }
+  .cta-btn:disabled { opacity: 0.6; }
+  .pay-row { display: flex; align-items: center; gap: 6px; }
+
   .msg { font-size: 13px; border-radius: 10px; padding: 10px 12px; margin-top: 12px; }
   .msg.warn { color: var(--warning); background: var(--warning-light); }
-  .hidden { display: none !important; }
+
+  .footer-links { display: flex; justify-content: center; margin-top: 24px; }
+  .footer-links a { font-size: 11px; color: var(--text-secondary); text-decoration: none; }
+
+  .status-title { font-size: 18px; font-weight: 700; color: var(--text); margin-bottom: 8px; }
+  .status-text { font-size: 13px; color: var(--text-secondary); max-width: 320px; }
   .spinner {
     width: 28px; height: 28px; border-radius: 50%; margin: 4px auto 16px;
     border: 3px solid var(--border); border-top-color: var(--primary);
@@ -80,27 +131,62 @@
 </style>
 </head>
 <body>
-  <div class="card" id="form-view">
-    <div class="wordmark">Patron</div>
-    <div class="label">ABONNEMENT</div>
-    <div class="plan">Alpha Pro</div>
-    <div class="price">24 000 GNF<span> / mois</span></div>
-    <div class="limit">20 conversations avec Alpha, chaque jour</div>
-    <input id="phone" type="tel" inputmode="tel" placeholder="Numéro utilisé sur Patron" autocomplete="tel" />
-    <button id="pay-btn">Investir</button>
-    <div class="hint">Paiement sécurisé via Orange Money (Djomi)</div>
-    <div class="msg warn hidden" id="error"></div>
+  <div class="screen" id="form-view">
+    <div class="header-panel">
+      <button class="close-btn" id="close-btn" aria-label="Fermer">✕</button>
+      <div class="icon-badge">A</div>
+      <div class="brand-name">ALPHA PRO</div>
+      <div class="header-tagline">Obtenez la réponse à votre question</div>
+    </div>
+    <div class="container">
+      <div class="section-label">ABONNEMENT</div>
+      <div class="plan-tile">
+        <div class="radio-outer"><div class="radio-inner"></div></div>
+        <div class="plan-text">
+          <div class="plan-name">ALPHA PRO</div>
+          <div class="plan-price">24&nbsp;000 GNF<span> / mois</span></div>
+          <div class="plan-limit">20 conversations avec Alpha, chaque jour</div>
+        </div>
+      </div>
+      <input id="phone" class="phone-input" type="tel" inputmode="tel" placeholder="Numéro utilisé sur Patron" autocomplete="tel" />
+      <button id="pay-btn" class="cta-btn">
+        <span class="pay-row">
+          <span>Payer via</span>
+          <svg width="18" height="18" viewBox="0 0 18 18" aria-hidden="true">
+            <circle cx="9" cy="9" r="9" fill="#FF7900" />
+            <text x="9" y="12.3" font-size="7.2" font-weight="700" fill="#fff" text-anchor="middle" font-family="Arial, sans-serif">OM</text>
+          </svg>
+          <span>Orange Money</span>
+        </span>
+      </button>
+      <div class="msg warn hidden" id="error"></div>
+      <div class="footer-links">
+        <a href="https://patron.kolilink.com/privacy.html" target="_blank" rel="noopener">Confidentialité</a>
+      </div>
+    </div>
   </div>
-  <div class="card hidden" id="wait-view">
-    <div class="wordmark">Patron</div>
-    <div class="spinner"></div>
-    <div class="plan">Confirmation du paiement…</div>
-    <div class="limit" id="wait-text">Merci de patienter quelques secondes pendant que nous confirmons votre paiement auprès de Djomi.</div>
+
+  <div class="screen hidden" id="wait-view">
+    <div class="header-panel">
+      <div class="icon-badge">A</div>
+      <div class="brand-name">ALPHA PRO</div>
+    </div>
+    <div class="container center">
+      <div class="spinner"></div>
+      <div class="status-title">Confirmation du paiement…</div>
+      <div class="status-text" id="wait-text">Merci de patienter quelques secondes pendant que nous confirmons votre paiement auprès de Djomi.</div>
+    </div>
   </div>
-  <div class="card hidden" id="done-view">
-    <div class="wordmark">Patron</div>
-    <div class="plan" id="done-title">Merci !</div>
-    <div class="limit" id="done-text"></div>
+
+  <div class="screen hidden" id="done-view">
+    <div class="header-panel">
+      <div class="icon-badge">A</div>
+      <div class="brand-name">ALPHA PRO</div>
+    </div>
+    <div class="container center">
+      <div class="status-title" id="done-title">Merci !</div>
+      <div class="status-text" id="done-text"></div>
+    </div>
   </div>
 <script>
   // Must match supabase/functions/djomi-checkout's own deployed URL —
@@ -116,6 +202,10 @@
       document.getElementById(v).classList.toggle('hidden', v !== id);
     });
   }
+
+  document.getElementById('close-btn').addEventListener('click', function () {
+    if (history.length > 1) history.back();
+  });
 
   if (ref) {
     show('wait-view');
@@ -160,7 +250,6 @@
       return;
     }
     btn.disabled = true;
-    btn.textContent = 'Un instant…';
     fetch(DJOMI_CHECKOUT_URL, {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
@@ -181,7 +270,6 @@
           : 'Une erreur est survenue. Réessayez.';
         errEl.classList.remove('hidden');
         btn.disabled = false;
-        btn.textContent = 'Investir';
       });
   });
 </script>
