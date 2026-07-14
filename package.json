@@ -71,7 +71,7 @@
     "zustand": "^5.0.13"
   },
   "devDependencies": {
-    "@expo/fingerprint": "^0.15.5",
+    "@expo/fingerprint": "^0.20.3",
     "@types/jest": "^29.5.14",
     "@types/pg": "^8.20.0",
     "@types/react": "~19.1.0",
