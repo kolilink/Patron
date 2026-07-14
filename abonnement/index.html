@@ -118,8 +118,10 @@
   .cta-btn:disabled { opacity: 0.6; }
   .pay-row { display: flex; align-items: center; gap: 6px; }
 
-  .msg { font-size: 13px; border-radius: 10px; padding: 10px 12px; margin-top: 12px; }
-  .msg.warn { color: var(--warning); background: var(--warning-light); }
+  .msg { font-size: 13px; margin-top: 8px; }
+  .msg.warn { color: var(--warning); }
+  .phone-input-tight { margin-bottom: 6px; }
+  .msg.hint { margin: 0 0 16px; }
 
   .footer-links { display: flex; justify-content: center; padding-top: 24px; }
   .footer-links a { font-size: 11px; color: var(--text-secondary); text-decoration: none; }
@@ -154,6 +156,8 @@
           </div>
         </div>
         <input id="phone" class="phone-input" type="tel" inputmode="tel" placeholder="Numéro utilisé sur Patron" autocomplete="tel" />
+        <input id="orange-phone" class="phone-input phone-input-tight" type="tel" inputmode="tel" placeholder="Numéro Orange Money" autocomplete="tel" />
+        <div class="msg warn hint">Entrez le numéro Orange Money lié à votre compte</div>
         <button id="pay-btn" class="cta-btn">
           <span class="pay-row">
             <span>Payer via</span>
@@ -246,13 +250,36 @@
     poll();
   }
 
+  // Convenience prefill, not a hard link between the two fields: the
+  // common case is the same person paying with their own Orange number,
+  // so typing it twice would be pure friction. Only fills while the
+  // Orange field is still untouched/empty, so overriding it for "pay
+  // with someone else's Orange number" (a family member's, an
+  // employee's) always works — see CLAUDE.md for why these are two
+  // separate fields at all: the Patron-lookup number and the Djomi
+  // payerNumber never had to be the same number, and forcing them to be
+  // silently broke that second case entirely.
+  var phoneEl = document.getElementById('phone');
+  var orangePhoneEl = document.getElementById('orange-phone');
+  phoneEl.addEventListener('blur', function () {
+    if (!orangePhoneEl.value.trim()) {
+      orangePhoneEl.value = phoneEl.value.trim();
+    }
+  });
+
   var btn = document.getElementById('pay-btn');
   var errEl = document.getElementById('error');
   btn.addEventListener('click', function () {
-    var phone = document.getElementById('phone').value.trim();
+    var phone = phoneEl.value.trim();
+    var orangePhone = orangePhoneEl.value.trim();
     errEl.classList.add('hidden');
     if (!phone) {
       errEl.textContent = 'Entrez votre numéro de téléphone.';
+      errEl.classList.remove('hidden');
+      return;
+    }
+    if (!orangePhone) {
+      errEl.textContent = 'Entrez le numéro Orange Money qui va payer.';
       errEl.classList.remove('hidden');
       return;
     }
@@ -260,7 +287,7 @@
     fetch(DJOMI_CHECKOUT_URL, {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ phone: phone, returnOrigin: location.origin }),
+      body: JSON.stringify({ phone: phone, payerPhone: orangePhone, returnOrigin: location.origin }),
     })
       .then(function (resp) {
         return resp.json().then(function (data) { return { resp: resp, data: data }; });
