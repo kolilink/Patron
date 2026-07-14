@@ -14,7 +14,15 @@ jobs:
 
       - uses: actions/setup-node@v4
         with:
-          node-version: '20'
+          # Integration tests instantiate a real @supabase/supabase-js
+          # client (helpers.ts's adminClient()), which pulls in
+          # @supabase/realtime-js's RealtimeClient — that requires a
+          # native global WebSocket, unflagged only from Node 22
+          # onward. Node 20 (still used by ci.yml/daily-rapport.yml,
+          # which never construct a real client — they mock
+          # supabase.rpc entirely) fails at import time with
+          # "Node.js 20 detected without native WebSocket support."
+          node-version: '22'
           cache: 'npm'
 
       - name: Install dependencies
