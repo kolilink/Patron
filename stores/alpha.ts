@@ -33,6 +33,13 @@ interface AlphaStore {
   sendMessage: (params: { businessId: string; content: string }) => Promise<boolean>;
   appendMessage: (msg: AlphaMessage) => void;
   fetchQuota: (businessId: string) => Promise<void>;
+  // Read-only check for the in-app WhatsApp-reminder consent prompt —
+  // see db/migration_v145.sql. Deliberately only true once the caller
+  // has ALREADY hit the free cap on 3+ separate days this week, never
+  // asked speculatively on the first block — a premature ask is a
+  // promise disconnected from anything that's actually happened yet.
+  checkWhatsappConsentEligibility: (businessId: string) => Promise<boolean>;
+  recordWhatsappConsent: (businessId: string, accepted: boolean) => Promise<void>;
   reset: () => void;
 }
 
@@ -168,6 +175,16 @@ export const useAlphaStore = create<AlphaStore>((set, get) => ({
     const { data, error } = await supabase.rpc('get_alpha_quota_status', { p_business_id: businessId });
     if (error || !data) return;
     set({ quota: data as AlphaQuotaStatus });
+  },
+
+  checkWhatsappConsentEligibility: async (businessId) => {
+    const { data, error } = await supabase.rpc('alpha_whatsapp_reminder_eligible_now', { p_business_id: businessId });
+    if (error || !data) return false;
+    return data as boolean;
+  },
+
+  recordWhatsappConsent: async (businessId, accepted) => {
+    await supabase.rpc('record_alpha_whatsapp_consent', { p_business_id: businessId, p_accepted: accepted });
   },
 
   reset: () => set(initialState),

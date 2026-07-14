@@ -5,6 +5,7 @@ import { router, useFocusEffect, useLocalSearchParams } from 'expo-router';
 import { Ionicons } from '@expo/vector-icons';
 import { Text } from '@/src/components/ui/Text';
 import { SkeletonList } from '@/src/components/ui/SkeletonPlaceholder';
+import { AppSheet } from '@/src/components/ui/AppSheet';
 import { PaywallScreen } from '@/src/components/PaywallScreen';
 import { useTheme, spacing, radius } from '@/src/theme';
 import type { Palette } from '@/src/theme';
@@ -55,9 +56,20 @@ export default function AlphaScreen() {
   const businessId = session?.activeBusiness?.id ?? '';
   const params = useLocalSearchParams<{ q?: string }>();
 
-  const { messages, quota, loading, sending, error, offline, load, sendMessage } = useAlphaStore();
+  const {
+    messages, quota, loading, sending, error, offline, load, sendMessage,
+    checkWhatsappConsentEligibility, recordWhatsappConsent,
+  } = useAlphaStore();
   const [text, setText] = useState('');
   const [pendingQuestion, setPendingQuestion] = useState<string | null>(null);
+  // Shown after the paywall is dismissed WITHOUT purchasing (never after a
+  // purchase — has_ai_access() becomes true then, so the eligibility check
+  // would already return false on its own). Deliberately not asked on the
+  // very first block, only once alpha_whatsapp_reminder_eligible_now
+  // confirms the free cap was actually hit on 3+ separate days this week —
+  // see db/migration_v145.sql for why an earlier ask would be a promise
+  // disconnected from anything real.
+  const [showWhatsappConsent, setShowWhatsappConsent] = useState(false);
   // Set on a blocked send attempt while at the paid-tier cap — renders the
   // plain waitCard instead of the upgrade popup, since offering an upgrade
   // to someone already paying is nonsensical. Self-clears once quota is no
@@ -160,6 +172,20 @@ export default function AlphaScreen() {
     setWaitBlocked(false);
     if (q) {
       await sendMessage({ businessId, content: q });
+    }
+  };
+
+  // Dismissing the paywall WITHOUT purchasing is exactly "the free popup
+  // alone hasn't converted this person" — the natural moment to check
+  // whether they've also crossed the WhatsApp-reminder threshold and, if
+  // so, offer the consent prompt as the next escalation. Not checked on
+  // handlePurchased — a fresh subscriber no longer needs reminding.
+  const dismissPaywall = async () => {
+    setPendingQuestion(null);
+    setWaitBlocked(false);
+    if (businessId) {
+      const eligible = await checkWhatsappConsentEligibility(businessId);
+      if (eligible) setShowWhatsappConsent(true);
     }
   };
 
@@ -300,16 +326,40 @@ export default function AlphaScreen() {
         visible={!!pendingQuestion && !!session?.activeBusiness}
         animationType="slide"
         presentationStyle="pageSheet"
-        onRequestClose={() => { setPendingQuestion(null); setWaitBlocked(false); }}
+        onRequestClose={dismissPaywall}
       >
         {session?.activeBusiness && (
           <PaywallScreen
             business={session.activeBusiness}
-            onDismiss={() => { setPendingQuestion(null); setWaitBlocked(false); }}
+            onDismiss={dismissPaywall}
             onPurchased={handlePurchased}
           />
         )}
       </Modal>
+
+      {/* Consent for the WhatsApp re-engagement reminder — only ever
+          reachable once alpha_whatsapp_reminder_eligible_now has already
+          confirmed the free cap was hit on 3+ separate days this week, so
+          the promise here ("we'll message you") is grounded in something
+          that already happened, not speculation. "Non merci" is a real,
+          equally-weighted second choice (AppSheet's secondaryAction), not
+          just a generic dismiss — declining is recorded the same way
+          accepting is. */}
+      <AppSheet
+        visible={showWhatsappConsent}
+        onClose={() => setShowWhatsappConsent(false)}
+        icon="logo-whatsapp"
+        title="Ne perdez pas le fil avec Alpha"
+        body="Si vous voulez continuer plus tard, on vous envoie un seul message WhatsApp pour vous le rappeler — pas de spam, juste ça."
+        action={{
+          label: 'Oui, prévenez-moi',
+          onPress: () => { if (businessId) void recordWhatsappConsent(businessId, true); },
+        }}
+        secondaryAction={{
+          label: 'Non merci',
+          onPress: () => { if (businessId) void recordWhatsappConsent(businessId, false); },
+        }}
+      />
     </Screen>
   );
 }

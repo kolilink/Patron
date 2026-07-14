@@ -16,9 +16,15 @@ interface Props {
   title: string;
   body: string;
   action?: { label: string; onPress: () => void };
+  // Optional second, de-emphasized (ghost) button — replaces the default
+  // generic "Fermer" when provided, for prompts that need a real second
+  // choice (e.g. "Non merci") rather than a plain dismiss. Omit for the
+  // existing single-action-or-just-close behavior every other AppSheet
+  // usage already relies on.
+  secondaryAction?: { label: string; onPress: () => void };
 }
 
-export function AppSheet({ visible, onClose, icon, title, body, action }: Props) {
+export function AppSheet({ visible, onClose, icon, title, body, action, secondaryAction }: Props) {
   const { palette } = useTheme();
   const styles = useMemo(() => makeStyles(palette), [palette]);
   const slideY          = useRef(new Animated.Value(400)).current;
@@ -62,7 +68,16 @@ export function AppSheet({ visible, onClose, icon, title, body, action }: Props)
               style={styles.actionBtn}
             />
           )}
-          <Button label="Fermer" variant="ghost" onPress={onClose} fullWidth />
+          {secondaryAction ? (
+            <Button
+              label={secondaryAction.label}
+              variant="ghost"
+              onPress={() => { secondaryAction.onPress(); onClose(); }}
+              fullWidth
+            />
+          ) : (
+            <Button label="Fermer" variant="ghost" onPress={onClose} fullWidth />
+          )}
         </Animated.View>
       </View>
     </Modal>
