@@ -16,6 +16,7 @@ import {
   View,
 } from 'react-native';
 import type { Audio } from 'expo-av';
+import * as ImagePicker from 'expo-image-picker';
 import { Gesture, GestureDetector } from 'react-native-gesture-handler';
 import Animated, {
   useSharedValue,
@@ -30,9 +31,14 @@ import { router, useFocusEffect } from 'expo-router';
 import { Ionicons } from '@expo/vector-icons';
 import { Text } from '@/src/components/ui/Text';
 import { VoiceMessageBubble, LiveWaveformBars } from '@/src/components/ui/VoiceMessageBubble';
+import { ImageMessageBubble } from '@/src/components/ui/ImageMessageBubble';
 import { haptics } from '@/lib/haptics';
 import { useTheme, fontFamily as FF, radius, spacing, AVATAR_PALETTE } from '@/src/theme';
 import type { Palette } from '@/src/theme';
+import {
+  isSep, buildGroupedItems, bubbleMargins, bubbleRadius, showsMeta,
+} from '@/src/lib/chatGrouping';
+import type { GroupPos, GroupedItem } from '@/src/lib/chatGrouping';
 import { useAuthStore } from '@/stores/auth';
 import { useChatStore } from '@/stores/chat';
 import { useMarketStore } from '@/stores/market';
@@ -76,26 +82,14 @@ function catFg(category: string, p: Palette): string {
 
 // ─── Types ────────────────────────────────────────────────────────────────────
 
-type Tab       = 'boutique' | 'amis' | 'marche';
-type GroupPos  = 'standalone' | 'first' | 'middle' | 'last';
+type Tab = 'boutique' | 'amis' | 'marche';
 
-type SeparatorItem  = { _sep: true; label: string; id: string };
 type ChatBubbleItem = ChatMessage & { _pos: GroupPos };
-type ListItem = ChatBubbleItem | SeparatorItem;
-
-function isSep(item: ListItem): item is SeparatorItem {
-  return '_sep' in item;
-}
+type ListItem = GroupedItem<ChatMessage>;
 
 // ─── Date helpers ─────────────────────────────────────────────────────────────
 
 const LOCALE = Intl.DateTimeFormat().resolvedOptions().locale;
-
-function sameDay(a: Date, b: Date): boolean {
-  return a.getFullYear() === b.getFullYear()
-    && a.getMonth() === b.getMonth()
-    && a.getDate() === b.getDate();
-}
 
 // Relative time for forum post cards (device-locale calendar format).
 function relativeTime(iso: string): string {
@@ -109,91 +103,6 @@ function relativeTime(iso: string): string {
   if (diffH < 24) return `${diffH}h`;
   if (diffD <= 7) return `${diffD}j`;
   return new Intl.DateTimeFormat('fr-FR', { day: 'numeric', month: 'short' }).format(d);
-}
-
-// ─── Message grouping ─────────────────────────────────────────────────────────
-
-const GROUP_GAP_MS = 5 * 60_000; // same group if < 5 min apart
-
-function sameGroup(a: ChatMessage, b: ChatMessage): boolean {
-  return a.sender_id === b.sender_id
-    && Math.abs(new Date(a.created_at).getTime() - new Date(b.created_at).getTime()) < GROUP_GAP_MS;
-}
-
-const FR_DAYS   = ['Dimanche', 'Lundi', 'Mardi', 'Mercredi', 'Jeudi', 'Vendredi', 'Samedi'];
-const FR_MONTHS = ['jan', 'fév', 'mars', 'avr', 'mai', 'juin', 'juil', 'août', 'sept', 'oct', 'nov', 'déc'];
-
-function timeSepLabel(iso: string): string {
-  const d         = new Date(iso);
-  const today     = new Date();
-  const yesterday = new Date(today); yesterday.setDate(today.getDate() - 1);
-  if (sameDay(d, today))     return "Aujourd'hui";
-  if (sameDay(d, yesterday)) return 'Hier';
-  const daysDiff = Math.floor((today.getTime() - d.getTime()) / (24 * 60 * 60 * 1000));
-  if (daysDiff < 7) return FR_DAYS[d.getDay()];
-  return `${d.getDate()} ${FR_MONTHS[d.getMonth()]}`;
-}
-
-// msgs is newest-first; FlatList is inverted so index 0 renders at the bottom.
-// Visual order: 'first' = topmost (oldest in group), 'last' = bottommost (newest).
-function buildGroupedItems(msgs: ChatMessage[]): ListItem[] {
-  if (msgs.length === 0) return [];
-
-  const bubbles: ChatBubbleItem[] = msgs.map((msg, i) => {
-    const newer    = msgs[i - 1]; // lower index → newer → visually below
-    const older    = msgs[i + 1]; // higher index → older → visually above
-    const withNewer = newer ? sameGroup(msg, newer) : false;
-    const withOlder = older ? sameGroup(msg, older) : false;
-    let pos: GroupPos;
-    if (!withNewer && !withOlder)  pos = 'standalone';
-    else if (!withNewer && withOlder) pos = 'last';   // visually bottom of group
-    else if (withNewer && !withOlder) pos = 'first';  // visually top of group
-    else                              pos = 'middle';
-    return { ...msg, _pos: pos } as ChatBubbleItem;
-  });
-
-  const out: ListItem[] = [];
-  for (let i = 0; i < bubbles.length; i++) {
-    out.push(bubbles[i]);
-    const nextMsg = msgs[i + 1];
-    // Insert one separator per calendar-day boundary.
-    // Label is msgs[i]'s day (the newer side) — separator marks the top of that day's section.
-    if (nextMsg && !sameDay(new Date(msgs[i].created_at), new Date(nextMsg.created_at))) {
-      out.push({ _sep: true, label: timeSepLabel(msgs[i].created_at), id: `tsep-${msgs[i].id}` });
-    }
-  }
-  // Always cap the top with a label for the oldest day group
-  out.push({ _sep: true, label: timeSepLabel(msgs[msgs.length - 1].created_at), id: 'tsep-oldest' });
-  return out;
-}
-
-// ─── Bubble geometry ──────────────────────────────────────────────────────────
-
-function bubbleMargins(pos: GroupPos): { marginTop: number; marginBottom: number } {
-  switch (pos) {
-    case 'standalone': return { marginTop: 8, marginBottom: 8 };
-    case 'first':      return { marginTop: 8, marginBottom: 2 };
-    case 'middle':     return { marginTop: 2, marginBottom: 2 };
-    case 'last':       return { marginTop: 2, marginBottom: 8 };
-  }
-}
-
-function bubbleRadius(isOwn: boolean, pos: GroupPos) {
-  if (pos === 'standalone') return { borderRadius: 16 };
-  if (isOwn) {
-    return {
-      borderTopLeftRadius:     16,
-      borderBottomLeftRadius:  16,
-      borderTopRightRadius:    pos === 'first' ? 16 : 4,
-      borderBottomRightRadius: pos === 'last'  ? 16 : 4,
-    };
-  }
-  return {
-    borderTopLeftRadius:     pos === 'first' ? 16 : 4,
-    borderBottomLeftRadius:  pos === 'last'  ? 16 : 4,
-    borderTopRightRadius:    16,
-    borderBottomRightRadius: 16,
-  };
 }
 
 // ─── Sender colour palette ────────────────────────────────────────────────────
@@ -228,9 +137,13 @@ function MessageBubble({
   const margins    = bubbleMargins(pos);
   const showAvatar = !isOwn && (pos === 'standalone' || pos === 'last');
   const showName   = !isOwn && (pos === 'standalone' || pos === 'first');
+  // One timestamp per cluster, not one per bubble — shown only on the last
+  // (visually bottommost) message of a group, same place WhatsApp/iMessage put it.
+  const showMeta   = showsMeta(pos);
   const name       = displayedName || msg.sender_name || generateFallbackName(msg.sender_id);
   const initial    = name.charAt(0).toUpperCase();
   const color      = senderColor(msg.sender_id);
+  const isImage    = msg.message_type === 'image' && !!msg.image_url;
 
   const translateX = useSharedValue(0);
 
@@ -253,6 +166,19 @@ function MessageBubble({
       translateX.value = withSpring(0, { damping: 20, stiffness: 400 });
     });
 
+  // Double-tap the bubble to edit (own text messages, within the 15-minute window).
+  // Raced against `pan` so a horizontal swipe still wins for the reply gesture.
+  const doubleTap = Gesture.Tap()
+    .enabled(!!onEdit)
+    .numberOfTaps(2)
+    .maxDuration(250)
+    .onEnd(() => {
+      if (!onEdit) return;
+      runOnJS(onEdit)();
+      runOnJS(haptics.tap)();
+    });
+
+  const bubbleGesture = Gesture.Race(pan, doubleTap);
 
   const slideAnim = useAnimatedStyle(() => ({
     transform: [{ translateX: translateX.value }],
@@ -264,8 +190,8 @@ function MessageBubble({
   }));
 
   return (
-    // Outer detector: pan only — type is always Pan, never changes between renders
-    <GestureDetector gesture={pan}>
+    // Outer detector: swipe-to-reply raced against double-tap-to-edit
+    <GestureDetector gesture={bubbleGesture}>
       <View style={[margins, { overflow: 'visible' }]}>
 
         {/* Reply icon — absolute, revealed as row slides right */}
@@ -289,10 +215,16 @@ function MessageBubble({
             </View>
           )}
 
-          {/* Bubble — tap the pencil icon to edit (onPress works inside GestureDetector; onLongPress doesn't) */}
-          <View style={[styles.bubble, isOwn ? styles.bubbleOwn : styles.bubbleOther, br, isHighlighted && styles.bubbleHighlighted]}>
+          {/* Bubble — double-tap to edit (own messages, within the 15-minute window) */}
+          <View style={[
+            styles.bubble,
+            isImage ? (isOwn ? styles.bubbleImageOwn : styles.bubbleImageOther) : (isOwn ? styles.bubbleOwn : styles.bubbleOther),
+            isImage && styles.bubbleImage,
+            br,
+            isHighlighted && styles.bubbleHighlighted,
+          ]}>
             {showName && (
-              <Text style={[styles.senderName, { color }]}>{name}</Text>
+              <Text style={[styles.senderName, { color }, isImage && styles.imageHeaderPad]}>{name}</Text>
             )}
 
             {msg.reply_to_id ? (
@@ -301,6 +233,7 @@ function MessageBubble({
                 style={({ pressed }) => [
                   styles.replyPill,
                   isOwn ? styles.replyPillOwn : styles.replyPillOther,
+                  isImage && !showName && styles.imageReplyPad,
                   pressed && { opacity: 0.65 },
                 ]}
               >
@@ -319,40 +252,53 @@ function MessageBubble({
             {msg.message_type === 'voice' ? (
               <>
                 <VoiceMessageBubble msg={msg} isOwn={isOwn} />
-                <View style={styles.bubbleMeta}>
-                  {msg.edited_at ? (
-                    <Text style={[styles.ts, isOwn ? styles.tsOwn : styles.tsOther]}>modifié · </Text>
-                  ) : null}
-                  <Text style={[styles.ts, isOwn ? styles.tsOwn : styles.tsOther]}>{time}</Text>
-                </View>
+                {showMeta && (
+                  <View style={styles.bubbleMeta}>
+                    {msg.edited_at ? (
+                      <Text style={[styles.ts, isOwn ? styles.tsOwn : styles.tsOther]}>modifié · </Text>
+                    ) : null}
+                    <Text style={[styles.ts, isOwn ? styles.tsOwn : styles.tsOther]}>{time}</Text>
+                  </View>
+                )}
+              </>
+            ) : isImage ? (
+              <>
+                {/* Sent "naked" — no padded/colored canvas, corners match the bubble group shape */}
+                <ImageMessageBubble msg={msg} imageStyle={br} />
+                {(!!msg.content || showMeta) && (
+                  <View style={styles.imageCaptionWrap}>
+                    {!!msg.content && (
+                      <Text style={[styles.bubbleText, isOwn && styles.bubbleTextOwn]}>
+                        {msg.content}
+                      </Text>
+                    )}
+                    {showMeta && (
+                      <View style={[styles.bubbleMeta, !msg.content && { marginTop: 0 }]}>
+                        <Text style={[styles.ts, isOwn ? styles.tsOwn : styles.tsOther]}>{time}</Text>
+                      </View>
+                    )}
+                  </View>
+                )}
               </>
             ) : (
-              <View style={{ position: 'relative' }}>
+              <>
                 <Text style={[styles.bubbleText, isOwn && styles.bubbleTextOwn]}>
                   {msg.content}
-                  <Text style={[styles.ts, { opacity: 0, lineHeight: 21 }]}>
-                    {'  ' + (msg.edited_at ? 'modifié · ' : '') + time
-                      + (isOwn && isRead !== null ? (isRead ? ' ✓✓' : ' ✓') : '')
-                      + (onEdit ? '   ' : '')}
-                  </Text>
                 </Text>
-                <View style={[styles.bubbleMeta, { position: 'absolute', bottom: 0, right: 0 }]}>
-                  {msg.edited_at ? (
-                    <Text style={[styles.ts, isOwn ? styles.tsOwn : styles.tsOther]}>modifié · </Text>
-                  ) : null}
-                  <Text style={[styles.ts, isOwn ? styles.tsOwn : styles.tsOther]}>{time}</Text>
-                  {onEdit && (
-                    <Pressable onPress={onEdit} hitSlop={10} style={{ marginLeft: 4 }}>
-                      <Ionicons name="pencil-outline" size={11} color="rgba(255,255,255,0.55)" />
-                    </Pressable>
-                  )}
-                  {isOwn && isRead !== null && (
-                    <Text style={[styles.receipt, isRead && styles.receiptRead]}>
-                      {isRead ? ' ✓✓' : ' ✓'}
-                    </Text>
-                  )}
-                </View>
-              </View>
+                {showMeta && (
+                  <View style={styles.bubbleMeta}>
+                    {msg.edited_at ? (
+                      <Text style={[styles.ts, isOwn ? styles.tsOwn : styles.tsOther]}>modifié · </Text>
+                    ) : null}
+                    <Text style={[styles.ts, isOwn ? styles.tsOwn : styles.tsOther]}>{time}</Text>
+                    {isOwn && isRead !== null && (
+                      <Text style={[styles.receipt, isRead && styles.receiptRead]}>
+                        {isRead ? ' ✓✓' : ' ✓'}
+                      </Text>
+                    )}
+                  </View>
+                )}
+              </>
             )}
           </View>
 
@@ -477,7 +423,7 @@ export default function DiscussionsScreen() {
     loading, sending, error,
     boutiqueUnread,
     offline: chatOffline,
-    load, sendMessage, sendVoiceMessage, editMessage, appendMessage, updateMessage, markRead,
+    load, sendMessage, sendVoiceMessage, sendImageMessage, editMessage, appendMessage, updateMessage, markRead,
   } = useChatStore();
 
   // ─── Partnerships store (Amis tab) ─────────────────────────────────────────
@@ -507,6 +453,7 @@ export default function DiscussionsScreen() {
   const [editingMsg, setEditingMsg] = useState<ChatMessage | null>(null);
   const [partnerLastRead, setPartnerLastRead] = useState<Date | null>(null);
   const [highlightedMsgId, setHighlightedMsgId] = useState<string | null>(null);
+  const [keyboardVisible, setKeyboardVisible] = useState(false);
   const boutiqueFlatListRef = useRef<FlatList<ListItem>>(null);
   const boutiqueChannelRef = useRef<ReturnType<typeof supabase.channel> | null>(null);
   const marcheChannelRef   = useRef<ReturnType<typeof supabase.channel> | null>(null);
@@ -927,6 +874,24 @@ export default function DiscussionsScreen() {
     });
   };
 
+  const handlePickImage = async () => {
+    if (!boutiqueRoom?.id) return;
+    const { status } = await ImagePicker.requestMediaLibraryPermissionsAsync();
+    if (status !== 'granted') return;
+    const result = await ImagePicker.launchImageLibraryAsync({ mediaTypes: ['images'], quality: 1 });
+    if (result.canceled || !result.assets?.[0]) return;
+    const asset = result.assets[0];
+    haptics.success();
+    await sendImageMessage({
+      roomId: boutiqueRoom.id,
+      senderId: userId,
+      senderName: userName,
+      fileUri: asset.uri,
+      sourceWidth: asset.width,
+      sourceHeight: asset.height,
+    });
+  };
+
   const closeNewPost = () => {
     setShowNewPost(false);
     setNewTitle('');
@@ -1178,14 +1143,14 @@ export default function DiscussionsScreen() {
 
             {isRecording ? (
               /* ── Recording UI ── */
-              <View style={[styles.inputRow, styles.recordingRow, { paddingBottom: Math.max(insets.bottom, spacing[3]) }]}>
+              <View style={[styles.inputRow, styles.recordingRow, { paddingBottom: keyboardVisible ? spacing[3] : Math.max(insets.bottom, spacing[3]) }]}>
                 {/* Cancel */}
                 <Pressable onPress={() => stopRecording(false)} hitSlop={10}>
-                  <Ionicons name="trash-outline" size={22} color={palette.danger} />
+                  <Ionicons name="trash-outline" size={22} color={palette.warning} />
                 </Pressable>
 
-                {/* Pulse dot + timer + live waveform */}
-                <RNAnimated.View style={{ opacity: pulseAnim, width: 8, height: 8, borderRadius: 4, backgroundColor: palette.danger }} />
+                {/* Breathing dot + timer + live waveform — amber, not red: recording isn't an alarm */}
+                <RNAnimated.View style={{ opacity: pulseAnim, width: 8, height: 8, borderRadius: 4, backgroundColor: palette.warning }} />
                 <Text style={[styles.recTimer, { color: palette.textPrimary }]}>
                   {Math.floor(recDuration / 60)}:{String(recDuration % 60).padStart(2, '0')}
                 </Text>
@@ -1203,13 +1168,17 @@ export default function DiscussionsScreen() {
               </View>
             ) : (
               /* ── Normal input row ── */
-              <View style={[styles.inputRow, { paddingBottom: Math.max(insets.bottom, spacing[3]) }]}>
+              <View style={[styles.inputRow, { paddingBottom: keyboardVisible ? spacing[3] : Math.max(insets.bottom, spacing[3]) }]}>
+                {!editingMsg && (
+                  <Pressable onPress={handlePickImage} hitSlop={10} style={({ pressed }) => [styles.imgBtn, pressed && { opacity: 0.75 }]}>
+                    <Ionicons name="image-outline" size={22} color={palette.primary} />
+                  </Pressable>
+                )}
                 <TextInput
                   style={styles.input}
                   value={text}
                   onChangeText={setText}
-                  placeholder="Écrire à l'équipe…"
-                  placeholderTextColor={palette.textSecondary}
+                  autoFocus
                   multiline
                   maxLength={1000}
                   returnKeyType="default"
@@ -1328,13 +1297,13 @@ export default function DiscussionsScreen() {
                         <View style={styles.amisRequestBtns}>
                           <Pressable
                             onPress={() => handleAcceptRequest(req.id, req.requester_business_id, req.requester_business_name)}
-                            style={styles.amisAcceptBtn}
+                            style={({ pressed }) => [styles.amisAcceptBtn, pressed && { opacity: 0.75 }]}
                           >
-                            <Text variant="caption" style={{ color: palette.primary, fontWeight: '600' }}>Accepter</Text>
+                            <Text variant="caption" style={{ color: palette.textInverse, fontWeight: '600' }}>Accepter</Text>
                           </Pressable>
                           <Pressable
                             onPress={() => handleDeclineRequest(req.id)}
-                            style={styles.amisDeclineBtn}
+                            style={({ pressed }) => [styles.amisDeclineBtn, pressed && { opacity: 0.6 }]}
                           >
                             <Text variant="caption" color="secondary">Refuser</Text>
                           </Pressable>
@@ -1631,14 +1600,23 @@ function makeStyles(p: Palette) {
   senderName: { fontSize: 12, fontWeight: '700' as const, marginBottom: 3 },
 
   // Bubble
-  bubble: { borderRadius: 16, paddingVertical: 8, paddingHorizontal: 10, marginHorizontal: 4 },
-  bubbleOwn: { backgroundColor: p.primary, maxWidth: '68%' },
+  bubble: { borderRadius: 18, marginHorizontal: 4 },
+  bubbleOwn: { backgroundColor: p.primary, maxWidth: '68%', paddingVertical: 9, paddingHorizontal: 12 },
   bubbleOther: {
     backgroundColor: p.surface,
     borderWidth: 1,
     borderColor: p.border,
     maxWidth: '72%',
+    paddingVertical: 9,
+    paddingHorizontal: 12,
   },
+  // Image messages get no padded/colored canvas — the image itself IS the bubble.
+  bubbleImage: { overflow: 'hidden' as const },
+  bubbleImageOwn: { maxWidth: '68%' },
+  bubbleImageOther: { maxWidth: '72%' },
+  imageHeaderPad: { paddingHorizontal: 12, paddingTop: 9 },
+  imageReplyPad: { marginHorizontal: 12, marginTop: 9 },
+  imageCaptionWrap: { paddingHorizontal: 12, paddingTop: 6, paddingBottom: 8 },
   bubbleHighlighted: { borderWidth: 2, borderColor: p.primary },
   bubbleText:    { fontSize: 15, lineHeight: 21, color: p.textPrimary },
   bubbleTextOwn: { color: p.textInverse },
@@ -1758,6 +1736,11 @@ function makeStyles(p: Palette) {
     fontSize: 15,
     color: p.textPrimary,
     backgroundColor: p.background,
+  },
+  imgBtn: {
+    width: 40, height: 40,
+    alignItems: 'center',
+    justifyContent: 'center',
   },
   sendBtn: {
     width: 40, height: 40,
@@ -1982,19 +1965,18 @@ function makeStyles(p: Palette) {
     gap: spacing[2],
     flexShrink: 0,
   },
+  // Accept is the one bold action here; decline stays quiet — one clear
+  // affordance per decision instead of two competing outlined pills.
   amisAcceptBtn: {
-    paddingHorizontal: spacing[3],
-    paddingVertical: spacing[1.5],
+    paddingHorizontal: spacing[4],
+    paddingVertical: spacing[2],
     borderRadius: radius.full,
-    borderWidth: 1,
-    borderColor: p.primary,
+    backgroundColor: p.primary,
   },
   amisDeclineBtn: {
     paddingHorizontal: spacing[3],
-    paddingVertical: spacing[1.5],
+    paddingVertical: spacing[2],
     borderRadius: radius.full,
-    borderWidth: 1,
-    borderColor: p.border,
   },
   amisInviteState: {
     alignItems: 'center' as const,

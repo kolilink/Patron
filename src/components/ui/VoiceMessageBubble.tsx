@@ -20,7 +20,7 @@ function getAudio(): typeof Audio | null {
 
 // ─── Waveform ────────────────────────────────────────────────────────────────
 
-const BAR_COUNT = 26;
+const BAR_COUNT = 18;
 const BAR_W     = 2;
 const BAR_GAP   = 1.5;
 const BAR_MAX_H = 22;
@@ -32,10 +32,11 @@ function WaveformBars({ samples, progress, isOwn }: {
   isOwn: boolean;
 }) {
   const bars = useMemo(() => {
+    // No captured amplitude data (legacy message, recorded before waveform
+    // capture existed) — show a flat, honest line rather than a decorative
+    // fake wiggle implying speech shape that was never actually recorded.
     if (samples.length === 0) {
-      return Array.from({ length: BAR_COUNT }, (_, i) =>
-        0.15 + 0.6 * Math.abs(Math.sin(i * 0.4))
-      );
+      return Array.from({ length: BAR_COUNT }, () => 0.22);
     }
     return Array.from({ length: BAR_COUNT }, (_, i) => {
       const idx = Math.floor(i * samples.length / BAR_COUNT);
@@ -46,23 +47,35 @@ function WaveformBars({ samples, progress, isOwn }: {
   const playedUpTo = Math.floor(progress * BAR_COUNT);
 
   return (
-    <View style={styles.barsRow}>
-      {bars.map((amp, i) => {
-        const played = i < playedUpTo;
-        return (
-          <View
-            key={i}
-            style={{
-              width: BAR_W,
-              height: BAR_MIN_H + amp * (BAR_MAX_H - BAR_MIN_H),
-              borderRadius: 2,
-              backgroundColor: played
-                ? (isOwn ? 'rgba(255,255,255,0.92)' : colors.primary[500])
-                : (isOwn ? 'rgba(255,255,255,0.32)' : colors.neutral[300]),
-            }}
-          />
-        );
-      })}
+    <View style={styles.waveTrack}>
+      <View style={styles.barsRow}>
+        {bars.map((amp, i) => {
+          const played = i < playedUpTo;
+          return (
+            <View
+              key={i}
+              style={{
+                width: BAR_W,
+                height: BAR_MIN_H + amp * (BAR_MAX_H - BAR_MIN_H),
+                borderRadius: 2,
+                backgroundColor: played
+                  ? (isOwn ? 'rgba(255,255,255,0.92)' : colors.primary[500])
+                  : (isOwn ? 'rgba(255,255,255,0.32)' : colors.neutral[300]),
+              }}
+            />
+          );
+        })}
+      </View>
+      {progress > 0 && (
+        <View
+          pointerEvents="none"
+          style={[
+            styles.knob,
+            isOwn ? styles.knobOwn : styles.knobOther,
+            { left: `${Math.min(100, progress * 100)}%` },
+          ]}
+        />
+      )}
     </View>
   );
 }
@@ -215,7 +228,7 @@ export function VoiceMessageBubble({ msg, isOwn }: {
       >
         <Ionicons
           name={playing ? 'pause' : 'play'}
-          size={16}
+          size={18}
           color={isOwn ? colors.primary[500] : colors.neutral[0]}
         />
       </Pressable>
@@ -284,16 +297,16 @@ const styles = StyleSheet.create({
     alignItems: 'center',
     gap: 8,
     paddingVertical: 2,
-    minWidth: 140,
-    maxWidth: 220,
+    minWidth: 130,
+    maxWidth: 190,
   },
   own:   {},
   other: {},
 
   playBtn: {
-    width: 30,
-    height: 30,
-    borderRadius: 15,
+    width: 38,
+    height: 38,
+    borderRadius: 19,
     alignItems: 'center',
     justifyContent: 'center',
     flexShrink: 0,
@@ -303,6 +316,8 @@ const styles = StyleSheet.create({
 
   middle: { flex: 1, gap: 4 },
 
+  waveTrack: { position: 'relative', justifyContent: 'center' },
+
   barsRow: {
     flexDirection: 'row',
     alignItems: 'center',
@@ -310,6 +325,18 @@ const styles = StyleSheet.create({
     height: BAR_MAX_H + 4,
     overflow: 'hidden',
   },
+
+  knob: {
+    position: 'absolute',
+    top: '50%',
+    width: 8,
+    height: 8,
+    borderRadius: 4,
+    marginTop: -4,
+    marginLeft: -4,
+  },
+  knobOwn:   { backgroundColor: colors.neutral[0] },
+  knobOther: { backgroundColor: colors.primary[500] },
 
   timer: { fontSize: 11 },
   timerOwn:   { color: 'rgba(255,255,255,0.75)' },

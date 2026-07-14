@@ -15,12 +15,15 @@ import {
 } from 'react-native';
 import type { Audio } from 'expo-av';
 import * as FileSystem from 'expo-file-system/legacy';
+import * as ImagePicker from 'expo-image-picker';
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
 import { Screen } from '@/src/components/ui/Screen';
 import { router, useLocalSearchParams } from 'expo-router';
 import { Ionicons } from '@expo/vector-icons';
 import { Text } from '@/src/components/ui/Text';
 import { VoiceMessageBubble, LiveWaveformBars } from '@/src/components/ui/VoiceMessageBubble';
+import { ImageMessageBubble } from '@/src/components/ui/ImageMessageBubble';
+import { uploadMessageImage } from '@/lib/chatImages';
 import { useTheme, radius, spacing } from '@/src/theme';
 import type { Palette } from '@/src/theme';
 import { useAuthStore } from '@/stores/auth';
@@ -337,10 +340,44 @@ export default function DmChatScreen() {
       if (partnerBizId) {
         const mins = Math.floor(duration / 60);
         const secs = String(Math.round(duration % 60)).padStart(2, '0');
-        notifyEvent({ businessId: partnerBizId, eventType: 'chat_message', payload: { sender: businessName, preview: `🎤 ${mins}:${secs}`, route: `/(app)/messages/${room_id}?partnership_id=${partnership_id}` }, targetRoles: ['administrateur', 'manager'], excludeUserId: userId });
+        notifyEvent({ businessId: partnerBizId, eventType: 'chat_message', payload: { sender: businessName, preview: `Message vocal · ${mins}:${secs}`, route: `/(app)/messages/${room_id}?partnership_id=${partnership_id}` }, targetRoles: ['administrateur', 'manager'], excludeUserId: userId });
       }
     } catch (err) {
       setSendError(translateError(err, 'Impossible d\'envoyer le message vocal'));
+    } finally {
+      setSending(false);
+    }
+  };
+
+  // ─── Image sharing ──────────────────────────────────────────────────────────
+  const handlePickImage = async () => {
+    const { status } = await ImagePicker.requestMediaLibraryPermissionsAsync();
+    if (status !== 'granted') return;
+    const result = await ImagePicker.launchImageLibraryAsync({ mediaTypes: ['images'], quality: 1 });
+    if (result.canceled || !result.assets?.[0]) return;
+    const asset = result.assets[0];
+
+    setSending(true);
+    const messageId = generateId();
+    try {
+      const { url, width, height } = await uploadMessageImage({
+        fileUri: asset.uri,
+        sourceWidth: asset.width,
+        sourceHeight: asset.height,
+        storagePath: `chat/${room_id}/${messageId}.jpg`,
+      });
+      const { data, error } = await supabase.from('chat_messages').insert({
+        id: messageId, room_id, sender_id: userId, sender_name: userName, content: '',
+        message_type: 'image', image_url: url, image_width: width, image_height: height,
+      }).select().single();
+      if (error) throw error;
+      setMessages(prev => prev.some(m => m.id === messageId) ? prev : [...prev, data as ChatMessage]);
+      setTimeout(() => flatListRef.current?.scrollToEnd({ animated: true }), 50);
+      if (partnerBizId) {
+        notifyEvent({ businessId: partnerBizId, eventType: 'chat_message', payload: { sender: businessName, preview: 'Photo', route: `/(app)/messages/${room_id}?partnership_id=${partnership_id}` }, targetRoles: ['administrateur', 'manager'], excludeUserId: userId });
+      }
+    } catch (err) {
+      setSendError(translateError(err, 'Impossible d\'envoyer l\'image'));
     } finally {
       setSending(false);
     }
@@ -457,6 +494,9 @@ export default function DmChatScreen() {
           </View>
         ) : (
           <View style={[styles.inputRow, { paddingBottom: Math.max(insets.bottom, spacing[3]) }]}>
+            <Pressable onPress={handlePickImage} hitSlop={10} style={({ pressed }) => [styles.imgBtn, pressed && { opacity: 0.75 }]}>
+              <Ionicons name="image-outline" size={22} color={palette.primary} />
+            </Pressable>
             <TextInput
               style={styles.input}
               value={text}
@@ -616,6 +656,24 @@ function DmBubble({ msg, isOwn, pos, palette }: {
         </View>
       );
     }
+    if (msg.message_type === 'image' && msg.image_url) {
+      // Sent "naked" — no padded/colored canvas, corners match the bubble radius
+      return (
+        <View style={{ maxWidth: '75%', overflow: 'hidden', ...bubbleRadius }}>
+          <ImageMessageBubble msg={msg} imageStyle={bubbleRadius} />
+          <View style={{ paddingHorizontal: 4, paddingTop: 4, paddingBottom: 4 }}>
+            {!!msg.content && (
+              <Text style={{ color: palette.textPrimary, fontSize: 15, lineHeight: 21 }}>
+                {msg.content}
+              </Text>
+            )}
+            <Text style={{ color: palette.textSecondary, fontSize: 11, marginTop: 2, textAlign: 'right' }}>
+              {timeLabel(msg.created_at)}
+            </Text>
+          </View>
+        </View>
+      );
+    }
     return (
       <View style={{ maxWidth: '70%', paddingHorizontal: 14, paddingVertical: 8, backgroundColor: isOwn ? palette.primary : palette.surface, ...bubbleRadius }}>
         <Text style={{ color: isOwn ? palette.textInverse : palette.textPrimary, fontSize: 15, lineHeight: 21 }}>
@@ -701,6 +759,12 @@ function makeStyles(p: Palette) {
       fontSize: 15,
       color: p.textPrimary,
       backgroundColor: p.background,
+    },
+    imgBtn: {
+      width: 40,
+      height: 40,
+      alignItems: 'center',
+      justifyContent: 'center',
     },
     sendBtn: {
       width: 40,

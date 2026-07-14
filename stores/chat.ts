@@ -6,6 +6,7 @@ import { isNetworkError } from '@/lib/sync';
 import { getKV, setKV, saveChatCache, getChatCache, getCacheTimestamp } from '@/lib/db';
 import { notifyEvent } from '@/src/utils/notifications';
 import { generateId } from '@/lib/id';
+import { uploadMessageImage } from '@/lib/chatImages';
 import type { ChatRoom, ChatMessage } from '@/src/types';
 
 const GLOBAL_ROOM_ID = '00000000-0000-0000-0000-000000000001';
@@ -48,6 +49,15 @@ interface ChatStore {
     fileUri: string;          // local file:// URI from expo-av
     duration: number;         // seconds
     waveform: number[];       // amplitude samples 0.0–1.0
+  }) => Promise<void>;
+  sendImageMessage: (params: {
+    roomId: string;
+    senderId: string;
+    senderName: string;
+    fileUri: string;          // local file:// URI from expo-image-picker
+    sourceWidth?: number;
+    sourceHeight?: number;
+    caption?: string;
   }) => Promise<void>;
   editMessage: (messageId: string, newContent: string) => Promise<void>;
   appendMessage: (msg: ChatMessage) => void;
@@ -335,7 +345,7 @@ export const useChatStore = create<ChatStore>((set, get) => ({
       get().appendMessage(data as ChatMessage);
       set({ sending: false });
 
-      // Notification: "Mamadou · 🎤 0:23" format
+      // Notification: "Mamadou · Message vocal · 0:23" format — no emoji in the OS tray
       const boutiqueRoom = get().boutiqueRoom;
       if (boutiqueRoom && roomId === boutiqueRoom.id && boutiqueRoom.business_id) {
         const mins = Math.floor(duration / 60);
@@ -345,7 +355,7 @@ export const useChatStore = create<ChatStore>((set, get) => ({
           eventType: 'chat_message',
           payload: {
             sender: senderName,
-            preview: `🎤 ${mins}:${secs}`,
+            preview: `Message vocal · ${mins}:${secs}`,
           },
           targetRoles: ['administrateur', 'manager', 'vendeur', 'investisseur'],
           excludeUserId: senderId,
@@ -353,6 +363,57 @@ export const useChatStore = create<ChatStore>((set, get) => ({
       }
     } catch (err) {
       set({ sending: false, error: translateError(err, 'Impossible d\'envoyer le message vocal') });
+    }
+  },
+
+  sendImageMessage: async ({ roomId, senderId, senderName, fileUri, sourceWidth, sourceHeight, caption }) => {
+    set({ sending: true, error: null });
+    const messageId = generateId();
+    const trimmedCaption = (caption ?? '').trim();
+
+    try {
+      const { url, width, height } = await uploadMessageImage({
+        fileUri,
+        sourceWidth,
+        sourceHeight,
+        storagePath: `chat/${roomId}/${messageId}.jpg`,
+      });
+
+      const { data, error: insertErr } = await supabase
+        .from('chat_messages')
+        .insert({
+          id: messageId,
+          room_id: roomId,
+          sender_id: senderId,
+          sender_name: senderName,
+          content: trimmedCaption,
+          message_type: 'image',
+          image_url: url,
+          image_width: width,
+          image_height: height,
+        })
+        .select()
+        .single();
+      if (insertErr) throw insertErr;
+
+      get().appendMessage(data as ChatMessage);
+      set({ sending: false });
+
+      const boutiqueRoom = get().boutiqueRoom;
+      if (boutiqueRoom && roomId === boutiqueRoom.id && boutiqueRoom.business_id) {
+        notifyEvent({
+          businessId: boutiqueRoom.business_id,
+          eventType: 'chat_message',
+          payload: {
+            sender: senderName,
+            preview: trimmedCaption || 'Photo',
+          },
+          targetRoles: ['administrateur', 'manager', 'vendeur', 'investisseur'],
+          excludeUserId: senderId,
+        });
+      }
+    } catch (err) {
+      set({ sending: false, error: translateError(err, 'Impossible d\'envoyer l\'image') });
     }
   },
 
