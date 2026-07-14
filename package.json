@@ -33,7 +33,7 @@
     "expo-application": "~7.0.8",
     "expo-av": "~16.0.8",
     "expo-blur": "~15.0.8",
-    "expo-clipboard": "~8.0.8",
+    "expo-clipboard": "~57.0.0",
     "expo-crypto": "~15.0.9",
     "expo-device": "~8.0.10",
     "expo-file-system": "~19.0.22",
