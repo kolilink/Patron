@@ -32,6 +32,16 @@ const corsHeaders = {
   'Access-Control-Allow-Methods': 'GET, POST, OPTIONS',
 };
 
+// patron.kolilink.com is a static GitHub Pages site (see abonnement/
+// index.html at the repo root) that calls this function cross-origin
+// with its own branded UI, so the post-payment redirect can land back
+// on that branded page instead of this function's raw *.supabase.co
+// URL. A fixed allowlist, not "trust whatever origin the client sends"
+// — this value only ever ends up as Djomi's returnUrl, and accepting
+// an arbitrary client-supplied origin there would be an open-redirect
+// hole in a payment flow.
+const ALLOWED_RETURN_ORIGINS = ['https://patron.kolilink.com'];
+
 // Same 00224-prefixed international format Djomi requires — see the
 // original integration draft this was built from.
 function formatPayerNumber(phone: string): string {
@@ -280,7 +290,7 @@ Deno.serve(async (req) => {
       throw new Error('Configuration Djomi incomplète.');
     }
 
-    const { phone } = await req.json();
+    const { phone, returnOrigin } = await req.json();
     if (!phone) {
       return new Response(JSON.stringify({ error: 'Numéro manquant.' }), {
         status: 400, headers: { ...corsHeaders, 'Content-Type': 'application/json' },
@@ -320,7 +330,10 @@ Deno.serve(async (req) => {
     }
 
     const { accessToken, xApiKey } = await djomiAuthToken(CLIENT_ID, CLIENT_SECRET);
-    const returnUrl = `${url.origin}${url.pathname}?ref=${encodeURIComponent(reference)}`;
+    const returnBase = ALLOWED_RETURN_ORIGINS.includes(returnOrigin)
+      ? `${returnOrigin}/abonnement`
+      : `${url.origin}${url.pathname}`;
+    const returnUrl = `${returnBase}?ref=${encodeURIComponent(reference)}`;
 
     const paymentResp = await fetch(`${BASE_URL}/v1/payments/gateway`, {
       method: 'POST',

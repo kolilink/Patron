@@ -1,0 +1,189 @@
+<!doctype html>
+<html lang="fr">
+<head>
+<meta charset="utf-8" />
+<meta name="viewport" content="width=device-width, initial-scale=1, maximum-scale=1" />
+<title>Abonnement Alpha Pro — Patron</title>
+<!--
+  Static mirror of supabase/functions/djomi-checkout's page, served
+  from patron.kolilink.com/abonnement via GitHub Pages (see
+  .github/workflows/static.yml — this repo is deployed as a plain
+  static site, not Cloudflare Pages; there is no server-side code
+  execution here, so this can only ever be a static page that talks
+  to the real backend cross-origin, never a proxy).
+
+  Every fetch() call below goes straight to the djomi-checkout Supabase
+  Edge Function (already CORS-open: Access-Control-Allow-Origin: *),
+  instead of a relative location.pathname the way the dynamic version
+  does — there is no same-origin API here to call. returnOrigin is sent
+  with the payment-creation request so Djomi's post-payment redirect
+  can land back on this branded page too (djomi-checkout only honors
+  it against a fixed allowlist — see ALLOWED_RETURN_ORIGINS there).
+
+  Keep this file's markup/copy in sync with djomi-checkout/index.ts's
+  PAGE_HTML by hand — there's no shared build step between a Deno Edge
+  Function and a plain static GitHub Pages file.
+-->
+<style>
+  :root {
+    --bg: #F8FAFC; --surface: #FFFFFF; --border: #E2E8F0;
+    --text: #0F172A; --text-secondary: #64748B;
+    --primary: #4F46E5; --primary-light: #EEF2FF;
+    --warning: #D97706; --warning-light: #FFFBEB;
+    --success: #16A34A; --success-light: #F0FDF4;
+  }
+  @media (prefers-color-scheme: dark) {
+    :root {
+      --bg: #0F1117; --surface: #1A1D27; --border: rgba(255,255,255,0.08);
+      --text: #F1F5F9; --text-secondary: #94A3B8;
+      --primary: #818CF8; --primary-light: rgba(129,140,248,0.14);
+      --warning: #FCD34D; --warning-light: rgba(252,211,77,0.14);
+      --success: #4ADE80; --success-light: rgba(74,222,128,0.14);
+    }
+  }
+  * { box-sizing: border-box; }
+  body {
+    margin: 0; min-height: 100vh; display: flex; align-items: center; justify-content: center;
+    background: var(--bg); color: var(--text); padding: 24px;
+    font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif;
+  }
+  .card {
+    width: 100%; max-width: 400px; background: var(--surface); border: 1px solid var(--border);
+    border-radius: 20px; padding: 28px 24px; text-align: center;
+  }
+  .wordmark { font-size: 15px; font-weight: 700; color: var(--text-secondary); margin-bottom: 20px; letter-spacing: 0.5px; }
+  .label { font-size: 12px; font-weight: 700; color: var(--text-secondary); letter-spacing: 0.5px; margin-bottom: 8px; }
+  .plan { font-size: 20px; font-weight: 700; margin-bottom: 4px; }
+  .price { font-size: 28px; font-weight: 800; margin-bottom: 2px; }
+  .price span { font-size: 15px; font-weight: 400; color: var(--text-secondary); }
+  .limit { font-size: 13px; color: var(--text-secondary); margin-bottom: 24px; }
+  input {
+    width: 100%; padding: 14px 16px; border-radius: 12px; border: 1px solid var(--border);
+    background: var(--bg); color: var(--text); font-size: 16px; margin-bottom: 12px;
+  }
+  input:focus { outline: none; border-color: var(--primary); }
+  button {
+    width: 100%; padding: 14px; border-radius: 12px; border: none; background: var(--primary);
+    color: #fff; font-size: 16px; font-weight: 700; cursor: pointer;
+  }
+  button:disabled { opacity: 0.6; }
+  .hint { font-size: 12px; color: var(--text-secondary); margin-top: 12px; }
+  .msg { font-size: 13px; border-radius: 10px; padding: 10px 12px; margin-top: 12px; }
+  .msg.warn { color: var(--warning); background: var(--warning-light); }
+  .hidden { display: none !important; }
+  .spinner {
+    width: 28px; height: 28px; border-radius: 50%; margin: 4px auto 16px;
+    border: 3px solid var(--border); border-top-color: var(--primary);
+    animation: spin 0.8s linear infinite;
+  }
+  @keyframes spin { to { transform: rotate(360deg); } }
+</style>
+</head>
+<body>
+  <div class="card" id="form-view">
+    <div class="wordmark">Patron</div>
+    <div class="label">ABONNEMENT</div>
+    <div class="plan">Alpha Pro</div>
+    <div class="price">24 000 GNF<span> / mois</span></div>
+    <div class="limit">20 conversations avec Alpha, chaque jour</div>
+    <input id="phone" type="tel" inputmode="tel" placeholder="Numéro utilisé sur Patron" autocomplete="tel" />
+    <button id="pay-btn">Investir</button>
+    <div class="hint">Paiement sécurisé via Orange Money (Djomi)</div>
+    <div class="msg warn hidden" id="error"></div>
+  </div>
+  <div class="card hidden" id="wait-view">
+    <div class="wordmark">Patron</div>
+    <div class="spinner"></div>
+    <div class="plan">Confirmation du paiement…</div>
+    <div class="limit" id="wait-text">Merci de patienter quelques secondes pendant que nous confirmons votre paiement auprès de Djomi.</div>
+  </div>
+  <div class="card hidden" id="done-view">
+    <div class="wordmark">Patron</div>
+    <div class="plan" id="done-title">Merci !</div>
+    <div class="limit" id="done-text"></div>
+  </div>
+<script>
+  // Must match supabase/functions/djomi-checkout's own deployed URL —
+  // see CLAUDE.md's "Djomi out-of-app subscription" section if this
+  // project's Supabase ref ever changes.
+  var DJOMI_CHECKOUT_URL = 'https://jnxpujsyvbenqgjbvifh.supabase.co/functions/v1/djomi-checkout';
+
+  var params = new URLSearchParams(location.search);
+  var ref = params.get('ref');
+
+  function show(id) {
+    ['form-view', 'wait-view', 'done-view'].forEach(function (v) {
+      document.getElementById(v).classList.toggle('hidden', v !== id);
+    });
+  }
+
+  if (ref) {
+    show('wait-view');
+    var attempts = 0;
+    var maxAttempts = 24; // ~2 minutes at 5s intervals
+    var poll = function () {
+      attempts++;
+      fetch(DJOMI_CHECKOUT_URL + '?verify=1&ref=' + encodeURIComponent(ref))
+        .then(function (resp) { return resp.json(); })
+        .then(function (data) {
+          if (data.status === 'success') {
+            document.getElementById('done-title').textContent = 'Paiement confirmé';
+            document.getElementById('done-text').textContent = "Alpha Pro est maintenant actif. Ouvrez l'application Patron pour en profiter.";
+            show('done-view');
+            return;
+          }
+          next();
+        })
+        .catch(next); // network hiccup — keep polling
+
+      function next() {
+        if (attempts >= maxAttempts) {
+          document.getElementById('done-title').textContent = 'Confirmation en cours';
+          document.getElementById('done-text').textContent = "Cela prend plus de temps que prévu. Si le paiement a bien été effectué, l'accès sera activé automatiquement dès sa confirmation.";
+          show('done-view');
+          return;
+        }
+        setTimeout(poll, 5000);
+      }
+    };
+    poll();
+  }
+
+  var btn = document.getElementById('pay-btn');
+  var errEl = document.getElementById('error');
+  btn.addEventListener('click', function () {
+    var phone = document.getElementById('phone').value.trim();
+    errEl.classList.add('hidden');
+    if (!phone) {
+      errEl.textContent = 'Entrez votre numéro de téléphone.';
+      errEl.classList.remove('hidden');
+      return;
+    }
+    btn.disabled = true;
+    btn.textContent = 'Un instant…';
+    fetch(DJOMI_CHECKOUT_URL, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ phone: phone, returnOrigin: location.origin }),
+    })
+      .then(function (resp) {
+        return resp.json().then(function (data) { return { resp: resp, data: data }; });
+      })
+      .then(function (result) {
+        if (!result.resp.ok || !result.data.payment_url) {
+          throw new Error(result.data.error || 'Erreur inconnue');
+        }
+        location.href = result.data.payment_url;
+      })
+      .catch(function (e) {
+        errEl.textContent = e.message === 'business_not_found'
+          ? "Aucun commerce administrateur trouvé avec ce numéro. Vérifiez que c'est bien le numéro utilisé sur Patron."
+          : 'Une erreur est survenue. Réessayez.';
+        errEl.classList.remove('hidden');
+        btn.disabled = false;
+        btn.textContent = 'Investir';
+      });
+  });
+</script>
+</body>
+</html>
