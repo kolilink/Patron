@@ -101,7 +101,7 @@ function FormSheet({ visible, mode, editing, businessId, currency, saving, onClo
   // Prefill when opening in edit mode
   useEffect(() => {
     if (visible && mode === 'edit' && editing) {
-      setAmountStr(formatAmountInput(String(Math.abs(editing.amount))));
+      setAmountStr(formatAmountInput(String(Math.abs(editing.amount)), currency));
       setSelectedMemberId(editing.injected_by_id);
       setSourceName(editing.source_name ?? '');
       setNote(editing.note ?? '');
@@ -117,7 +117,7 @@ function FormSheet({ visible, mode, editing, businessId, currency, saving, onClo
     : sourceName.trim() || null;
 
   const handleSave = () => {
-    const amount = parseAmountInput(amountStr);
+    const amount = parseAmountInput(amountStr, currency);
     if (!amount || amount <= 0) {
       toast.warning('Entrez un montant valide');
       return;
@@ -150,7 +150,7 @@ function FormSheet({ visible, mode, editing, businessId, currency, saving, onClo
               <TextInput
                 style={styles.amountInput}
                 value={amountStr}
-                onChangeText={v => setAmountStr(formatAmountInput(v))}
+                onChangeText={v => setAmountStr(formatAmountInput(v, currency))}
                 keyboardType="numeric"
                 placeholder="0"
                 placeholderTextColor={palette.textDisabled}

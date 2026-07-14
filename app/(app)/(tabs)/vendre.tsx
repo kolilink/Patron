@@ -202,10 +202,10 @@ function PaymentModal({
   const [step, setStep] = useState<PayStep>(initialStep);
   const [payMethod, setPayMethod] = useState<'especes' | 'orange' | 'mtn' | 'digital'>('especes');
   const [amountInput, setAmountInput] = useState('');
-  // Defaults to 'credit' rather than undecided — a short payment in this
-  // market is overwhelmingly "they'll pay the rest later," not a discount.
-  // The seller still sees both options and can switch to 'rabais' in one tap.
-  const [disambig, setDisambig] = useState<Disambig>('credit');
+  // Defaults to 'rabais' rather than undecided — a short payment is most
+  // often just a discount given at the register, not an actual credit sale.
+  // The seller still sees both options and can switch to 'credit' in one tap.
+  const [disambig, setDisambig] = useState<Disambig>('rabais');
   const [creditDiscountInput, setCreditDiscountInput] = useState('');
   const [creditUpfrontInput, setCreditUpfrontInput] = useState('');
   const [creditPayMethod, setCreditPayMethod] = useState<'especes' | 'orange' | 'mtn' | 'digital'>('especes');
@@ -232,8 +232,8 @@ function PaymentModal({
     if (visible) {
       setStep(initialStep);
       setPayMethod('especes');
-      setAmountInput(formatAmountInput(String(Math.round(total))));
-      setDisambig('credit');
+      setAmountInput(formatAmountInput(String(Math.round(total)), currency));
+      setDisambig('rabais');
       setCreditDiscountInput('');
       setCreditUpfrontInput('');
       setCreditPayMethod('especes');
@@ -325,12 +325,12 @@ function PaymentModal({
     handleSelectClient(name, phone, data?.id ?? undefined);
   };
 
-  const parsedAmount = parseAmountInput(amountInput);
+  const parsedAmount = parseAmountInput(amountInput, currency);
   const shortfall = total - parsedAmount;
   const isShort = shortfall > 0.5;
 
-  const creditDiscount = parseAmountInput(creditDiscountInput);
-  const creditUpfront  = parseAmountInput(creditUpfrontInput);
+  const creditDiscount = parseAmountInput(creditDiscountInput, currency);
+  const creditUpfront  = parseAmountInput(creditUpfrontInput, currency);
   const creditEffectiveTotal = total - creditDiscount;
   const creditUpfrontCoversAll = creditUpfront >= creditEffectiveTotal - 0.01 && creditUpfront > 0;
 
@@ -342,8 +342,8 @@ function PaymentModal({
   })();
 
   const handleAmountChange = (val: string) => {
-    setAmountInput(formatAmountInput(val));
-    setDisambig('credit');
+    setAmountInput(formatAmountInput(val, currency));
+    setDisambig('rabais');
   };
 
   const requiresClient = disambig === 'credit';
@@ -419,7 +419,7 @@ function PaymentModal({
                 <TextInput
                   style={styles.amountBigInput}
                   value={creditDiscountInput}
-                  onChangeText={v => setCreditDiscountInput(formatAmountInput(v))}
+                  onChangeText={v => setCreditDiscountInput(formatAmountInput(v, currency))}
                   keyboardType="decimal-pad"
                   placeholderTextColor={palette.textDisabled}
                   selectTextOnFocus
@@ -432,7 +432,7 @@ function PaymentModal({
                 <TextInput
                   style={styles.amountBigInput}
                   value={creditUpfrontInput}
-                  onChangeText={v => setCreditUpfrontInput(formatAmountInput(v))}
+                  onChangeText={v => setCreditUpfrontInput(formatAmountInput(v, currency))}
                   keyboardType="decimal-pad"
                   placeholderTextColor={palette.textDisabled}
                   selectTextOnFocus
@@ -1249,7 +1249,7 @@ export default function VendreScreen() {
   const handleCreditAdd = async () => {
     const trimmedName = creditName.trim();
     const trimmedPhone = creditPhone.trim();
-    const parsed = Math.round(parseAmountInput(creditAmount));
+    const parsed = Math.round(parseAmountInput(creditAmount, currency));
     if (!trimmedName || isNaN(parsed) || parsed <= 0) return;
     setCreditSaving(true);
     setCreditError(null);
@@ -1508,7 +1508,7 @@ export default function VendreScreen() {
                     placeholder="0"
                     placeholderTextColor={palette.textDisabled}
                     value={creditAmount}
-                    onChangeText={v => { setCreditAmount(formatAmountInput(v)); setCreditError(null); }}
+                    onChangeText={v => { setCreditAmount(formatAmountInput(v, currency)); setCreditError(null); }}
                     keyboardType="numeric"
                     returnKeyType="done"
                     onSubmitEditing={handleCreditAdd}

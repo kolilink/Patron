@@ -1,6 +1,5 @@
-import { useEffect, useMemo, useRef, useState } from 'react';
+import { useEffect, useMemo, useState } from 'react';
 import {
-  Animated,
   Dimensions,
   Modal,
   Pressable,
@@ -9,6 +8,16 @@ import {
   TextInput,
   View,
 } from 'react-native';
+import { Gesture, GestureDetector } from 'react-native-gesture-handler';
+import Animated, {
+  useSharedValue,
+  useAnimatedStyle,
+  withTiming,
+  runOnJS,
+  interpolate,
+  Extrapolation,
+  Easing,
+} from 'react-native-reanimated';
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
 import { router } from 'expo-router';
 import { Ionicons } from '@expo/vector-icons';
@@ -21,6 +30,15 @@ import { isFounderPhone } from '@/src/utils/founder';
 import type { Role } from '@/src/types';
 
 const DRAWER_WIDTH = Dimensions.get('window').width * 0.78;
+
+// Plain eased timing, not a physics spring — a spring has velocity/mass and
+// can overshoot the target and settle back (the back-and-forth wobble the
+// user kept seeing even with overshootClamping). A timing curve has no
+// velocity to overshoot with: it interpolates monotonically to the target
+// every time. Shared by open, cancel-drag spring-back, and drag-confirmed close.
+const DRAWER_EASE = Easing.out(Easing.cubic);
+const DRAWER_OPEN_DURATION = 260;
+const DRAWER_CLOSE_DURATION = 300;
 
 const DRAWER_AVATAR_PALETTE = BUSINESS_AVATAR_PALETTE;
 
@@ -47,39 +65,55 @@ export function BusinessDrawer() {
   const isFounder = isFounderPhone(session?.user.phone);
   const founderUnreadTotal = useSupportChatStore(s => s.founderUnreadTotal);
 
-  const slideAnim = useRef(new Animated.Value(-DRAWER_WIDTH)).current;
-  const sheetAnim = useRef(new Animated.Value(300)).current;
+  const translateX = useSharedValue(-DRAWER_WIDTH);
+  const dragStartX = useSharedValue(-DRAWER_WIDTH);
   const [modalVisible, setModalVisible] = useState(false);
   const [search, setSearch] = useState('');
-  const [showComingSoon, setShowComingSoon] = useState(false);
-
-  const openSheet = () => {
-    setShowComingSoon(true);
-    Animated.spring(sheetAnim, { toValue: 0, useNativeDriver: true, tension: 65, friction: 11 }).start();
-  };
-  const closeSheet = () => {
-    Animated.timing(sheetAnim, { toValue: 300, duration: 220, useNativeDriver: true })
-      .start(() => setShowComingSoon(false));
-  };
 
   useEffect(() => {
     if (businessDrawerOpen) {
       setSearch('');
       setModalVisible(true);
-      Animated.spring(slideAnim, {
-        toValue: 0,
-        useNativeDriver: true,
-        tension: 65,
-        friction: 11,
-      }).start();
+      translateX.value = withTiming(0, { duration: DRAWER_OPEN_DURATION, easing: DRAWER_EASE });
     } else {
-      Animated.timing(slideAnim, {
-        toValue: -DRAWER_WIDTH,
-        duration: 220,
-        useNativeDriver: true,
-      }).start(() => setModalVisible(false));
+      translateX.value = withTiming(-DRAWER_WIDTH, { duration: DRAWER_CLOSE_DURATION, easing: DRAWER_EASE }, (finished) => {
+        if (finished) runOnJS(setModalVisible)(false);
+      });
     }
   }, [businessDrawerOpen]);
+
+  // Swipe-to-close: drag the open panel left. A quick flick (velocity) or a
+  // drag past ~35% of the drawer width closes it; otherwise it springs back
+  // open. Small activeOffsetX/failOffsetY thresholds mirror the swipe-to-reply
+  // gesture in discussions.tsx so a simple tap or vertical scroll inside the
+  // list isn't mistaken for a close-drag.
+  const closeDragGesture = Gesture.Pan()
+    .activeOffsetX([-10, 10])
+    .failOffsetY([-15, 15])
+    .onStart(() => {
+      dragStartX.value = translateX.value;
+    })
+    .onUpdate((e) => {
+      if (e.translationX < 0) {
+        translateX.value = Math.max(-DRAWER_WIDTH, dragStartX.value + e.translationX);
+      }
+    })
+    .onEnd((e) => {
+      const shouldClose = translateX.value < -DRAWER_WIDTH * 0.35 || e.velocityX < -600;
+      if (shouldClose) {
+        runOnJS(closeBusinessDrawer)();
+      } else {
+        translateX.value = withTiming(0, { duration: 200, easing: DRAWER_EASE });
+      }
+    });
+
+  const drawerAnimStyle = useAnimatedStyle(() => ({
+    transform: [{ translateX: translateX.value }],
+  }));
+
+  const backdropAnimStyle = useAnimatedStyle(() => ({
+    opacity: interpolate(translateX.value, [-DRAWER_WIDTH, 0], [0, 1], Extrapolation.CLAMP),
+  }));
 
   const memberships = session?.memberships ?? [];
   const activeBusiness = session?.activeBusiness;
@@ -116,12 +150,8 @@ export function BusinessDrawer() {
   };
 
   const handleCreate = () => {
-    if (isAlreadyAdmin) {
-      openSheet();
-    } else {
-      closeBusinessDrawer();
-      router.push('/(app)/onboarding/creer');
-    }
+    closeBusinessDrawer();
+    router.push('/(app)/onboarding/creer');
   };
 
   return (
@@ -132,20 +162,20 @@ export function BusinessDrawer() {
       onRequestClose={closeBusinessDrawer}
     >
       {/* Backdrop */}
-      <Pressable
-        style={[StyleSheet.absoluteFillObject, styles.backdrop]}
-        onPress={closeBusinessDrawer}
-      />
+      <Animated.View style={[StyleSheet.absoluteFillObject, styles.backdrop, backdropAnimStyle]}>
+        <Pressable style={StyleSheet.absoluteFillObject} onPress={closeBusinessDrawer} />
+      </Animated.View>
 
       {/* Drawer panel */}
-      <Animated.View style={[
-        styles.drawer,
-        {
-          top: insets.top + 10,
-          bottom: 10,
-          transform: [{ translateX: slideAnim }],
-        },
-      ]}>
+      <GestureDetector gesture={closeDragGesture}>
+        <Animated.View style={[
+          styles.drawer,
+          {
+            top: insets.top + 10,
+            bottom: 10,
+          },
+          drawerAnimStyle,
+        ]}>
 
           {/* Header */}
           <View style={styles.header}>
@@ -239,35 +269,18 @@ export function BusinessDrawer() {
               </View>
               <Text style={styles.footerLabel}>Rejoindre un commerce</Text>
             </Pressable>
-            <Pressable onPress={handleCreate} style={({ pressed }) => [styles.footerRow, pressed && { opacity: 0.6 }]}>
-              <View style={styles.footerIcon}>
-                <Ionicons name="add-circle-outline" size={18} color={palette.textSecondary} />
-              </View>
-              <Text style={[styles.footerLabel, { color: palette.textSecondary }]}>Créer un commerce</Text>
-            </Pressable>
+            {!isAlreadyAdmin && (
+              <Pressable onPress={handleCreate} style={({ pressed }) => [styles.footerRow, pressed && { opacity: 0.6 }]}>
+                <View style={styles.footerIcon}>
+                  <Ionicons name="add-circle-outline" size={18} color={palette.textSecondary} />
+                </View>
+                <Text style={[styles.footerLabel, { color: palette.textSecondary }]}>Créer un commerce</Text>
+              </Pressable>
+            )}
           </View>
 
-      </Animated.View>
-
-      {/* Inline "Bientôt disponible" sheet — avoids nested Modal on Android */}
-      {showComingSoon && (
-        <>
-          <Pressable style={styles.sheetBackdrop} onPress={closeSheet} />
-          <Animated.View style={[styles.sheet, { transform: [{ translateY: sheetAnim }] }]}>
-            <View style={styles.sheetHandle} />
-            <View style={styles.sheetIcon}>
-              <Ionicons name="rocket-outline" size={28} color={palette.primary} />
-            </View>
-            <Text style={styles.sheetTitle}>Bientôt disponible</Text>
-            <Text style={styles.sheetBody}>
-              La gestion de plusieurs commerces arrive prochainement sur Patron. Pour l'instant, vous pouvez rejoindre un commerce existant avec un code.
-            </Text>
-            <Pressable onPress={closeSheet} style={styles.sheetClose}>
-              <Text style={styles.sheetCloseLabel}>OK, compris</Text>
-            </Pressable>
-          </Animated.View>
-        </>
-      )}
+        </Animated.View>
+      </GestureDetector>
     </Modal>
   );
 }
@@ -399,65 +412,6 @@ function makeStyles(p: Palette) {
       height: 8,
       borderRadius: radius.full,
       backgroundColor: p.primary,
-    },
-    sheetBackdrop: {
-      ...StyleSheet.absoluteFillObject,
-      backgroundColor: 'rgba(0,0,0,0.25)',
-    },
-    sheet: {
-      position: 'absolute',
-      left: 0,
-      right: 0,
-      bottom: 0,
-      backgroundColor: p.surface,
-      borderTopLeftRadius: 24,
-      borderTopRightRadius: 24,
-      paddingHorizontal: spacing[6],
-      paddingTop: spacing[3],
-      paddingBottom: spacing[10],
-      alignItems: 'center',
-      gap: spacing[3],
-    },
-    sheetHandle: {
-      width: 40,
-      height: 4,
-      borderRadius: 2,
-      backgroundColor: p.border,
-      marginBottom: spacing[2],
-    },
-    sheetIcon: {
-      width: 64,
-      height: 64,
-      borderRadius: 20,
-      backgroundColor: p.primaryLight,
-      alignItems: 'center',
-      justifyContent: 'center',
-    },
-    sheetTitle: {
-      fontSize: 18,
-      fontWeight: '700',
-      color: p.textPrimary,
-      textAlign: 'center',
-    },
-    sheetBody: {
-      fontSize: 14,
-      color: p.textSecondary,
-      textAlign: 'center',
-      lineHeight: 22,
-    },
-    sheetClose: {
-      marginTop: spacing[2],
-      backgroundColor: p.primary,
-      borderRadius: radius.lg,
-      paddingHorizontal: spacing[8],
-      paddingVertical: spacing[4],
-      width: '100%',
-      alignItems: 'center',
-    },
-    sheetCloseLabel: {
-      fontSize: 16,
-      fontWeight: '700',
-      color: colors.neutral[0],
     },
   });
 }

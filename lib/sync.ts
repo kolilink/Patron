@@ -62,7 +62,10 @@ async function notifyQueuedSaleSynced(payload: Record<string, unknown>): Promise
     const businessId = payload.p_business_id as string;
     const sellerId = payload.p_seller_id as string;
     const cart = (payload.p_cart as { product_id: string; product_name: string; qty: number; variant_name?: string | null }[]) ?? [];
-    const totalCents = (payload.p_total_amount as number) ?? 0;
+    // Net of discount — p_total_amount alone is the catalog total (see
+    // "discount_amount convention" in CLAUDE.md), which read as the product's
+    // list price instead of what the customer was actually charged.
+    const totalCents = ((payload.p_total_amount as number) ?? 0) - ((payload.p_discount_amount as number) ?? 0);
 
     const [{ data: biz }, { data: membership }, { data: profile }] = await Promise.all([
       supabase.from('businesses').select('currency').eq('id', businessId).maybeSingle(),

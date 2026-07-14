@@ -48,7 +48,7 @@ export default function CarnetScreen() {
 
   const handleAdd = () => {
     const trimmedName = name.trim();
-    const parsed = Math.round(parseAmountInput(amount));
+    const parsed = Math.round(parseAmountInput(amount, currency));
     if (!trimmedName || isNaN(parsed) || parsed <= 0) return;
 
     setEntries(prev => [...prev, { id: generateId(), name: trimmedName, amountCents: parsed * 100 }]);
@@ -79,7 +79,7 @@ export default function CarnetScreen() {
     router.replace('/(app)/(tabs)/');
   };
 
-  const canAdd = name.trim().length > 0 && parseAmountInput(amount) > 0;
+  const canAdd = name.trim().length > 0 && parseAmountInput(amount, currency) > 0;
 
   return (
     <Screen>
@@ -116,7 +116,7 @@ export default function CarnetScreen() {
             placeholder="Montant"
             placeholderTextColor={palette.textDisabled}
             value={amount}
-            onChangeText={v => setAmount(formatAmountInput(v))}
+            onChangeText={v => setAmount(formatAmountInput(v, currency))}
             keyboardType="numeric"
             returnKeyType="done"
             onSubmitEditing={handleAdd}

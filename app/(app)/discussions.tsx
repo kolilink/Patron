@@ -17,6 +17,7 @@ import {
 } from 'react-native';
 import type { Audio } from 'expo-av';
 import * as ImagePicker from 'expo-image-picker';
+import * as Clipboard from 'expo-clipboard';
 import { Gesture, GestureDetector } from 'react-native-gesture-handler';
 import Animated, {
   useSharedValue,
@@ -33,6 +34,7 @@ import { Text } from '@/src/components/ui/Text';
 import { VoiceMessageBubble, LiveWaveformBars } from '@/src/components/ui/VoiceMessageBubble';
 import { ImageMessageBubble } from '@/src/components/ui/ImageMessageBubble';
 import { haptics } from '@/lib/haptics';
+import { toast } from '@/stores/toast';
 import { useTheme, fontFamily as FF, radius, spacing, AVATAR_PALETTE } from '@/src/theme';
 import type { Palette } from '@/src/theme';
 import {
@@ -711,6 +713,14 @@ export default function DiscussionsScreen() {
     }
   }, [inviteCode?.code]);
 
+  const handleCopyMyCode = useCallback(async () => {
+    const code = inviteCode?.code ?? '';
+    if (!code) return;
+    await Clipboard.setStringAsync(code);
+    haptics.tap();
+    toast.success('Code copié');
+  }, [inviteCode?.code]);
+
   const handleSendPartnerRequest = useCallback(async () => {
     if (!partnerCodeInput.trim()) return;
     setAddPartnerLoading(true);
@@ -1235,17 +1245,28 @@ export default function DiscussionsScreen() {
                 <View style={{ flex: 38 }} />
                 <View style={styles.amisInviteState}>
                   <Text style={[styles.amisCodeLabel, { color: palette.textSecondary }]}>Mon code</Text>
-                  <Text
-                    style={[styles.amisCodeValue, {
-                      color: palette.textPrimary,
-                      width: screenWidth - spacing[5] * 4,
-                    }]}
-                    adjustsFontSizeToFit
-                    minimumFontScale={0.4}
-                    numberOfLines={1}
-                  >
-                    {inviteCodeLoading ? '…' : (inviteCode?.code ? '* * * * * * * *' : '…')}
-                  </Text>
+                  <View style={{ width: screenWidth - spacing[5] * 4 }}>
+                    <Text
+                      style={[styles.amisCodeValue, { color: palette.textPrimary }]}
+                      adjustsFontSizeToFit
+                      minimumFontScale={0.4}
+                      numberOfLines={1}
+                    >
+                      {inviteCodeLoading ? '…' : (inviteCode?.code ? inviteCode.code.toUpperCase().split('').join(' ') : '…')}
+                    </Text>
+                    <Pressable
+                      onPress={handleCopyMyCode}
+                      disabled={!inviteCode?.code || inviteCodeLoading}
+                      hitSlop={10}
+                      style={({ pressed }) => [
+                        styles.amisCopyBtn,
+                        (!inviteCode?.code || inviteCodeLoading) && { opacity: 0.3 },
+                        pressed && { opacity: 0.6 },
+                      ]}
+                    >
+                      <Ionicons name="copy-outline" size={18} color={palette.textSecondary} />
+                    </Pressable>
+                  </View>
                   <Text style={[styles.amisCodeMeta, { color: palette.textSecondary }]}>
                     24h · usage unique
                   </Text>
@@ -1991,6 +2012,8 @@ function makeStyles(p: Palette) {
   amisCodeValue: {
     fontFamily: 'DMSans_700Bold',
     fontSize: 32,
+    lineHeight: 44,
+    paddingTop: 6,
     letterSpacing: 0,
     marginBottom: spacing[2],
     textAlign: 'center' as const,
@@ -1998,6 +2021,11 @@ function makeStyles(p: Palette) {
   amisCodeMeta: {
     fontSize: 12,
     marginBottom: spacing[8],
+  },
+  amisCopyBtn: {
+    position: 'absolute' as const,
+    top: 0,
+    right: 0,
   },
   amisShareBtn: {
     flexDirection: 'row' as const,

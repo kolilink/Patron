@@ -148,7 +148,7 @@ function PayModal({
 
   useEffect(() => {
     if (visible) {
-      setAmountStr(formatAmountInput(String(Math.round(totalOwed))));
+      setAmountStr(formatAmountInput(String(Math.round(totalOwed)), currency));
       setMethod('especes');
       setDate(todayISO());
       setAllocation('fifo');
@@ -156,7 +156,7 @@ function PayModal({
     }
   }, [visible, totalOwed]);
 
-  const amount = parseAmountInput(amountStr);
+  const amount = parseAmountInput(amountStr, currency);
 
   const saleRemaining = (id: string) => {
     const sale = creditSales.find(s => s.id === id);
@@ -208,14 +208,14 @@ function PayModal({
               <TextInput
                 style={styles.amountInput}
                 value={amountStr}
-                onChangeText={v => setAmountStr(formatAmountInput(v))}
+                onChangeText={v => setAmountStr(formatAmountInput(v, currency))}
                 keyboardType="numeric"
                 placeholderTextColor={palette.textDisabled}
                 selectTextOnFocus
               />
               <Pressable
                 style={styles.solderBtn}
-                onPress={() => setAmountStr(formatAmountInput(String(Math.round(totalOwed))))}
+                onPress={() => setAmountStr(formatAmountInput(String(Math.round(totalOwed)), currency))}
               >
                 <Text variant="label" style={{ color: palette.primary }}>Tout régler</Text>
               </Pressable>

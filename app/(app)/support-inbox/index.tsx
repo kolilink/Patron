@@ -29,19 +29,25 @@ export default function SupportInboxScreen() {
   const styles = useMemo(() => makeStyles(palette), [palette]);
   const session = useAuthStore(s => s.session);
   const isFounder = isFounderPhone(session?.user.phone);
-  const businessId = session?.activeBusiness?.id ?? '';
-  const businessName = session?.activeBusiness?.name ?? '';
 
-  const { founderConversations, founderLoading, loadBusinessConversations } = useSupportChatStore();
+  const { founderConversations, founderLoading, loadFounderConversations } = useSupportChatStore();
 
   useEffect(() => {
-    if (!isFounder) router.back();
+    // router.back() is a no-op when this screen is the only entry in the
+    // stack (e.g. reached directly from a cold-start notification tap) — that
+    // used to leave the navigator with no matching route at all, landing on
+    // Expo Router's "Unmatched Route" screen instead of a redirect. Fall back
+    // to the tabs root whenever there's nothing to go back to.
+    if (!isFounder) {
+      if (router.canGoBack()) router.back();
+      else router.replace('/(app)/(tabs)/');
+    }
   }, [isFounder]);
 
   useFocusEffect(useCallback(() => {
-    if (!isFounder || !businessId) return;
-    loadBusinessConversations(businessId);
-  }, [isFounder, businessId]));
+    if (!isFounder) return;
+    loadFounderConversations();
+  }, [isFounder]));
 
   if (!isFounder) return null;
 
@@ -53,7 +59,7 @@ export default function SupportInboxScreen() {
         </Pressable>
         <View style={{ alignItems: 'center' }}>
           <Text variant="h4">Support</Text>
-          <Text variant="caption" color="secondary" numberOfLines={1}>{businessName}</Text>
+          <Text variant="caption" color="secondary" numberOfLines={1}>Toutes les conversations</Text>
         </View>
         <View style={{ width: 60 }} />
       </View>

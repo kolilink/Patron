@@ -228,14 +228,14 @@ function PaymentSheet({ visible, sale, currency, onClose, onConfirm, saving }: P
 
   useEffect(() => {
     if (visible) {
-      setAmountStr(formatAmountInput(String(Math.round(remaining))));
+      setAmountStr(formatAmountInput(String(Math.round(remaining)), currency));
       setMethod('especes');
       setDate(todayISO());
     }
   }, [visible]);
 
   const handleConfirm = () => {
-    const amt = parseAmountInput(amountStr);
+    const amt = parseAmountInput(amountStr, currency);
     if (!amt || amt <= 0) { Alert.alert('Vérifiez le montant :)'); return; }
     if (amt > remaining + 0.01) {
       Alert.alert('Le montant dépasse le total :)');
@@ -273,14 +273,14 @@ function PaymentSheet({ visible, sale, currency, onClose, onConfirm, saving }: P
               <TextInput
                 style={styles.amountInput}
                 value={amountStr}
-                onChangeText={v => setAmountStr(formatAmountInput(v))}
+                onChangeText={v => setAmountStr(formatAmountInput(v, currency))}
                 keyboardType="numeric"
                 placeholderTextColor={palette.textSecondary}
                 selectTextOnFocus
               />
               <Pressable
                 style={styles.solderBtn}
-                onPress={() => setAmountStr(formatAmountInput(String(Math.round(remaining))))}
+                onPress={() => setAmountStr(formatAmountInput(String(Math.round(remaining)), currency))}
               >
                 <Text variant="label" style={{ color: palette.primary }}>Tout régler</Text>
               </Pressable>

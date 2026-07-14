@@ -38,7 +38,14 @@ export default function SupportInboxDetailScreen() {
   const sendingRef = useRef(false);
 
   useEffect(() => {
-    if (!isFounder) { router.back(); return; }
+    // See app/(app)/support-inbox/index.tsx — router.back() with no history
+    // (e.g. this screen reached directly from a cold-start notification tap)
+    // used to strand the navigator on "Unmatched Route" instead of redirecting.
+    if (!isFounder) {
+      if (router.canGoBack()) router.back();
+      else router.replace('/(app)/(tabs)/');
+      return;
+    }
     if (id) loadConversationDetail(id);
   }, [isFounder, id]);
 

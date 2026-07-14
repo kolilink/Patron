@@ -58,10 +58,22 @@ export default function VerrouilleScreen() {
     // Firing authenticateAsync while this screen's own mount/route transition
     // is still animating makes the OS silently reject the prompt with no
     // native UI at all — waiting for interactions to finish avoids racing it.
-    const task = InteractionManager.runAfterInteractions(() => {
+    // But a stuck/never-resolving interaction handle (seen intermittently on
+    // both platforms) would then delay the prompt indefinitely with no
+    // visible sign anything is wrong — race it against a flat timeout so the
+    // attempt always fires within ~600ms either way.
+    let fired = false;
+    const fire = () => {
+      if (fired) return;
+      fired = true;
       attemptBiometric();
-    });
-    return () => task.cancel();
+    };
+    const task = InteractionManager.runAfterInteractions(fire);
+    const timeout = setTimeout(fire, 600);
+    return () => {
+      task.cancel();
+      clearTimeout(timeout);
+    };
   }, []);
 
   async function degradeToFullLogin() {
@@ -82,9 +94,13 @@ export default function VerrouilleScreen() {
 
             {(phase === 'checking' || phase === 'retry') && (
               <>
-                {phase === 'retry' && (
-                  <Button label="Réessayer" onPress={attemptBiometric} fullWidth size="lg" />
-                )}
+                {/* Always visible, even mid-attempt (not just after a failure) — a
+                    silently stalled prompt must never strand the user with only
+                    the full WhatsApp re-login as an escape hatch. Safe to tap
+                    during 'checking' too: unlockWithBiometric()'s in-flight guard
+                    just resolves it to 'retryable' instead of firing a second
+                    native prompt. */}
+                <Button label="Réessayer" onPress={attemptBiometric} fullWidth size="lg" />
                 <Button label="Se connecter via WhatsApp" variant="ghost" onPress={degradeToFullLogin} />
               </>
             )}

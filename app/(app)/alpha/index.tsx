@@ -1,5 +1,5 @@
 import React, { useCallback, useEffect, useMemo, useRef, useState } from 'react';
-import { FlatList, InteractionManager, KeyboardAvoidingView, Platform, Pressable, StyleSheet, TextInput, View } from 'react-native';
+import { FlatList, InteractionManager, KeyboardAvoidingView, Modal, Platform, Pressable, StyleSheet, TextInput, View } from 'react-native';
 import { Screen } from '@/src/components/ui/Screen';
 import { router, useFocusEffect, useLocalSearchParams } from 'expo-router';
 import { Ionicons } from '@expo/vector-icons';
@@ -45,7 +45,7 @@ function formatCountdown(nextResetAt: string | null | undefined): string {
   if (ms <= 0) return 'bientôt';
   const h = Math.floor(ms / 3_600_000);
   const m = Math.floor((ms % 3_600_000) / 60_000);
-  return h > 0 ? `${h}h${String(m).padStart(2, '0')}` : `${m}min`;
+  return h > 0 ? `${h}h${String(m).padStart(2, '0')}min` : `${m}min`;
 }
 
 export default function AlphaScreen() {
@@ -169,7 +169,7 @@ export default function AlphaScreen() {
         <Pressable onPress={() => router.back()}>
           <Text variant="body" color="secondary">‹ Retour</Text>
         </Pressable>
-        <Text variant="h4" style={{ fontWeight: '800' }}>A</Text>
+        <Text variant="h4" style={{ fontWeight: '800' }}>{quota?.has_ai_access ? 'ALPHA PRO' : 'ALPHA'}</Text>
         <View style={{ width: 60 }} />
       </View>
 
@@ -244,14 +244,7 @@ export default function AlphaScreen() {
           </View>
         ) : null}
 
-        {pendingQuestion && session?.activeBusiness ? (
-          <PaywallScreen
-            business={session.activeBusiness}
-            inline
-            onDismiss={() => { setPendingQuestion(null); setWaitBlocked(false); }}
-            onPurchased={handlePurchased}
-          />
-        ) : waitBlocked && paidQuotaExhausted ? (
+        {pendingQuestion ? null : waitBlocked && paidQuotaExhausted ? (
           <View style={styles.waitCard}>
             <Ionicons name="time-outline" size={18} color={palette.textSecondary} />
             <Text variant="bodySmall" color="secondary" style={styles.waitText}>
@@ -298,6 +291,25 @@ export default function AlphaScreen() {
           </>
         )}
       </KeyboardAvoidingView>
+
+      {/* Full-screen modal, not the old embedded inline card — big and
+          dedicated like a real checkout screen, X-to-close via onDismiss,
+          matching the reference paywall's scale rather than a small card
+          tucked at the bottom of the conversation. */}
+      <Modal
+        visible={!!pendingQuestion && !!session?.activeBusiness}
+        animationType="slide"
+        presentationStyle="pageSheet"
+        onRequestClose={() => { setPendingQuestion(null); setWaitBlocked(false); }}
+      >
+        {session?.activeBusiness && (
+          <PaywallScreen
+            business={session.activeBusiness}
+            onDismiss={() => { setPendingQuestion(null); setWaitBlocked(false); }}
+            onPurchased={handlePurchased}
+          />
+        )}
+      </Modal>
     </Screen>
   );
 }

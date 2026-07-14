@@ -26,6 +26,8 @@ const ROUTE_MAP: Record<string, string> = {
   po_received:           '/(app)/fournisseurs',
   support_message:       '/(app)/support-inbox',
   support_reply:         '/(app)/support',
+  alpha_quota_reset:     '/(app)/alpha',
+  daily_digest:          '/(app)/rapports',
 };
 
 // ─── Three-line format ───────────────────────────────────────────────────────
@@ -34,7 +36,7 @@ const ROUTE_MAP: Record<string, string> = {
 // Body     = the core fact (who/what + the key number + brief context)
 
 const SUBTITLE_MAP: Record<string, string | null> = {
-  sale_completed:    'Vente',
+  sale_completed:    null, // body already says "a vendu" — a "Vente" subtitle was redundant
   sale_cancelled:    'Vente annulée',
   credit_paid:       'Crédit soldé',
   expense_submitted: 'Dépense en attente',
@@ -48,8 +50,10 @@ const SUBTITLE_MAP: Record<string, string | null> = {
   partnership_request:   'Amis',
   partnership_accepted:  'Amis',
   po_received:           'Livraison',
-  support_message:       'Support',
+  support_message:       null, // body is a self-explanatory full sentence — no subtitle needed
   support_reply:         null, // body is a self-explanatory full sentence — no subtitle needed
+  alpha_quota_reset:     null, // body is a self-explanatory full sentence — no subtitle needed
+  daily_digest:          null, // body is a self-explanatory full sentence — no subtitle needed
 };
 
 function buildBody(eventType: string, p: Record<string, string | number>): string {
@@ -70,9 +74,9 @@ function buildBody(eventType: string, p: Record<string, string | number>): strin
     case 'expense_approved':
     case 'expense_rejected':
       return `${p.amount} — ${p.description}`;
-    // Subtitle carries "Stock critique" — body: product and quantity
+    // Subtitle carries "Stock critique" — body: flat, no pronoun, fast to scan
     case 'low_stock':
-      return `${p.product} — plus que ${p.qty} en stock`;
+      return `Il reste ${p.qty} ${p.product} en stock`;
     // Subtitle carries "Équipe" — body: name and role
     case 'member_joined':
       return `${p.name} · ${p.role}`;
@@ -91,12 +95,22 @@ function buildBody(eventType: string, p: Record<string, string | number>): strin
     // Subtitle carries "Livraison" — body: count and supplier
     case 'po_received':
       return `${p.N} article${Number(p.N) > 1 ? 's' : ''} de ${p.supplier}`;
-    // No subtitle — body carries everything: sender · preview (same shape as chat_message)
+    // No subtitle — generic full sentence (never the merchant's name or raw
+    // message text, same posture as support_reply below)
     case 'support_message':
-      return `${p.sender} · ${p.preview}`;
-    // Subtitle carries "Support" — body: the reply preview
     case 'support_reply':
       return String(p.preview ?? '');
+    // No subtitle — full sentence, tier-specific ("Pro" only for paid)
+    case 'alpha_quota_reset':
+      return p.tier === 'paid'
+        ? 'Vous pouvez parler à Alpha Pro maintenant.'
+        : 'Vous pouvez parler à Alpha maintenant.';
+    // No subtitle — full sentence. "bonne" states the revenue; "calme" never
+    // reports a number at all, deliberately — see migration_v139.sql.
+    case 'daily_digest':
+      return p.tier === 'bonne'
+        ? `La journée est bonne, vous avez fait : ${p.amount}.`
+        : 'La journée était calme. On se retrouve demain.';
     default:
       return String(p.body ?? '');
   }
@@ -156,6 +170,11 @@ const CROSS_BUSINESS_EVENTS = new Set(['partnership_request', 'partnership_accep
 // mirroring is_founder() in db/migration_v126.sql.
 const FOUNDER_EVENTS = new Set(['support_reply']);
 
+// Events dispatched by a background job, not a logged-in user — there is no
+// session to hold a Bearer JWT, so these authenticate via a shared secret
+// instead (see send-alpha-quota-reminders and send-daily-digest).
+const CRON_EVENTS = new Set(['alpha_quota_reset', 'daily_digest']);
+
 async function callerIsFounder(supabase: ReturnType<typeof createClient>, userId: string): Promise<boolean> {
   const { data: profile } = await supabase.from('profiles').select('phone').eq('id', userId).maybeSingle();
   const digits = ((profile as { phone: string | null } | null)?.phone ?? '').replace(/\D/g, '');
@@ -166,13 +185,6 @@ serve(async (req) => {
   if (req.method === 'OPTIONS') return new Response('ok', { headers: corsHeaders });
 
   try {
-    const authHeader = req.headers.get('Authorization');
-    if (!authHeader?.startsWith('Bearer ')) {
-      return new Response(JSON.stringify({ error: 'Non authentifié' }), {
-        status: 401, headers: { ...corsHeaders, 'Content-Type': 'application/json' },
-      });
-    }
-
     const input = await req.json() as DispatchInput;
     let { payload } = input;
     const { business_id, event_type, target_roles, target_user_ids, exclude_user_id } = input;
@@ -183,45 +195,67 @@ serve(async (req) => {
       });
     }
 
-    const userClient = createClient(
-      Deno.env.get('SUPABASE_URL')!,
-      Deno.env.get('SUPABASE_ANON_KEY')!,
-      { global: { headers: { Authorization: authHeader } } },
-    );
-    const { data: { user }, error: userErr } = await userClient.auth.getUser();
-    if (userErr || !user) {
-      return new Response(JSON.stringify({ error: 'Session invalide' }), {
-        status: 401, headers: { ...corsHeaders, 'Content-Type': 'application/json' },
-      });
-    }
-
     const supabase = createClient(
       Deno.env.get('SUPABASE_URL')!,
       Deno.env.get('SUPABASE_SERVICE_ROLE_KEY')!,
     );
 
+    // Cron-dispatched events (see CRON_EVENTS) skip the user-session check
+    // entirely — a background job never holds a Bearer JWT. Fail closed: an
+    // unset CRON_SECRET must never make isCronCall true.
+    const cronSecret = Deno.env.get('CRON_SECRET');
+    const isCronCall = CRON_EVENTS.has(event_type)
+      && !!cronSecret
+      && req.headers.get('x-cron-secret') === cronSecret;
+
+    let callerUserId: string | null = null;
+    if (!isCronCall) {
+      const authHeader = req.headers.get('Authorization');
+      if (!authHeader?.startsWith('Bearer ')) {
+        return new Response(JSON.stringify({ error: 'Non authentifié' }), {
+          status: 401, headers: { ...corsHeaders, 'Content-Type': 'application/json' },
+        });
+      }
+      const userClient = createClient(
+        Deno.env.get('SUPABASE_URL')!,
+        Deno.env.get('SUPABASE_ANON_KEY')!,
+        { global: { headers: { Authorization: authHeader } } },
+      );
+      const { data: { user }, error: userErr } = await userClient.auth.getUser();
+      if (userErr || !user) {
+        return new Response(JSON.stringify({ error: 'Session invalide' }), {
+          status: 401, headers: { ...corsHeaders, 'Content-Type': 'application/json' },
+        });
+      }
+      callerUserId = user.id;
+    }
+
     // Caller must either belong to the business they're dispatching for, or
     // (for the partnership handshake events only) have an actual partnership
-    // row linking one of their own businesses to this one.
-    const { data: callerMemberships } = await supabase
-      .from('memberships')
-      .select('business_id')
-      .eq('user_id', user.id);
-    const callerBusinessIds = (callerMemberships ?? []).map((m: { business_id: string }) => m.business_id);
+    // row linking one of their own businesses to this one — unless it's a
+    // trusted cron call, which is authorized by the secret alone.
+    let authorized = isCronCall;
+    if (!authorized) {
+      const { data: callerMemberships } = await supabase
+        .from('memberships')
+        .select('business_id')
+        .eq('user_id', callerUserId!);
+      const callerBusinessIds = (callerMemberships ?? []).map((m: { business_id: string }) => m.business_id);
 
-    let authorized = callerBusinessIds.includes(business_id);
-    if (!authorized && CROSS_BUSINESS_EVENTS.has(event_type) && callerBusinessIds.length > 0) {
-      const { count } = await supabase
-        .from('business_partnerships')
-        .select('id', { count: 'exact', head: true })
-        .or(
-          `and(requester_id.eq.${business_id},recipient_id.in.(${callerBusinessIds.join(',')})),`
-          + `and(recipient_id.eq.${business_id},requester_id.in.(${callerBusinessIds.join(',')}))`,
-        );
-      authorized = (count ?? 0) > 0;
-    }
-    if (!authorized && FOUNDER_EVENTS.has(event_type)) {
-      authorized = await callerIsFounder(supabase, user.id);
+      authorized = callerBusinessIds.includes(business_id);
+      if (!authorized && CROSS_BUSINESS_EVENTS.has(event_type) && callerBusinessIds.length > 0) {
+        const { count } = await supabase
+          .from('business_partnerships')
+          .select('id', { count: 'exact', head: true })
+          .or(
+            `and(requester_id.eq.${business_id},recipient_id.in.(${callerBusinessIds.join(',')})),`
+            + `and(recipient_id.eq.${business_id},requester_id.in.(${callerBusinessIds.join(',')}))`,
+          );
+        authorized = (count ?? 0) > 0;
+      }
+      if (!authorized && FOUNDER_EVENTS.has(event_type)) {
+        authorized = await callerIsFounder(supabase, callerUserId!);
+      }
     }
     if (!authorized) {
       return new Response(JSON.stringify({ error: 'Accès refusé' }), {
@@ -297,12 +331,13 @@ serve(async (req) => {
       });
     }
 
-    // Fetch device tokens
+    // Fetch device tokens (with owning user_id — needed to stamp each push
+    // with that user's own running unread count, not a shared value)
     const { data: tokenRows } = await supabase
       .from('device_tokens')
-      .select('token')
+      .select('token, user_id')
       .in('user_id', userIds);
-    const tokens = (tokenRows ?? []).map((r: { token: string }) => r.token);
+    const tokens = (tokenRows ?? []) as { token: string; user_id: string }[];
 
     if (tokens.length === 0) {
       await supabase.from('notification_log').insert({ business_id, event_type, payload, recipient_count: 0 });
@@ -310,6 +345,19 @@ serve(async (req) => {
         headers: { ...corsHeaders, 'Content-Type': 'application/json' },
       });
     }
+
+    // Atomically bump each recipient's server-tracked unread count and use
+    // the real running total as that user's badge number (see migration_v137.sql —
+    // this used to be hardcoded to 1 on every push, which reset the OS icon
+    // instead of accumulating it).
+    const recipientUserIds = [...new Set(tokens.map(t => t.user_id))];
+    const { data: badgeRows } = await supabase.rpc('increment_unread_notifications', {
+      p_user_ids: recipientUserIds,
+    });
+    const badgeByUser = new Map(
+      ((badgeRows ?? []) as { id: string; unread_notification_count: number }[])
+        .map(r => [r.id, r.unread_notification_count]),
+    );
 
     // Build notification fields
     const body            = buildBody(event_type, payload as Record<string, string | number>);
@@ -326,7 +374,7 @@ serve(async (req) => {
 
     for (let i = 0; i < tokens.length; i += CHUNK) {
       const chunk = tokens.slice(i, i + CHUNK);
-      const messages = chunk.map((to) => ({
+      const messages = chunk.map(({ token: to, user_id }) => ({
         to,
         title: bizName,                               // business name — always
         ...(subtitle ? { subtitle } : {}),            // event category in French
@@ -334,7 +382,7 @@ serve(async (req) => {
         data: { route, event_type, business_id, ...payload },
         sound: soundFile,
         channelId,
-        badge: 1,
+        badge: badgeByUser.get(user_id) ?? 1,
         ...(categoryId ? { categoryIdentifier: categoryId } : {}),
         ...(isTimeSensitive ? { _interruptionLevel: 'time-sensitive' } : {}),
       }));
@@ -349,7 +397,7 @@ serve(async (req) => {
         const result = await resp.json() as { data: ExpoTicket[] };
         result.data?.forEach((ticket, idx) => {
           if (ticket.status === 'error' && ticket.details?.error === 'DeviceNotRegistered') {
-            staleTokens.push(chunk[idx]);
+            staleTokens.push(chunk[idx].token);
           }
         });
       }

@@ -429,7 +429,7 @@ function MemberDetailSheet({
                     <Pressable
                       onPress={() => {
                         setPendingPayoutId(pending.id);
-                        setPayoutAmountStr(formatAmountInput(String(pending.requested_amount)));
+                        setPayoutAmountStr(formatAmountInput(String(pending.requested_amount), currency));
                         setShowPayoutSheet(true);
                       }}
                       style={[styles.assignBtn, { paddingVertical: 0 }]}
@@ -581,7 +581,7 @@ function MemberDetailSheet({
                 <TextInput
                   style={{ flex: 1, fontSize: 28, fontWeight: '700', color: palette.textPrimary }}
                   value={payoutAmountStr}
-                  onChangeText={v => setPayoutAmountStr(formatAmountInput(v))}
+                  onChangeText={v => setPayoutAmountStr(formatAmountInput(v, currency))}
                   keyboardType="numeric"
                   placeholder="0"
                   placeholderTextColor={palette.textDisabled}
@@ -598,7 +598,7 @@ function MemberDetailSheet({
               loading={investorSaving}
               onPress={async () => {
                 if (!pendingPayoutId) return;
-                const amt = parseAmountInput(payoutAmountStr);
+                const amt = parseAmountInput(payoutAmountStr, currency);
                 if (!amt || amt <= 0) { toast.warning('Entrez un montant valide'); return; }
                 const amtCents = BigInt(Math.round(amt * 100));
                 const ok = await confirmPayout(pendingPayoutId, amtCents);
@@ -911,7 +911,14 @@ export default function EquipeScreen() {
   const currency = session?.activeBusiness?.currency ?? 'GNF';
 
   useEffect(() => {
-    if (role && role !== 'administrateur') router.back();
+    // router.back() is a no-op when this screen is the only stack entry (e.g.
+    // reached directly from a cold-start notification tap for member_joined/
+    // role_changed/member_removed) — that used to strand the navigator on
+    // "Unmatched Route" instead of redirecting. Fall back to the tabs root.
+    if (role && role !== 'administrateur') {
+      if (router.canGoBack()) router.back();
+      else router.replace('/(app)/(tabs)/');
+    }
   }, [role]);
 
   const { membres, codes, loading, saving, error, hasFetched, offline, offlineSince, fetchMembres, fetchCodes, createCode, revokeCode } = useEquipeStore();

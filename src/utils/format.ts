@@ -18,13 +18,29 @@ export function formatAmount(n: number, currency: string): string {
  * Handles both integer amounts (GNF) and decimal amounts (e.g. 1 234.56).
  * Safe to call on paste: strips all spaces first, then reformats.
  *
+ * `currency` is required and must match `formatAmount`'s WHOLE_UNIT_CURRENCIES
+ * handling — a whole-unit currency (GNF, XOF, …) has no fractional subunit,
+ * so a '.' or ',' the user types is always a thousands-grouping mistake
+ * (Guinea merchants commonly type "960.000" or "960,000" to mean 960 000),
+ * never a decimal point. Treating it as a decimal point silently truncates
+ * the amount by ~1000x (regression: a merchant-reported sale showed "960
+ * GNF" cash received for an intended "960 000" — this function used to
+ * accept comma/period as a decimal separator unconditionally, so
+ * "960,000"/"960.000" parsed to 960). For a real decimal currency, comma/
+ * period is still treated as the decimal separator, same as before.
+ *
  * Usage:
- *   onChangeText={v => setAmountStr(formatAmountInput(v))}
+ *   onChangeText={v => setAmountStr(formatAmountInput(v, currency))}
  *   value={amountStr}
- *   // on submit: parseAmountInput(amountStr) → number
+ *   // on submit: parseAmountInput(amountStr, currency) → number
  */
-export function formatAmountInput(raw: string): string {
-  // Normalize: accept comma as decimal separator
+export function formatAmountInput(raw: string, currency: string): string {
+  if (WHOLE_UNIT_CURRENCIES.has(currency)) {
+    const digitsOnly = raw.replace(/[^\d]/g, '');
+    if (!digitsOnly) return '';
+    return digitsOnly.replace(/\B(?=(\d{3})+(?!\d))/g, ' ');
+  }
+  // Decimal currency — comma or period is a real decimal separator.
   const normalized = raw.replace(/,/g, '.').replace(/[^\d.]/g, '');
   const dotIdx = normalized.indexOf('.');
   if (dotIdx === -1) {
@@ -39,8 +55,13 @@ export function formatAmountInput(raw: string): string {
   return formattedInt + decPart;
 }
 
-/** Parse a formatted amount string back to a number. */
-export function parseAmountInput(formatted: string): number {
+/** Parse a formatted amount string back to a number. See formatAmountInput for why `currency` is required. */
+export function parseAmountInput(formatted: string, currency: string): number {
+  if (WHOLE_UNIT_CURRENCIES.has(currency)) {
+    const digitsOnly = formatted.replace(/[^\d]/g, '');
+    const n = parseInt(digitsOnly, 10);
+    return isNaN(n) ? 0 : n;
+  }
   const clean = formatted.replace(/\s/g, '').replace(',', '.');
   const n = parseFloat(clean);
   return isNaN(n) ? 0 : n;

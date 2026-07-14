@@ -68,7 +68,7 @@ function ExpenseFormModal({ visible, editing, onClose, onSave, saving, currency,
 
   useEffect(() => {
     if (visible) {
-      setAmount(editing ? formatAmountInput(String(editing.amount)) : '');
+      setAmount(editing ? formatAmountInput(String(editing.amount), currency) : '');
       setDescription(editing?.description ?? '');
       setSelectedProductId(editing?.product_id ?? null);
       const today = todayIso();
@@ -80,7 +80,7 @@ function ExpenseFormModal({ visible, editing, onClose, onSave, saving, currency,
   }, [visible, editing]);
 
   const handleSave = async () => {
-    const amt = parseAmountInput(amount);
+    const amt = parseAmountInput(amount, currency);
     if (!description.trim()) { Alert.alert('Écrivez un petit mot :)'); return; }
     if (!amt || amt <= 0) { Alert.alert('Vérifiez le montant :)'); return; }
     await onSave({ amount: amt, description, category: null, date, due_date: null, note: null, product_id: selectedProductId });
@@ -101,7 +101,7 @@ function ExpenseFormModal({ visible, editing, onClose, onSave, saving, currency,
           <Input
             label={`Montant (${currency})`}
             value={amount}
-            onChangeText={v => setAmount(formatAmountInput(v))}
+            onChangeText={v => setAmount(formatAmountInput(v, currency))}
             keyboardType="decimal-pad"
           />
 

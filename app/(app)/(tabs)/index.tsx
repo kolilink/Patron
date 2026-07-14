@@ -1,5 +1,8 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { Animated, Easing, KeyboardAvoidingView, Modal, Platform, Pressable, ScrollView, StyleSheet, TextInput, View } from 'react-native';
+import { Gesture, GestureDetector } from 'react-native-gesture-handler';
+import { runOnJS } from 'react-native-reanimated';
+import { LinearGradient } from 'expo-linear-gradient';
 import { Screen } from '@/src/components/ui/Screen';
 import { router, useFocusEffect } from 'expo-router';
 import { Ionicons } from '@expo/vector-icons';
@@ -48,6 +51,16 @@ interface BestSeller {
 function fmt(n: number, cur: string) {
   return `${Math.round(n).toLocaleString('fr-FR')} ${cur}`;
 }
+
+// Invisible strip along the left edge that catches the swipe-to-open-drawer
+// gesture — matches the touch-target width iOS itself uses for its own
+// edge-swipe-back gesture. activeOffsetX(15)/failOffsetY(20) mirror the
+// swipe-to-reply gesture in discussions.tsx: a small horizontal threshold
+// before claiming the gesture, generous vertical tolerance so it doesn't
+// fight the KPI ScrollView underneath.
+const EDGE_SWIPE_WIDTH = 24;
+const EDGE_SWIPE_OPEN_DISTANCE = 40;
+const EDGE_SWIPE_OPEN_VELOCITY = 600;
 
 type DayPart = 'morning' | 'active' | 'evening' | 'night';
 
@@ -99,7 +112,7 @@ function OnboardingStep({ number, label, done, active }: {
 }
 
 export default function AccueilScreen() {
-  const { palette } = useTheme();
+  const { palette, resolvedScheme } = useTheme();
   const styles = useMemo(() => makeStyles(palette), [palette]);
   const session = useAuthStore(s => s.session);
   const openBusinessPicker = useAuthStore(s => s.openBusinessDrawer);
@@ -114,17 +127,26 @@ export default function AccueilScreen() {
   const memberships = session?.memberships ?? [];
   const totalUnread = useChatStore(s => s.boutiqueUnread + s.marcheUnread);
   const isFounder = isFounderPhone(session?.user.phone);
-  // Prefetches founder conversations purely so the lateral drawer's
-  // "Service client" unread dot (BusinessDrawer, driven by
-  // founderUnreadTotal) is fresh as soon as the founder opens Accueil, not
-  // only after they've visited the inbox once this session. The store fetch
-  // itself is scoped to businessId — a founder must never see another
-  // business's threads, even switching businesses via the drawer.
-  const loadBusinessConversations = useSupportChatStore(s => s.loadBusinessConversations);
+  // Prefetches founder conversations (across every business — see
+  // loadFounderConversations) purely so the lateral drawer's "Service
+  // client" unread dot (BusinessDrawer, driven by founderUnreadTotal) is
+  // fresh as soon as the founder opens Accueil, not only after they've
+  // visited the inbox once this session.
+  const loadFounderConversations = useSupportChatStore(s => s.loadFounderConversations);
+
+  const edgeSwipeOpenDrawer = Gesture.Pan()
+    .activeOffsetX([15, 999])
+    .failOffsetY([-20, 20])
+    .onEnd((e) => {
+      if (e.translationX > EDGE_SWIPE_OPEN_DISTANCE || e.velocityX > EDGE_SWIPE_OPEN_VELOCITY) {
+        runOnJS(openBusinessPicker)();
+        runOnJS(haptics.tap)();
+      }
+    });
 
   useEffect(() => {
-    if (isFounder && businessId) void loadBusinessConversations(businessId);
-  }, [isFounder, businessId]);
+    if (isFounder) void loadFounderConversations();
+  }, [isFounder]);
 
   const { products, fetchProducts } = useProductStore();
   const { snapshot: rapportsSnapshot, fetchReportsSnapshot } = useRapportsStore();
@@ -154,6 +176,24 @@ export default function AccueilScreen() {
       router.push('/(app)/alpha');
     }
   };
+
+  // Alpha pill glow — a slow-rotating gradient ring around the pill border,
+  // purely to draw the eye to the entry point and incentivize first use.
+  // Loops forever; cost is negligible (native-driven transform only).
+  const alphaGlowRotation = useRef(new Animated.Value(0)).current;
+  useEffect(() => {
+    const loop = Animated.loop(
+      Animated.timing(alphaGlowRotation, {
+        toValue: 1,
+        duration: 3500,
+        easing: Easing.linear,
+        useNativeDriver: true,
+      })
+    );
+    loop.start();
+    return () => loop.stop();
+  }, [alphaGlowRotation]);
+  const alphaGlowSpin = alphaGlowRotation.interpolate({ inputRange: [0, 1], outputRange: ['0deg', '360deg'] });
 
   const welcomeBtnScale = useRef(new Animated.Value(1)).current;
   const welcomeBtnOpacity = useRef(new Animated.Value(1)).current;
@@ -418,6 +458,12 @@ export default function AccueilScreen() {
   return (
     <KeyboardAvoidingView style={{ flex: 1 }} behavior={Platform.OS === 'ios' ? 'padding' : undefined}>
     <Screen tab>
+      {/* Swipe right from the left edge to open the business drawer —
+          complements the header menu icon's tap-to-open. */}
+      <GestureDetector gesture={edgeSwipeOpenDrawer}>
+        <View style={styles.edgeSwipeCatcher} pointerEvents="box-only" />
+      </GestureDetector>
+
       {/* One-time carnet import sheet shown after business creation */}
       <Modal visible={showCarnetSheet} transparent animationType="slide" onRequestClose={() => setShowCarnetSheet(false)}>
         <View style={styles.sheetBackdrop}>
@@ -570,7 +616,7 @@ export default function AccueilScreen() {
                   {(balance ?? 0) > 0 && (
                     <Pressable
                       onPress={() => {
-                        setWithdrawAmountStr(formatAmountInput(String(balance ?? 0)));
+                        setWithdrawAmountStr(formatAmountInput(String(balance ?? 0), currency));
                         setShowWithdrawSheet(true);
                       }}
                       style={[styles.withdrawBtn, { borderColor: palette.primary }]}
@@ -744,17 +790,45 @@ export default function AccueilScreen() {
           tab bar rather than a flush full-width strip. No separate send
           button — the keyboard's own "send"/enter key launches it. ── */}
       <View style={styles.alphaBarWrap}>
-        <View style={[styles.alphaBar, { backgroundColor: palette.surface, shadowColor: palette.shadow }]}>
-          <TextInput
-            style={[styles.alphaInput, { color: palette.textPrimary }]}
-            value={alphaText}
-            onChangeText={setAlphaText}
-            placeholder="Parler avec Alpha…"
-            placeholderTextColor={palette.textSecondary}
-            onSubmitEditing={submitAlpha}
-            returnKeyType="send"
-            blurOnSubmit={false}
-          />
+        {/* Outer wrapper carries the colored ambient shadow — it can't live
+            on `alphaGlowContainer` itself, since that view's overflow:hidden
+            (needed to clip the rotating ring below) would clip the shadow
+            too, since shadows render outside a view's own bounds. */}
+        <View
+          style={{
+            shadowColor: palette.primary,
+            // A plain black shadow (the app's default `palette.shadow`) is
+            // nearly invisible against a dark surface, so the pill needs its
+            // own colored glow to actually read as "glowing" in dark mode —
+            // boosted well past the light-mode value, which only needs a
+            // faint lift off a near-white background.
+            shadowOpacity: resolvedScheme === 'dark' ? 0.3 : 0.25,
+            shadowRadius: resolvedScheme === 'dark' ? 8 : 10,
+            shadowOffset: { width: 0, height: 0 },
+          }}
+        >
+          <View style={styles.alphaGlowContainer}>
+            <Animated.View style={[styles.alphaGlowRotator, { transform: [{ rotate: alphaGlowSpin }] }]}>
+              <LinearGradient
+                style={StyleSheet.absoluteFill}
+                colors={[palette.primary, 'transparent', 'transparent', 'transparent', palette.primary]}
+                start={{ x: 0, y: 0 }}
+                end={{ x: 1, y: 1 }}
+              />
+            </Animated.View>
+            <View style={[styles.alphaBar, { backgroundColor: palette.surface, shadowColor: palette.shadow }]}>
+              <TextInput
+                style={[styles.alphaInput, { color: palette.textPrimary }]}
+                value={alphaText}
+                onChangeText={setAlphaText}
+                placeholder="Parler avec Alpha…"
+                placeholderTextColor={palette.textSecondary}
+                onSubmitEditing={submitAlpha}
+                returnKeyType="send"
+                blurOnSubmit={false}
+              />
+            </View>
+          </View>
         </View>
       </View>
 
@@ -775,7 +849,7 @@ export default function AccueilScreen() {
                 <TextInput
                   style={{ flex: 1, fontSize: 28, fontWeight: '700', color: palette.textPrimary }}
                   value={withdrawAmountStr}
-                  onChangeText={v => setWithdrawAmountStr(formatAmountInput(v))}
+                  onChangeText={v => setWithdrawAmountStr(formatAmountInput(v, currency))}
                   keyboardType="numeric"
                   placeholder="0"
                   placeholderTextColor={palette.textDisabled}
@@ -791,7 +865,7 @@ export default function AccueilScreen() {
               size="lg"
               loading={investorSaving}
               onPress={async () => {
-                const amt = parseAmountInput(withdrawAmountStr);
+                const amt = parseAmountInput(withdrawAmountStr, currency);
                 if (!amt || amt <= 0) { toast.warning('Entrez un montant valide'); return; }
                 const balanceVal = balance ?? 0;
                 if (amt > balanceVal) { toast.warning('Montant supérieur à votre solde'); return; }
@@ -820,6 +894,16 @@ export default function AccueilScreen() {
 function makeStyles(p: Palette) {
   return StyleSheet.create({
     safe: { flex: 1, backgroundColor: p.background },
+    edgeSwipeCatcher: {
+      position: 'absolute',
+      left: 0,
+      // Starts below the header row so it never shadows the hamburger menu
+      // icon's own tap-to-open target (that icon sits at roughly this x/y).
+      top: 64,
+      bottom: 0,
+      width: EDGE_SWIPE_WIDTH,
+      zIndex: 20,
+    },
     content: { padding: spacing[5], gap: spacing[4], paddingBottom: spacing[10] },
     header: { paddingBottom: spacing[2], flexDirection: 'row', alignItems: 'center', justifyContent: 'space-between' },
     chatBtn: { padding: spacing[1] },
@@ -837,6 +921,22 @@ function makeStyles(p: Palette) {
       paddingHorizontal: spacing[4],
       paddingTop: spacing[2],
       paddingBottom: spacing[3],
+    },
+    // Clips the rotating gradient to a ring: padding here is the ring's
+    // visible thickness, `alphaBar` inside covers everything but that edge.
+    alphaGlowContainer: {
+      borderRadius: radius.full,
+      padding: 2,
+      overflow: 'hidden',
+    },
+    // Sized to comfortably cover the container's diagonal at any rotation
+    // angle (2x the box in both dimensions, centered) — a plain linear
+    // gradient spun behind the pill, so as it rotates the bright end sweeps
+    // continuously around the ring like a chasing light.
+    alphaGlowRotator: {
+      position: 'absolute',
+      top: '-50%', left: '-50%',
+      width: '200%', height: '200%',
     },
     alphaBar: {
       flexDirection: 'row', alignItems: 'center', gap: spacing[3],

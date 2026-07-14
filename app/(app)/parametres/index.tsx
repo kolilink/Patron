@@ -33,6 +33,9 @@ const CURRENCY_NAMES: Record<string, string> = {
   EUR: 'Euro',
 };
 
+// "Inviter un ami" turned off for now — flip back to true to re-enable.
+const SHOW_REFERRAL = false;
+
 export default function ParametresScreen() {
   const { palette, colorScheme, setColorScheme } = useTheme();
   const styles = useMemo(() => makeStyles(palette), [palette]);
@@ -348,7 +351,7 @@ export default function ParametresScreen() {
           )}
 
           {/* Inviter un ami — admin only, referral_code lives on businesses (migration_v130) */}
-          {isAdmin && business?.referral_code && (
+          {SHOW_REFERRAL && isAdmin && business?.referral_code && (
             <Card style={styles.section}>
               <Text variant="label" color="secondary">Inviter un ami</Text>
               <Text variant="bodySmall" color="secondary">

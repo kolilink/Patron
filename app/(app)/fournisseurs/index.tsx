@@ -325,7 +325,7 @@ function DebtModal({ visible, fournisseur, currency, saving, onClose, onSave }: 
               <Text variant="label">{fournisseur.name}</Text>
             </Card>
           )}
-          <Input label={`Montant (${currency})`} value={amount} onChangeText={v => setAmount(formatAmountInput(v))}
+          <Input label={`Montant (${currency})`} value={amount} onChangeText={v => setAmount(formatAmountInput(v, currency))}
             keyboardType="decimal-pad" />
           <Input label="Description (optionnel)" value={description} onChangeText={setDescription}
             placeholder="50 sacs de riz, livraison du 5 juin" />
@@ -336,7 +336,7 @@ function DebtModal({ visible, fournisseur, currency, saving, onClose, onSave }: 
             label={saving ? '…' : 'Enregistrer la dette'}
             loading={saving} fullWidth size="lg"
             onPress={() => {
-              const amt = parseAmountInput(amount);
+              const amt = parseAmountInput(amount, currency);
               if (isNaN(amt) || amt <= 0) { Alert.alert('Vérifiez le montant :)'); return; }
               onSave(amt, description.trim(), date);
             }}
@@ -376,19 +376,19 @@ function CommandeForm({ visible, fournisseur, currency, onClose, onSave, saving 
     const linked = fId
       ? products.filter(p => p.supplier_id === fId && !p.archived)
       : [];
-    setLines(linked.map(p => ({ product_id: p.id, product_name: p.name, variant_id: null, variant_name: null, qty: '1', total_cost: p.cost_price > 0 && !p.has_variants ? formatAmountInput(String(p.cost_price)) : '' })));
+    setLines(linked.map(p => ({ product_id: p.id, product_name: p.name, variant_id: null, variant_name: null, qty: '1', total_cost: p.cost_price > 0 && !p.has_variants ? formatAmountInput(String(p.cost_price), currency) : '' })));
     // Pre-fetch variants for all linked variant products
     linked.filter(p => p.has_variants && !variantsByProduct[p.id]).forEach(p => fetchVariants(p.id, fId ?? ''));
   }, [visible, products, fournisseur?.id]);
 
   const addLine = (p: Product) => {
-    setLines(prev => [...prev, { product_id: p.id, product_name: p.name, variant_id: null, variant_name: null, qty: '1', total_cost: p.cost_price > 0 && !p.has_variants ? formatAmountInput(String(p.cost_price)) : '' }]);
+    setLines(prev => [...prev, { product_id: p.id, product_name: p.name, variant_id: null, variant_name: null, qty: '1', total_cost: p.cost_price > 0 && !p.has_variants ? formatAmountInput(String(p.cost_price), currency) : '' }]);
     if (p.has_variants && !variantsByProduct[p.id]) {
       fetchVariants(p.id, fournisseur?.id ?? '');
     }
   };
 
-  const total = lines.reduce((s, l) => s + parseAmountInput(l.total_cost), 0);
+  const total = lines.reduce((s, l) => s + parseAmountInput(l.total_cost, currency), 0);
 
   // Picker only shows products not already in lines, supplier-linked ones first
   const lineIds = new Set(lines.map(l => l.product_id));
@@ -450,7 +450,7 @@ function CommandeForm({ visible, fournisseur, currency, onClose, onSave, saving 
                     {variants.map(v => (
                       <Pressable
                         key={v.id}
-                        onPress={() => setLines(prev => prev.map((x, j) => j === i ? { ...x, variant_id: v.id, variant_name: v.name, total_cost: v.cost_price > 0 ? formatAmountInput(String(v.cost_price)) : x.total_cost } : x))}
+                        onPress={() => setLines(prev => prev.map((x, j) => j === i ? { ...x, variant_id: v.id, variant_name: v.name, total_cost: v.cost_price > 0 ? formatAmountInput(String(v.cost_price), currency) : x.total_cost } : x))}
                         style={[styles.prodChip, l.variant_id === v.id && styles.prodChipLinked]}
                       >
                         <Text variant="caption" style={{ color: l.variant_id === v.id ? palette.primary : palette.textPrimary }}>{v.name}</Text>
@@ -471,13 +471,13 @@ function CommandeForm({ visible, fournisseur, currency, onClose, onSave, saving 
                   </View>
                   <View style={{ flex: 2 }}>
                     <Input label={`Coût total (${currency})`} value={l.total_cost}
-                      onChangeText={v => setLines(prev => prev.map((x, j) => j === i ? { ...x, total_cost: formatAmountInput(v) } : x))}
+                      onChangeText={v => setLines(prev => prev.map((x, j) => j === i ? { ...x, total_cost: formatAmountInput(v, currency) } : x))}
                       keyboardType="decimal-pad" />
                   </View>
                 </View>
                 {(() => {
                   const qty = parseInt(l.qty) || 0;
-                  const tc = parseAmountInput(l.total_cost);
+                  const tc = parseAmountInput(l.total_cost, currency);
                   const unit = qty > 0 && tc > 0 ? fmt(tc / qty, currency) : '—';
                   return (
                     <Text variant="caption" color="secondary">
@@ -510,7 +510,7 @@ function CommandeForm({ visible, fournisseur, currency, onClose, onSave, saving 
             onPress={() => {
               const parsed = lines.map(l => {
                 const qty = parseInt(l.qty) || 0;
-                const tc = parseAmountInput(l.total_cost);
+                const tc = parseAmountInput(l.total_cost, currency);
                 return { product_id: l.product_id, product_name: l.product_name, variant_id: l.variant_id ?? null, qty, unit_cost: qty > 0 ? tc / qty : 0 };
               });
               const invalid = parsed.find(l => l.qty <= 0 || l.unit_cost <= 0);
@@ -584,7 +584,7 @@ function CommandeDetail({ commande, currency, onClose, onRecevoir, saving }: {
         const orig = unreceivedLines.find(x => x.id === l.id)!;
         return l.qty >= orig.qty_ordered - orig.qty_received;
       });
-    const shippingCents = Math.round(parseAmountInput(shippingInput) * 100);
+    const shippingCents = Math.round(parseAmountInput(shippingInput, currency) * 100);
     onRecevoir(isAll ? null : lines, shippingCents);
   };
 
@@ -703,7 +703,7 @@ function CommandeDetail({ commande, currency, onClose, onRecevoir, saving }: {
               <Input
                 label={`Frais de port (${currency}) — optionnel`}
                 value={shippingInput}
-                onChangeText={v => setShippingInput(formatAmountInput(v))}
+                onChangeText={v => setShippingInput(formatAmountInput(v, currency))}
                 keyboardType="decimal-pad"
                 placeholder="0"
               />

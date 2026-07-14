@@ -1,5 +1,5 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
-import { FlatList, KeyboardAvoidingView, Platform, Pressable, StyleSheet, TextInput, View } from 'react-native';
+import { FlatList, InteractionManager, KeyboardAvoidingView, Platform, Pressable, StyleSheet, TextInput, View } from 'react-native';
 import * as ImagePicker from 'expo-image-picker';
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
 import { Screen } from '@/src/components/ui/Screen';
@@ -71,12 +71,20 @@ export default function SupportScreen() {
   const { conversation, messages, loading, sending, error, offline, load, sendMessage, sendImageMessage, appendMessage, updateConversation } = useSupportChatStore();
   const [text, setText] = useState('');
   const listRef = useRef<FlatList<GroupedItem<SupportMessage>>>(null);
+  const inputRef = useRef<TextInput>(null);
   const channelRef = useRef<ReturnType<typeof supabase.channel> | null>(null);
 
   useFocusEffect(useCallback(() => {
     if (!businessId) return;
     load(businessId);
   }, [businessId]));
+
+  useFocusEffect(useCallback(() => {
+    const task = InteractionManager.runAfterInteractions(() => {
+      inputRef.current?.focus();
+    });
+    return () => task.cancel();
+  }, []));
 
   useEffect(() => {
     const convId = conversation?.id;
@@ -142,9 +150,8 @@ export default function SupportScreen() {
           </View>
         ) : messages.length === 0 ? (
           <View style={styles.empty}>
-            <Text variant="h4" style={{ textAlign: 'center', marginBottom: 8 }}>Une question ?</Text>
             <Text variant="body" color="secondary" style={{ textAlign: 'center', lineHeight: 22 }}>
-              Décrivez votre problème ci-dessous — le fondateur de Patron vous répond directement ici.
+              Décrivez votre inquiétude et un membre de l'équipe vous assistera
             </Text>
           </View>
         ) : (
@@ -194,10 +201,10 @@ export default function SupportScreen() {
             <Ionicons name="image-outline" size={22} color={palette.primary} />
           </Pressable>
           <TextInput
+            ref={inputRef}
             style={styles.input}
             value={text}
             onChangeText={setText}
-            placeholder="Décrivez votre problème…"
             placeholderTextColor={palette.textSecondary}
             multiline
             maxLength={1000}

@@ -1,12 +1,14 @@
 // Exercises the real send_alpha_message/open_or_get_alpha_conversation/
 // get_alpha_quota_status Postgres functions (db/migration_v133.sql, renamed
 // from mystic_*/Mystic to alpha_*/Alpha by db/migration_v134.sql) — the
-// welcome burst, the rolling-24h quota (3 free / 100 paid), and the RLS
-// isolation between two users' conversations in the same business. Does
-// NOT call the real Groq API (alpha-chat edge function) — no CI network
-// dependency, doesn't burn the shared Groq budget, matches the existing
-// precedent that no integration test hits Groq via generate-support-draft
-// either.
+// welcome burst, the rolling-24h quota (5 free / 20 paid, as of
+// migration_v135.sql + migration_v136.sql — a stopgap lowering the paid
+// tier from its original 100 and raising the free tier from its original 3,
+// see CLAUDE.md's "Billing" section under Alpha), and the RLS isolation
+// between two users' conversations in the same business. Does NOT call the
+// real Groq API (alpha-chat edge function) — no CI network dependency,
+// doesn't burn the shared Groq budget, matches the existing precedent that
+// no integration test hits Groq via generate-support-draft either.
 import {
   adminClient, createTestUser, createTestBusiness, addMember,
 } from './helpers';
@@ -52,7 +54,7 @@ describe('Alpha (real RPCs)', () => {
     expect(quotaRow).toBeNull();
   });
 
-  it('enforces the 3-per-24h free ration after the welcome burst, and rejects the 4th without incrementing further', async () => {
+  it('enforces the 5-per-24h free ration after the welcome burst, and rejects the 6th without incrementing further (regression: v136)', async () => {
     const { client, userId } = await createTestUser('alpha-free');
     const businessId = await createTestBusiness(client, 'Boutique Free');
     await setAiAccess(businessId, 'none');
@@ -61,23 +63,23 @@ describe('Alpha (real RPCs)', () => {
       await client.rpc('send_alpha_message', { p_business_id: businessId, p_content: `Burst ${i}` });
     }
 
-    for (let i = 0; i < 3; i++) {
+    for (let i = 0; i < 5; i++) {
       const { error } = await client.rpc('send_alpha_message', { p_business_id: businessId, p_content: `Free ${i}` });
       expect(error).toBeNull();
     }
 
-    const fourth = await client.rpc('send_alpha_message', { p_business_id: businessId, p_content: 'Free 4' });
-    expect(fourth.error).toBeTruthy();
-    expect(fourth.error!.message).toMatch(/Limite de questions atteinte/);
+    const sixth = await client.rpc('send_alpha_message', { p_business_id: businessId, p_content: 'Free 6' });
+    expect(sixth.error).toBeTruthy();
+    expect(sixth.error!.message).toMatch(/Limite de questions atteinte/);
 
     const admin = adminClient();
     const { data: quotaRow } = await admin.from('alpha_quota').select('count_in_window').eq('user_id', userId).single();
     // Rejected call rolled back its own increment attempt (Postgres functions
-    // are atomic per top-level call) — count stays at 3, not 4.
-    expect(quotaRow!.count_in_window).toBe(3);
+    // are atomic per top-level call) — count stays at 5, not 6.
+    expect(quotaRow!.count_in_window).toBe(5);
   });
 
-  it('raises the ceiling to 100/24h once the business has active AI access', async () => {
+  it('raises the ceiling to 20/24h once the business has active AI access (regression: v135)', async () => {
     const { client } = await createTestUser('alpha-paid');
     const businessId = await createTestBusiness(client, 'Boutique Paid');
     await setAiAccess(businessId, 'active');
@@ -86,15 +88,15 @@ describe('Alpha (real RPCs)', () => {
       await client.rpc('send_alpha_message', { p_business_id: businessId, p_content: `Burst ${i}` });
     }
 
-    // 4 more messages (would already have failed on the free tier's 3-cap) should succeed.
-    for (let i = 0; i < 4; i++) {
+    // 6 more messages (would already have failed on the free tier's 5-cap) should succeed.
+    for (let i = 0; i < 6; i++) {
       const { error } = await client.rpc('send_alpha_message', { p_business_id: businessId, p_content: `Paid ${i}` });
       expect(error).toBeNull();
     }
 
     const { data: status } = await client.rpc('get_alpha_quota_status', { p_business_id: businessId });
     expect(status.has_ai_access).toBe(true);
-    expect(status.limit).toBe(100);
+    expect(status.limit).toBe(20);
   });
 
   it('gives an administrateur and a vendeur separate conversations, invisible to each other via RLS', async () => {

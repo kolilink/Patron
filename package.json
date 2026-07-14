@@ -15,7 +15,9 @@
     "test:db:stop": "supabase stop",
     "test:db:reset": "node scripts/test-db-setup.js",
     "test:integration": "jest --config jest.integration.config.js",
-    "build:android": "node -e \"const fs=require('fs'),f='app.json',j=JSON.parse(fs.readFileSync(f,'utf8')),v=j.expo.version.split('.').map(Number);v[2]++;j.expo.version=v.join('.');fs.writeFileSync(f,JSON.stringify(j,null,2)+'\\n');console.log('Version bumped to '+j.expo.version)\" && eas build --platform android --profile preview"
+    "build:android": "node -e \"const fs=require('fs'),f='app.json',j=JSON.parse(fs.readFileSync(f,'utf8')),v=j.expo.version.split('.').map(Number);v[2]++;j.expo.version=v.join('.');fs.writeFileSync(f,JSON.stringify(j,null,2)+'\\n');console.log('Version bumped to '+j.expo.version)\" && eas build --platform android --profile preview",
+    "fingerprint:ios": "expo-updates fingerprint:generate --platform ios",
+    "fingerprint:android": "expo-updates fingerprint:generate --platform android"
   },
   "dependencies": {
     "@expo-google-fonts/dm-sans": "^0.4.2",
@@ -69,6 +71,7 @@
     "zustand": "^5.0.13"
   },
   "devDependencies": {
+    "@expo/fingerprint": "^0.15.5",
     "@types/jest": "^29.5.14",
     "@types/pg": "^8.20.0",
     "@types/react": "~19.1.0",

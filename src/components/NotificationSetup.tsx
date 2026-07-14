@@ -6,8 +6,7 @@ import { colors } from '@/src/theme';
 import { useAuthStore } from '@/stores/auth';
 import { useExpensesStore } from '@/stores/expenses';
 import { useChatStore } from '@/stores/chat';
-import { useToastStore } from '@/stores/toast';
-import { registerDeviceToken } from '@/src/utils/notifications';
+import { registerDeviceToken, resetUnreadBadge } from '@/src/utils/notifications';
 
 const EAS_PROJECT_ID = '9cd0ec2b-0dc9-49f3-ba97-999bb31a0252';
 
@@ -85,19 +84,23 @@ async function setupAndRegister(): Promise<void> {
   const N = getNotifications();
   if (!N) return;
 
-  const perms = await N.requestPermissionsAsync();
-  if (!(perms as unknown as { granted?: boolean }).granted) return;
-
-  await Promise.all([
-    ensureAndroidChannels(N),
-    registerCategories(N),
-  ]);
-
+  // Every call below is backed by a native module that only exists in a real
+  // dev-client/production build (missing under Expo Go, or an older binary
+  // built before this dependency was linked) — one try/catch around the whole
+  // flow so any of them failing never surfaces as an unhandled rejection.
   try {
+    const perms = await N.requestPermissionsAsync();
+    if (!(perms as unknown as { granted?: boolean }).granted) return;
+
+    await Promise.all([
+      ensureAndroidChannels(N),
+      registerCategories(N),
+    ]);
+
     const tokenResult = await N.getExpoPushTokenAsync({ projectId: EAS_PROJECT_ID });
     await registerDeviceToken(tokenResult.data, Platform.OS as 'ios' | 'android');
   } catch {
-    // Silent — token registration never surfaces to the user
+    // Silent — notification setup never surfaces to the user
   }
 }
 
@@ -172,6 +175,12 @@ export function NotificationSetup(): null {
 
     void setupAndRegister();
 
+    // Cold start also counts as "the user has now seen their notifications" —
+    // reset the server-side counter so the next background push's badge
+    // starts fresh instead of continuing from wherever it left off.
+    const coldStartUid = useAuthStore.getState().session?.user.id;
+    if (coldStartUid) void resetUnreadBadge(coldStartUid);
+
     // Handle notification that launched the app (cold start from a tap).
     // Defer by 600ms so the Stack has finished rendering its initial route
     // before we push a new one — pushing before the initial route is set crashes.
@@ -179,11 +188,8 @@ export function NotificationSetup(): null {
       if (response) setTimeout(() => void handleResponse(response), 600);
     });
 
-    // Foreground notification — show as in-app toast instead of system banner
-    const foregroundSub = N.addNotificationReceivedListener((notification) => {
-      const body = notification.request.content.body;
-      if (body) useToastStore.getState().show(body, 'info');
-      // Increment badge even when foregrounded so the count stays accurate
+    // Foreground notification — no banner/toast shown, just keep the badge accurate
+    const foregroundSub = N.addNotificationReceivedListener(() => {
       void N.getBadgeCountAsync().then(count => {
         void N.setBadgeCountAsync(count + 1);
       });
@@ -198,6 +204,8 @@ export function NotificationSetup(): null {
     const appStateSub = AppState.addEventListener('change', (nextState) => {
       if (appStateRef.current !== 'active' && nextState === 'active') {
         void N.setBadgeCountAsync(0);
+        const uid = useAuthStore.getState().session?.user.id;
+        if (uid) void resetUnreadBadge(uid);
         void setupAndRegister(); // re-register in case token rotated
       }
       appStateRef.current = nextState;

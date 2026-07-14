@@ -1,12 +1,12 @@
 import React, { useEffect, useMemo, useRef, useState } from 'react';
-import { Animated, Easing, Linking, ScrollView, StyleSheet, Pressable, View } from 'react-native';
+import { Animated, Easing, Linking, Platform, StyleSheet, Pressable, View } from 'react-native';
 import { SafeAreaView } from 'react-native-safe-area-context';
 import { Ionicons } from '@expo/vector-icons';
 import Purchases, { PurchasesPackage } from 'react-native-purchases';
 import { Text } from '@/src/components/ui/Text';
 import { Button } from '@/src/components/ui/Button';
 import { Card } from '@/src/components/ui/Card';
-import { useTheme, radius, spacing } from '@/src/theme';
+import { useTheme, radius, spacing, typography } from '@/src/theme';
 import type { Palette } from '@/src/theme';
 import type { Business } from '@/src/types';
 import { toast } from '@/stores/toast';
@@ -14,28 +14,6 @@ import { isPurchasesConfigured } from '@/lib/purchases';
 import { useAuthStore } from '@/stores/auth';
 
 const PRIVACY_URL = 'https://patron.kolilink.com/privacy.html';
-
-// The concrete, provable reasons Alpha is worth paying for — each one maps
-// to a real mechanism in alpha-chat/get_reports_snapshot/get_stock_velocity
-// (see CLAUDE.md's "Alpha" section), not a generic AI-assistant claim. Kept
-// to 3: past that, a value stack stops persuading and starts diluting.
-const VALUE_STACK: { icon: keyof typeof Ionicons.glyphMap; title: string; body: string }[] = [
-  {
-    icon: 'stats-chart-outline',
-    title: 'Vos vrais chiffres, pas des suppositions',
-    body: "Chaque réponse est calculée sur vos ventes et votre stock réels.",
-  },
-  {
-    icon: 'cube-outline',
-    title: "Les ruptures, vues à l'avance",
-    body: 'Alpha repère les produits qui vont manquer avant que ça arrive.',
-  },
-  {
-    icon: 'wallet-outline',
-    title: 'Votre argent, expliqué simplement',
-    body: 'Ventes, dépenses, profit — clairs en une phrase, chaque jour.',
-  },
-];
 
 interface Props {
   business: Business;
@@ -127,25 +105,43 @@ export function PaywallScreen({ business, onDismiss, inline = false, onPurchased
     return () => loop.stop();
   }, [breathing, breathScale]);
 
-  // Smallest-increment framing (a well-worn pricing trick: $2.99/mo reads as
-  // expensive, $0.10/day reads as free — see the "display price in the
-  // smallest increment, bill on the longest" note in the pricing playbook).
-  // Computed from the real store product when available so it's never a
-  // stale hardcoded number; falls back to the known $2.99 fallback price.
-  const dailyPrice = useMemo(() => {
-    if (monthlyPkg) {
-      try {
-        return new Intl.NumberFormat('fr-FR', {
-          style: 'currency',
-          currency: monthlyPkg.product.currencyCode,
-          maximumFractionDigits: 2,
-        }).format(monthlyPkg.product.price / 30);
-      } catch {
-        return null;
-      }
-    }
-    return '0,10$';
-  }, [monthlyPkg]);
+  // "Google Play", not "Google Pay" — a different product. Neither label is
+  // literally accurate (native IAP subscriptions never touch Apple Pay/
+  // PassKit or a Google Pay wallet either), but "Google Play" at least names
+  // the real billing system; "Apple Pay" doesn't have an equivalent honest
+  // substitute with the same brand recognition, so it's used as requested.
+  // Rendered as "Payer via [logo] Pay/Play" — Button only supports a single
+  // leading icon before its whole label, not one embedded mid-sentence, so
+  // this whole row is passed through Button's `icon` slot with an empty
+  // label instead, rather than modifying the shared component.
+  const payButtonContent = (
+    <View style={styles.payRow}>
+      <Text style={styles.payRowText}>Payer via</Text>
+      <Ionicons
+        name={Platform.OS === 'ios' ? 'logo-apple' : 'logo-google'}
+        size={17}
+        color={palette.textInverse}
+      />
+      <Text style={styles.payRowText}>{Platform.OS === 'ios' ? 'Pay' : 'Play'}</Text>
+    </View>
+  );
+
+  // Silent restore check on mount — a real subscriber who lands here (e.g.
+  // after a reinstall, before RevenueCat's local cache has synced) should
+  // never have to remember to tap "Restaurer mes achats" themselves. Errors
+  // (most commonly "nothing to restore") are swallowed on purpose — this is
+  // a background check, not a user-initiated action, so it must never
+  // surface a toast the way the manual restore() below does.
+  useEffect(() => {
+    if (!isPurchasesConfigured()) return;
+    Purchases.restorePurchases()
+      .then(async () => {
+        await refreshActiveBusiness();
+        onPurchased?.();
+      })
+      .catch(() => {});
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, []);
 
   const restore = async () => {
     if (!isPurchasesConfigured()) {
@@ -180,19 +176,23 @@ export function PaywallScreen({ business, onDismiss, inline = false, onPurchased
     setPurchasing(true);
     try {
       await Purchases.purchasePackage(monthlyPkg);
+      // Purchases.purchasePackage() resolving IS Apple/Google's own proof
+      // the payment succeeded — that's already enough to unlock the screen.
       // subscription_status itself is written server-side by
-      // supabase/functions/revenuecat-webhook, not here — refresh so
-      // has_ai_access() (db/migration_v133.sql) sees it as soon as the
-      // webhook lands, then let the caller (e.g. Alpha's pending-question
-      // auto-send) retry.
-      await refreshActiveBusiness();
+      // supabase/functions/revenuecat-webhook, asynchronously, so it must
+      // never gate the success transition: the webhook can land a moment
+      // after this promise resolves, and blocking onPurchased() on
+      // refreshActiveBusiness() finishing first meant a user could pay
+      // successfully and still briefly see the paywall as if nothing
+      // happened, with no automatic retry. Fired in the background instead.
+      setPurchasing(false);
       onPurchased?.();
+      void refreshActiveBusiness();
     } catch (err) {
       const cancelled = (err as { userCancelled?: boolean })?.userCancelled;
       if (!cancelled) {
         toast.warning('Achat impossible pour le moment. Réessayez.');
       }
-    } finally {
       setPurchasing(false);
     }
   };
@@ -201,18 +201,25 @@ export function PaywallScreen({ business, onDismiss, inline = false, onPurchased
     return (
       <Card style={styles.inlineCard}>
         <Text variant="h4" style={styles.inlineHeadline}>Obtenez la réponse à votre question</Text>
-        <View style={styles.inlineValueRow}>
-          <Ionicons name="chatbubbles-outline" size={16} color={palette.primary} />
-          <Text variant="bodySmall" color="secondary" style={styles.inlineValueText}>
-            {PAID_DAILY_LIMIT} conversations avec Alpha, chaque jour.
-          </Text>
+
+        <Text variant="label" color="secondary" style={styles.sectionLabel}>ABONNEMENT</Text>
+        <View style={styles.planTile}>
+          <View style={styles.planTileRadioOuter}>
+            <View style={styles.planTileRadioInner} />
+          </View>
+          <View style={styles.planTileTextWrap}>
+            <Text variant="label" style={styles.planName}>Alpha Pro</Text>
+            <Text variant="h3" style={styles.planPrice}>{monthlyPrice}<Text variant="body" color="secondary"> / mois</Text></Text>
+            <Text variant="caption" color="secondary" style={styles.planLimit}>
+              {PAID_DAILY_LIMIT} conversations avec Alpha, chaque jour
+            </Text>
+          </View>
         </View>
-        <Text variant="caption" color="secondary" style={styles.inlinePrice}>
-          {monthlyPrice} / mois — sans engagement
-        </Text>
+
         <Animated.View style={{ width: '100%', transform: [{ scale: breathScale }] }}>
           <Button
-            label={purchasing ? 'Un instant…' : `Investir — ${monthlyPrice}`}
+            label={purchasing ? 'Un instant…' : ''}
+            icon={!purchasing ? payButtonContent : undefined}
             onPress={purchase}
             disabled={purchasing}
             fullWidth
@@ -238,46 +245,44 @@ export function PaywallScreen({ business, onDismiss, inline = false, onPurchased
 
   return (
     <SafeAreaView style={styles.safe}>
-      <ScrollView
-        contentContainerStyle={styles.container}
-        showsVerticalScrollIndicator={false}
-      >
-        <Text variant="h3" style={styles.logo}>Alpha</Text>
-
-        <Text variant="h2" style={styles.headline}>Sachez toujours où va votre argent.</Text>
-
-        <Text variant="body" style={styles.sub}>
-          Alpha lit vos ventes, votre stock et votre trésorerie en temps réel — et vous répond en secondes, dans vos mots.
-        </Text>
-
-        <View style={styles.valueStack}>
-          {VALUE_STACK.map(item => (
-            <View key={item.title} style={styles.valueRow}>
-              <View style={styles.valueIconWrap}>
-                <Ionicons name={item.icon} size={18} color={palette.primary} />
-              </View>
-              <View style={styles.valueTextWrap}>
-                <Text variant="label" style={styles.valueTitle}>{item.title}</Text>
-                <Text variant="bodySmall" color="secondary">{item.body}</Text>
-              </View>
-            </View>
-          ))}
+      {/* Two zones, like the reference: a distinct header panel (icon + name
+          + close) on its own surface with a bottom divider, then the rest
+          of the content below on the plain background. */}
+      <View style={styles.headerPanel}>
+        {onDismiss && (
+          <Pressable onPress={onDismiss} hitSlop={12} style={styles.closeBtn}>
+            <Ionicons name="close" size={22} color={palette.textSecondary} />
+          </Pressable>
+        )}
+        <View style={styles.iconBadge}>
+          <Text style={styles.iconBadgeText}>A</Text>
         </View>
+        <Text variant="label" style={styles.brandName}>ALPHA PRO</Text>
+        <Text variant="body" style={styles.headerTagline}>Obtenez la réponse à votre question</Text>
+      </View>
 
-        <View style={styles.planCard}>
-          <Text variant="label" style={styles.planName}>Alpha Pro</Text>
-          <Text variant="h3" style={styles.planPrice}>{monthlyPrice}<Text variant="body" color="secondary"> / mois</Text></Text>
-          {dailyPrice && (
-            <Text variant="caption" color="secondary" style={styles.planDaily}>
-              soit environ {dailyPrice} par jour
+      <View style={styles.container}>
+        {/* Selector kept, just toned down — muted/neutral instead of bold
+            primary. There's only one plan, but the selected-radio affordance
+            still reads well; it's the loud coloring that was the problem. */}
+        <Text variant="label" color="secondary" style={styles.sectionLabel}>ABONNEMENT</Text>
+        <View style={styles.planTile}>
+          <View style={styles.planTileRadioOuter}>
+            <View style={styles.planTileRadioInner} />
+          </View>
+          <View style={styles.planTileTextWrap}>
+            <Text variant="label" style={styles.planName}>Alpha Pro</Text>
+            <Text variant="h3" style={styles.planPrice}>{monthlyPrice}<Text variant="body" color="secondary"> / mois</Text></Text>
+            <Text variant="caption" color="secondary" style={styles.planLimit}>
+              {PAID_DAILY_LIMIT} conversations avec Alpha, chaque jour
             </Text>
-          )}
-          <Text variant="body" style={styles.planLimit}>{PAID_DAILY_LIMIT} conversations avec Alpha, chaque jour</Text>
+          </View>
         </View>
 
         <Animated.View style={{ width: '100%', transform: [{ scale: breathScale }] }}>
           <Button
-            label={purchasing ? 'Un instant…' : "Investir — Alpha Pro →"}
+            label={purchasing ? 'Un instant…' : ''}
+            icon={!purchasing ? payButtonContent : undefined}
             onPress={purchase}
             disabled={purchasing}
             fullWidth
@@ -285,26 +290,6 @@ export function PaywallScreen({ business, onDismiss, inline = false, onPurchased
             style={styles.cta}
           />
         </Animated.View>
-
-        <View style={styles.guaranteeRow}>
-          <Ionicons name="shield-checkmark-outline" size={15} color={palette.textSecondary} />
-          <Text style={styles.guaranteeText}>Annulez en 1 clic • Paiement sécurisé Apple / Google</Text>
-        </View>
-
-        <Text style={styles.roiText}>
-          Un seul conseil d'Alpha qui vous évite une rupture de stock, et l'abonnement est déjà rentable.
-        </Text>
-
-        {onDismiss && (
-          <Button
-            label="Plus tard"
-            onPress={onDismiss}
-            variant="outline"
-            size="md"
-            fullWidth
-            style={styles.laterButton}
-          />
-        )}
 
         <View style={styles.footerLinks}>
           <Pressable onPress={restore} disabled={restoring} hitSlop={8}>
@@ -317,8 +302,7 @@ export function PaywallScreen({ business, onDismiss, inline = false, onPurchased
             <Text style={styles.footerLinkText}>Confidentialité</Text>
           </Pressable>
         </View>
-
-      </ScrollView>
+      </View>
     </SafeAreaView>
   );
 }
@@ -329,75 +313,104 @@ function makeStyles(p: Palette) {
       flex: 1,
       backgroundColor: p.background,
     },
-    container: {
-      flexGrow: 1,
-      paddingHorizontal: spacing[6],
+    // Header panel: a distinct zone (its own surface + hairline divider)
+    // holding just the icon, name, and close button — mirrors the
+    // reference's light banner up top, everything else sits below it.
+    headerPanel: {
+      alignItems: 'center',
+      backgroundColor: p.surface,
+      borderBottomWidth: 1,
+      borderBottomColor: p.border,
       paddingTop: spacing[12],
-      paddingBottom: spacing[10],
+      paddingBottom: spacing[6],
+    },
+    closeBtn: {
+      position: 'absolute',
+      top: spacing[3],
+      left: spacing[4],
+      zIndex: 1,
+      padding: spacing[2],
+    },
+    container: {
+      flex: 1,
+      paddingHorizontal: spacing[6],
+      paddingTop: spacing[8],
+      paddingBottom: spacing[8],
+      justifyContent: 'center',
       alignItems: 'stretch',
     },
-    logo: {
-      color: p.primary,
-      textAlign: 'center',
-      marginBottom: spacing[6],
-    },
-    headline: {
-      textAlign: 'center',
-      color: p.textPrimary,
-      marginBottom: spacing[3],
-    },
-    sub: {
-      textAlign: 'center',
-      color: p.textSecondary,
-      marginBottom: spacing[6],
-    },
-    valueStack: {
-      gap: spacing[4],
-      marginBottom: spacing[7],
-    },
-    valueRow: {
-      flexDirection: 'row',
-      alignItems: 'flex-start',
-      gap: spacing[3],
-    },
-    valueIconWrap: {
-      width: 32,
-      height: 32,
-      borderRadius: radius.md,
-      backgroundColor: p.primaryLight,
+    iconBadge: {
+      width: 56,
+      height: 56,
+      borderRadius: radius.lg,
+      backgroundColor: p.primary,
       alignItems: 'center',
       justifyContent: 'center',
-      marginTop: 1,
+      marginBottom: spacing[2],
     },
-    valueTextWrap: {
-      flex: 1,
-      gap: 2,
+    iconBadgeText: {
+      color: p.textInverse,
+      fontSize: 26,
+      fontWeight: '800',
     },
-    valueTitle: {
+    brandName: {
+      color: p.textSecondary,
+      letterSpacing: 1.5,
+      fontSize: 12,
+    },
+    headerTagline: {
+      textAlign: 'center',
       color: p.textPrimary,
+      fontWeight: '700',
+      marginTop: spacing[2],
+      paddingHorizontal: spacing[6],
     },
-    planCard: {
-      backgroundColor: p.surface,
-      borderRadius: radius.lg,
-      borderWidth: 2,
-      borderColor: p.primary,
-      padding: spacing[5],
-      marginBottom: spacing[5],
+    sectionLabel: {
+      letterSpacing: 0.5,
+      fontSize: 11,
+      marginBottom: spacing[2],
+    },
+    // Selector kept, deliberately muted — no bold colored border/background
+    // box, just a hairline outline and a neutral-toned radio dot, so the
+    // "this is selected" affordance survives without the loud coloring.
+    planTile: {
+      flexDirection: 'row',
       alignItems: 'center',
+      gap: spacing[3],
+      borderWidth: 1,
+      borderColor: p.border,
+      borderRadius: radius.lg,
+      padding: spacing[4],
+      marginBottom: spacing[6],
+    },
+    planTileRadioOuter: {
+      width: 20,
+      height: 20,
+      borderRadius: 10,
+      borderWidth: 2,
+      borderColor: p.textSecondary,
+      alignItems: 'center',
+      justifyContent: 'center',
+    },
+    planTileRadioInner: {
+      width: 10,
+      height: 10,
+      borderRadius: 5,
+      backgroundColor: p.textSecondary,
+    },
+    planTileTextWrap: {
+      flex: 1,
     },
     planName: {
       color: p.textSecondary,
       textTransform: 'uppercase',
       letterSpacing: 0.5,
       fontSize: 11,
-      marginBottom: spacing[2],
-    },
-    planPrice: {
-      color: p.primary,
       marginBottom: spacing[1],
     },
-    planDaily: {
-      marginBottom: spacing[2],
+    planPrice: {
+      color: p.textPrimary,
+      marginBottom: spacing[1],
     },
     planLimit: {
       color: p.textSecondary,
@@ -406,27 +419,14 @@ function makeStyles(p: Palette) {
       marginTop: spacing[2],
       marginBottom: spacing[3],
     },
-    guaranteeRow: {
+    payRow: {
       flexDirection: 'row',
       alignItems: 'center',
-      justifyContent: 'center',
       gap: spacing[1],
-      marginBottom: spacing[4],
     },
-    guaranteeText: {
-      fontSize: 12,
-      color: p.textSecondary,
-    },
-    roiText: {
-      fontSize: 13,
-      color: p.textSecondary,
-      textAlign: 'center',
-      lineHeight: 20,
-      fontStyle: 'italic',
-      marginBottom: spacing[4],
-    },
-    laterButton: {
-      marginTop: spacing[3],
+    payRowText: {
+      ...typography.labelLarge,
+      color: p.textInverse,
     },
     footerLinks: {
       flexDirection: 'row',
@@ -447,26 +447,12 @@ function makeStyles(p: Palette) {
     inlineCard: {
       margin: spacing[4],
       gap: spacing[2],
-      alignItems: 'center',
+      alignItems: 'stretch',
     },
     inlineHeadline: {
       textAlign: 'center',
       color: p.textPrimary,
-    },
-    inlineValueRow: {
-      flexDirection: 'row',
-      alignItems: 'flex-start',
-      gap: spacing[2],
-      paddingHorizontal: spacing[2],
       marginBottom: spacing[1],
-    },
-    inlineValueText: {
-      flex: 1,
-      textAlign: 'left',
-    },
-    inlinePrice: {
-      textAlign: 'center',
-      marginBottom: spacing[2],
     },
     inlineUrgency: {
       textAlign: 'center',

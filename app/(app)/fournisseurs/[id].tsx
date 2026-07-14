@@ -78,7 +78,7 @@ function CommandeForm({
             product_id: p.id,
             product_name: `${p.name} (${v.name})`,
             qty: '1',
-            total_cost: v.cost_price > 0 ? formatAmountInput(String(v.cost_price)) : '',
+            total_cost: v.cost_price > 0 ? formatAmountInput(String(v.cost_price), currency) : '',
             variant_id: v.id,
           })),
         ]);
@@ -87,7 +87,7 @@ function CommandeForm({
     }
     setLines(prev => [...prev, {
       product_id: p.id, product_name: p.name, qty: '1',
-      total_cost: p.cost_price > 0 ? formatAmountInput(String(p.cost_price)) : '',
+      total_cost: p.cost_price > 0 ? formatAmountInput(String(p.cost_price), currency) : '',
     }]);
   }, [businessId, fetchVariants, variantsByProduct]);
 
@@ -122,7 +122,7 @@ function CommandeForm({
                 product_id: p.id,
                 product_name: `${p.name} (${v.name})`,
                 qty: '1',
-                total_cost: v.cost_price > 0 ? formatAmountInput(String(v.cost_price)) : '',
+                total_cost: v.cost_price > 0 ? formatAmountInput(String(v.cost_price), currency) : '',
                 variant_id: v.id,
               });
             }
@@ -131,7 +131,7 @@ function CommandeForm({
         }
         seedLines.push({
           product_id: p.id, product_name: p.name, qty: '1',
-          total_cost: p.cost_price > 0 ? formatAmountInput(String(p.cost_price)) : '',
+          total_cost: p.cost_price > 0 ? formatAmountInput(String(p.cost_price), currency) : '',
         });
       }
       // Only set if still the same fournisseur (guard against race)
@@ -140,10 +140,10 @@ function CommandeForm({
     })();
   }, [visible, fournisseur.id]);
 
-  const total = lines.reduce((s, l) => s + parseAmountInput(l.total_cost), 0);
+  const total = lines.reduce((s, l) => s + parseAmountInput(l.total_cost, currency), 0);
   const parsedPaid = paymentInput.trim() === ''
     ? total
-    : parseAmountInput(paymentInput);
+    : parseAmountInput(paymentInput, currency);
   const owed = Math.max(0, total - parsedPaid);
   // A product is "in the order" if any of its lines (possibly variant lines) are present
   const lineProductIds = new Set(lines.map(l => l.product_id));
@@ -208,13 +208,13 @@ function CommandeForm({
                 </View>
                 <View style={{ flex: 2 }}>
                   <Input label={`Coût total (${currency})`} value={l.total_cost}
-                    onChangeText={v => setLines(prev => prev.map((x, j) => j === i ? { ...x, total_cost: formatAmountInput(v) } : x))}
+                    onChangeText={v => setLines(prev => prev.map((x, j) => j === i ? { ...x, total_cost: formatAmountInput(v, currency) } : x))}
                     keyboardType="decimal-pad" />
                 </View>
               </View>
               {(() => {
                 const qty = parseInt(l.qty) || 0;
-                const tc = parseAmountInput(l.total_cost);
+                const tc = parseAmountInput(l.total_cost, currency);
                 const unit = qty > 0 && tc > 0 ? fmt(tc / qty, currency) : '—';
                 return (
                   <Text variant="caption" color="secondary">
@@ -242,7 +242,7 @@ function CommandeForm({
               <Input
                 label={`Montant payé (${currency})`}
                 value={paymentInput}
-                onChangeText={v => setPaymentInput(formatAmountInput(v))}
+                onChangeText={v => setPaymentInput(formatAmountInput(v, currency))}
                 keyboardType="decimal-pad"
                 placeholder={total > 0 ? String(Math.round(total)) : '0'}
               />
@@ -271,7 +271,7 @@ function CommandeForm({
             onPress={() => {
               const parsed = lines.map(l => {
                 const qty = parseInt(l.qty) || 0;
-                const tc = parseAmountInput(l.total_cost);
+                const tc = parseAmountInput(l.total_cost, currency);
                 return {
                   product_id: l.product_id, product_name: l.product_name,
                   qty, unit_cost: qty > 0 ? tc / qty : 0,
@@ -421,7 +421,7 @@ export default function FournisseurProfile() {
   };
 
   const handlePay = async () => {
-    const amount = parseAmountInput(payAmount);
+    const amount = parseAmountInput(payAmount, currency);
     if (isNaN(amount) || amount <= 0) { Alert.alert('Vérifiez le montant :)'); return; }
     if (amount > totalOwed + 0.01) {
       Alert.alert('Montant trop élevé', `Vous ne devez que ${fmt(totalOwed, currency)}.`);
@@ -650,7 +650,7 @@ export default function FournisseurProfile() {
               <Input
                 label={`Montant payé (${currency})`}
                 value={payAmount}
-                onChangeText={v => setPayAmount(formatAmountInput(v))}
+                onChangeText={v => setPayAmount(formatAmountInput(v, currency))}
                 keyboardType="decimal-pad"
               />
             </ScrollView>

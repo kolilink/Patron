@@ -51,7 +51,6 @@ export default function CreerCommerceScreen() {
               error={error}
               initialCurrency={inferCurrency(session?.user.phone)}
               onSubmit={handleSubmit}
-              showReferralCode
               submitLabel="Créer le commerce"
             />
           )}

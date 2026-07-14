@@ -65,7 +65,7 @@ export default function CreditsScreen() {
 
   const handleAddDebt = async () => {
     const trimmedName = addName.trim();
-    const parsed = Math.round(parseAmountInput(addAmount));
+    const parsed = Math.round(parseAmountInput(addAmount, currency));
     if (!trimmedName || isNaN(parsed) || parsed <= 0) return;
     setAddSaving(true);
     const ok = await submitCarnetDebt(businessId, userId, trimmedName, parsed * 100);
@@ -218,7 +218,7 @@ export default function CreditsScreen() {
                     placeholder="Montant"
                     placeholderTextColor={palette.textDisabled}
                     value={addAmount}
-                    onChangeText={v => setAddAmount(formatAmountInput(v))}
+                    onChangeText={v => setAddAmount(formatAmountInput(v, currency))}
                     keyboardType="numeric"
                     returnKeyType="done"
                     onSubmitEditing={handleAddDebt}
@@ -230,7 +230,7 @@ export default function CreditsScreen() {
                   loading={addSaving}
                   fullWidth
                   size="lg"
-                  disabled={!addName.trim() || parseAmountInput(addAmount) <= 0}
+                  disabled={!addName.trim() || parseAmountInput(addAmount, currency) <= 0}
                 />
                 <Pressable
                   onPress={() => { setShowAddForm(false); setAddName(''); setAddAmount(''); }}

@@ -65,12 +65,12 @@ const EMPTY_FORM: FormState = {
   supplier_id: '',
 };
 
-function productToForm(p: Product): FormState {
+function productToForm(p: Product, currency: string): FormState {
   return {
     name: p.name,
-    purchase_price: p.cost_price > 0 ? formatAmountInput(String(p.cost_price)) : '',
+    purchase_price: p.cost_price > 0 ? formatAmountInput(String(p.cost_price), currency) : '',
     extra_fees: '',
-    sale_price: formatAmountInput(String(p.sale_price)),
+    sale_price: formatAmountInput(String(p.sale_price), currency),
     initial_stock: '',
     purchase_qty: '1',
     reorder_level: p.reorder_level > 0 ? String(p.reorder_level) : '',
@@ -78,25 +78,25 @@ function productToForm(p: Product): FormState {
   };
 }
 
-function totalCost(f: FormState): number {
+function totalCost(f: FormState, currency: string): number {
   const qty = Math.max(parseFloat(f.initial_stock) || parseFloat(f.purchase_qty) || 1, 1);
-  const fees = parseAmountInput(f.extra_fees);
-  return parseAmountInput(f.purchase_price) + fees / qty;
+  const fees = parseAmountInput(f.extra_fees, currency);
+  return parseAmountInput(f.purchase_price, currency) + fees / qty;
 }
 
-function validateForm(f: FormState): string | null {
+function validateForm(f: FormState, currency: string): string | null {
   if (!f.name.trim()) return 'Indiquez le nom :)';
-  const sp = parseAmountInput(f.sale_price);
+  const sp = parseAmountInput(f.sale_price, currency);
   if (isNaN(sp) || sp <= 0) return 'Le prix de vente doit être supérieur à 0';
   return null;
 }
 
-function formToData(f: FormState): CreateProductData {
+function formToData(f: FormState, currency: string): CreateProductData {
   return {
     name: f.name,
     unit: 'pcs',
-    cost_price: totalCost(f),
-    sale_price: parseAmountInput(f.sale_price),
+    cost_price: totalCost(f, currency),
+    sale_price: parseAmountInput(f.sale_price, currency),
     reorder_level: parseInt(f.reorder_level) || 0,
     initial_stock: parseInt(f.initial_stock) || 0,
     supplier_id: f.supplier_id || null,
@@ -245,13 +245,13 @@ function VariantRow({ variant, onChange, onRemove }: Omit<VariantRowProps, 'curr
   );
 }
 
-function makeVariantItem(form: FormState, overrides?: Partial<VariantDraftItem>): VariantDraftItem {
+function makeVariantItem(form: FormState, currency: string, overrides?: Partial<VariantDraftItem>): VariantDraftItem {
   return {
     _key: generateLocalKey(),
     _overridePrice: false,
     name: '',
-    sale_price: parseAmountInput(form.sale_price),
-    cost_price: totalCost(form),
+    sale_price: parseAmountInput(form.sale_price, currency),
+    cost_price: totalCost(form, currency),
     stock_qty: 0,
     reorder_level: 0,
     ...overrides,
@@ -272,7 +272,7 @@ function ProductFormModal({ visible, editing, onClose, onSave, saving, currency,
 
   useEffect(() => {
     if (visible) {
-      const f = editing ? productToForm(editing) : EMPTY_FORM;
+      const f = editing ? productToForm(editing, currency) : EMPTY_FORM;
       setForm(f);
       setFormError(null);
       setShowDetails(false);
@@ -299,7 +299,7 @@ function ProductFormModal({ visible, editing, onClose, onSave, saving, currency,
     setForm(prev => ({ ...prev, [key]: val }));
 
   const handleSave = async () => {
-    const err = validateForm(form);
+    const err = validateForm(form, currency);
     if (err) { setFormError(err); return; }
     if (hasVariants && variantDraft.length === 0) {
       setFormError('Ajoutez au moins une version');
@@ -314,7 +314,7 @@ function ProductFormModal({ visible, editing, onClose, onSave, saving, currency,
     // to the parent form's price at creation time (see makeVariantItem), and an
     // existing variant's distinct price must not be clobbered by an unrelated edit.
     await onSave(
-      formToData(form),
+      formToData(form, currency),
       hasVariants,
       variantDraft.map(({ _key: _k, _overridePrice: _op, ...v }) => v),
     );
@@ -329,10 +329,10 @@ function ProductFormModal({ visible, editing, onClose, onSave, saving, currency,
   };
 
   const qty = parseFloat(form.initial_stock) || 0;
-  const pp = parseAmountInput(form.purchase_price);
-  const sp = parseAmountInput(form.sale_price);
-  const computedCost = totalCost(form);
-  const fees = parseAmountInput(form.extra_fees);
+  const pp = parseAmountInput(form.purchase_price, currency);
+  const sp = parseAmountInput(form.sale_price, currency);
+  const computedCost = totalCost(form, currency);
+  const fees = parseAmountInput(form.extra_fees, currency);
   const liveInvested = qty * pp + fees;
   const totalVariantStock = variantDraft.reduce((s, v) => s + (v.stock_qty || 0), 0);
   const showLiveCalc = !editing && !hasVariants && liveInvested > 0;
@@ -390,7 +390,7 @@ function ProductFormModal({ visible, editing, onClose, onSave, saving, currency,
                   onValueChange={v => {
                     setHasVariants(v);
                     if (v && variantDraft.length === 0) {
-                      setVariantDraft([makeVariantItem(form)]);
+                      setVariantDraft([makeVariantItem(form, currency)]);
                     }
                   }}
                   trackColor={{ false: palette.border, true: palette.primary }}
@@ -406,7 +406,7 @@ function ProductFormModal({ visible, editing, onClose, onSave, saving, currency,
                 <TextInput
                   style={styles.fieldInput}
                   value={form.purchase_price}
-                  onChangeText={v => setForm(prev => ({ ...prev, purchase_price: formatAmountInput(v) }))}
+                  onChangeText={v => setForm(prev => ({ ...prev, purchase_price: formatAmountInput(v, currency) }))}
                   keyboardType="decimal-pad"
                   placeholderTextColor={palette.textDisabled}
                 />
@@ -420,13 +420,13 @@ function ProductFormModal({ visible, editing, onClose, onSave, saving, currency,
                 <TextInput
                   style={styles.fieldInput}
                   value={form.sale_price}
-                  onChangeText={v => setForm(prev => ({ ...prev, sale_price: formatAmountInput(v) }))}
+                  onChangeText={v => setForm(prev => ({ ...prev, sale_price: formatAmountInput(v, currency) }))}
                   keyboardType="decimal-pad"
                   placeholderTextColor={palette.textDisabled}
                 />
                 {(() => {
-                  const sp = parseAmountInput(form.sale_price);
-                  const cp = totalCost(form);
+                  const sp = parseAmountInput(form.sale_price, currency);
+                  const cp = totalCost(form, currency);
                   if (cp > 0 && sp > 0 && sp < cp) {
                     return (
                       <Text style={{ fontSize: 12, color: palette.warning, marginTop: 4 }}>
@@ -473,7 +473,7 @@ function ProductFormModal({ visible, editing, onClose, onSave, saving, currency,
                   ))}
                   <Pressable
                     style={styles.addVariantBtn}
-                    onPress={() => setVariantDraft(prev => [...prev, makeVariantItem(form)])}
+                    onPress={() => setVariantDraft(prev => [...prev, makeVariantItem(form, currency)])}
                   >
                     <Ionicons name="add-circle-outline" size={18} color={palette.primary} />
                     <Text variant="label" style={{ color: palette.primary, marginLeft: 4 }}>Ajouter une variante</Text>
@@ -540,7 +540,7 @@ function ProductFormModal({ visible, editing, onClose, onSave, saving, currency,
                     <TextInput
                       style={styles.fieldInput}
                       value={form.extra_fees}
-                      onChangeText={v => setForm(prev => ({ ...prev, extra_fees: formatAmountInput(v) }))}
+                      onChangeText={v => setForm(prev => ({ ...prev, extra_fees: formatAmountInput(v, currency) }))}
                       keyboardType="decimal-pad"
                       placeholder="0"
                       placeholderTextColor={palette.textDisabled}

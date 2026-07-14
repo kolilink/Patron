@@ -279,7 +279,10 @@ export const useSalesStore = create<SalesStore>((set, get) => ({
           payload: {
             seller: _notifSession.user.name || 'Vendeur',
             desc: describeSaleForNotification(cartSnapshot),
-            amount: formatAmount(totalAmount, _notifSession.activeBusiness.currency),
+            // Net of discount — totalAmount alone is the catalog total (see
+            // "discount_amount convention" in CLAUDE.md), which read as the
+            // product's list price instead of what the customer was actually charged.
+            amount: formatAmount(totalAmount - discount, _notifSession.activeBusiness.currency),
           },
           targetRoles: ['administrateur', 'manager'],
         });

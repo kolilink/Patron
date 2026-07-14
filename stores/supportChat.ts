@@ -67,7 +67,7 @@ interface SupportChatStore {
   founderDraft: SupportAiDraft | null;
   founderDetailLoading: boolean;
 
-  loadBusinessConversations: (businessId: string) => Promise<void>;
+  loadFounderConversations: () => Promise<void>;
   loadConversationDetail: (conversationId: string) => Promise<void>;
   sendFounderReply: (params: { conversationId: string; content: string; usedAiDraft: boolean }) => Promise<void>;
   sendFounderImageReply: (params: {
@@ -193,13 +193,13 @@ export const useSupportChatStore = create<SupportChatStore>((set, get) => ({
         sending: false,
       }));
 
+      // Generic on purpose — mirrors the founder→merchant support_reply
+      // notifications below ("L'équipe de Patron vous a envoyé un message"),
+      // never the raw sender name + message preview.
       notifyEvent({
         businessId,
         eventType: 'support_message',
-        payload: {
-          sender: senderName,
-          preview: trimmed.slice(0, 60) + (trimmed.length > 60 ? '…' : ''),
-        },
+        payload: { preview: 'Un client vous a envoyé un message' },
       });
 
       // Fire-and-forget — a founder-only draft is ready by the time the
@@ -268,9 +268,7 @@ export const useSupportChatStore = create<SupportChatStore>((set, get) => ({
       notifyEvent({
         businessId,
         eventType: 'support_message',
-        // No camera emoji in the push notification text — plain "Photo" (or the
-        // caption, if any) reads cleaner in the OS notification tray.
-        payload: { sender: senderName, preview: trimmedCaption || 'Photo' },
+        payload: { preview: 'Un client vous a envoyé une photo' },
       });
 
       void supabase.functions.invoke('generate-support-draft', {
@@ -349,25 +347,25 @@ export const useSupportChatStore = create<SupportChatStore>((set, get) => ({
 
   // ─── Founder slice ───────────────────────────────────────────────────────
 
-  // Scoped to one business — the founder should only ever see the active
-  // business's own threads, never other businesses' mixed in, even though
-  // is_founder() technically grants cross-business RLS read access.
-  loadBusinessConversations: async (businessId) => {
+  // Across every business, not just the founder's own — is_founder() grants
+  // cross-business RLS read access on support_conversations/businesses
+  // specifically so this inbox can surface every merchant's questions in one
+  // list (see migration_v126.sql). businesses(name) is a FK embed, not a
+  // second round trip per conversation.
+  loadFounderConversations: async () => {
     set({ founderLoading: true, founderError: null });
     try {
-      const [{ data: convs, error: convErr }, { data: biz }] = await Promise.all([
-        supabase
-          .from('support_conversations')
-          .select('*')
-          .eq('business_id', businessId)
-          .order('last_message_at', { ascending: false })
-          .limit(200),
-        supabase.from('businesses').select('name').eq('id', businessId).maybeSingle(),
-      ]);
+      const { data: convs, error: convErr } = await supabase
+        .from('support_conversations')
+        .select('*, businesses(name)')
+        .order('last_message_at', { ascending: false })
+        .limit(200);
       if (convErr) throw convErr;
 
-      const businessName = (biz as { name: string } | null)?.name ?? '—';
-      const withNames = (convs ?? []).map(c => ({ ...c, business_name: businessName }));
+      const withNames = (convs ?? []).map(c => {
+        const { businesses, ...rest } = c as SupportConversation & { businesses: { name: string } | null };
+        return { ...rest, business_name: businesses?.name ?? '—' };
+      });
       const unreadTotal = withNames.filter(c =>
         !c.founder_last_read_at || new Date(c.last_message_at) > new Date(c.founder_last_read_at),
       ).length;
