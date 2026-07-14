@@ -207,6 +207,13 @@
 
   var params = new URLSearchParams(location.search);
   var ref = params.get('ref');
+  // Personalized-link mode: ?biz=<per-business token> (see
+  // migration_v142.sql) identifies the business by itself, so the
+  // "Numéro utilisé sur Patron" lookup field is unnecessary — only
+  // sent via a future WhatsApp reminder, one link per business. Absent
+  // this param (the generic patron.kolilink.com/abonnement link
+  // anyone can share/bookmark), both fields stay as the fallback.
+  var bizToken = params.get('biz');
 
   function show(id) {
     ['form-view', 'wait-view', 'done-view'].forEach(function (v) {
@@ -261,33 +268,44 @@
   // silently broke that second case entirely.
   var phoneEl = document.getElementById('phone');
   var orangePhoneEl = document.getElementById('orange-phone');
-  phoneEl.addEventListener('blur', function () {
-    if (!orangePhoneEl.value.trim()) {
-      orangePhoneEl.value = phoneEl.value.trim();
-    }
-  });
+
+  if (bizToken) {
+    phoneEl.style.display = 'none';
+  } else {
+    phoneEl.addEventListener('blur', function () {
+      if (!orangePhoneEl.value.trim()) {
+        orangePhoneEl.value = phoneEl.value.trim();
+      }
+    });
+  }
 
   var btn = document.getElementById('pay-btn');
   var errEl = document.getElementById('error');
   btn.addEventListener('click', function () {
-    var phone = phoneEl.value.trim();
     var orangePhone = orangePhoneEl.value.trim();
     errEl.classList.add('hidden');
-    if (!phone) {
-      errEl.textContent = 'Entrez votre numéro de téléphone.';
-      errEl.classList.remove('hidden');
-      return;
-    }
     if (!orangePhone) {
       errEl.textContent = 'Entrez le numéro Orange Money qui va payer.';
       errEl.classList.remove('hidden');
       return;
     }
+    var payload = { payerPhone: orangePhone, returnOrigin: location.origin };
+    if (bizToken) {
+      payload.bizToken = bizToken;
+    } else {
+      var phone = phoneEl.value.trim();
+      if (!phone) {
+        errEl.textContent = 'Entrez votre numéro de téléphone.';
+        errEl.classList.remove('hidden');
+        return;
+      }
+      payload.phone = phone;
+    }
     btn.disabled = true;
     fetch(DJOMI_CHECKOUT_URL, {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ phone: phone, payerPhone: orangePhone, returnOrigin: location.origin }),
+      body: JSON.stringify(payload),
     })
       .then(function (resp) {
         return resp.json().then(function (data) { return { resp: resp, data: data }; });
