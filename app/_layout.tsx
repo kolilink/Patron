@@ -17,6 +17,7 @@ import { openDb } from '@/lib/db';
 import { ThemeProvider } from '@/src/theme';
 import { posthog } from '@/lib/posthog';
 import { identifyUser, resetAnalytics } from '@/lib/analytics';
+import { configurePurchases } from '@/lib/purchases';
 
 // Only active when EXPO_PUBLIC_SENTRY_DSN is set (no-op in local dev without it)
 if (process.env.EXPO_PUBLIC_SENTRY_DSN) {
@@ -26,6 +27,11 @@ if (process.env.EXPO_PUBLIC_SENTRY_DSN) {
     tracesSampleRate: 0.2,
   });
 }
+
+// Only active once EXPO_PUBLIC_REVENUECAT_API_KEY_IOS/_ANDROID are set — see
+// lib/purchases.ts. No-op in the meantime so the app runs fine before the
+// RevenueCat/App Store Connect/Play Console setup exists.
+configurePurchases();
 
 SplashScreen.preventAutoHideAsync();
 

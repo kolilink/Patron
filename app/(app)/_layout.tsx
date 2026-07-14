@@ -1,9 +1,7 @@
-import { useEffect } from 'react';
+import { useEffect, useRef } from 'react';
 import { Alert, AppState, Pressable, View } from 'react-native';
 import { Redirect, Stack, router } from 'expo-router';
-import { AppLockOverlay } from '@/src/components/AppLockOverlay';
 import { BusinessDrawer } from '@/src/components/BusinessDrawer';
-import { PaywallScreen } from '@/src/components/PaywallScreen';
 import { TrialWelcomeOverlay } from '@/src/components/TrialWelcomeOverlay';
 import { AppToastContainer } from '@/src/components/ui/AppToast';
 import { DemoBanner } from '@/src/components/ui/DemoBanner';
@@ -11,7 +9,6 @@ import { NotificationSetup } from '@/src/components/NotificationSetup';
 import { Text } from '@/src/components/ui/Text';
 import { useTheme, spacing } from '@/src/theme';
 import { useAuthStore } from '@/stores/auth';
-import { usePinGate } from '@/src/hooks/usePinGate';
 import { useChatStore } from '@/stores/chat';
 import { useProductStore } from '@/stores/products';
 import { useVentesStore } from '@/stores/ventes';
@@ -21,17 +18,14 @@ import { toast } from '@/stores/toast';
 import { drainQueue } from '@/lib/sync';
 import { getDeadOps, archiveDeadOps } from '@/lib/db';
 import { supabase } from '@/lib/supabase';
-import type { Business, Role } from '@/src/types';
+import type { Role } from '@/src/types';
 
-// Paywall disabled — app is free during early access
-function isSubscriptionExpired(_business: Business): boolean {
-  return false;
-}
-
-// Trial banner paused — app is free during early access
-function TrialBanner({ business: _business }: { business: Business }) {
-  return null;
-}
+// Re-lock (biometric or full OTP re-login, see verrouille.tsx) after the app
+// has been backgrounded this long. Was previously a separate AppLockOverlay
+// component with its own AppState listener; folded into the existing
+// foreground-sync listener below so backgrounding doesn't also trigger a
+// pointless realtime reconnect + drainQueue() right before the redirect.
+const BACKGROUND_MS = 3 * 60_000;
 
 function SyncBanner() {
   const { palette } = useTheme();
@@ -72,10 +66,6 @@ export default function AppLayout() {
   const session = useAuthStore(s => s.session);
   const loading = useAuthStore(s => s.loading);
   const locked = useAuthStore(s => s.locked);
-  const justAuthenticated = useAuthStore(s => s.justAuthenticated);
-  // See app/index.tsx for why this is gated on justAuthenticated — an existing
-  // user's silently-restored session must never be interrupted here.
-  const pinSet = usePinGate(justAuthenticated ? session?.user.id : undefined);
   const showTrialWelcome = useAuthStore(s => s.showTrialWelcome);
   const clearTrialWelcome = useAuthStore(s => s.clearTrialWelcome);
   const removedBusinessName = useAuthStore(s => s.removedBusinessName);
@@ -198,6 +188,7 @@ export default function AppLayout() {
   }, [session?.activeBusiness?.id, session?.user.id]);
 
   // Auto-sync: drain queue on login and every time app comes to foreground
+  const backgroundAt = useRef<number | null>(null);
   useEffect(() => {
     if (!session?.user.id) return;
 
@@ -277,7 +268,19 @@ export default function AppLayout() {
     const chatInterval = setInterval(refreshChat, 30_000);
 
     const sub = AppState.addEventListener('change', (nextState) => {
+      if (nextState === 'background' || nextState === 'inactive') {
+        backgroundAt.current = Date.now();
+        return;
+      }
       if (nextState === 'active') {
+        const bgStart = backgroundAt.current;
+        backgroundAt.current = null;
+
+        if (bgStart !== null && Date.now() - bgStart >= BACKGROUND_MS) {
+          void useAuthStore.getState().lock();
+          return; // about to redirect to /(auth)/verrouille — skip the sync below
+        }
+
         void useAuthStore.getState().refreshActiveBusiness();
         trySync();
       }
@@ -289,27 +292,29 @@ export default function AppLayout() {
   if (loading) return null;
   if (locked) return <Redirect href="/(auth)/verrouille" />;
   if (!session) return <Redirect href="/(welcome)/" />;
-  if (justAuthenticated && pinSet === false) return <Redirect href="/(auth)/creer-pin" />;
-  if (justAuthenticated && pinSet === null) return null;
 
   const activeBusiness = session.activeBusiness;
   const isDemoMode = session.isDemoMode ?? false;
-  const isOwner = session.activeMembership?.role === 'administrateur';
-  if (activeBusiness && isOwner && isSubscriptionExpired(activeBusiness)) {
-    return <PaywallScreen business={activeBusiness} />;
-  }
+  // No paywall gating anywhere in the app anymore — the core app is free
+  // forever, and only Alpha (has_ai_access(), db/migration_v133.sql) checks
+  // subscription state, entirely within app/(app)/alpha/index.tsx itself.
 
   return (
-    <AppLockOverlay>
+    <>
       <NotificationSetup />
-      {activeBusiness && <TrialBanner business={activeBusiness} />}
       <DemoBanner />
       <SyncBanner />
       <Stack screenOptions={{ headerShown: false, animation: 'slide_from_right' }} />
       <BusinessDrawer />
-      {/* TrialWelcomeOverlay paused — app is free during early access */}
+      {showTrialWelcome && activeBusiness && (
+        <TrialWelcomeOverlay
+          businessName={activeBusiness.name}
+          trialEndsAt={activeBusiness.trial_ends_at}
+          onStart={clearTrialWelcome}
+        />
+      )}
       <AppToastContainer />
-    </AppLockOverlay>
+    </>
   );
 }
 

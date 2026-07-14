@@ -11,8 +11,6 @@ import type { Palette } from '@/src/theme';
 import { useAuthStore } from '@/stores/auth';
 import { generateFallbackName } from '@/lib/id';
 import { type KnownBusiness, getKnownBusinesses, dismissRemovedBusiness } from '@/lib/knownBusinesses';
-import { hasPinSet, verifyPin } from '@/lib/pin';
-import { PinConfirmSheet } from '@/src/components/ui/PinConfirmSheet';
 
 type IoniconName = React.ComponentProps<typeof Ionicons>['name'];
 
@@ -45,9 +43,8 @@ export default function PlusScreen() {
   const { palette, resolvedScheme } = useTheme();
   const styles = useMemo(() => makeStyles(palette), [palette]);
   const session = useAuthStore(s => s.session);
-  const lock = useAuthStore(s => s.lock);
+  const logout = useAuthStore(s => s.logout);
   const [removedBusinesses, setRemovedBusinesses] = useState<KnownBusiness[]>([]);
-  const [lockConfirmOpen, setLockConfirmOpen] = useState(false);
 
   useEffect(() => {
     if (!session?.user.id) return;
@@ -65,20 +62,18 @@ export default function PlusScreen() {
   const isVendeur = role === 'vendeur';
   const isInvestisseur = role === 'investisseur';
 
-  // "Se déconnecter" is PIN-gated rather than an immediate destructive sign-out:
-  // existing users who authenticated before this feature shipped may stay
-  // mid-session for months and never naturally re-authenticate, so this tap is
-  // the only reliable moment to get them onto a PIN. Confirming (or creating)
-  // the PIN locks the app instead of fully signing out — no WhatsApp OTP is
-  // needed to get back in. A true destructive sign-out (fresh OTP required) is
-  // still reachable via the recovery paths on the lock screen (forgotten PIN,
-  // "Changer de compte").
-  const handleLogout = async () => {
-    if (await hasPinSet()) {
-      setLockConfirmOpen(true);
-    } else {
-      router.push({ pathname: '/(auth)/creer-pin', params: { afterLock: '1' } });
-    }
+  // A quick re-lock (biometric-recoverable, no OTP needed) is available from
+  // Paramètres → "Verrouiller" — this button is for a real sign-out, which now
+  // that PIN is gone always requires a fresh WhatsApp OTP to come back.
+  const handleLogout = () => {
+    Alert.alert(
+      'Se déconnecter ?',
+      'Vous devrez recevoir un nouveau code WhatsApp pour vous reconnecter.',
+      [
+        { text: 'Annuler', style: 'cancel' },
+        { text: 'Se déconnecter', style: 'destructive', onPress: () => { void logout(); } },
+      ],
+    );
   };
 
   return (
@@ -209,21 +204,6 @@ export default function PlusScreen() {
           <Button label="Se déconnecter" variant="danger" onPress={handleLogout} fullWidth />
         </View>
       </ScrollView>
-
-      <PinConfirmSheet
-        visible={lockConfirmOpen}
-        title="Confirmez votre code"
-        body="Entrez votre code pour vous déconnecter."
-        onCancel={() => setLockConfirmOpen(false)}
-        onSubmit={async (pin) => {
-          const ok = await verifyPin(pin);
-          if (ok) {
-            setLockConfirmOpen(false);
-            await lock();
-          }
-          return ok;
-        }}
-      />
     </Screen>
   );
 }

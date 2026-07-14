@@ -1,40 +1,34 @@
 import { useEffect, useMemo, useRef, useState } from 'react';
-import { Animated, KeyboardAvoidingView, Platform, ScrollView, StyleSheet, View } from 'react-native';
+import { Animated, InteractionManager, KeyboardAvoidingView, Platform, ScrollView, StyleSheet, View } from 'react-native';
 import { router } from 'expo-router';
 import { Ionicons } from '@expo/vector-icons';
 import { Screen } from '@/src/components/ui/Screen';
 import { Button } from '@/src/components/ui/Button';
-import { PinInput } from '@/src/components/ui/PinInput';
 import { Text } from '@/src/components/ui/Text';
 import { useTheme, spacing } from '@/src/theme';
 import type { Palette } from '@/src/theme';
 import { useAuthStore, getLastPhone } from '@/stores/auth';
-import { getPinFailCount, MAX_PIN_ATTEMPTS } from '@/lib/pin';
 
-// Progressive disclosure: Face ID/Touch ID is tried silently first, showing
-// only a calm lock icon (matching AppLockOverlay's visual language) — the PIN
-// boxes only appear once biometrics fail, are unavailable, or the user asks
-// for them directly. Showing both at once reads as cluttered and redundant;
-// biometric success should feel instant with nothing else on screen.
-type Phase = 'checking' | 'pin' | 'locked-out';
+// Biometric-only re-entry: Face ID/Touch ID is tried silently on mount,
+// showing only a calm lock icon. There is no PIN fallback anywhere — a hard
+// failure (no hardware/enrollment, or a genuine lockout) goes straight to a
+// full WhatsApp OTP re-login, while a soft failure (accidental cancel, an
+// interrupted prompt, a single bad read) offers an immediate retry instead of
+// punishing the user with a forced sign-out.
+type Phase = 'checking' | 'retry' | 'restore-failed' | 'unavailable';
 
 export default function VerrouilleScreen() {
   const { palette } = useTheme();
   const styles = useMemo(() => makeStyles(palette), [palette]);
-  const unlockWithPin = useAuthStore(s => s.unlockWithPin);
   const unlockWithBiometric = useAuthStore(s => s.unlockWithBiometric);
 
   const [phase, setPhase] = useState<Phase>('checking');
   const [lastPhone, setLastPhone] = useState<string | null>(null);
-  const [error, setError] = useState<string | null>(null);
-  const [attemptsLeft, setAttemptsLeft] = useState(MAX_PIN_ATTEMPTS);
-  const [resetSignal, setResetSignal] = useState(0);
-  const [busy, setBusy] = useState(false);
 
   const breathOpacity = useRef(new Animated.Value(0.5)).current;
 
   useEffect(() => {
-    if (phase !== 'checking') return;
+    if (phase !== 'checking' && phase !== 'retry') return;
     const anim = Animated.loop(
       Animated.sequence([
         Animated.timing(breathOpacity, { toValue: 1, duration: 900, useNativeDriver: true }),
@@ -47,40 +41,28 @@ export default function VerrouilleScreen() {
 
   useEffect(() => {
     getLastPhone().then(setLastPhone);
-    getPinFailCount().then(count => setAttemptsLeft(Math.max(0, MAX_PIN_ATTEMPTS - count)));
-
-    unlockWithBiometric().then(ok => {
-      // On success the routing guard redirects automatically once `locked`
-      // flips false — nothing to do here. On failure/unavailable, reveal PIN.
-      if (!ok) setPhase('pin');
-    });
   }, []);
 
-  async function handlePinComplete(pin: string) {
-    setBusy(true);
-    const result = await unlockWithPin(pin);
-    setBusy(false);
-
-    if (result === 'unlocked') return; // routing guard redirects automatically once `locked` flips false
-
-    if (result === 'restore-failed') {
-      // The PIN was correct — this is a connectivity/session issue, not a bad
-      // code. Never count it against the attempt limit or blame the PIN.
-      setResetSignal(s => s + 1);
-      setError('Impossible de vous reconnecter. Vérifiez votre connexion et réessayez.');
-      return;
-    }
-
-    const failCount = await getPinFailCount();
-    const remaining = Math.max(0, MAX_PIN_ATTEMPTS - failCount);
-    setAttemptsLeft(remaining);
-    setResetSignal(s => s + 1);
-    if (remaining <= 0) {
-      setPhase('locked-out');
-    } else {
-      setError(`Code incorrect. ${remaining} tentative${remaining > 1 ? 's' : ''} restante${remaining > 1 ? 's' : ''}.`);
-    }
+  async function attemptBiometric() {
+    setPhase('checking');
+    const result = await unlockWithBiometric();
+    // 'unlocked' → nothing to do, the route guards redirect automatically
+    // once `locked` flips false.
+    if (result === 'unlocked') return;
+    if (result === 'retryable') setPhase('retry');
+    else if (result === 'restore-failed') setPhase('restore-failed');
+    else setPhase('unavailable');
   }
+
+  useEffect(() => {
+    // Firing authenticateAsync while this screen's own mount/route transition
+    // is still animating makes the OS silently reject the prompt with no
+    // native UI at all — waiting for interactions to finish avoids racing it.
+    const task = InteractionManager.runAfterInteractions(() => {
+      attemptBiometric();
+    });
+    return () => task.cancel();
+  }, []);
 
   async function degradeToFullLogin() {
     await useAuthStore.getState().logout();
@@ -93,42 +75,35 @@ export default function VerrouilleScreen() {
         <ScrollView contentContainerStyle={styles.scrollContent} keyboardShouldPersistTaps="handled">
           <View style={styles.content}>
             <View style={styles.header}>
-              <Text variant="h2">Bonjour {lastPhone ? `· ${lastPhone}` : ''}</Text>
-              {phase === 'pin' && (
-                <Text variant="body" color="secondary" style={styles.sub}>
-                  {attemptsLeft < MAX_PIN_ATTEMPTS
-                    ? `Entrez votre code pour continuer (${attemptsLeft} tentative${attemptsLeft > 1 ? 's' : ''} restante${attemptsLeft > 1 ? 's' : ''})`
-                    : 'Entrez votre code pour continuer'}
-                </Text>
-              )}
+              <Animated.View style={{ opacity: (phase === 'checking' || phase === 'retry') ? breathOpacity : 1 }}>
+                <Ionicons name="lock-closed" size={40} color={palette.textSecondary} />
+              </Animated.View>
             </View>
 
-            {error && <Text variant="bodySmall" color="warning" style={styles.error}>{error}</Text>}
-
-            {phase === 'checking' && (
+            {(phase === 'checking' || phase === 'retry') && (
               <>
-                <Animated.View style={{ opacity: breathOpacity }}>
-                  <Ionicons name="lock-closed" size={34} color={palette.textSecondary} />
-                </Animated.View>
-                <Button label="Utiliser mon code" variant="ghost" onPress={() => setPhase('pin')} />
+                {phase === 'retry' && (
+                  <Button label="Réessayer" onPress={attemptBiometric} fullWidth size="lg" />
+                )}
+                <Button label="Se connecter via WhatsApp" variant="ghost" onPress={degradeToFullLogin} />
               </>
             )}
 
-            {phase === 'pin' && (
-              <>
-                <View style={styles.pinWrap}>
-                  <PinInput onComplete={handlePinComplete} disabled={busy} autoFocus resetSignal={resetSignal} />
-                </View>
-                <Button label="Changer de compte" variant="ghost" onPress={degradeToFullLogin} />
-              </>
+            {phase === 'restore-failed' && (
+              <View style={styles.form}>
+                <Text variant="bodySmall" color="warning" style={styles.sub}>
+                  Impossible de vous reconnecter. Vérifiez votre connexion et réessayez.
+                </Text>
+                <Button label="Réessayer" onPress={attemptBiometric} fullWidth size="lg" />
+              </View>
             )}
 
-            {phase === 'locked-out' && (
+            {phase === 'unavailable' && (
               <View style={styles.form}>
                 <Text variant="bodySmall" color="secondary" style={styles.sub}>
-                  Trop de tentatives. Reconnectez-vous avec un nouveau code envoyé par WhatsApp.
+                  Authentification biométrique indisponible sur cet appareil.
                 </Text>
-                <Button label="Se reconnecter avec un nouveau code" onPress={degradeToFullLogin} fullWidth size="lg" />
+                <Button label="Se connecter via WhatsApp" onPress={degradeToFullLogin} fullWidth size="lg" />
               </View>
             )}
           </View>
@@ -142,11 +117,13 @@ function makeStyles(_p: Palette) {
   return StyleSheet.create({
     kav:           { flex: 1 },
     scrollContent: { flexGrow: 1 },
-    content:       { flex: 1, padding: spacing[6], gap: spacing[6], justifyContent: 'center', alignItems: 'center' },
+    // flex-start + paddingTop (not centered) — keeps the lock icon and the
+    // Réessayer/WhatsApp buttons within easy one-handed thumb reach near the
+    // top-middle of the screen, instead of sitting dead-center where a thumb
+    // has to stretch down the phone to tap them.
+    content:       { flex: 1, padding: spacing[6], paddingTop: spacing[20], gap: spacing[6], justifyContent: 'flex-start', alignItems: 'center' },
     header:        { gap: spacing[3], alignItems: 'center' },
     sub:           { lineHeight: 22, textAlign: 'center' },
-    pinWrap:       { alignItems: 'center' },
     form:          { gap: spacing[4], width: '100%' },
-    error:         { textAlign: 'center' },
   });
 }

@@ -24,6 +24,8 @@ const ROUTE_MAP: Record<string, string> = {
   partnership_request:   '/(app)/discussions',
   partnership_accepted:  '/(app)/discussions',
   po_received:           '/(app)/fournisseurs',
+  support_message:       '/(app)/support-inbox',
+  support_reply:         '/(app)/support',
 };
 
 // ─── Three-line format ───────────────────────────────────────────────────────
@@ -46,6 +48,8 @@ const SUBTITLE_MAP: Record<string, string | null> = {
   partnership_request:   'Amis',
   partnership_accepted:  'Amis',
   po_received:           'Livraison',
+  support_message:       'Support',
+  support_reply:         null, // body is a self-explanatory full sentence — no subtitle needed
 };
 
 function buildBody(eventType: string, p: Record<string, string | number>): string {
@@ -87,6 +91,12 @@ function buildBody(eventType: string, p: Record<string, string | number>): strin
     // Subtitle carries "Livraison" — body: count and supplier
     case 'po_received':
       return `${p.N} article${Number(p.N) > 1 ? 's' : ''} de ${p.supplier}`;
+    // No subtitle — body carries everything: sender · preview (same shape as chat_message)
+    case 'support_message':
+      return `${p.sender} · ${p.preview}`;
+    // Subtitle carries "Support" — body: the reply preview
+    case 'support_reply':
+      return String(p.preview ?? '');
     default:
       return String(p.body ?? '');
   }
@@ -102,6 +112,8 @@ const URGENT_EVENTS = new Set([
   'sale_cancelled',
   'role_changed',
   'member_removed',
+  'support_message',
+  'support_reply',
 ]);
 
 // Time-sensitive interruption: also includes approved/rejected (person is waiting)
@@ -133,10 +145,34 @@ interface ExpoTicket {
   details?: { error?: string };
 }
 
+// Events where the caller legitimately dispatches to a business they are NOT
+// a member of — the two partnership handshake notifications, sent to the
+// *other* business in the relationship. Authorized instead via an actual
+// business_partnerships row linking that business to one of the caller's own.
+const CROSS_BUSINESS_EVENTS = new Set(['partnership_request', 'partnership_accepted']);
+
+// The founder replying to a support thread is never a member of the
+// merchant's business — authorized instead by matching profiles.phone,
+// mirroring is_founder() in db/migration_v126.sql.
+const FOUNDER_EVENTS = new Set(['support_reply']);
+
+async function callerIsFounder(supabase: ReturnType<typeof createClient>, userId: string): Promise<boolean> {
+  const { data: profile } = await supabase.from('profiles').select('phone').eq('id', userId).maybeSingle();
+  const digits = ((profile as { phone: string | null } | null)?.phone ?? '').replace(/\D/g, '');
+  return digits === '12672421843';
+}
+
 serve(async (req) => {
   if (req.method === 'OPTIONS') return new Response('ok', { headers: corsHeaders });
 
   try {
+    const authHeader = req.headers.get('Authorization');
+    if (!authHeader?.startsWith('Bearer ')) {
+      return new Response(JSON.stringify({ error: 'Non authentifié' }), {
+        status: 401, headers: { ...corsHeaders, 'Content-Type': 'application/json' },
+      });
+    }
+
     const input = await req.json() as DispatchInput;
     let { payload } = input;
     const { business_id, event_type, target_roles, target_user_ids, exclude_user_id } = input;
@@ -147,10 +183,51 @@ serve(async (req) => {
       });
     }
 
+    const userClient = createClient(
+      Deno.env.get('SUPABASE_URL')!,
+      Deno.env.get('SUPABASE_ANON_KEY')!,
+      { global: { headers: { Authorization: authHeader } } },
+    );
+    const { data: { user }, error: userErr } = await userClient.auth.getUser();
+    if (userErr || !user) {
+      return new Response(JSON.stringify({ error: 'Session invalide' }), {
+        status: 401, headers: { ...corsHeaders, 'Content-Type': 'application/json' },
+      });
+    }
+
     const supabase = createClient(
       Deno.env.get('SUPABASE_URL')!,
       Deno.env.get('SUPABASE_SERVICE_ROLE_KEY')!,
     );
+
+    // Caller must either belong to the business they're dispatching for, or
+    // (for the partnership handshake events only) have an actual partnership
+    // row linking one of their own businesses to this one.
+    const { data: callerMemberships } = await supabase
+      .from('memberships')
+      .select('business_id')
+      .eq('user_id', user.id);
+    const callerBusinessIds = (callerMemberships ?? []).map((m: { business_id: string }) => m.business_id);
+
+    let authorized = callerBusinessIds.includes(business_id);
+    if (!authorized && CROSS_BUSINESS_EVENTS.has(event_type) && callerBusinessIds.length > 0) {
+      const { count } = await supabase
+        .from('business_partnerships')
+        .select('id', { count: 'exact', head: true })
+        .or(
+          `and(requester_id.eq.${business_id},recipient_id.in.(${callerBusinessIds.join(',')})),`
+          + `and(recipient_id.eq.${business_id},requester_id.in.(${callerBusinessIds.join(',')}))`,
+        );
+      authorized = (count ?? 0) > 0;
+    }
+    if (!authorized && FOUNDER_EVENTS.has(event_type)) {
+      authorized = await callerIsFounder(supabase, user.id);
+    }
+    if (!authorized) {
+      return new Response(JSON.stringify({ error: 'Accès refusé' }), {
+        status: 403, headers: { ...corsHeaders, 'Content-Type': 'application/json' },
+      });
+    }
 
     // Validate business + get name for the notification title
     const { data: biz } = await supabase
@@ -190,12 +267,27 @@ serve(async (req) => {
 
     // Resolve recipients
     let userIds: string[] = target_user_ids ?? [];
-    if (userIds.length === 0 && target_roles?.length) {
+    if (event_type === 'support_message') {
+      // Always routes to the founder himself, regardless of any target_roles/
+      // target_user_ids the caller passed — he is not a member of business_id,
+      // so the memberships-based resolution below can never find him.
+      const { data: founderId } = await supabase.rpc('get_founder_id');
+      userIds = founderId ? [founderId as string] : [];
+    } else if (userIds.length === 0 && target_roles?.length) {
       const { data: members } = await supabase
         .from('memberships')
         .select('user_id')
         .eq('business_id', business_id)
         .in('role', target_roles);
+      userIds = (members ?? []).map((m: { user_id: string }) => m.user_id);
+    } else if (userIds.length > 0) {
+      // Caller-supplied recipient list — restrict to real members of this
+      // business so a caller can never target an arbitrary user_id.
+      const { data: members } = await supabase
+        .from('memberships')
+        .select('user_id')
+        .eq('business_id', business_id)
+        .in('user_id', userIds);
       userIds = (members ?? []).map((m: { user_id: string }) => m.user_id);
     }
     if (exclude_user_id) userIds = userIds.filter(id => id !== exclude_user_id);

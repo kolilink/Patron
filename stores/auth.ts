@@ -1,12 +1,14 @@
 import { create } from 'zustand';
+import * as Sentry from '@sentry/react-native';
 import * as SecureStore from 'expo-secure-store';
 import * as Localization from 'expo-localization';
+import { isAuthRetryableFetchError } from '@supabase/supabase-js';
 import { supabase, clearSupabaseLocalSession, revokeAccessToken } from '@/lib/supabase';
 import { translateError } from '@/lib/errors';
 import { generateId } from '@/lib/id';
 import { syncKnownBusinesses } from '@/lib/knownBusinesses';
 import { getKV, setKV } from '@/lib/db';
-import { isLocked, setLocked, clearPin, verifyPin, incrementPinFailCount, resetPinFailCount } from '@/lib/pin';
+import { isLocked, setLocked } from '@/lib/lock';
 import type { AppSession, Business, Membership, Role, User } from '@/src/types';
 import { useProductStore } from './products';
 import { useVentesStore } from './ventes';
@@ -22,6 +24,7 @@ import { useAportsStore } from './apports';
 import { useInvestorStore } from './investor';
 import { usePartnershipsStore } from './partnerships';
 import { trackEvent, identifyUser, resetAnalytics } from '@/lib/analytics';
+import { loginPurchases, logoutPurchases } from '@/lib/purchases';
 import { notifyEvent, deleteDeviceToken } from '@/src/utils/notifications';
 
 // ─── Last phone + biometric refresh token (quick-login) ──────────────────────
@@ -117,6 +120,14 @@ let _explicitLogout = false;
 let _currentAccessToken: string | null = null;
 const PENDING_SIGNOUT_TOKEN_KEY = 'pending_signout_token';
 
+// A second authenticateAsync() call fired while one is still pending (e.g. the
+// screen's own mount-time auto-attempt racing a manual "Réessayer" tap) makes
+// iOS/Android silently reject the newer call with no native UI shown at all —
+// LocalAuthentication only supports one in-flight prompt per app. Guards
+// unlockWithBiometric() below so a stacked call is dropped instead of
+// swallowed as a mysterious no-op.
+let _biometricPromptInFlight = false;
+
 function resetAllStores() {
   useProductStore.getState().reset();
   useVentesStore.getState().reset();
@@ -166,15 +177,17 @@ interface AuthStore {
   register: (name: string, email: string, password: string) => Promise<void>;
   logout: () => Promise<void>;
   selectBusiness: (businessId: string) => void;
-  createBusiness: (data: { name: string; type?: string; currency: string }) => Promise<void>;
+  createBusiness: (data: { name: string; type?: string; currency: string; referralCode?: string }) => Promise<void>;
   joinBusiness: (code: string) => Promise<void>;
   loginWithBiometric: () => Promise<boolean>;
   lock: () => Promise<void>;
-  // 'wrong-pin' counts against the attempt limit; 'restore-failed' means the PIN
-  // was correct but the underlying session couldn't be refreshed (e.g. offline)
-  // — that must never be reported to the user as an incorrect code.
-  unlockWithPin: (pin: string) => Promise<'unlocked' | 'wrong-pin' | 'restore-failed'>;
-  unlockWithBiometric: () => Promise<boolean>;
+  // 'retryable' covers cancels/interruptions (worth an immediate re-prompt);
+  // 'unavailable' means no usable biometric at all (hardware/enrollment
+  // missing, or a hard failure like lockout) — only this should fall back to
+  // a full WhatsApp OTP re-login. 'restore-failed' means biometric succeeded
+  // but the underlying session couldn't be refreshed (e.g. offline) — that
+  // must never be treated as a failed auth attempt.
+  unlockWithBiometric: () => Promise<'unlocked' | 'retryable' | 'unavailable' | 'restore-failed'>;
   clearJustAuthenticated: () => void;
   createPhoneVerification: (phone: string) => Promise<{ verificationId: string } | null>;
   loginWithPhone: (phone: string) => Promise<{ verificationId: string } | null>;
@@ -306,7 +319,7 @@ export const useAuthStore = create<AuthStore>((set, get) => ({
     }
 
     try {
-      const { data: { session } } = await supabase.auth.getSession();
+      const { data: { session }, error: sessionError } = await supabase.auth.getSession();
       _currentAccessToken = session?.access_token ?? _currentAccessToken;
 
       // Retry any server-side sign-out that couldn't reach the network last
@@ -314,9 +327,18 @@ export const useAuthStore = create<AuthStore>((set, get) => ({
       void retryPendingSignOut();
 
       if (!session) {
-        if (!cachedSession) set({ session: null, loading: false });
-        // Offline (or genuinely logged out) with a cached session already
-        // rendered above — nothing more to do here.
+        // A retryable fetch error means we simply couldn't reach the server
+        // (no connectivity) — the account's real validity is unknown, so keep
+        // showing the cached session for offline use. Any other outcome (no
+        // error at all, or a non-retryable auth error such as an invalid or
+        // revoked refresh token) means the account is genuinely no longer
+        // valid server-side — a stale cached session must not keep being
+        // trusted indefinitely just because it happens to exist locally.
+        if (sessionError && isAuthRetryableFetchError(sessionError)) {
+          // Offline — cached session (if any) already rendered above.
+        } else {
+          set({ session: null, loading: false });
+        }
       } else {
         // Belt-and-suspenders: save the token we got from getSession() directly,
         // in case the TOKEN_REFRESHED event fired before the listener was ready.
@@ -351,6 +373,7 @@ export const useAuthStore = create<AuthStore>((set, get) => ({
           }
           const removed = await syncKnownBusinesses(session.user.id, appSession.memberships);
           void persistSessionCache(appSession);
+          if (appSession.activeBusiness) void loginPurchases(appSession.activeBusiness.id);
           if (removed.length > 0 && appSession.memberships.length === 0) {
             set({ session: appSession, removedBusinessesOnLogin: removed, loading: false });
           } else if (removed.length > 0 && appSession.memberships.length > 0) {
@@ -453,6 +476,7 @@ export const useAuthStore = create<AuthStore>((set, get) => ({
     const accessTokenToRevoke = _currentAccessToken;
     trackEvent('user_logged_out', session?.activeBusiness?.id ?? null, userId ?? null);
     resetAnalytics();
+    void logoutPurchases();
 
     // Logging out is a local, instant action — it must never wait on the
     // network. supabase.auth.signOut() calls the server *before* it clears
@@ -465,7 +489,6 @@ export const useAuthStore = create<AuthStore>((set, get) => ({
     await clearSupabaseLocalSession();
     await clearSessionCache();
     void clearBioRefreshToken();
-    void clearPin();
     await setLocked(false);
     if (userId) setKV(`demo_mode_${userId}`, 'false').catch(() => {});
     resetAllStores();
@@ -524,7 +547,7 @@ export const useAuthStore = create<AuthStore>((set, get) => ({
     set({ session: nextSession });
   },
 
-  createBusiness: async ({ name, type, currency }) => {
+  createBusiness: async ({ name, type, currency, referralCode }) => {
     const { session } = get();
     if (!session) return;
 
@@ -535,6 +558,7 @@ export const useAuthStore = create<AuthStore>((set, get) => ({
     }
 
     set({ loading: true, error: null });
+    trackEvent('business_create_started', null, session.user.id);
 
     const businessId = generateId();
 
@@ -556,9 +580,31 @@ export const useAuthStore = create<AuthStore>((set, get) => ({
     }
 
     const m = membership as Membership;
+
+    // Referral code ("Inviter un ami" in Paramètres) is optional and
+    // best-effort — a bad/expired code should never block business
+    // creation. resolve_referral_code is SECURITY DEFINER because this
+    // brand-new user isn't a member of the referrer's business yet, so the
+    // normal is_member(id) SELECT policy on businesses would otherwise
+    // block the lookup. The actual write below is a plain client update,
+    // allowed by the "Administrateurs: modifier leur commerce" policy
+    // since this user is now that business's own admin.
+    if (referralCode?.trim()) {
+      try {
+        const { data: referrerId } = await supabase.rpc('resolve_referral_code', { p_code: referralCode.trim() });
+        if (referrerId && referrerId !== businessId) {
+          await supabase.from('businesses').update({ referred_by_business_id: referrerId }).eq('id', businessId);
+          if (m.business) (m.business as Business).referred_by_business_id = referrerId as string;
+        }
+      } catch (err) {
+        console.warn('[createBusiness] referral code lookup failed:', err);
+      }
+    }
+
     const newMemberships = [...session.memberships, m];
     // Persist so next cold start lands on the newly created business
     setKV(`last_business_${session.user.id}`, businessId).catch(() => {});
+    void loginPurchases(businessId);
     // Seed the cache so first-reload removal detection works immediately
     syncKnownBusinesses(session.user.id, newMemberships).catch(() => {});
     resetAllStores();
@@ -577,6 +623,7 @@ export const useAuthStore = create<AuthStore>((set, get) => ({
       showTrialWelcome: true,
       loading: false,
     });
+    trackEvent('business_created', businessId, session.user.id, { currency, business_type: type ?? null });
   },
 
   joinBusiness: async (code) => {
@@ -584,6 +631,7 @@ export const useAuthStore = create<AuthStore>((set, get) => ({
     if (!session) return;
 
     set({ loading: true, error: null });
+    trackEvent('business_join_started', null, session.user.id);
     try {
       const joinedCount = session.memberships.filter(m => m.role !== 'administrateur').length;
       if (joinedCount >= 3) throw new Error('Vous avez atteint la limite de 3 commerces rejoints. Bientôt, vous pourrez en rejoindre davantage.');
@@ -615,6 +663,7 @@ export const useAuthStore = create<AuthStore>((set, get) => ({
           // Already a member — reload session so navigation proceeds
           const appSession = await loadSession(session.user.id);
           set({ session: appSession, loading: false });
+          trackEvent('business_joined', appSession.activeBusiness?.id ?? null, session.user.id);
           return;
         }
         throw rpcErr;
@@ -646,6 +695,7 @@ export const useAuthStore = create<AuthStore>((set, get) => ({
       });
 
       set({ session: appSession, loading: false });
+      trackEvent('business_joined', business_id, session.user.id);
     } catch (err) {
       const raw = err instanceof Error ? err.message : (err as Record<string, unknown>)?.message as string | undefined;
       set({ error: translateError(err, raw ?? 'Erreur lors de la jonction'), loading: false });
@@ -691,58 +741,66 @@ export const useAuthStore = create<AuthStore>((set, get) => ({
     }
   },
 
-  // ─── PIN-based soft lock ───────────────────────────────────────────────────
+  // ─── Biometric-only soft lock ──────────────────────────────────────────────
   // "Verrouiller" is deliberately NOT logout(): it never touches SecureStore's
   // Supabase session, the bio refresh token, or any domain store — those are
-  // exactly what let unlockWithPin/unlockWithBiometric restore the session for
-  // free below, with no WhatsApp OTP. logout() remains the only path that
-  // wipes all of that, for the rarer "fully sign out / switch account" case.
+  // exactly what let unlockWithBiometric restore the session for free below,
+  // with no WhatsApp OTP. logout() remains the only path that wipes all of
+  // that, for the "fully sign out / switch account" case — also the only
+  // fallback when biometric itself is unavailable, since there's no PIN.
 
   lock: async () => {
     await setLocked(true);
     set({ session: null, locked: true });
   },
 
-  unlockWithPin: async (pin) => {
-    const ok = await verifyPin(pin);
-    if (!ok) {
-      await incrementPinFailCount();
-      return 'wrong-pin';
-    }
-    // The PIN itself is correct from here on — nothing below should ever
-    // count against the wrong-attempt limit or be reported as a bad code.
-    await resetPinFailCount();
-    const restored = await get().loginWithBiometric();
-    if (!restored) return 'restore-failed';
-    await setLocked(false);
-    set({ locked: false });
-    return 'unlocked';
-  },
-
   unlockWithBiometric: async () => {
+    // Dropped, not queued — a stacked call while one is already showing its
+    // native prompt gets silently rejected by the OS with no UI at all, which
+    // reads to the user as "nothing happens when I tap Réessayer."
+    if (_biometricPromptInFlight) return 'retryable';
+    _biometricPromptInFlight = true;
     try {
       const LocalAuthentication = await import('expo-local-authentication');
       const [hasHardware, isEnrolled] = await Promise.all([
         LocalAuthentication.hasHardwareAsync(),
         LocalAuthentication.isEnrolledAsync(),
       ]);
-      if (!hasHardware || !isEnrolled) return false;
+      if (!hasHardware || !isEnrolled) return 'unavailable';
 
-      const result = await LocalAuthentication.authenticateAsync({
-        promptMessage: 'Confirmez votre identité pour continuer',
-        cancelLabel: 'Annuler',
-      });
-      if (!result.success) return false;
-    } catch {
-      return false;
-    }
+      // Errors that mean "no usable biometric on this device/attempt ever" vs.
+      // ones that just mean "that particular attempt didn't land" (cancel,
+      // interruption, a single bad read) and deserve an immediate re-prompt
+      // rather than being forced straight to a full OTP re-login.
+      const HARD_FAIL = new Set(['not_enrolled', 'not_available', 'lockout', 'passcode_not_set', 'no_space']);
+      let result;
+      try {
+        result = await LocalAuthentication.authenticateAsync({
+          promptMessage: 'Confirmez votre identité pour continuer',
+          cancelLabel: 'Annuler',
+          disableDeviceFallback: true, // true biometric only — no OS passcode escape hatch
+        });
+      } catch (err) {
+        Sentry.captureMessage('biometric_authenticate_threw', { extra: { err: String(err) } });
+        return 'retryable';
+      }
+      if (!result.success) {
+        // Logged because a bare boolean/'retryable' hides the actual native
+        // reason (e.g. 'missing_usage_description' — see "Biometric-only
+        // lock" in CLAUDE.md) — both present to the user as the prompt never
+        // appearing at all, but need different fixes.
+        Sentry.captureMessage('biometric_authenticate_failed', { extra: { error: result.error } });
+        return HARD_FAIL.has(result.error) ? 'unavailable' : 'retryable';
+      }
 
-    const restored = await get().loginWithBiometric();
-    if (restored) {
+      const restored = await get().loginWithBiometric();
+      if (!restored) return 'restore-failed';
       await setLocked(false);
       set({ locked: false });
+      return 'unlocked';
+    } finally {
+      _biometricPromptInFlight = false;
     }
-    return restored;
   },
 
   clearJustAuthenticated: () => set({ justAuthenticated: false }),
@@ -875,6 +933,7 @@ export const useAuthStore = create<AuthStore>((set, get) => ({
       setKV(`demo_mode_${user.id}`, 'false').catch(() => {});
       const appSession = await loadSession(user.id);
       identifyUser(appSession);
+      if (appSession.activeBusiness) void loginPurchases(appSession.activeBusiness.id);
       trackEvent('user_signed_up', appSession.activeBusiness?.id ?? null, appSession.user.id, {
         has_business: appSession.memberships.length > 0,
       });
@@ -921,6 +980,7 @@ export const useAuthStore = create<AuthStore>((set, get) => ({
       void saveBioRefreshToken(session.refresh_token);
       const appSession = await loadSession(session.user.id, session.user.phone);
       identifyUser(appSession);
+      if (appSession.activeBusiness) void loginPurchases(appSession.activeBusiness.id);
       trackEvent('user_logged_in', appSession.activeBusiness?.id ?? null, appSession.user.id, {
         method: 'phone_otp',
         has_business: appSession.memberships.length > 0,
@@ -991,6 +1051,7 @@ export const useAuthStore = create<AuthStore>((set, get) => ({
       void saveBioRefreshToken(session.refresh_token);
       const appSession = await loadSession(session.user.id, session.user.phone);
       identifyUser(appSession);
+      if (appSession.activeBusiness) void loginPurchases(appSession.activeBusiness.id);
       trackEvent('user_logged_in', appSession.activeBusiness?.id ?? null, appSession.user.id, {
         method: 'email_recovery',
         has_business: appSession.memberships.length > 0,
@@ -1097,7 +1158,7 @@ export const useAuthStore = create<AuthStore>((set, get) => ({
 
     const { data } = await supabase
       .from('businesses')
-      .select('subscription_status, trial_ends_at, subscription_expires_at, updated_at')
+      .select('subscription_status, trial_ends_at, subscription_expires_at, bonus_access_until, payment_provider, updated_at')
       .eq('id', session.activeBusiness.id)
       .single();
 
