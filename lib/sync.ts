@@ -1,5 +1,7 @@
 import { supabase } from '@/lib/supabase';
 import { getPendingOps, deleteQueueItem, markAttemptFailed } from '@/lib/db';
+import { notifyEvent } from '@/src/utils/notifications';
+import { formatAmount } from '@/src/utils/format';
 
 export type SyncResult = {
   synced: number;
@@ -35,11 +37,65 @@ export function isNetworkError(err: unknown): boolean {
   );
 }
 
+// Builds the "{qty} {product}" fragment for the sale-completed notification,
+// mirroring stores/sales.ts's describeSaleForNotification but operating on
+// the raw cart JSON stored in the queue (no CartLine/Product objects survive
+// a trip through SQLite).
+function describeQueuedCart(
+  cart: { product_id: string; product_name: string; qty: number; variant_name?: string | null }[],
+): string {
+  const byProduct = new Set(cart.map(l => l.product_id));
+  const totalQty = cart.reduce((s, l) => s + l.qty, 0);
+  if (byProduct.size > 1) return `${totalQty} produits`;
+  const first = cart[0];
+  if (!first) return `${totalQty} article${totalQty > 1 ? 's' : ''}`;
+  return first.variant_name ? `${totalQty} ${first.product_name} ${first.variant_name}` : `${totalQty} ${first.product_name}`;
+}
+
+// The online path (stores/sales.ts) notifies admins/managers right after a
+// successful submit_sale call — the offline-queue replay skipped this
+// entirely, so sales made offline (this app's core low-connectivity use
+// case) never generated the notification once synced. Best-effort: a lookup
+// failure here must never affect the sync result itself.
+async function notifyQueuedSaleSynced(payload: Record<string, unknown>): Promise<void> {
+  try {
+    const businessId = payload.p_business_id as string;
+    const sellerId = payload.p_seller_id as string;
+    const cart = (payload.p_cart as { product_id: string; product_name: string; qty: number; variant_name?: string | null }[]) ?? [];
+    const totalCents = (payload.p_total_amount as number) ?? 0;
+
+    const [{ data: biz }, { data: membership }, { data: profile }] = await Promise.all([
+      supabase.from('businesses').select('currency').eq('id', businessId).maybeSingle(),
+      supabase.from('memberships').select('display_name').eq('business_id', businessId).eq('user_id', sellerId).maybeSingle(),
+      supabase.from('profiles').select('name').eq('id', sellerId).maybeSingle(),
+    ]);
+
+    const currency = (biz as { currency: string } | null)?.currency ?? 'GNF';
+    const sellerName = (membership as { display_name: string | null } | null)?.display_name
+      || (profile as { name: string | null } | null)?.name
+      || 'Vendeur';
+
+    notifyEvent({
+      businessId,
+      eventType: 'sale_completed',
+      payload: {
+        seller: sellerName,
+        desc: describeQueuedCart(cart),
+        amount: formatAmount(totalCents / 100, currency),
+      },
+      targetRoles: ['administrateur', 'manager'],
+    });
+  } catch {
+    // Best-effort — never let a notification lookup failure affect sync.
+  }
+}
+
 async function executeOp(operation: string, payload: Record<string, unknown>): Promise<void> {
   switch (operation) {
     case 'submit_sale': {
       const { error } = await supabase.rpc('submit_sale', payload);
       if (error) throw error;
+      void notifyQueuedSaleSynced(payload);
       break;
     }
     case 'create_expense': {

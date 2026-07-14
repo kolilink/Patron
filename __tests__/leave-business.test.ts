@@ -33,6 +33,8 @@ const biz1: Business = {
   logo_url: null, status: 'actif', subscription_tier: 'gratuit',
   subscription_status: 'trialing', trial_ends_at: null,
   stripe_customer_id: null, subscription_expires_at: null, phone: null,
+  payment_provider: null, revenuecat_customer_id: null, bonus_access_until: null,
+  referred_by_business_id: null, referral_code: null,
   created_at: '2026-01-01T00:00:00Z', updated_at: '2026-01-01T00:00:00Z', created_by: 'user-1',
 };
 
@@ -41,18 +43,20 @@ const biz2: Business = {
   logo_url: null, status: 'actif', subscription_tier: 'gratuit',
   subscription_status: 'trialing', trial_ends_at: null,
   stripe_customer_id: null, subscription_expires_at: null, phone: null,
+  payment_provider: null, revenuecat_customer_id: null, bonus_access_until: null,
+  referred_by_business_id: null, referral_code: null,
   created_at: '2026-01-01T00:00:00Z', updated_at: '2026-01-01T00:00:00Z', created_by: 'user-1',
 };
 
 const mem1: Membership = {
   id: 'mem-1', user_id: 'user-1', business_id: 'biz-1',
-  role: 'administrateur', pin_hash: null, joined_at: '2026-01-01T00:00:00Z',
+  role: 'administrateur', joined_at: '2026-01-01T00:00:00Z',
   milestone_reached: false, business: biz1,
 };
 
 const mem2: Membership = {
   id: 'mem-2', user_id: 'user-1', business_id: 'biz-2',
-  role: 'manager', pin_hash: null, joined_at: '2026-01-01T00:00:00Z',
+  role: 'manager', joined_at: '2026-01-01T00:00:00Z',
   milestone_reached: false, business: biz2,
 };
 
