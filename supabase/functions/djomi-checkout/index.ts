@@ -42,6 +42,16 @@ const corsHeaders = {
 // hole in a payment flow.
 const ALLOWED_RETURN_ORIGINS = ['https://patron.kolilink.com'];
 
+// Client IP as seen by the edge (Supabase forwards this header). Used to
+// rate-limit payment creation — this is an unauthenticated public endpoint, so
+// without it an attacker could spam Djomi's payment-gateway API (cost/abuse)
+// and pile up djomi_pending_payments rows.
+function getClientIp(req: Request): string {
+  const fwd = req.headers.get('x-forwarded-for');
+  return fwd ? fwd.split(',')[0].trim() : 'unknown';
+}
+const POST_RATE_LIMIT_PER_HOUR = 15;
+
 // Same 00224-prefixed international format Djomi requires — see the
 // original integration draft this was built from.
 function formatPayerNumber(phone: string): string {
@@ -444,6 +454,23 @@ Deno.serve(async (req) => {
     }
 
     const supabase = djomiServiceClient();
+
+    // ─── Per-IP rate limit (unauthenticated endpoint) ───────────
+    // Reuses the shared ip_verification_attempts table (migration_v113.sql),
+    // endpoint 'djomi_checkout'. Caps payment-creation spam against Djomi's API.
+    const clientIp = getClientIp(req);
+    const { count: ipCount } = await supabase
+      .from('ip_verification_attempts')
+      .select('*', { count: 'exact', head: true })
+      .eq('ip', clientIp)
+      .eq('endpoint', 'djomi_checkout')
+      .gt('attempted_at', new Date(Date.now() - 60 * 60 * 1000).toISOString());
+    if ((ipCount ?? 0) >= POST_RATE_LIMIT_PER_HOUR) {
+      return new Response(JSON.stringify({ error: 'Trop de tentatives. Réessayez plus tard.' }), {
+        status: 429, headers: { ...corsHeaders, 'Content-Type': 'application/json' },
+      });
+    }
+    await supabase.from('ip_verification_attempts').insert({ ip: clientIp, endpoint: 'djomi_checkout' });
 
     // Resolves to the business this phone administers, or the business
     // this personalized-link token belongs to — see

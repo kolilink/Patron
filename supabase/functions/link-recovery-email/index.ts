@@ -75,7 +75,9 @@ serve(async (req) => {
       .eq('id', verificationId)
       .maybeSingle();
 
-    console.log('link-recovery-email: verif=', JSON.stringify(verif), 'err=', verifErr?.message);
+    // Never log verif in full — it contains the plaintext OTP `token`, which
+    // would put valid, in-window email-verification codes into edge logs.
+    console.log('link-recovery-email: rowFound=', !!verif, 'status=', verif?.status, 'err=', verifErr?.message);
 
     if (verifErr) throw verifErr;
 
@@ -111,7 +113,7 @@ serve(async (req) => {
     }
 
     if (!timingSafeEqual(verif.token, normalizedCode)) {
-      console.error('link-recovery-email: token mismatch stored=', verif.token, 'got=', normalizedCode);
+      console.error('link-recovery-email: token mismatch for verificationId=', verificationId);
       await serviceClient
         .from('email_verifications')
         .update({ failed_attempts: verif.failed_attempts + 1 })

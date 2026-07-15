@@ -195,6 +195,17 @@ serve(async (req) => {
       });
     }
 
+    // business_id is later string-interpolated into a PostgREST .or() filter
+    // (the partnership authorization check). Reject anything that isn't a plain
+    // UUID up front so no filter metacharacters can ever reach that expression
+    // — defense-in-depth; a valid UUID has none.
+    const UUID_RE = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
+    if (!UUID_RE.test(business_id)) {
+      return new Response(JSON.stringify({ error: 'business_id invalide' }), {
+        status: 400, headers: { ...corsHeaders, 'Content-Type': 'application/json' },
+      });
+    }
+
     const supabase = createClient(
       Deno.env.get('SUPABASE_URL')!,
       Deno.env.get('SUPABASE_SERVICE_ROLE_KEY')!,

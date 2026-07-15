@@ -1,4 +1,4 @@
-import { hmacHex, confirmDjomiPayment, djomiServiceClient, getPendingPayment } from '../_shared/djomi.ts';
+import { hmacHex, timingSafeEqualHex, verifyDjomiTransaction, confirmDjomiPayment, djomiServiceClient, getPendingPayment } from '../_shared/djomi.ts';
 
 // ============================================================
 // djomi-webhook — a BACKSTOP, not the primary confirmation path.
@@ -35,8 +35,9 @@ Deno.serve(async (req) => {
   }
 
   try {
+    const CLIENT_ID = Deno.env.get('djomi_id');
     const CLIENT_SECRET = Deno.env.get('djomi_key');
-    if (!CLIENT_SECRET) {
+    if (!CLIENT_ID || !CLIENT_SECRET) {
       throw new Error('Configuration Djomi incomplète.');
     }
 
@@ -50,7 +51,7 @@ Deno.serve(async (req) => {
       return new Response('Unauthorized', { status: 401 });
     }
     const expectedHex = await hmacHex(rawBody, CLIENT_SECRET);
-    if (providedHex !== expectedHex) {
+    if (!timingSafeEqualHex(providedHex, expectedHex)) {
       console.warn('djomi-webhook: signature mismatch');
       return new Response('Unauthorized', { status: 401 });
     }
@@ -100,7 +101,18 @@ Deno.serve(async (req) => {
       return new Response(JSON.stringify({ received: true }), { headers: { 'Content-Type': 'application/json' } });
     }
 
-    await confirmDjomiPayment(supabase, pending, transactionId);
+    // Never trust the webhook's own status field to ACTIVATE — re-verify the
+    // transaction directly against Djomi first (same GET /v1/payments/{id}
+    // lookup djomi-checkout's poll uses), using the transaction_id from OUR
+    // pending row, never one parsed out of the webhook body. Matches the trust
+    // boundary documented at the top of this file and in migration_v140.sql.
+    const verified = await verifyDjomiTransaction(pending.transaction_id ?? transactionId, CLIENT_ID, CLIENT_SECRET);
+    if (verified !== 'success') {
+      console.log(`djomi-webhook: ${reference} not confirmed by Djomi (status=${verified}) — not activating`);
+      return new Response(JSON.stringify({ received: true }), { headers: { 'Content-Type': 'application/json' } });
+    }
+
+    await confirmDjomiPayment(supabase, pending, pending.transaction_id ?? transactionId);
 
     return new Response(JSON.stringify({ received: true }), { headers: { 'Content-Type': 'application/json' } });
   } catch (err) {
