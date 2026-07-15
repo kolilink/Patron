@@ -29,6 +29,30 @@ import { createClient } from 'https://esm.sh/@supabase/supabase-js@2';
 // failing request itself is the trigger, not a schedule or a dashboard
 // watch. Free tier and paid tier both go through this same fallback path —
 // nothing routes them to different providers on purpose.
+//
+// On-demand tool calls (added 2026-07-14): the fixed 3-snapshot data block
+// below is still built and sent on every turn (cheap — parallel Postgres
+// RPCs, not LLM tokens — and covers the common "how's my shop doing"
+// question), but it's necessarily a fixed-shape aggregate. A merchant asking
+// about ONE named product, ONE named client, an arbitrary date/period, or an
+// itemized expense breakdown was previously answered by the model guessing
+// from that aggregate, since nothing in the aggregate could actually answer
+// those questions. TOOLS + executeTool give the model real OpenAI/Groq
+// function-calling to look those up on demand, mid-reply, via the caller's
+// own JWT-scoped client — so the existing RLS policies (vendeur sees only
+// their own sales/expenses, admin/manager/investisseur see the full
+// business) gate tool results the same way they already gate everything
+// else, with no new SECURITY DEFINER RPC and no migration required. The one
+// exception is get_product_stats, which (like get_best_sellers below) has no
+// role gate of its own — profit/cost figures are withheld from vendeur in
+// code, not by RLS. Tool-calling is bounded to MAX_TOOL_ROUNDS to guarantee
+// termination and cap worst-case cost; the final round is sent WITHOUT the
+// tools param so the model is forced to answer in plain text rather than
+// attempt another call. Assumes Groq's llama-3.3-70b-versatile actually
+// supports OpenAI-compatible tool-calling — if that assumption is ever wrong,
+// the existing Groq→OpenAI fallback below degrades safely (a rejected
+// `tools` param just throws and falls through to OpenAI), at worse cost, not
+// incorrect behavior.
 
 const corsHeaders = {
   'Access-Control-Allow-Origin': '*',
@@ -47,6 +71,15 @@ const PERIOD_DAYS = 30;
 // the whole business" and "blow the token budget dumping raw rows into every
 // message" — see CLAUDE.md's Alpha section for why that tradeoff matters.
 const LIFETIME_PERIOD_DAYS = 3650;
+// Hard cap on tool-call round trips per reply. Each round is a full
+// LLM call (resending the whole message history), so this bounds both
+// worst-case latency and worst-case token cost — without it, a model that
+// keeps deciding "let me check one more thing" could loop indefinitely.
+const MAX_TOOL_ROUNDS = 3;
+// ventes_sur_periode is clamped to this many days so a merchant asking for
+// "since the beginning" via the date-range tool can't return a payload sized
+// like the very per-transaction dump depuis_le_debut was designed to avoid.
+const MAX_PERIOD_QUERY_DAYS = 92;
 
 const STATIC_INSTRUCTIONS = `Tu es Alpha, le conseiller IA de Patron, une application de gestion commerciale pour petits commerces. Ce commerce opère en Guinée / Afrique de l'Ouest, en économie très majoritairement au comptant (cash), avec des relations de crédit informel courantes entre le commerçant et ses clients réguliers — n'oublie jamais ce contexte : ne suggère jamais des outils (virements bancaires, cartes de crédit, POS en ligne) qui ne correspondent pas à ce contexte, sauf si le marchand les mentionne lui-même.
 
@@ -60,7 +93,9 @@ Règles :
 - Les listes "produits_stock_bas" et "produits_en_rupture" sont déjà calculées — ne recalcule jamais toi-même des jours de stock restant, ne fais aucune arithmétique sur les données fournies : utilise directement les valeurs telles quelles.
 - "evolution_vs_periode_precedente" compare la période actuelle aux 30 jours précédents (déjà calculé — n'invente jamais toi-même un pourcentage). Utilise-la pour dire si les choses vont mieux ou moins bien, pas juste donner un chiffre isolé : un chiffre d'affaires stable en apparence peut être une baisse par rapport au mois dernier, et l'inverse. "evolution_pct: null" veut dire qu'il n'y avait rien à comparer sur la période précédente (pas un chiffre à zéro) — dis-le en mots ("c'est nouveau par rapport au mois dernier"), n'affiche jamais "null" ou "None".
 - "depuis_le_debut" donne les totaux depuis le tout début de l'activité du commerce (pas seulement les 30 derniers jours) — utilise-le quand la question porte sur la performance globale ou l'historique complet ("comment va mon commerce depuis le début ?", "combien j'ai gagné au total ?"), pas seulement sur le mois en cours.
-- Si "credit_en_cours" est élevé par rapport au chiffre d'affaires, mentionne-le comme risque de trésorerie, mais ne prétends JAMAIS savoir quel client précis est en retard — cette donnée n'est pas disponible, seul le total est connu.
+- Si "credit_en_cours" est élevé par rapport au chiffre d'affaires, mentionne-le comme risque de trésorerie, mais ne prétends JAMAIS savoir quel client précis est en retard, SAUF si tu as utilisé l'outil chercher_client pour ce client précis.
+- Tu as accès à 4 outils pour vérifier des faits précis avant de répondre : chercher_produit (un produit nommé), chercher_client (un client nommé), ventes_sur_periode (une date ou période précise, différente du mois en cours), depenses_detail (le détail des dépenses au lieu du seul total). Utilise l'outil correspondant DÈS QUE le commerçant nomme un produit, un client, ou une date/période précise — ne réponds jamais "je ne sais pas" ou par une généralité si un outil peut vérifier le fait réel. N'utilise ces outils que quand la question le justifie ; pour une question générale ("comment va mon commerce"), les données déjà fournies ci-dessous suffisent.
+- Ne cite JAMAIS un chiffre (montant, quantité, date) qui n'apparaît ni dans "Données du commerce" ci-dessous, ni dans le résultat d'un outil que tu as toi-même appelé dans cette réponse. Si tu n'as pas la donnée exacte, dis-le clairement plutôt que d'estimer ou d'arrondir un chiffre qui semble plausible.
 - Si le message du commerçant est trop court ou vague pour être une vraie question (une seule lettre, un mot isolé, un salut sans question, "autre chose", "je ne sais pas", etc.), ta réponse ENTIÈRE doit être UNIQUEMENT une question de clarification courte et amicale, avec 1-2 exemples génériques de sujets (ventes, stock, dépenses, trésorerie, crédit). N'écris RIEN d'autre : pas de chiffre, pas de montant, pas de nom de produit ou de vendeur, et surtout pas le texte "Action à faire" sous aucune forme (ni rempli, ni vide, ni suivi d'un "?") — cette ligne n'existe que dans les réponses de la règle suivante. Cite des données réelles seulement une fois que le commerçant a posé une vraie question sur un sujet précis.
 - Si une question sort du cadre du commerce (ventes, stock, dépenses, crédit, trésorerie), redirige poliment vers ce périmètre.
 - Pas de tableaux markdown — des phrases courtes ou une courte liste à puces simples, adaptées à une lecture rapide sur mobile. Mets en **gras** (markdown, avec des doubles astérisques) les 1 à 3 chiffres les plus importants de ta réponse (montants clés, quantités critiques) pour qu'ils sautent aux yeux sur un petit écran — n'en mets pas plus, sinon plus rien ne ressort.
@@ -259,52 +294,303 @@ Données du commerce (déjà converties en ${currency} affichable, PAS en centim
 ${JSON.stringify(data)}`;
 }
 
+// ─────────────────────────────────────────────────────────────────────────
+// On-demand tools — see "On-demand tool calls" note at the top of this file.
+// ─────────────────────────────────────────────────────────────────────────
+
+const TOOLS = [
+  {
+    type: 'function',
+    function: {
+      name: 'chercher_produit',
+      description:
+        "Cherche un produit du catalogue par son nom et retourne son stock actuel, son prix, et (pour un rôle qui y a accès) sa rentabilité réelle depuis le début. À utiliser dès que le commerçant nomme un produit précis.",
+      parameters: {
+        type: 'object',
+        properties: { nom: { type: 'string', description: 'Nom (ou partie du nom) du produit' } },
+        required: ['nom'],
+      },
+    },
+  },
+  {
+    type: 'function',
+    function: {
+      name: 'chercher_client',
+      description:
+        "Cherche un client par son nom et retourne son historique d'achats réel (total acheté, nombre de commandes, date de dernière visite). À utiliser dès que le commerçant nomme un client précis.",
+      parameters: {
+        type: 'object',
+        properties: { nom: { type: 'string', description: 'Nom (ou partie du nom) du client' } },
+        required: ['nom'],
+      },
+    },
+  },
+  {
+    type: 'function',
+    function: {
+      name: 'ventes_sur_periode',
+      description:
+        "Retourne le chiffre d'affaires et le nombre de commandes réels, jour par jour, sur une période précise (ex: une semaine donnée, un jour précis, comparer deux semaines). À utiliser pour toute question portant sur une date ou une période différente du mois en cours déjà fourni dans les données.",
+      parameters: {
+        type: 'object',
+        properties: {
+          date_debut: { type: 'string', description: 'Date de début, format AAAA-MM-JJ' },
+          date_fin: { type: 'string', description: 'Date de fin, format AAAA-MM-JJ' },
+        },
+        required: ['date_debut', 'date_fin'],
+      },
+    },
+  },
+  {
+    type: 'function',
+    function: {
+      name: 'depenses_detail',
+      description:
+        "Retourne la liste détaillée des dépenses réelles (date, catégorie, montant, description), au lieu du seul total déjà fourni. À utiliser quand le commerçant demande le détail ou la raison de ses dépenses.",
+      parameters: {
+        type: 'object',
+        properties: {
+          depuis: { type: 'string', description: 'Date de début AAAA-MM-JJ (optionnel, défaut: 30 derniers jours)' },
+          categorie: { type: 'string', description: 'Filtrer sur une catégorie de dépense précise (optionnel)' },
+        },
+      },
+    },
+  },
+] as const;
+
+interface ToolContext {
+  userClient: ReturnType<typeof createClient>;
+  businessId: string;
+  role: string;
+}
+
+// Every query below runs through the CALLER's own JWT-scoped client, so the
+// same RLS policies that already govern the rest of the app apply here with
+// no extra code: a vendeur querying sale_orders/expenses transparently only
+// ever gets their own rows back (migration_v19/v20), exactly like the rest
+// of Alpha's grounding data. get_product_stats is the one exception — like
+// get_best_sellers elsewhere in this file, it has no role gate of its own
+// (only is_member), so profit/cost figures are withheld from vendeur here in
+// code rather than by RLS.
+async function executeTool(name: string, args: Record<string, unknown>, ctx: ToolContext): Promise<unknown> {
+  const { userClient, businessId, role } = ctx;
+  try {
+    switch (name) {
+      case 'chercher_produit': {
+        const nom = String(args.nom ?? '').trim();
+        if (!nom) return { erreur: 'Nom de produit manquant' };
+        const { data: products } = await userClient
+          .from('products')
+          .select('id, name, category, sale_price, stock_qty')
+          .eq('business_id', businessId)
+          .eq('archived', false)
+          .ilike('name', `%${nom}%`)
+          .limit(3);
+        if (!products || products.length === 0) return { trouve: false };
+
+        const canSeeProfit = role === 'administrateur' || role === 'manager' || role === 'investisseur';
+        const produits = await Promise.all(products.map(async (p) => {
+          const base: Record<string, unknown> = {
+            nom: p.name,
+            categorie: p.category,
+            stock_actuel: p.stock_qty,
+            prix_vente: Math.round(p.sale_price / 100),
+          };
+          if (!canSeeProfit) return base;
+          const { data: stats } = await userClient.rpc('get_product_stats', {
+            p_product_id: p.id, p_business_id: businessId, p_since: null,
+          });
+          const s = (stats ?? {}) as Record<string, number>;
+          base.revenu_total_depuis_le_debut = Math.round((s.revenue ?? 0) / 100);
+          base.profit_total_depuis_le_debut = Math.round((s.profit ?? 0) / 100);
+          return base;
+        }));
+        return { trouve: true, produits };
+      }
+
+      case 'chercher_client': {
+        const nom = String(args.nom ?? '').trim();
+        if (!nom) return { erreur: 'Nom de client manquant' };
+        const { data: clients } = await userClient
+          .from('clients')
+          .select('id, name')
+          .eq('business_id', businessId)
+          .ilike('name', `%${nom}%`)
+          .limit(3);
+        if (!clients || clients.length === 0) return { trouve: false };
+
+        const resultats = await Promise.all(clients.map(async (c) => {
+          const { data: orders } = await userClient
+            .from('sale_orders')
+            .select('total_amount, discount_amount, sale_date')
+            .eq('business_id', businessId)
+            .eq('client_id', c.id)
+            .in('status', ['paye', 'credit']);
+          const rows = orders ?? [];
+          const total = rows.reduce((sum, o) => sum + (o.total_amount - (o.discount_amount ?? 0)), 0);
+          const derniereVisite = rows.reduce<string | null>(
+            (max, o) => (o.sale_date && (!max || o.sale_date > max) ? o.sale_date : max), null,
+          );
+          return {
+            nom: c.name,
+            total_achete: Math.round(total / 100),
+            nombre_commandes: rows.length,
+            derniere_visite: derniereVisite,
+          };
+        }));
+        return { trouve: true, clients: resultats };
+      }
+
+      case 'ventes_sur_periode': {
+        let dateDebut = String(args.date_debut ?? '');
+        const dateFin = String(args.date_fin ?? '');
+        if (!dateDebut || !dateFin) return { erreur: 'date_debut et date_fin sont requis (AAAA-MM-JJ)' };
+        const earliestAllowed = new Date(new Date(dateFin).getTime() - MAX_PERIOD_QUERY_DAYS * 86_400_000)
+          .toISOString().slice(0, 10);
+        let borne = false;
+        if (dateDebut < earliestAllowed) { dateDebut = earliestAllowed; borne = true; }
+
+        const { data: rows } = await userClient
+          .from('sale_orders')
+          .select('sale_date, total_amount, discount_amount')
+          .eq('business_id', businessId)
+          .in('status', ['paye', 'credit'])
+          .gte('sale_date', dateDebut)
+          .lte('sale_date', dateFin);
+
+        const byDay = new Map<string, { revenu: number; commandes: number }>();
+        for (const o of rows ?? []) {
+          const d = o.sale_date as string;
+          const cur = byDay.get(d) ?? { revenu: 0, commandes: 0 };
+          cur.revenu += (o.total_amount - (o.discount_amount ?? 0));
+          cur.commandes += 1;
+          byDay.set(d, cur);
+        }
+        const jours = Array.from(byDay.entries())
+          .sort(([a], [b]) => a.localeCompare(b))
+          .map(([date, v]) => ({ date, chiffre_affaires: Math.round(v.revenu / 100), commandes: v.commandes }));
+        return { jours, periode_limitee_a_92_jours: borne };
+      }
+
+      case 'depenses_detail': {
+        const depuis = args.depuis
+          ? String(args.depuis)
+          : new Date(Date.now() - PERIOD_DAYS * 86_400_000).toISOString().slice(0, 10);
+        let query = userClient
+          .from('expenses')
+          .select('date, category, amount, description')
+          .eq('business_id', businessId)
+          .eq('status', 'approuve')
+          .gte('date', depuis)
+          .order('date', { ascending: false })
+          .limit(30);
+        if (args.categorie) query = query.eq('category', String(args.categorie));
+        const { data: rows } = await query;
+        return {
+          depenses: (rows ?? []).map(e => ({
+            date: e.date, categorie: e.category, montant: Math.round(e.amount / 100), description: e.description,
+          })),
+        };
+      }
+
+      default:
+        return { erreur: `Outil inconnu: ${name}` };
+    }
+  } catch (err) {
+    // A single bad tool call must never sink the whole reply — the model
+    // gets a plain error string back and can still answer from the rest of
+    // its context, same "never-unanswered" posture as the outer handler.
+    return { erreur: err instanceof Error ? err.message : 'Erreur outil inconnue' };
+  }
+}
+
+interface ChatTurn {
+  role: string;
+  content: string | null;
+  tool_calls?: Array<{ id: string; type: 'function'; function: { name: string; arguments: string } }>;
+  tool_call_id?: string;
+}
+
 // Groq and OpenAI both speak the same OpenAI-compatible chat-completions
-// shape (Groq deliberately mirrors it), so one function serves both — only
-// the base URL, key, and model differ.
+// shape (Groq deliberately mirrors it, including tool-calling), so one
+// function serves both — only the base URL, key, and model differ.
+//
+// Tool-calling loop: each round is sent WITH `tools` except the last, which
+// is deliberately sent without — forcing the model to answer in plain text
+// once MAX_TOOL_ROUNDS is reached instead of looping forever. toolCtx is
+// undefined when the caller doesn't want tool-calling at all (kept as an
+// escape hatch, unused today, rather than threading a boolean everywhere).
 async function callChatCompletions(
   baseUrl: string,
   apiKey: string,
   model: string,
   systemPrompt: string,
   turns: { role: string; content: string }[],
+  toolCtx?: ToolContext,
 ): Promise<string> {
-  const resp = await fetch(baseUrl, {
-    method: 'POST',
-    headers: {
-      'Content-Type': 'application/json',
-      Authorization: `Bearer ${apiKey}`,
-    },
-    body: JSON.stringify({
-      model,
-      messages: [{ role: 'system', content: systemPrompt }, ...turns],
-      temperature: 0.6,
-      max_tokens: 400,
-    }),
-  });
-  if (!resp.ok) {
-    const errText = await resp.text().catch(() => '');
-    throw new Error(`${model} error ${resp.status}: ${errText.slice(0, 300)}`);
+  const messages: ChatTurn[] = [{ role: 'system', content: systemPrompt }, ...turns];
+
+  for (let round = 0; round <= MAX_TOOL_ROUNDS; round++) {
+    const allowTools = toolCtx && round < MAX_TOOL_ROUNDS;
+    const resp = await fetch(baseUrl, {
+      method: 'POST',
+      headers: {
+        'Content-Type': 'application/json',
+        Authorization: `Bearer ${apiKey}`,
+      },
+      body: JSON.stringify({
+        model,
+        messages,
+        temperature: 0.6,
+        max_tokens: 400,
+        ...(allowTools ? { tools: TOOLS, tool_choice: 'auto' } : {}),
+      }),
+    });
+    if (!resp.ok) {
+      const errText = await resp.text().catch(() => '');
+      throw new Error(`${model} error ${resp.status}: ${errText.slice(0, 300)}`);
+    }
+    const json = await resp.json() as {
+      choices?: { message?: { content?: string; tool_calls?: ChatTurn['tool_calls'] } }[];
+    };
+    const message = json.choices?.[0]?.message;
+    const toolCalls = message?.tool_calls;
+
+    if (allowTools && toolCalls && toolCalls.length > 0) {
+      messages.push({ role: 'assistant', content: message?.content ?? null, tool_calls: toolCalls });
+      // Cap fan-out per round too — a model requesting an unreasonable
+      // number of calls in one turn shouldn't multiply the round's cost.
+      for (const call of toolCalls.slice(0, 4)) {
+        let args: Record<string, unknown> = {};
+        try { args = JSON.parse(call.function.arguments || '{}'); } catch { /* treat as no args */ }
+        const result = await executeTool(call.function.name, args, toolCtx!);
+        messages.push({ role: 'tool', tool_call_id: call.id, content: JSON.stringify(result) });
+      }
+      continue;
+    }
+
+    const content = message?.content?.trim();
+    if (!content) throw new Error(`${model} returned no content`);
+    return content;
   }
-  const json = await resp.json() as { choices?: { message?: { content?: string } }[] };
-  const content = json.choices?.[0]?.message?.content?.trim();
-  if (!content) throw new Error(`${model} returned no content`);
-  return content;
+  throw new Error(`${model}: exceeded tool-call rounds without a final answer`);
 }
 
 // Groq first; OpenAI is an automatic fallback the instant Groq fails for
-// any reason (daily token ceiling, rate limit, outage) — see the "Provider
+// any reason (daily token ceiling, rate limit, outage, or a rejected `tools`
+// param if Groq's tool-calling support ever changes) — see the "Provider
 // fallback" note above. Returns which model actually served the reply so
 // the caller can record it instead of hardcoding GROQ_MODEL.
 async function generateReply(
   systemPrompt: string,
   turns: { role: string; content: string }[],
+  toolCtx: ToolContext,
 ): Promise<{ content: string; model: string }> {
   const groqKey = Deno.env.get('GROQ_API_KEY');
   if (groqKey) {
     try {
       const content = await callChatCompletions(
-        'https://api.groq.com/openai/v1/chat/completions', groqKey, GROQ_MODEL, systemPrompt, turns,
+        'https://api.groq.com/openai/v1/chat/completions', groqKey, GROQ_MODEL, systemPrompt, turns, toolCtx,
       );
       return { content, model: GROQ_MODEL };
     } catch (groqErr) {
@@ -317,7 +603,7 @@ async function generateReply(
     throw new Error(groqKey ? 'Groq failed and OPENAI_API_KEY not configured' : 'Neither GROQ_API_KEY nor OPENAI_API_KEY configured');
   }
   const content = await callChatCompletions(
-    'https://api.openai.com/v1/chat/completions', openaiKey, OPENAI_MODEL, systemPrompt, turns,
+    'https://api.openai.com/v1/chat/completions', openaiKey, OPENAI_MODEL, systemPrompt, turns, toolCtx,
   );
   return { content, model: OPENAI_MODEL };
 }
@@ -475,7 +761,8 @@ serve(async (req) => {
       const anonymizedTurns = turns.map(t => ({ ...t, content: replaceNames(t.content, nameToLabel) }));
       const labelToName = new Map(Array.from(nameToLabel, ([name, label]) => [label, name] as [string, string]));
 
-      const { content: rawReply, model: servedByModel } = await generateReply(systemPrompt, anonymizedTurns);
+      const toolCtx: ToolContext = { userClient, businessId, role };
+      const { content: rawReply, model: servedByModel } = await generateReply(systemPrompt, anonymizedTurns, toolCtx);
       const replyContent = replaceNames(rawReply, labelToName);
 
       const { data: inserted, error: insertErr } = await supabase
