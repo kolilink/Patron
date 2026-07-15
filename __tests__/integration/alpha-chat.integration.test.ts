@@ -79,7 +79,7 @@ describe('Alpha (real RPCs)', () => {
     expect(quotaRow!.count_in_window).toBe(5);
   });
 
-  it('raises the ceiling to 20/24h once the business has active AI access (regression: v135)', async () => {
+  it('raises the ceiling to 100/24h once the business has active AI access (v146 restored the paid tier; limit now seeded in app_config by v147)', async () => {
     const { client } = await createTestUser('alpha-paid');
     const businessId = await createTestBusiness(client, 'Boutique Paid');
     await setAiAccess(businessId, 'active');
@@ -96,7 +96,7 @@ describe('Alpha (real RPCs)', () => {
 
     const { data: status } = await client.rpc('get_alpha_quota_status', { p_business_id: businessId });
     expect(status.has_ai_access).toBe(true);
-    expect(status.limit).toBe(20);
+    expect(status.limit).toBe(100);
   });
 
   it('gives an administrateur and a vendeur separate conversations, invisible to each other via RLS', async () => {
