@@ -23,6 +23,18 @@ export function partnerDomainKey(): string {
   return key;
 }
 
+// Constant-time comparison of two hex strings — avoids leaking, via response
+// timing, how many leading characters of a forged HMAC signature were correct.
+export function timingSafeEqualHex(a: string, b: string): boolean {
+  const enc = new TextEncoder();
+  const aB = enc.encode(a);
+  const bB = enc.encode(b);
+  let diff = aB.length ^ bB.length;
+  const len = Math.max(aB.length, bB.length);
+  for (let i = 0; i < len; i++) diff |= (aB[i] ?? 0) ^ (bB[i] ?? 0);
+  return diff === 0;
+}
+
 export async function hmacHex(data: string, secret: string): Promise<string> {
   const encoder = new TextEncoder();
   const key = await crypto.subtle.importKey(

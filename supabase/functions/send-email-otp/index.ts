@@ -12,6 +12,20 @@ function getClientIp(req: Request): string {
   return fwd ? fwd.split(',')[0].trim() : 'unknown';
 }
 
+// Cryptographically-secure uniform 6-digit code (100000–999999).
+// CSPRNG, not Math.random() — rejection-sampled to avoid modulo bias.
+function generateOtpCode(): string {
+  const range = 900000;
+  const limit = Math.floor(0xFFFFFFFF / range) * range;
+  const buf = new Uint32Array(1);
+  let r: number;
+  do {
+    crypto.getRandomValues(buf);
+    r = buf[0];
+  } while (r >= limit);
+  return (100000 + (r % range)).toString();
+}
+
 serve(async (req) => {
   if (req.method === 'OPTIONS') return new Response('ok', { headers: corsHeaders });
 
@@ -76,7 +90,7 @@ serve(async (req) => {
       .delete()
       .lt('attempted_at', new Date(Date.now() - 60 * 60 * 1000).toISOString());
 
-    const token = Math.floor(100000 + Math.random() * 900000).toString();
+    const token = generateOtpCode();
 
     const { data, error: insertErr } = await serviceClient
       .from('email_verifications')

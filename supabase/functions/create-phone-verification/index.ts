@@ -12,6 +12,21 @@ function getClientIp(req: Request): string {
   return fwd ? fwd.split(',')[0].trim() : 'unknown';
 }
 
+// Cryptographically-secure uniform 6-digit code (100000–999999).
+// Rejection sampling drops the top of the u32 range so `% 900000` carries no
+// modulo bias.
+function generateOtpCode(): string {
+  const range = 900000;
+  const limit = Math.floor(0xFFFFFFFF / range) * range;
+  const buf = new Uint32Array(1);
+  let r: number;
+  do {
+    crypto.getRandomValues(buf);
+    r = buf[0];
+  } while (r >= limit);
+  return (100000 + (r % range)).toString();
+}
+
 serve(async (req) => {
   if (req.method === 'OPTIONS') {
     return new Response('ok', { headers: corsHeaders });
@@ -127,7 +142,10 @@ serve(async (req) => {
     }
 
     // ── Generate 6-digit code ─────────────────────────────────────────────────
-    const token = isDemo ? '000000' : Math.floor(100000 + Math.random() * 900000).toString();
+    // CSPRNG, not Math.random() — Deno exposes crypto.getRandomValues (the
+    // Hermes limitation that forces Math.random() for client-side invite codes
+    // does not apply server-side). Rejection-sampled to avoid modulo bias.
+    const token = isDemo ? '000000' : generateOtpCode();
 
     // ── Send via WhatsApp (Meta Cloud API), fall back to Twilio Verify (skip for demo) ──
     if (!isDemo) {
