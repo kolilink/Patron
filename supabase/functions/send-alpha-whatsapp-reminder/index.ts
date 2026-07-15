@@ -30,19 +30,19 @@ const TEMPLATE_NAME = 'patron_alpha_pro';
 const TEMPLATE_LANGUAGE = 'fr';
 
 // Meta's Graph API wants digits only, country code prefixed, no leading
-// "00" and no "+" — a different shape from Djomi's formatPayerNumber
-// (which wants a leading "00"). Two separate normalizers on purpose,
-// not shared, since the two APIs disagree on the format.
+// "00" and no "+". Unlike Djomi's formatPayerNumber — which handles
+// fresh, possibly-bare-local user-typed input in the checkout form and
+// so needs Guinea-specific 9-digit-detection to add a missing country
+// code — admin_phone here comes straight from profiles.phone, which is
+// already a complete, deliverable number (it's the same field real
+// WhatsApp OTP delivery already sends to successfully). Guessing a
+// country code on top of an already-complete number was a real bug,
+// found via the first live test: a US test number (+12672421843) got
+// Guinea's "224" wrongly prepended, producing the invalid
+// "22412672421843". Just strip formatting characters and trust the
+// stored number.
 function formatWhatsAppNumber(phone: string): string {
-  let clean = phone.replace(/\D/g, '');
-  if (clean.length === 9) {
-    clean = '224' + clean;
-  } else if (clean.startsWith('00224')) {
-    clean = clean.slice(2);
-  } else if (!clean.startsWith('224')) {
-    clean = '224' + clean;
-  }
-  return clean;
+  return phone.replace(/\D/g, '');
 }
 
 async function sendTemplate(phoneNumberId: string, accessToken: string, toPhone: string, checkoutToken: string) {
@@ -111,6 +111,11 @@ Deno.serve(async (req) => {
 
   let sent = 0;
   let failed = 0;
+  // Surfaced in the response, not just console.error — this endpoint is
+  // only reachable with the cron secret, and the CLI in use has no `logs`
+  // subcommand, so this is the only practical way to see the real Meta
+  // API rejection reason without the Dashboard's log viewer.
+  const errors: { business_id: string; error: string }[] = [];
 
   for (const candidate of candidates ?? []) {
     if (!candidate.checkout_token) {
@@ -119,6 +124,7 @@ Deno.serve(async (req) => {
       // be broken, so skip rather than send an unusable message. Already
       // marked sent by the RPC; not retried.
       console.error(`send-alpha-whatsapp-reminder: business ${candidate.business_id} has no checkout_token — skipped`);
+      errors.push({ business_id: candidate.business_id, error: 'no checkout_token' });
       failed++;
       continue;
     }
@@ -127,13 +133,14 @@ Deno.serve(async (req) => {
       sent++;
     } catch (err) {
       console.error(`send-alpha-whatsapp-reminder: failed for business ${candidate.business_id}:`, err);
+      errors.push({ business_id: candidate.business_id, error: err instanceof Error ? err.message : String(err) });
       failed++;
     }
   }
 
   console.log(`send-alpha-whatsapp-reminder: ${sent} sent, ${failed} failed, ${(candidates ?? []).length} candidates`);
 
-  return new Response(JSON.stringify({ candidates: (candidates ?? []).length, sent, failed }), {
+  return new Response(JSON.stringify({ candidates: (candidates ?? []).length, sent, failed, errors }), {
     headers: { ...corsHeaders, 'Content-Type': 'application/json' },
   });
 });
