@@ -14,6 +14,7 @@ import { isPurchasesConfigured } from '@/lib/purchases';
 import { useAuthStore } from '@/stores/auth';
 
 const PRIVACY_URL = 'https://patron.kolilink.com/privacy.html';
+const TERMS_URL = 'https://patron.kolilink.com/terms.html';
 
 interface Props {
   business: Business;
@@ -213,6 +214,9 @@ export function PaywallScreen({ business, onDismiss, inline = false, onPurchased
             <Text variant="caption" color="secondary" style={styles.planLimit}>
               {PAID_DAILY_LIMIT} conversations avec Alpha, chaque jour
             </Text>
+            <Text variant="caption" color="secondary" style={styles.planRenewal}>
+              Renouvellement automatique chaque mois. Résiliable à tout moment.
+            </Text>
           </View>
         </View>
 
@@ -239,6 +243,15 @@ export function PaywallScreen({ business, onDismiss, inline = false, onPurchased
             style={styles.inlineDismiss}
           />
         )}
+        <View style={styles.footerLinks}>
+          <Pressable onPress={() => Linking.openURL(TERMS_URL)} hitSlop={8}>
+            <Text style={styles.footerLinkText}>Conditions d'utilisation</Text>
+          </Pressable>
+          <Text style={styles.footerDot}>·</Text>
+          <Pressable onPress={() => Linking.openURL(PRIVACY_URL)} hitSlop={8}>
+            <Text style={styles.footerLinkText}>Confidentialité</Text>
+          </Pressable>
+        </View>
       </Card>
     );
   }
@@ -276,6 +289,9 @@ export function PaywallScreen({ business, onDismiss, inline = false, onPurchased
             <Text variant="caption" color="secondary" style={styles.planLimit}>
               {PAID_DAILY_LIMIT} conversations avec Alpha, chaque jour
             </Text>
+            <Text variant="caption" color="secondary" style={styles.planRenewal}>
+              Renouvellement automatique chaque mois. Résiliable à tout moment.
+            </Text>
           </View>
         </View>
 
@@ -296,6 +312,10 @@ export function PaywallScreen({ business, onDismiss, inline = false, onPurchased
             <Text style={styles.footerLinkText}>
               {restoring ? 'Restauration…' : 'Restaurer mes achats'}
             </Text>
+          </Pressable>
+          <Text style={styles.footerDot}>·</Text>
+          <Pressable onPress={() => Linking.openURL(TERMS_URL)} hitSlop={8}>
+            <Text style={styles.footerLinkText}>Conditions d'utilisation</Text>
           </Pressable>
           <Text style={styles.footerDot}>·</Text>
           <Pressable onPress={() => Linking.openURL(PRIVACY_URL)} hitSlop={8}>
@@ -415,6 +435,10 @@ function makeStyles(p: Palette) {
     planLimit: {
       color: p.textSecondary,
     },
+    planRenewal: {
+      color: p.textSecondary,
+      marginTop: spacing[1],
+    },
     cta: {
       marginTop: spacing[2],
       marginBottom: spacing[3],
@@ -430,6 +454,7 @@ function makeStyles(p: Palette) {
     },
     footerLinks: {
       flexDirection: 'row',
+      flexWrap: 'wrap',
       alignItems: 'center',
       justifyContent: 'center',
       gap: spacing[2],

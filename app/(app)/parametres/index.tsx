@@ -526,6 +526,10 @@ export default function ParametresScreen() {
               <Text variant="body">Politique de confidentialité</Text>
               <Text variant="caption" color="secondary">›</Text>
             </Pressable>
+            <Pressable onPress={() => Linking.openURL('https://patron.kolilink.com/terms.html')} style={styles.linkRow}>
+              <Text variant="body">Conditions d'utilisation</Text>
+              <Text variant="caption" color="secondary">›</Text>
+            </Pressable>
             <Pressable onPress={() => Linking.openURL('https://wa.me/16094454809')} style={styles.linkRow}>
               <Text variant="body">Contacter le support</Text>
               <Text variant="caption" color="secondary">›</Text>

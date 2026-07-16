@@ -1,0 +1,301 @@
+<!DOCTYPE html>
+<html lang="fr">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>Patron — Conditions d'utilisation</title>
+  <link rel="preconnect" href="https://fonts.googleapis.com">
+  <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+  <link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700;800&display=swap" rel="stylesheet">
+  <style>
+    :root {
+      --bg: #FFFFFF;
+      --primary: #18181B;
+      --secondary: #71717A;
+    }
+
+    @media (prefers-color-scheme: dark) {
+      :root {
+        --bg: #09090B;
+        --primary: #FFFFFF;
+        --secondary: #71717A;
+      }
+    }
+
+    * {
+      margin: 0;
+      padding: 0;
+      box-sizing: border-box;
+    }
+
+    body {
+      font-family: 'Inter', -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif;
+      background-color: var(--bg);
+      color: var(--primary);
+      line-height: 1.6;
+      -webkit-font-smoothing: antialiased;
+      -moz-osx-font-smoothing: grayscale;
+      padding: 120px 24px;
+    }
+
+    .container {
+      max-width: 900px;
+      margin: 0 auto;
+    }
+
+    main, footer {
+      max-width: 620px;
+      margin: 0 auto;
+    }
+
+    /* Hero Section */
+    .hero {
+      text-align: center;
+      margin-bottom: 80px;
+    }
+
+    .hero h2 {
+      font-size: 14px;
+      font-weight: 600;
+      text-transform: uppercase;
+      letter-spacing: 0.15em;
+      margin-bottom: 24px;
+      color: var(--primary);
+    }
+
+    .hero h1 {
+      font-size: clamp(24px, 4.2vw, 38px);
+      font-weight: 800;
+      line-height: 1.2;
+      letter-spacing: -0.03em;
+      margin-bottom: 16px;
+      color: var(--primary);
+      text-wrap: balance;
+    }
+
+    @media (min-width: 768px) {
+      .hero h1 {
+        white-space: nowrap;
+      }
+    }
+
+    .hero .subtitle {
+      font-size: clamp(18px, 2.5vw, 22px);
+      font-weight: 500;
+      margin-bottom: 32px;
+      color: var(--secondary);
+    }
+
+    .hero .date {
+      font-size: 13px;
+      color: var(--secondary);
+      font-weight: 500;
+      letter-spacing: -0.01em;
+    }
+
+    /* Dividers */
+    hr {
+      border: 0;
+      height: 1px;
+      background-color: var(--secondary);
+      opacity: 0.15;
+      margin: 56px 0;
+    }
+
+    /* Content Sections */
+    .section {
+      margin-bottom: 56px;
+    }
+
+    .section h3 {
+      font-size: 13px;
+      font-weight: 700;
+      letter-spacing: 0.15em;
+      text-transform: uppercase;
+      margin-bottom: 24px;
+      color: var(--primary);
+    }
+
+    .section p {
+      font-size: 16px;
+      font-weight: 400;
+      margin-bottom: 24px;
+      color: var(--primary);
+    }
+
+    .section p strong {
+      font-weight: 600;
+    }
+
+    .section ul {
+      list-style: none;
+      margin-bottom: 24px;
+    }
+
+    .section ul li {
+      font-size: 16px;
+      margin-bottom: 16px;
+      padding-left: 24px;
+      position: relative;
+    }
+
+    .section ul li::before {
+      content: "—";
+      position: absolute;
+      left: 0;
+      color: var(--secondary);
+    }
+
+    .section ul li strong {
+      font-weight: 600;
+    }
+
+    /* Contact Details */
+    .contact-list {
+      list-style: none;
+      padding: 0;
+      margin-bottom: 0;
+    }
+
+    .contact-list li {
+      padding-left: 0 !important;
+      margin-bottom: 16px !important;
+    }
+
+    .contact-list li::before {
+      display: none !important;
+    }
+
+    .contact-list span {
+      display: inline-block;
+      width: 110px;
+      font-size: 11px;
+      font-weight: 700;
+      letter-spacing: 0.1em;
+      color: var(--secondary);
+      text-transform: uppercase;
+    }
+
+    .contact-list a {
+      color: var(--primary);
+      text-decoration: none;
+      font-weight: 500;
+      border-bottom: 1px solid var(--secondary);
+      transition: opacity 0.2s ease;
+    }
+
+    .contact-list a:hover {
+      opacity: 0.7;
+    }
+
+    /* Footer */
+    footer {
+      text-align: center;
+      margin-top: 120px;
+    }
+
+    footer p {
+      font-size: 13px;
+      color: var(--secondary);
+      line-height: 1.8;
+    }
+  </style>
+</head>
+<body>
+
+  <div class="container">
+    <header class="hero">
+      <h2>Conditions d'utilisation</h2>
+      <h1>Les règles simples qui encadrent Patron</h1>
+      <p class="subtitle">Y compris l'abonnement Alpha Pro</p>
+      <div class="date">Mise à jour : 16 juillet 2026</div>
+    </header>
+
+    <hr>
+
+    <main>
+      <section class="section">
+        <h3>En utilisant Patron</h3>
+        <p>En créant un compte ou en utilisant l'application Patron, vous acceptez ces conditions. Si vous n'êtes pas d'accord, vous ne pouvez pas utiliser l'application.</p>
+        <p>Patron est une application de gestion commerciale : ventes, stock, dépenses, clients et équipe, pour les petits commerces.</p>
+      </section>
+
+      <hr>
+
+      <section class="section">
+        <h3>Votre compte</h3>
+        <ul>
+          <li><strong>Un compte, un numéro :</strong> Vous vous connectez avec votre numéro de téléphone (code envoyé par WhatsApp).</li>
+          <li><strong>Vous êtes responsable :</strong> De garder l'accès à votre téléphone et à votre compte en sécurité.</li>
+          <li><strong>Vos informations :</strong> Elles doivent être exactes. Ce que nous gardons est expliqué dans notre <a href="https://patron.kolilink.com/privacy.html">Politique de confidentialité</a>.</li>
+        </ul>
+      </section>
+
+      <hr>
+
+      <section class="section">
+        <h3>Alpha Pro — l'abonnement</h3>
+        <p>Alpha est l'assistant qui répond à vos questions sur votre commerce. Une version gratuite est incluse pour toujours (nombre de messages limité chaque jour).</p>
+        <p><strong>Alpha Pro</strong> est un abonnement optionnel qui augmente ce nombre de messages par jour.</p>
+        <ul>
+          <li><strong>Durée :</strong> Abonnement mensuel, renouvelé automatiquement chaque mois.</li>
+          <li><strong>Prix :</strong> Affiché dans l'application avant l'achat, dans la devise de votre App Store ou Google Play.</li>
+          <li><strong>Paiement :</strong> Débité sur votre compte App Store (Apple) ou Google Play (Android) au moment de l'achat, puis à nouveau à chaque renouvellement, dans les 24 heures avant la fin de la période en cours.</li>
+          <li><strong>Renouvellement automatique :</strong> Sauf si vous annulez au moins 24 heures avant la fin de la période en cours, l'abonnement se renouvelle automatiquement pour la même durée, au même prix.</li>
+          <li><strong>Annulation :</strong> Vous pouvez annuler à tout moment dans les réglages de votre compte App Store ou Google Play (Patron ne peut pas annuler à votre place). L'annulation prend effet à la fin de la période déjà payée — pas de remboursement pour la période en cours.</li>
+          <li><strong>Gestion :</strong> Voir ou modifier votre abonnement dans les réglages de votre identifiant Apple (iOS) ou dans Google Play → Abonnements (Android).</li>
+        </ul>
+      </section>
+
+      <hr>
+
+      <section class="section">
+        <h3>Ce que vous ne pouvez pas faire</h3>
+        <ul>
+          <li>Utiliser Patron pour une activité illégale.</li>
+          <li>Essayer d'accéder aux données d'un autre commerce sans autorisation.</li>
+          <li>Copier, revendre ou modifier l'application elle-même.</li>
+        </ul>
+      </section>
+
+      <hr>
+
+      <section class="section">
+        <h3>Suspension et suppression</h3>
+        <p>Vous pouvez supprimer votre compte à tout moment dans l'application (<strong>Plus → Paramètres → Supprimer mon compte</strong>).</p>
+        <p>Nous pouvons suspendre ou fermer un compte en cas de fraude, d'abus ou de non-respect de ces conditions.</p>
+      </section>
+
+      <hr>
+
+      <section class="section">
+        <h3>Responsabilité</h3>
+        <p>Patron est un outil de gestion. Les décisions commerciales (prix, stock, conseils d'Alpha) restent de votre responsabilité. Nous faisons de notre mieux pour que l'application soit fiable, mais nous ne pouvons pas garantir qu'elle sera toujours sans erreur ou disponible sans interruption.</p>
+      </section>
+
+      <hr>
+
+      <section class="section">
+        <h3>Changements</h3>
+        <p>Nous pouvons modifier ces conditions. En cas de changement important, nous vous informerons dans l'application. Continuer à utiliser Patron après un changement veut dire que vous acceptez les nouvelles conditions.</p>
+      </section>
+
+      <hr>
+
+      <section class="section">
+        <h3>Nous contacter</h3>
+        <p>Pour toute question sur ces conditions :</p>
+        <ul class="contact-list">
+          <li><span>WhatsApp :</span> <a href="https://wa.me/16094454809">+1 609 445 4809</a></li>
+          <li><span>Email :</span> <a href="mailto:support@patron.com">support@patron.com</a></li>
+        </ul>
+      </section>
+    </main>
+
+    <footer>
+      <p>© 2026 — Patron. Tous droits réservés.</p>
+    </footer>
+  </div>
+
+</body>
+</html>
