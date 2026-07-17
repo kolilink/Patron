@@ -57,24 +57,3 @@ export async function loginPurchases(businessId: string): Promise<void> {
     console.warn('[purchases] logIn failed:', err);
   }
 }
-
-export async function logoutPurchases(): Promise<void> {
-  if (!configured) return;
-  try {
-    // Purchases.logOut() throws if no user is currently logged in (the SDK's
-    // documented behavior for calling it on an anonymous app_user_id). On
-    // this SDK version, that throw doesn't reliably surface as a rejected JS
-    // promise — it can escape as an uncaught native exception through React
-    // Native's TurboModule bridge and crash the whole app (SIGABRT via
-    // performVoidMethodInvocation's exception rethrow), which the try/catch
-    // here can't catch since the failure happens on the native side before
-    // the promise rejection is ever constructed. Checking isAnonymous() first
-    // avoids calling logOut() in the state that throws, rather than relying
-    // on catching it after the fact.
-    const alreadyAnonymous = await Purchases.isAnonymous();
-    if (alreadyAnonymous) return;
-    await Purchases.logOut();
-  } catch (err) {
-    if (__DEV__) console.warn('[purchases] logOut failed:', err);
-  }
-}

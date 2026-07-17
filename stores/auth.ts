@@ -24,7 +24,7 @@ import { useAportsStore } from './apports';
 import { useInvestorStore } from './investor';
 import { usePartnershipsStore } from './partnerships';
 import { trackEvent, identifyUser, resetAnalytics } from '@/lib/analytics';
-import { loginPurchases, logoutPurchases } from '@/lib/purchases';
+import { loginPurchases } from '@/lib/purchases';
 import { notifyEvent, deleteDeviceToken } from '@/src/utils/notifications';
 
 // ─── Last phone + biometric refresh token (quick-login) ──────────────────────
@@ -476,7 +476,18 @@ export const useAuthStore = create<AuthStore>((set, get) => ({
     const accessTokenToRevoke = _currentAccessToken;
     trackEvent('user_logged_out', session?.activeBusiness?.id ?? null, userId ?? null);
     resetAnalytics();
-    void logoutPurchases();
+    // Deliberately NOT calling RevenueCat's logOut()/isAnonymous() here — both
+    // are native calls that can throw an uncaught NSException on the
+    // com.meta.react.turbomodulemanager.queue, which surfaces as a native
+    // SIGABRT (not a catchable JS promise rejection) and aborts the whole
+    // app. A prior fix tried guarding logOut() with an isAnonymous() check
+    // first, but isAnonymous() goes through the exact same crash-prone
+    // native bridge path, so it just moved the crash one call earlier
+    // instead of preventing it (confirmed via a real TestFlight .ips crash
+    // log still showing this exact signature after that fix shipped).
+    // loginPurchases(businessId) already runs unconditionally on every
+    // subsequent login/session-restore and RevenueCat's logIn() safely
+    // switches identity on its own — no explicit logOut() is needed first.
 
     // Logging out is a local, instant action — it must never wait on the
     // network. supabase.auth.signOut() calls the server *before* it clears
