@@ -49,16 +49,3 @@ export async function resetUnreadBadge(userId: string): Promise<void> {
     // Best-effort — a failed reset just means the next push's badge number is briefly stale
   }
 }
-
-export async function deleteDeviceToken(
-  token: string,
-  platform: 'ios' | 'android',
-): Promise<void> {
-  try {
-    await supabase.functions.invoke('register-device-token', {
-      body: { token, platform, action: 'delete' },
-    });
-  } catch {
-    // Silent
-  }
-}

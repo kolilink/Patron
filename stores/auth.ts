@@ -25,7 +25,7 @@ import { useInvestorStore } from './investor';
 import { usePartnershipsStore } from './partnerships';
 import { trackEvent, identifyUser, resetAnalytics } from '@/lib/analytics';
 import { loginPurchases } from '@/lib/purchases';
-import { notifyEvent, deleteDeviceToken } from '@/src/utils/notifications';
+import { notifyEvent } from '@/src/utils/notifications';
 
 // ─── Last phone + biometric refresh token (quick-login) ──────────────────────
 
@@ -523,17 +523,13 @@ export const useAuthStore = create<AuthStore>((set, get) => ({
       _explicitLogout = false;
     })();
 
-    // Remove push token fire-and-forget — must not block or crash the logout.
-    if (!session?.isDemoMode) {
-      void (async () => {
-        try {
-          const { getExpoPushTokenAsync } = await import('expo-notifications');
-          const tokenResult = await getExpoPushTokenAsync({ projectId: '9cd0ec2b-0dc9-49f3-ba97-999bb31a0252' });
-          const { Platform } = await import('react-native');
-          await deleteDeviceToken(tokenResult.data, Platform.OS as 'ios' | 'android');
-        } catch {}
-      })();
-    }
+    // Deliberately NOT calling getExpoPushTokenAsync()/deleteDeviceToken() here
+    // anymore — same class of risk as the RevenueCat calls removed above:
+    // getExpoPushTokenAsync() is a native module call that can throw an
+    // uncaught native exception un-catchable by JS try/catch, and it wasn't
+    // load-bearing (worst case without it: a logged-out device keeps its old
+    // push token registered server-side until the next login re-registers a
+    // fresh one, or it naturally goes stale — not a crash-worthy tradeoff).
   },
 
   selectBusiness: (businessId) => {
