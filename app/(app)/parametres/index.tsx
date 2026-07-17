@@ -1,6 +1,7 @@
 import { useEffect, useMemo, useRef, useState } from 'react';
 import { Alert, Animated, KeyboardAvoidingView, Linking, Platform, Pressable, ScrollView, Share, StyleSheet, TextInput, View } from 'react-native';
 import * as Clipboard from 'expo-clipboard';
+import * as Application from 'expo-application';
 import * as Updates from 'expo-updates';
 import { Screen } from '@/src/components/ui/Screen';
 import { router } from 'expo-router';
@@ -36,6 +37,12 @@ const CURRENCY_NAMES: Record<string, string> = {
 
 // "Inviter un ami" turned off for now — flip back to true to re-enable.
 const SHOW_REFERRAL = false;
+
+// Bump by 1 on every OTA-only publish (eas update). Updates.updateId is a
+// UUID — not something a merchant or support agent can compare at a glance —
+// so this gives a simple, human-readable "which OTA is this" number instead.
+// Purely a display label; has no effect on update delivery/fingerprint.
+const OTA_BUILD_NUMBER = 1;
 
 export default function ParametresScreen() {
   const { palette, colorScheme, setColorScheme } = useTheme();
@@ -538,9 +545,7 @@ export default function ParametresScreen() {
             <View style={styles.linkRow}>
               <Text variant="body">Version</Text>
               <Text variant="caption" color="secondary" selectable>
-                {Updates.isEmbeddedLaunch
-                  ? 'native uniquement (aucune mise à jour)'
-                  : `OTA ${Updates.updateId?.slice(0, 8) ?? '?'} · ${Updates.createdAt?.toLocaleString('fr-FR') ?? '?'}`}
+                {`Version ${Application.nativeApplicationVersion ?? '?'}${Updates.isEmbeddedLaunch ? '' : `.${OTA_BUILD_NUMBER}`}`}
               </Text>
             </View>
           </Card>
