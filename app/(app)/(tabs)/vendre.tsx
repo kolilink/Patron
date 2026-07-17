@@ -34,6 +34,7 @@ import { todayIso } from '@/src/utils/dates';
 import type { Product, ProductVariant } from '@/src/types';
 import { useAuthStore } from '@/stores/auth';
 import { useProductStore } from '@/stores/products';
+import { OfflineNotice } from '@/src/components/ui/OfflineNotice';
 import type { CartLine, SalePayment } from '@/stores/sales';
 import { useSalesStore } from '@/stores/sales';
 import { useVentesStore } from '@/stores/ventes';
@@ -1057,7 +1058,7 @@ export default function VendreScreen() {
   const role = session?.activeMembership?.role;
   const isVendeur = role === 'vendeur';
 
-  const { products: allProducts, vendeurProductScope, variantsByProduct, loading, fetchProducts, fetchVariants } = useProductStore();
+  const { products: allProducts, vendeurProductScope, variantsByProduct, loading, offline, offlineSince, fetchProducts, fetchVariants } = useProductStore();
 
   // Apply vendeur product scope (empty = unscoped, sees everything)
   const products = useMemo(() => {

@@ -1,7 +1,7 @@
 import { create } from 'zustand';
 import { supabase } from '@/lib/supabase';
 import { saveRapportsCache, getRapportsCache, getCacheTimestamp } from '@/lib/db';
-import { isNetworkError } from '@/lib/sync';
+import { isNetworkError, withTimeout } from '@/lib/sync';
 
 export interface StockVelocityItem {
   item_id: string;
@@ -127,13 +127,15 @@ export const useRapportsStore = create<RapportsState>((set) => ({
 
   fetchReportsSnapshot: async (businessId, periodDays, role, userId, today) => {
     set({ snapshotLoading: true });
-    const { data, error } = await supabase.rpc('get_reports_snapshot', {
-      p_business_id: businessId,
-      p_period_days: periodDays,
-      p_role:        role,
-      p_user_id:     userId,
-      p_today:       today ?? new Date().toISOString().split('T')[0],
-    });
+    const { data, error } = await withTimeout(
+      supabase.rpc('get_reports_snapshot', {
+        p_business_id: businessId,
+        p_period_days: periodDays,
+        p_role:        role,
+        p_user_id:     userId,
+        p_today:       today ?? new Date().toISOString().split('T')[0],
+      }),
+    ).catch(err => ({ data: null, error: err }));
     if (error || !data) {
       if (isNetworkError(error)) {
         const cached = await getRapportsCache(businessId);

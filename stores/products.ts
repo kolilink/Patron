@@ -3,7 +3,7 @@ import { supabase } from '@/lib/supabase';
 import { translateError } from '@/lib/errors';
 import { generateId } from '@/lib/id';
 import { saveProductCache, getProductCache, enqueue, getQueueCount, getCacheTimestamp } from '@/lib/db';
-import { isNetworkError } from '@/lib/sync';
+import { isNetworkError, withTimeout } from '@/lib/sync';
 import { useSyncStore } from '@/stores/sync';
 import { trackEvent } from '@/lib/analytics';
 import { notifyEvent } from '@/src/utils/notifications';
@@ -98,13 +98,15 @@ export const useProductStore = create<ProductStore>((set, get) => ({
       set({ error: null });
     }
     try {
-      const { data, error } = await supabase
-        .from('products')
-        .select('*')
-        .eq('business_id', businessId)
-        .eq('archived', false)
-        .eq('is_system', false)
-        .order('name');
+      const { data, error } = await withTimeout(
+        supabase
+          .from('products')
+          .select('*')
+          .eq('business_id', businessId)
+          .eq('archived', false)
+          .eq('is_system', false)
+          .order('name'),
+      );
 
       if (error) throw error;
       const products = (data as Product[]).map(p => ({

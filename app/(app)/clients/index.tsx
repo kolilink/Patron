@@ -9,6 +9,7 @@ import { useTheme, spacing, radius, AVATAR_PALETTE } from '@/src/theme';
 import type { Palette } from '@/src/theme';
 import { useAuthStore } from '@/stores/auth';
 import { useVentesStore } from '@/stores/ventes';
+import { OfflineNotice } from '@/src/components/ui/OfflineNotice';
 
 function fmt(n: number, cur: string) { return `${Math.round(n).toLocaleString('fr-FR')} ${cur}`; }
 
@@ -55,7 +56,7 @@ export default function ClientsScreen() {
   const role = session?.activeMembership?.role;
   const isVendeur = role === 'vendeur';
 
-  const { sales, loading, error, offline, fetchSales } = useVentesStore();
+  const { sales, loading, error, offline, offlineSince, fetchSales } = useVentesStore();
   const [filter, setFilter] = useState<FilterType>('tous');
   const [search, setSearch] = useState('');
 
@@ -141,11 +142,7 @@ export default function ClientsScreen() {
         </View>
       )}
 
-      {offline && (
-        <View style={styles.offlineBanner}>
-          <Text variant="caption" color="secondary">Pas de réseau · Informations non actualisées</Text>
-        </View>
-      )}
+      {offline && <OfflineNotice offlineSince={offlineSince} />}
 
       {loading && allClients.length === 0 ? (
         <Text variant="body" color="secondary" style={styles.center}>Chargement…</Text>
@@ -243,7 +240,6 @@ function makeStyles(p: Palette) {
       paddingHorizontal: spacing[5], paddingVertical: spacing[3], backgroundColor: p.surface,
     },
     avatar: { width: 40, height: 40, borderRadius: 20, alignItems: 'center', justifyContent: 'center' },
-    offlineBanner: { alignItems: 'center', justifyContent: 'center', paddingVertical: spacing[1], borderBottomWidth: StyleSheet.hairlineWidth, borderBottomColor: p.border },
     empty: { flex: 1, alignItems: 'center', justifyContent: 'center', paddingHorizontal: spacing[8] },
     emptyIconWrap: { width: 72, height: 72, borderRadius: 36, alignItems: 'center', justifyContent: 'center', marginBottom: spacing[4] },
     emptyTitle: { textAlign: 'center' as const, marginBottom: spacing[2] },
