@@ -4,7 +4,7 @@ import { generateId, generateFallbackName } from '@/lib/id';
 import { translateError } from '@/lib/errors';
 import { trackEvent } from '@/lib/analytics';
 import { saveVentesCache, getVentesCache, getCacheTimestamp, enqueue, getQueueCount } from '@/lib/db';
-import { isNetworkError } from '@/lib/sync';
+import { isNetworkError, withTimeout } from '@/lib/sync';
 import { useSyncStore } from '@/stores/sync';
 import { notifyEvent } from '@/src/utils/notifications';
 import { useAuthStore } from '@/stores/auth';
@@ -103,7 +103,7 @@ export const useVentesStore = create<VentesStore>((set, get) => ({
     if (sellerId) query = query.eq('seller_id', sellerId);
     if (since) query = query.gte('sale_date', since);
 
-    const { data, error: fetchErr } = await query;
+    const { data, error: fetchErr } = await withTimeout(query).catch(err => ({ data: null, error: err }));
     if (fetchErr) {
       if (isNetworkError(fetchErr)) {
         const cached = await getVentesCache(cacheKey) as Vente[] | null;

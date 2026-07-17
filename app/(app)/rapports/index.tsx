@@ -286,6 +286,31 @@ export default function RapportsScreen() {
     );
   }
 
+  // Offline with nothing ever cached for this business: every KPI below defaults
+  // via `?? 0`, which would otherwise render as a confident "0 GNF, aucune vente"
+  // — indistinguishable from a real quiet period. Show an honest "no data" state
+  // instead of a silently misleading zeroed-out dashboard.
+  if (offline && !snapshot) {
+    return (
+      <Screen>
+        <View style={styles.hdr}>
+          <Pressable onPress={() => router.back()}>
+            <Text variant="body" color="secondary">‹ Retour</Text>
+          </Pressable>
+          <Text variant="h4">{isInvestisseur ? businessName : 'Mes chiffres'}</Text>
+          <View style={{ width: 60 }} />
+        </View>
+        <OfflineNotice offlineSince={offlineSince} />
+        <View style={styles.content}>
+          {periodToggle}
+          <Text variant="body" color="secondary" style={{ textAlign: 'center', marginTop: spacing[8] }}>
+            Données non disponibles hors ligne. Ouvrez l'application en ligne une première fois pour activer le mode hors ligne.
+          </Text>
+        </View>
+      </Screen>
+    );
+  }
+
   return (
     <Screen>
       <View style={styles.hdr}>

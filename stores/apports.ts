@@ -3,7 +3,7 @@ import { supabase } from '@/lib/supabase';
 import { translateError } from '@/lib/errors';
 import { generateFallbackName } from '@/lib/id';
 import { saveApportsCache, getApportsCache, getCacheTimestamp } from '@/lib/db';
-import { isNetworkError } from '@/lib/sync';
+import { isNetworkError, withTimeout } from '@/lib/sync';
 
 export interface Apport {
   id: string;
@@ -76,11 +76,13 @@ export const useAportsStore = create<AportsStore>((set, get) => ({
       set({ error: null });
     }
 
-    const { data, error } = await supabase
-      .from('capital_injections')
-      .select('*, injected_by:profiles!injected_by_id(name), creator:profiles!created_by(name), editor:profiles!edited_by(name)')
-      .eq('business_id', businessId)
-      .order('injected_at', { ascending: false });
+    const { data, error } = await withTimeout(
+      supabase
+        .from('capital_injections')
+        .select('*, injected_by:profiles!injected_by_id(name), creator:profiles!created_by(name), editor:profiles!edited_by(name)')
+        .eq('business_id', businessId)
+        .order('injected_at', { ascending: false }),
+    ).catch(err => ({ data: null, error: err }));
 
     if (error) {
       if (isNetworkError(error)) {

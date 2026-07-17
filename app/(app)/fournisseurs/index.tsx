@@ -3,6 +3,7 @@ import { Alert, Animated, Easing, FlatList, KeyboardAvoidingView, LayoutAnimatio
 import { Ionicons } from '@expo/vector-icons';
 import { SafeAreaView } from 'react-native-safe-area-context';
 import { Screen } from '@/src/components/ui/Screen';
+import { OfflineNotice } from '@/src/components/ui/OfflineNotice';
 import { router } from 'expo-router';
 import { Button } from '@/src/components/ui/Button';
 import { Card } from '@/src/components/ui/Card';
@@ -734,7 +735,7 @@ export default function FournisseursScreen() {
 
   const { products, fetchProducts } = useProductStore();
   const {
-    fournisseurs, commandes, debts, loading, saving, error, offline,
+    fournisseurs, commandes, debts, loading, saving, error, offline, offlineSince,
     fetchFournisseurs, updateFournisseur, deleteFournisseur,
     fetchCommandes, createCommande, loadCommandeLines, recevoirCommande,
     fetchDebts, createDebt,
@@ -964,11 +965,7 @@ export default function FournisseursScreen() {
         <View style={{ width: 60 }} />
       </View>
 
-      {offline && (
-        <View style={styles.offlineBanner}>
-          <Text variant="caption" color="secondary">Pas de réseau · Informations non actualisées</Text>
-        </View>
-      )}
+      {offline && <OfflineNotice offlineSince={offlineSince} />}
 
       {tab === 'fournisseurs' && fournisseurs.length > 0 && (
         <View style={styles.summaryBar}>
@@ -1282,7 +1279,6 @@ function makeStyles(p: Palette) {
       borderWidth: StyleSheet.hairlineWidth, borderColor: p.border,
     },
     statusPill: { paddingHorizontal: spacing[2], paddingVertical: 2, borderRadius: radius.sm },
-    offlineBanner: { alignItems: 'center', justifyContent: 'center', paddingVertical: spacing[1], borderBottomWidth: StyleSheet.hairlineWidth, borderBottomColor: p.border },
     empty: { flex: 1, alignItems: 'center', justifyContent: 'center', paddingHorizontal: spacing[4] },
     center: { textAlign: 'center', marginTop: spacing[10] },
 

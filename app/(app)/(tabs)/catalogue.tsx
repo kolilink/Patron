@@ -1325,10 +1325,12 @@ export default function CatalogueScreen() {
         <SkeletonList count={8} />
       ) : tab === 'actifs' && products.length === 0 ? (
         <View style={styles.emptyState}>
-          <Ionicons name="cube-outline" size={72} color={palette.textDisabled} />
-          <Text variant="h4">Catalogue vide</Text>
+          <Ionicons name={offline ? 'cloud-offline-outline' : 'cube-outline'} size={72} color={palette.textDisabled} />
+          <Text variant="h4">{offline ? 'Catalogue non disponible hors ligne' : 'Catalogue vide'}</Text>
           <Text variant="body" color="secondary" style={styles.emptyDesc}>
-            {!canEdit
+            {offline
+              ? 'Ouvrez l\'application en ligne une première fois pour activer le mode hors ligne.'
+              : !canEdit
               ? 'Votre responsable ajoutera les produits bientôt.'
               : 'Ajoutez votre premier produit pour démarrer.'}
           </Text>

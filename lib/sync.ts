@@ -37,6 +37,24 @@ export function isNetworkError(err: unknown): boolean {
   );
 }
 
+// None of the Supabase read calls across the stores have a client-side
+// timeout — under some real-world network conditions (a dead/captive wifi
+// rather than true airplane mode, certain carrier states) the underlying
+// fetch can hang instead of rejecting promptly, so the catch block that
+// falls back to the SQLite read cache never runs and `loading` is stuck
+// `true` forever, even though the fallback logic itself is correct. Wrap
+// the network call with this so it always settles — the message contains
+// "timeout", which isNetworkError() above already recognizes, so a timeout
+// is treated exactly like any other network failure by every store's
+// existing catch/fallback code. 12s is generous for a slow 3G connection
+// (this app's core use case) while still guaranteeing the UI never hangs.
+export function withTimeout<T>(promise: PromiseLike<T>, ms = 12000): Promise<T> {
+  const timeout = new Promise<never>((_, reject) => {
+    setTimeout(() => reject(new Error(`Network timeout after ${ms}ms`)), ms);
+  });
+  return Promise.race([Promise.resolve(promise), timeout]);
+}
+
 // Builds the "{qty} {product}" fragment for the sale-completed notification,
 // mirroring stores/sales.ts's describeSaleForNotification but operating on
 // the raw cart JSON stored in the queue (no CartLine/Product objects survive

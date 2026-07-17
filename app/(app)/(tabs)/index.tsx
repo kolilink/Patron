@@ -4,6 +4,7 @@ import { Gesture, GestureDetector } from 'react-native-gesture-handler';
 import { runOnJS } from 'react-native-reanimated';
 import { LinearGradient } from 'expo-linear-gradient';
 import { Screen } from '@/src/components/ui/Screen';
+import { OfflineNotice } from '@/src/components/ui/OfflineNotice';
 import { router, useFocusEffect } from 'expo-router';
 import { Ionicons } from '@expo/vector-icons';
 import { Button } from '@/src/components/ui/Button';
@@ -502,11 +503,7 @@ export default function AccueilScreen() {
         </View>
       </Modal>
 
-      {isOffline && (
-        <View style={styles.offlineBanner}>
-          <Text variant="caption" color="secondary">Pas de réseau · Informations non actualisées</Text>
-        </View>
-      )}
+      {isOffline && <OfflineNotice offlineSince={null} />}
 
       <ScrollView style={{ flex: 1 }} contentContainerStyle={styles.content} showsVerticalScrollIndicator={false}>
 
@@ -987,12 +984,6 @@ function makeStyles(p: Palette) {
     allGood: { textAlign: 'center', paddingVertical: spacing[3] },
     monthLine: { textAlign: 'center', paddingVertical: spacing[2] },
 
-    offlineBanner: {
-      alignItems: 'center', justifyContent: 'center',
-      paddingVertical: spacing[1],
-      borderBottomWidth: StyleSheet.hairlineWidth,
-      borderBottomColor: p.border,
-    },
     sheetBackdrop: {
       flex: 1, justifyContent: 'flex-end',
       backgroundColor: 'rgba(0,0,0,0.5)',

@@ -3,7 +3,7 @@ import { supabase } from '@/lib/supabase';
 import { translateError } from '@/lib/errors';
 import { generateId } from '@/lib/id';
 import { saveFournisseurCache, getFournisseurCache, saveCommandeCache, getCommandeCache, getCacheTimestamp } from '@/lib/db';
-import { isNetworkError } from '@/lib/sync';
+import { isNetworkError, withTimeout } from '@/lib/sync';
 import { useProductStore } from '@/stores/products';
 import { notifyEvent } from '@/src/utils/notifications';
 
@@ -113,8 +113,10 @@ export const useFournisseursStore = create<FournisseursStore>((set, get) => ({
   fetchFournisseurs: async (businessId) => {
     set({ loading: true });
     const [suppliersRes, debtsRes] = await Promise.all([
-      supabase.from('suppliers').select('*').eq('business_id', businessId).order('name'),
-      supabase.from('supplier_debts').select('*').eq('business_id', businessId).order('date', { ascending: false }),
+      withTimeout(supabase.from('suppliers').select('*').eq('business_id', businessId).order('name'))
+        .catch(err => ({ data: null, error: err })),
+      withTimeout(supabase.from('supplier_debts').select('*').eq('business_id', businessId).order('date', { ascending: false }))
+        .catch(err => ({ data: null, error: err })),
     ]);
     if (suppliersRes.error) {
       if (isNetworkError(suppliersRes.error)) {
