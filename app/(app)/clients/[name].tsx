@@ -15,6 +15,9 @@ import { useAuthStore } from '@/stores/auth';
 import { useVentesStore, type Vente } from '@/stores/ventes';
 import { supabase } from '@/lib/supabase';
 import { formatAmountInput, parseAmountInput } from '@/src/utils/format';
+import { saveClientLedgerCache, getClientLedgerCache } from '@/lib/db';
+import { isNetworkError } from '@/lib/sync';
+import { OfflineNotice } from '@/src/components/ui/OfflineNotice';
 
 function fmt(n: number, cur: string) { return `${Math.round(n).toLocaleString('fr-FR')} ${cur}`; }
 
@@ -298,7 +301,11 @@ export default function ClientLedgerScreen() {
   const role = session?.activeMembership?.role;
   const canEdit = role === 'administrateur' || role === 'manager';
 
-  const { sales, loading, saving, fetchSales, recordPayment, recordClientPayment } = useVentesStore();
+  const { sales, loading, saving, offline, offlineSince, fetchSales, recordPayment, recordClientPayment } = useVentesStore();
+
+  // Shared key for this client's cached reads (payments + record) — prefixed by
+  // route type since routeParam can be either a client UUID or a raw name.
+  const clientKey = isClientId ? `id:${routeParam}` : `name:${routeParam}`;
 
   // displayName is resolved after clientRecord loads when routing by UUID
   const [displayName, setDisplayName] = useState(isClientId ? '' : routeParam);
@@ -331,16 +338,30 @@ export default function ClientLedgerScreen() {
   }, [sales, loading, displayName]);
 
   const loadClientRecord = async () => {
+    const recordCacheKey = `${businessId}:record:${clientKey}`;
+
+    // Seed from cache immediately (mainly matters for the isClientId route,
+    // where displayName has nothing else to resolve from until this loads).
+    if (!clientRecord) {
+      const cached = await getClientLedgerCache(recordCacheKey) as ClientRecord | null;
+      if (cached) {
+        setClientRecord(cached);
+        if (isClientId) setDisplayName(cached.name);
+      }
+    }
+
     let query = supabase.from('clients').select('*').eq('business_id', businessId);
     if (isClientId) {
       query = query.eq('id', routeParam);
     } else {
       query = query.eq('name', routeParam);
     }
-    const { data } = await query.maybeSingle();
+    const { data, error } = await query.maybeSingle();
+    if (error) return; // offline (or any other failure) — cached value above already applied
     const record = data as ClientRecord | null;
     setClientRecord(record);
     if (isClientId && record) setDisplayName(record.name);
+    if (record) void saveClientLedgerCache(recordCacheKey, record);
   };
 
   const loadLedgerPayments = async () => {
@@ -350,14 +371,35 @@ export default function ClientLedgerScreen() {
       : sales.filter(s => s.customer_name === routeParam);
     if (clientSales.length === 0) { setLoadingLocal(false); return; }
 
+    const paymentsCacheKey = `${businessId}:payments:${clientKey}`;
+
+    // Seed from cache immediately so the ledger (and the real totalOwed it
+    // drives) is correct while the network call runs, not just once it resolves.
+    if (ledgerPayments.length === 0) {
+      const cached = await getClientLedgerCache(paymentsCacheKey) as LedgerPayment[] | null;
+      if (cached) setLedgerPayments(cached);
+    }
+
     const saleIds = clientSales.map(s => s.id);
     const { data, error } = await supabase
       .from('payments')
       .select('id, order_id, method, amount, date')
       .in('order_id', saleIds)
       .order('date', { ascending: true });
-    if (error) { setLoadingLocal(false); return; }
-    setLedgerPayments((data ?? []).map(p => ({ ...(p as object), amount: (p as { amount: number }).amount / 100 })) as LedgerPayment[]);
+    if (error) {
+      // Network failure: fall back to cache so a client's real debt (sales minus
+      // payments) doesn't silently inflate to their full lifetime sale total —
+      // this is what happened before this cache existed (payments = [] offline).
+      if (isNetworkError(error)) {
+        const cached = await getClientLedgerCache(paymentsCacheKey) as LedgerPayment[] | null;
+        if (cached) setLedgerPayments(cached);
+      }
+      setLoadingLocal(false);
+      return;
+    }
+    const payments = (data ?? []).map(p => ({ ...(p as object), amount: (p as { amount: number }).amount / 100 })) as LedgerPayment[];
+    setLedgerPayments(payments);
+    void saveClientLedgerCache(paymentsCacheKey, payments);
     setLoadingLocal(false);
   };
 
@@ -504,6 +546,8 @@ export default function ClientLedgerScreen() {
           <View style={{ width: 60 }} />
         )}
       </View>
+
+      {offline && <OfflineNotice offlineSince={offlineSince} />}
 
       <ScrollView contentContainerStyle={styles.content} showsVerticalScrollIndicator={false}>
 
