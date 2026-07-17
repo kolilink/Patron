@@ -44,7 +44,6 @@ export function OtpInput({ length = 6, onComplete, disabled = false, autoFocus =
       sub?.remove();
       stopSmsRetriever();
     };
-    // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [whatsappAutofill, disabled, length]);
 
   // On some Android OEM keyboards (OPPO, Xiaomi) calling focus() on an already-focused

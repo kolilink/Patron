@@ -58,6 +58,7 @@ export default function TabsLayout() {
   const session = useAuthStore(s => s.session);
   const loading = useAuthStore(s => s.loading);
   const removedBusinessName = useAuthStore(s => s.removedBusinessName);
+  const { boutiqueRoom, load: loadChat } = useChatStore();
 
   useEffect(() => {
     // If membership was removed, the (app)/_layout.tsx handles the redirect.
@@ -67,20 +68,18 @@ export default function TabsLayout() {
     }
   }, [loading, session?.activeBusiness, removedBusinessName]);
 
+  useEffect(() => {
+    const bId = session?.activeBusiness?.id;
+    const uId = session?.user?.id;
+    if (!bId || !uId || boutiqueRoom !== null) return;
+    loadChat(bId, uId);
+  }, [session?.activeBusiness?.id, session?.user?.id, boutiqueRoom]);
+
   if (!session?.activeBusiness) return null;
 
   const role = session.activeMembership?.role;
   const isInvestisseur = role === 'investisseur';
   const isVendeur = role === 'vendeur';
-
-  const { boutiqueRoom, load: loadChat } = useChatStore();
-
-  useEffect(() => {
-    const bId = session.activeBusiness?.id;
-    const uId = session.user.id;
-    if (!bId || !uId || boutiqueRoom !== null) return;
-    loadChat(bId, uId);
-  }, [session.activeBusiness?.id, session.user.id]);
 
   const bId = session.activeBusiness?.id ?? null;
   const uId = session.user.id;
