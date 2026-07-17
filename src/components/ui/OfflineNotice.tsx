@@ -1,27 +1,33 @@
 import { StyleSheet, View } from 'react-native';
+import { Ionicons } from '@expo/vector-icons';
 import { Text } from '@/src/components/ui/Text';
-import { colors, useTheme, spacing } from '@/src/theme';
+import { useTheme, spacing } from '@/src/theme';
 
 interface Props {
   offlineSince: number | null;
 }
 
-function fmtTs(ts: number): string {
-  const d = new Date(ts);
-  const hh = String(d.getHours()).padStart(2, '0');
-  const mm = String(d.getMinutes()).padStart(2, '0');
-  const day = d.toLocaleDateString('fr-FR', { day: 'numeric', month: 'short' });
-  return `${day} à ${hh}:${mm}`;
+// Offline is a supported mode now, not an error — so the banner reads as a
+// quiet fact ("here's how fresh this is"), not an alarm. Relative time is
+// both shorter and more immediately meaningful than a full date+time string;
+// falls back to a weekday name only in the rare case of being offline a
+// full day or more.
+function relativeTime(ts: number): string {
+  const min = Math.floor((Date.now() - ts) / 60000);
+  if (min < 1) return "à l'instant";
+  if (min < 60) return `il y a ${min} min`;
+  const hr = Math.floor(min / 60);
+  if (hr < 24) return `il y a ${hr} h`;
+  return `depuis ${new Date(ts).toLocaleDateString('fr-FR', { weekday: 'long' })}`;
 }
 
 export function OfflineNotice({ offlineSince }: Props) {
   const { palette } = useTheme();
   return (
-    <View style={[styles.bar, { backgroundColor: palette.warning }]}>
-      <Text variant="caption" style={styles.text}>
-        {offlineSince
-          ? `Hors ligne — données du ${fmtTs(offlineSince)}`
-          : 'Hors ligne — données locales'}
+    <View style={[styles.bar, { backgroundColor: palette.warningLight }]}>
+      <Ionicons name="cloud-offline-outline" size={13} color={palette.warning} />
+      <Text variant="caption" style={{ color: palette.warning }}>
+        {offlineSince ? `Hors ligne · ${relativeTime(offlineSince)}` : 'Hors ligne'}
       </Text>
     </View>
   );
@@ -29,9 +35,11 @@ export function OfflineNotice({ offlineSince }: Props) {
 
 const styles = StyleSheet.create({
   bar: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    justifyContent: 'center',
+    gap: 6,
     paddingHorizontal: spacing[5],
     paddingVertical: spacing[1],
-    alignItems: 'center',
   },
-  text: { color: colors.neutral[0] },
 });
