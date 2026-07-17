@@ -9,7 +9,6 @@ const KEY_STORE_KEY = 'patron_db_enc_key_v1';
 
 // SubtleCrypto from Hermes's built-in WebCrypto API (available in RN 0.76+ / Expo SDK 54+).
 // Typed manually to avoid requiring DOM lib in tsconfig.
-// eslint-disable-next-line @typescript-eslint/no-explicit-any
 const subtle = (globalThis as any).crypto?.subtle as {
   importKey(format: string, keyData: ArrayBuffer, algorithm: { name: string; length: number }, extractable: boolean, keyUsages: string[]): Promise<unknown>;
   encrypt(algorithm: { name: string; iv: Uint8Array }, key: unknown, data: ArrayBuffer): Promise<ArrayBuffer>;

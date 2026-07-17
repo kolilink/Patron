@@ -141,7 +141,6 @@ export function PaywallScreen({ business, onDismiss, inline = false, onPurchased
         onPurchased?.();
       })
       .catch(() => {});
-    // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
 
   const restore = async () => {
