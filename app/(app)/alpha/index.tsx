@@ -1,5 +1,7 @@
 import React, { useCallback, useEffect, useMemo, useRef, useState } from 'react';
-import { FlatList, InteractionManager, KeyboardAvoidingView, Modal, Platform, Pressable, StyleSheet, TextInput, View } from 'react-native';
+import { ActivityIndicator, Animated, FlatList, InteractionManager, Keyboard, KeyboardAvoidingView, Modal, Platform, Pressable, StyleSheet, TextInput, View } from 'react-native';
+import { useSafeAreaInsets } from 'react-native-safe-area-context';
+import * as FileSystem from 'expo-file-system/legacy';
 import { Screen } from '@/src/components/ui/Screen';
 import { router, useFocusEffect, useLocalSearchParams } from 'expo-router';
 import { Ionicons } from '@expo/vector-icons';
@@ -7,10 +9,14 @@ import { Text } from '@/src/components/ui/Text';
 import { SkeletonList } from '@/src/components/ui/SkeletonPlaceholder';
 import { AppSheet } from '@/src/components/ui/AppSheet';
 import { PaywallScreen } from '@/src/components/PaywallScreen';
+import { LiveWaveformBars } from '@/src/components/ui/VoiceMessageBubble';
 import { useTheme, spacing, radius } from '@/src/theme';
 import type { Palette } from '@/src/theme';
 import { useAuthStore } from '@/stores/auth';
 import { useAlphaStore } from '@/stores/alpha';
+import { supabase } from '@/lib/supabase';
+import { PAYWALL_ENABLED } from '@/lib/purchases';
+import { useVoiceRecorder } from '@/src/hooks/useVoiceRecorder';
 import { isSep, buildGroupedItems } from '@/src/lib/chatGrouping';
 import type { GroupedItem } from '@/src/lib/chatGrouping';
 import type { AlphaMessage } from '@/src/types';
@@ -49,12 +55,35 @@ function formatCountdown(nextResetAt: string | null | undefined): string {
   return h > 0 ? `${h}h${String(m).padStart(2, '0')}min` : `${m}min`;
 }
 
+function formatRecDuration(s: number): string {
+  const m = Math.floor(s / 60);
+  const sec = s % 60;
+  return `${m}:${String(sec).padStart(2, '0')}`;
+}
+
+// "gratuite" tier wording only makes sense when there's a paid tier to
+// contrast it with — suppressed while PAYWALL_ENABLED is false (lib/
+// purchases.ts) so the remaining-count row doesn't imply an upgrade path
+// that isn't actually offered right now.
+function formatQuotaLabel(quota: { has_ai_access: boolean; remaining: number; next_reset_at: string | null }): string {
+  const showFreeWord = PAYWALL_ENABLED && !quota.has_ai_access;
+  if (quota.remaining > 0) {
+    const plural = quota.remaining > 1 ? 's' : '';
+    return showFreeWord
+      ? `${quota.remaining} question${plural} gratuite${plural} restante${plural}`
+      : `${quota.remaining} question${plural} restante${plural} aujourd'hui`;
+  }
+  return showFreeWord
+    ? `Prochaine question gratuite dans ${formatCountdown(quota.next_reset_at)}`
+    : `Prochaine question dans ${formatCountdown(quota.next_reset_at)}`;
+}
+
 export default function AlphaScreen() {
   const { palette } = useTheme();
   const styles = useMemo(() => makeStyles(palette), [palette]);
   const session = useAuthStore(s => s.session);
   const businessId = session?.activeBusiness?.id ?? '';
-  const params = useLocalSearchParams<{ q?: string }>();
+  const params = useLocalSearchParams<{ q?: string; autoRecord?: string }>();
 
   const {
     messages, quota, loading, sending, error, offline, load, sendMessage,
@@ -76,9 +105,40 @@ export default function AlphaScreen() {
   // longer exhausted (see the render check below), so a stale true value
   // from before the window reset can never hide the input row.
   const [waitBlocked, setWaitBlocked] = useState(false);
+  const [isTranscribing, setIsTranscribing] = useState(false);
+  const [voiceError, setVoiceError] = useState<string | null>(null);
   const autoSentRef = useRef(false);
+  const autoRecordRef = useRef(false);
   const listRef = useRef<FlatList<GroupedItem<GroupableAlphaMessage>>>(null);
   const inputRef = useRef<TextInput>(null);
+  const recorder = useVoiceRecorder();
+  const pulseAnim = useRef(new Animated.Value(1)).current;
+  const insets = useSafeAreaInsets();
+  // Screen only reserves the top safe area (see below) so KeyboardAvoidingView
+  // can own the bottom padding while the keyboard is up — the composer needs
+  // its own bottom padding only when the keyboard is NOT covering it, or it
+  // sits flush under the home-indicator/gesture-bar on notched phones.
+  const [keyboardVisible, setKeyboardVisible] = useState(false);
+
+  useEffect(() => {
+    const showEvt = Platform.OS === 'ios' ? 'keyboardWillShow' : 'keyboardDidShow';
+    const hideEvt = Platform.OS === 'ios' ? 'keyboardWillHide' : 'keyboardDidHide';
+    const showSub = Keyboard.addListener(showEvt, () => setKeyboardVisible(true));
+    const hideSub = Keyboard.addListener(hideEvt, () => setKeyboardVisible(false));
+    return () => { showSub.remove(); hideSub.remove(); };
+  }, []);
+
+  useEffect(() => {
+    if (!recorder.isRecording) { pulseAnim.setValue(1); return; }
+    const loop = Animated.loop(
+      Animated.sequence([
+        Animated.timing(pulseAnim, { toValue: 0.3, duration: 600, useNativeDriver: true }),
+        Animated.timing(pulseAnim, { toValue: 1, duration: 600, useNativeDriver: true }),
+      ]),
+    );
+    loop.start();
+    return () => loop.stop();
+  }, [recorder.isRecording, pulseAnim]);
 
   useFocusEffect(useCallback(() => {
     if (!businessId) return;
@@ -110,8 +170,15 @@ export default function AlphaScreen() {
   // one: a free user is shown the upgrade popup (they can act on it), a
   // paying user at their 20/24h cap is only ever told to wait — showing them
   // an "upgrade" offer would be nonsensical, they already pay.
-  const freeQuotaExhausted = !!quota && !quota.in_welcome_burst && !quota.has_ai_access && quota.remaining <= 0;
-  const paidQuotaExhausted = !!quota && !quota.in_welcome_burst && quota.has_ai_access && quota.remaining <= 0;
+  //
+  // While PAYWALL_ENABLED is false (see lib/purchases.ts), freeQuotaExhausted
+  // is forced to never fire — every exhausted user, regardless of
+  // has_ai_access, falls into paidQuotaExhausted's plain wait-card state
+  // instead, so nobody (including App Store/Play Store reviewers) can reach
+  // the upgrade popup at all.
+  const quotaExhausted = !!quota && !quota.in_welcome_burst && quota.remaining <= 0;
+  const freeQuotaExhausted = PAYWALL_ENABLED && !!quota && quotaExhausted && !quota.has_ai_access;
+  const paidQuotaExhausted = !!quota && quotaExhausted && (!PAYWALL_ENABLED || quota.has_ai_access);
 
   const handleSend = async (content?: string) => {
     const trimmed = (content ?? text).trim();
@@ -133,6 +200,43 @@ export default function AlphaScreen() {
     // typed, forcing a retype instead of a simple retry.
     const ok = await sendMessage({ businessId, content: trimmed });
     if (ok && content === undefined) setText('');
+  };
+
+  const handleMicPress = async () => {
+    if (offline) return;
+    setVoiceError(null);
+    await recorder.start();
+  };
+
+  const handleCancelRecording = () => {
+    recorder.cancel();
+  };
+
+  // Fills the composer, never auto-sends — a bad transcription (accent,
+  // background noise, a local-language word Whisper doesn't know) should be
+  // catchable before it costs a quota slot. See supabase/functions/
+  // alpha-transcribe/index.ts for the Groq-first/OpenAI-fallback call.
+  const handleStopAndTranscribe = async () => {
+    const result = await recorder.stop();
+    if (!result) return;
+
+    setIsTranscribing(true);
+    setVoiceError(null);
+    try {
+      const base64 = await FileSystem.readAsStringAsync(result.uri, {
+        encoding: FileSystem.EncodingType.Base64,
+      });
+      const { data, error: fnError } = await supabase.functions.invoke('alpha-transcribe', {
+        body: { audio: base64, mimeType: 'audio/m4a' },
+      });
+      if (fnError || !data?.text) throw fnError ?? new Error('empty transcription');
+      setText(t => (t.trim() ? `${t.trim()} ${data.text}` : data.text));
+      inputRef.current?.focus();
+    } catch {
+      setVoiceError('Transcription impossible — réessayez.');
+    } finally {
+      setIsTranscribing(false);
+    }
   };
 
   // Pre-filled from the home-screen "Demandez Alpha…" bar — auto-sends once
@@ -166,6 +270,22 @@ export default function AlphaScreen() {
     void handleSend(params.q);
   }, [businessId, params.q, quota, offline]);
 
+  // Triggered by the home-screen mic button (mutually exclusive with the
+  // `q` auto-send above — the pill only ever sends one or the other).
+  // Deferred with InteractionManager so the permission prompt / recording
+  // start doesn't fire mid-push-transition (same pattern as the
+  // auto-focus effect below, and verrouille.tsx's biometric auto-prompt).
+  // No quota gate here, unlike the q flow — recording itself doesn't spend
+  // a quota slot, only the eventual send after transcription does, and
+  // that already goes through handleSend's normal exhaustion check.
+  useEffect(() => {
+    if (autoRecordRef.current) return;
+    if (params.autoRecord !== '1' || offline) return;
+    autoRecordRef.current = true;
+    const task = InteractionManager.runAfterInteractions(() => { void handleMicPress(); });
+    return () => task.cancel();
+  }, [params.autoRecord, offline]);
+
   const handlePurchased = async () => {
     const q = pendingQuestion;
     setPendingQuestion(null);
@@ -183,6 +303,10 @@ export default function AlphaScreen() {
   const dismissPaywall = async () => {
     setPendingQuestion(null);
     setWaitBlocked(false);
+    // No WhatsApp-reminder consent ask while the paywall itself is hidden —
+    // it only makes sense as a follow-up to an upgrade offer nobody is being
+    // shown right now (see PAYWALL_ENABLED in lib/purchases.ts).
+    if (!PAYWALL_ENABLED) return;
     if (businessId) {
       const eligible = await checkWhatsappConsentEligibility(businessId);
       if (eligible) setShowWhatsappConsent(true);
@@ -195,7 +319,7 @@ export default function AlphaScreen() {
         <Pressable onPress={() => router.back()}>
           <Text variant="body" color="secondary">‹ Retour</Text>
         </Pressable>
-        <Text variant="h4" style={{ fontWeight: '800' }}>{quota?.has_ai_access ? 'ALPHA PRO' : 'ALPHA'}</Text>
+        <Text variant="h4" style={{ fontWeight: '800' }}>{PAYWALL_ENABLED && quota?.has_ai_access ? 'ALPHA PRO' : 'ALPHA'}</Text>
         <View style={{ width: 60 }} />
       </View>
 
@@ -281,43 +405,78 @@ export default function AlphaScreen() {
           <>
             {quota && !quota.in_welcome_burst && (
               <View style={styles.quotaRow}>
-                <Text variant="caption" color="secondary">
-                  {quota.has_ai_access
-                    ? quota.remaining > 0
-                      ? `${quota.remaining} question${quota.remaining > 1 ? 's' : ''} restante${quota.remaining > 1 ? 's' : ''} aujourd'hui`
-                      : `Prochaine question dans ${formatCountdown(quota.next_reset_at)}`
-                    : quota.remaining > 0
-                      ? `${quota.remaining} question${quota.remaining > 1 ? 's' : ''} gratuite${quota.remaining > 1 ? 's' : ''} restante${quota.remaining > 1 ? 's' : ''}`
-                      : `Prochaine question gratuite dans ${formatCountdown(quota.next_reset_at)}`}
-                </Text>
+                <Text variant="caption" color="secondary">{formatQuotaLabel(quota)}</Text>
               </View>
             )}
-            <View style={styles.inputRow}>
-              <TextInput
-                ref={inputRef}
-                style={[styles.input, offline && { opacity: 0.5 }]}
-                value={text}
-                onChangeText={setText}
-                placeholder={offline ? 'Alpha nécessite une connexion internet…' : 'Parler avec Alpha…'}
-                placeholderTextColor={palette.textSecondary}
-                multiline
-                maxLength={500}
-                onSubmitEditing={() => handleSend()}
-                returnKeyType="send"
-                blurOnSubmit={false}
-                autoFocus
-                editable={!offline}
-              />
-              {text.trim().length > 0 && (
-                <Pressable
-                  onPress={() => handleSend()}
-                  disabled={sending || offline}
-                  style={({ pressed }) => [styles.sendBtn, (pressed || offline) && { opacity: 0.6 }]}
-                >
-                  <Ionicons name="arrow-forward" size={20} color={palette.textInverse} />
-                </Pressable>
+            <View style={[styles.inputRow, { paddingBottom: keyboardVisible ? spacing[3] : Math.max(insets.bottom, spacing[3]) }]}>
+              {recorder.isRecording ? (
+                <>
+                  <Pressable onPress={handleCancelRecording} style={styles.recIconBtn} hitSlop={8}>
+                    <Ionicons name="close" size={22} color={palette.textSecondary} />
+                  </Pressable>
+                  <View style={styles.recIndicator}>
+                    <Animated.View style={[styles.recDot, { opacity: pulseAnim }]} />
+                    <Text variant="bodySmall" color="secondary" style={styles.recTimer}>{formatRecDuration(recorder.duration)}</Text>
+                    <View style={{ flex: 1 }}>
+                      <LiveWaveformBars samples={recorder.amplitudes} />
+                    </View>
+                  </View>
+                  <Pressable onPress={handleStopAndTranscribe} style={styles.sendBtn} hitSlop={8}>
+                    <Ionicons name="checkmark" size={22} color={palette.textInverse} />
+                  </Pressable>
+                </>
+              ) : (
+                // Mic/send lives inside the input pill itself (right edge),
+                // not as a separate circle floating outside it — swaps to a
+                // solid send arrow the moment there's text, back to a plain
+                // mic glyph once the box is empty again.
+                <View style={styles.composerPill}>
+                  <TextInput
+                    ref={inputRef}
+                    style={[styles.input, offline && { opacity: 0.5 }]}
+                    value={text}
+                    onChangeText={setText}
+                    placeholder={offline ? 'Alpha nécessite une connexion internet…' : 'Parler avec Alpha…'}
+                    placeholderTextColor={palette.textSecondary}
+                    multiline
+                    maxLength={500}
+                    onSubmitEditing={() => handleSend()}
+                    returnKeyType="send"
+                    blurOnSubmit={false}
+                    autoFocus
+                    editable={!offline && !isTranscribing}
+                  />
+                  {isTranscribing ? (
+                    <View style={[styles.pillIconBtn, styles.pillSendBtn]}>
+                      <ActivityIndicator color={palette.textInverse} size="small" />
+                    </View>
+                  ) : text.trim().length > 0 ? (
+                    <Pressable
+                      onPress={() => handleSend()}
+                      disabled={sending || offline}
+                      hitSlop={8}
+                      style={({ pressed }) => [styles.pillIconBtn, styles.pillSendBtn, (pressed || offline) && { opacity: 0.6 }]}
+                    >
+                      <Ionicons name="arrow-forward" size={18} color={palette.textInverse} />
+                    </Pressable>
+                  ) : (
+                    <Pressable
+                      onPress={handleMicPress}
+                      disabled={offline}
+                      hitSlop={8}
+                      style={({ pressed }) => [styles.pillIconBtn, (pressed || offline) && { opacity: 0.5 }]}
+                    >
+                      <Ionicons name="mic" size={20} color={palette.primary} />
+                    </Pressable>
+                  )}
+                </View>
               )}
             </View>
+            {voiceError && (
+              <View style={{ paddingHorizontal: spacing[4], paddingTop: spacing[1] }}>
+                <Text variant="caption" style={{ color: palette.warning }}>{voiceError}</Text>
+              </View>
+            )}
           </>
         )}
       </KeyboardAvoidingView>
@@ -327,7 +486,7 @@ export default function AlphaScreen() {
           matching the reference paywall's scale rather than a small card
           tucked at the bottom of the conversation. */}
       <Modal
-        visible={!!pendingQuestion && !!session?.activeBusiness}
+        visible={PAYWALL_ENABLED && !!pendingQuestion && !!session?.activeBusiness}
         animationType="slide"
         presentationStyle="pageSheet"
         onRequestClose={dismissPaywall}
@@ -350,7 +509,7 @@ export default function AlphaScreen() {
           just a generic dismiss — declining is recorded the same way
           accepting is. */}
       <AppSheet
-        visible={showWhatsappConsent}
+        visible={PAYWALL_ENABLED && showWhatsappConsent}
         onClose={() => setShowWhatsappConsent(false)}
         icon="logo-whatsapp"
         title="On vous facilite ça ?"
@@ -380,8 +539,20 @@ function makeStyles(p: Palette) {
     waitCard: { alignItems: 'center', justifyContent: 'center', gap: spacing[2], paddingVertical: spacing[6], paddingHorizontal: spacing[6] },
     waitText: { textAlign: 'center' },
     inputRow: { flexDirection: 'row', alignItems: 'flex-end', gap: spacing[3], paddingHorizontal: spacing[4], paddingTop: spacing[3], borderTopWidth: 1, borderTopColor: p.border },
-    input: { flex: 1, maxHeight: 100, borderRadius: radius.lg, paddingHorizontal: spacing[4], paddingVertical: spacing[3], fontSize: 15, color: p.textPrimary, backgroundColor: p.surface },
+    // One rounded pill holds both the text input and the trailing mic/send
+    // glyph — the glyph is a child of this pill, not a separate circle
+    // floating outside it. alignItems: 'flex-end' + the button's own
+    // marginBottom keeps the glyph pinned bottom-right as the input grows
+    // multiline, instead of drifting to the vertical center of a tall box.
+    composerPill: { flex: 1, flexDirection: 'row', alignItems: 'flex-end', borderRadius: radius.lg, backgroundColor: p.surface, paddingLeft: spacing[4], paddingRight: spacing[1], paddingVertical: spacing[1] },
+    input: { flex: 1, maxHeight: 100, paddingVertical: spacing[2] + 2, fontSize: 15, color: p.textPrimary },
+    pillIconBtn: { width: 36, height: 36, borderRadius: 18, alignItems: 'center', justifyContent: 'center', marginLeft: spacing[1], marginBottom: spacing[1] },
+    pillSendBtn: { backgroundColor: p.primary },
     sendBtn: { width: 44, height: 44, borderRadius: 22, backgroundColor: p.primary, alignItems: 'center', justifyContent: 'center' },
+    recIconBtn: { width: 44, height: 44, alignItems: 'center', justifyContent: 'center' },
+    recIndicator: { flex: 1, flexDirection: 'row', alignItems: 'center', gap: spacing[2], paddingHorizontal: spacing[4], height: 44, borderRadius: radius.lg, backgroundColor: p.surface },
+    recDot: { width: 8, height: 8, borderRadius: 4, backgroundColor: p.warning },
+    recTimer: { minWidth: 34 },
     rowOwn: { alignItems: 'flex-end', paddingHorizontal: spacing[4], marginVertical: 3 },
     rowOther: { alignItems: 'flex-start', paddingHorizontal: spacing[4], marginVertical: 3 },
     bubble: { maxWidth: '82%', borderRadius: 18, paddingHorizontal: spacing[4], paddingVertical: spacing[3] },

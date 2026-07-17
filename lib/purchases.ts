@@ -21,6 +21,20 @@ const isExpoGo = Constants.executionEnvironment === ExecutionEnvironment.StoreCl
 const IOS_API_KEY = process.env.EXPO_PUBLIC_REVENUECAT_API_KEY_IOS ?? '';
 const ANDROID_API_KEY = process.env.EXPO_PUBLIC_REVENUECAT_API_KEY_ANDROID ?? '';
 
+// Master killswitch for the entire Alpha Pro paywall/upsell surface (the
+// full-screen + inline PaywallScreen, the WhatsApp-reminder consent ask, and
+// the "ALPHA PRO"/"gratuite" tier wording — all in app/(app)/alpha/index.tsx).
+// Set to false 2026-07-16 on explicit product direction: no upsell should be
+// visible to anyone — including App Store/Play Store reviewers — until the
+// app has a real base of active users (order of 100s). Alpha itself stays
+// available to everyone at a flat quota in the meantime (see
+// db/migration_v147.sql's app_config — alpha_free_daily_limit and
+// alpha_paid_daily_limit both set to 10 via set_alpha_daily_limit) with no
+// way to ever reach an upgrade prompt while this is false. Flip back to true
+// (and raise alpha_paid_daily_limit back up) when ready to re-launch
+// monetization — every paywall-adjacent surface reads this one flag.
+export const PAYWALL_ENABLED = false;
+
 let configured = false;
 
 export function configurePurchases(): void {
