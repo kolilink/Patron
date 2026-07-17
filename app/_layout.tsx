@@ -65,14 +65,24 @@ function RootLayout() {
   }, [pathname, params]);
 
   // Keep Sentry + PostHog user context in sync with the active session.
+  // Sentry.* calls are guarded by the same DSN check as Sentry.init() above —
+  // calling into the native Sentry SDK when it was never initialized is the
+  // same class of risk as the RevenueCat/expo-notifications native calls
+  // removed elsewhere during the 2026-07-17 logout-crash investigation (see
+  // CLAUDE.md): a native module call with no guarantee it's safe to invoke
+  // pre-init, un-catchable by JS try/catch if it throws.
   useEffect(() => {
     if (session) {
-      Sentry.setUser({ id: session.user.id });
-      Sentry.setTag('business_id', session.activeBusiness?.id ?? 'none');
-      Sentry.setTag('role', session.activeMembership?.role ?? 'none');
+      if (process.env.EXPO_PUBLIC_SENTRY_DSN) {
+        Sentry.setUser({ id: session.user.id });
+        Sentry.setTag('business_id', session.activeBusiness?.id ?? 'none');
+        Sentry.setTag('role', session.activeMembership?.role ?? 'none');
+      }
       identifyUser(session);
     } else {
-      Sentry.setUser(null);
+      if (process.env.EXPO_PUBLIC_SENTRY_DSN) {
+        Sentry.setUser(null);
+      }
       resetAnalytics();
     }
   }, [session]);
