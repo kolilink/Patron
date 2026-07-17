@@ -616,7 +616,7 @@ export default function AccueilScreen() {
                   {(balance ?? 0) > 0 && (
                     <Pressable
                       onPress={() => {
-                        setWithdrawAmountStr(formatAmountInput(String(balance ?? 0), currency));
+                        setWithdrawAmountStr(formatAmountInput(String(Math.round(balance ?? 0)), currency));
                         setShowWithdrawSheet(true);
                       }}
                       style={[styles.withdrawBtn, { borderColor: palette.primary }]}

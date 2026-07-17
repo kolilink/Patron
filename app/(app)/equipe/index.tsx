@@ -429,7 +429,7 @@ function MemberDetailSheet({
                     <Pressable
                       onPress={() => {
                         setPendingPayoutId(pending.id);
-                        setPayoutAmountStr(formatAmountInput(String(pending.requested_amount), currency));
+                        setPayoutAmountStr(formatAmountInput(String(Math.round(pending.requested_amount)), currency));
                         setShowPayoutSheet(true);
                       }}
                       style={[styles.assignBtn, { paddingVertical: 0 }]}

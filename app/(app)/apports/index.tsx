@@ -101,7 +101,7 @@ function FormSheet({ visible, mode, editing, businessId, currency, saving, onClo
   // Prefill when opening in edit mode
   useEffect(() => {
     if (visible && mode === 'edit' && editing) {
-      setAmountStr(formatAmountInput(String(Math.abs(editing.amount)), currency));
+      setAmountStr(formatAmountInput(String(Math.round(Math.abs(editing.amount))), currency));
       setSelectedMemberId(editing.injected_by_id);
       setSourceName(editing.source_name ?? '');
       setNote(editing.note ?? '');

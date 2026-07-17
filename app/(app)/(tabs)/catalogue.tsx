@@ -68,9 +68,9 @@ const EMPTY_FORM: FormState = {
 function productToForm(p: Product, currency: string): FormState {
   return {
     name: p.name,
-    purchase_price: p.cost_price > 0 ? formatAmountInput(String(p.cost_price), currency) : '',
+    purchase_price: p.cost_price > 0 ? formatAmountInput(String(Math.round(p.cost_price)), currency) : '',
     extra_fees: '',
-    sale_price: formatAmountInput(String(p.sale_price), currency),
+    sale_price: formatAmountInput(String(Math.round(p.sale_price)), currency),
     initial_stock: '',
     purchase_qty: '1',
     reorder_level: p.reorder_level > 0 ? String(p.reorder_level) : '',

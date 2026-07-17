@@ -376,13 +376,13 @@ function CommandeForm({ visible, fournisseur, currency, onClose, onSave, saving 
     const linked = fId
       ? products.filter(p => p.supplier_id === fId && !p.archived)
       : [];
-    setLines(linked.map(p => ({ product_id: p.id, product_name: p.name, variant_id: null, variant_name: null, qty: '1', total_cost: p.cost_price > 0 && !p.has_variants ? formatAmountInput(String(p.cost_price), currency) : '' })));
+    setLines(linked.map(p => ({ product_id: p.id, product_name: p.name, variant_id: null, variant_name: null, qty: '1', total_cost: p.cost_price > 0 && !p.has_variants ? formatAmountInput(String(Math.round(p.cost_price)), currency) : '' })));
     // Pre-fetch variants for all linked variant products
     linked.filter(p => p.has_variants && !variantsByProduct[p.id]).forEach(p => fetchVariants(p.id, fId ?? ''));
   }, [visible, products, fournisseur?.id]);
 
   const addLine = (p: Product) => {
-    setLines(prev => [...prev, { product_id: p.id, product_name: p.name, variant_id: null, variant_name: null, qty: '1', total_cost: p.cost_price > 0 && !p.has_variants ? formatAmountInput(String(p.cost_price), currency) : '' }]);
+    setLines(prev => [...prev, { product_id: p.id, product_name: p.name, variant_id: null, variant_name: null, qty: '1', total_cost: p.cost_price > 0 && !p.has_variants ? formatAmountInput(String(Math.round(p.cost_price)), currency) : '' }]);
     if (p.has_variants && !variantsByProduct[p.id]) {
       fetchVariants(p.id, fournisseur?.id ?? '');
     }
@@ -450,7 +450,7 @@ function CommandeForm({ visible, fournisseur, currency, onClose, onSave, saving 
                     {variants.map(v => (
                       <Pressable
                         key={v.id}
-                        onPress={() => setLines(prev => prev.map((x, j) => j === i ? { ...x, variant_id: v.id, variant_name: v.name, total_cost: v.cost_price > 0 ? formatAmountInput(String(v.cost_price), currency) : x.total_cost } : x))}
+                        onPress={() => setLines(prev => prev.map((x, j) => j === i ? { ...x, variant_id: v.id, variant_name: v.name, total_cost: v.cost_price > 0 ? formatAmountInput(String(Math.round(v.cost_price)), currency) : x.total_cost } : x))}
                         style={[styles.prodChip, l.variant_id === v.id && styles.prodChipLinked]}
                       >
                         <Text variant="caption" style={{ color: l.variant_id === v.id ? palette.primary : palette.textPrimary }}>{v.name}</Text>
