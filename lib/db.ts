@@ -908,6 +908,43 @@ export async function getClientLedgerCache(cacheKey: string): Promise<unknown | 
   }
 }
 
+// ─── Cache diagnostics ───────────────────────────────────────────────────────
+// Every save*Cache/get*Cache pair above swallows its own errors (`catch {}`)
+// so a write failure has never been observable — this exists to answer, on
+// the device itself, whether the cache tables actually contain anything at
+// all, distinguishing three very different failure modes that all *look*
+// the same from the UI ("nothing shows offline"): (1) openDb()/migrate()
+// itself is failing (every table reports -1), (2) the DB is fine but writes
+// never ran or never completed (every table reports 0 despite having
+// browsed the matching screen online), or (3) data really is cached (count
+// > 0) and the bug is downstream in how a screen reads/renders it.
+const CACHE_TABLE_NAMES = [
+  'product_cache', 'ventes_cache', 'expense_cache', 'fournisseur_cache',
+  'commande_cache', 'dashboard_kpi_cache', 'chat_cache', 'market_cache',
+  'rapports_cache', 'investor_cache', 'equipe_cache', 'partnerships_cache',
+  'apports_cache', 'client_ledger_cache',
+] as const;
+
+export async function getCacheDiagnostics(): Promise<Record<string, number>> {
+  const counts: Record<string, number> = {};
+  try {
+    const db = await openDb();
+    for (const table of CACHE_TABLE_NAMES) {
+      try {
+        const row = await db.getFirstAsync<{ c: number }>(`SELECT COUNT(*) as c FROM ${table}`);
+        counts[table] = row?.c ?? 0;
+      } catch {
+        counts[table] = -1;
+      }
+    }
+  } catch {
+    // openDb()/migrate() itself failed — every table gets -1 so this reads
+    // the same as "every individual query failed", which is the correct signal.
+    for (const table of CACHE_TABLE_NAMES) counts[table] = -1;
+  }
+  return counts;
+}
+
 // ─── Cache timestamp helper ─────────────────────────────────────────────────────
 // Returns the epoch-ms timestamp when a cache table was last written for a given key.
 // Used by stores to expose staleness info to the UI.
