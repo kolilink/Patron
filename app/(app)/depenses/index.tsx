@@ -68,7 +68,7 @@ function ExpenseFormModal({ visible, editing, onClose, onSave, saving, currency,
 
   useEffect(() => {
     if (visible) {
-      setAmount(editing ? formatAmountInput(String(editing.amount), currency) : '');
+      setAmount(editing ? formatAmountInput(String(Math.round(editing.amount)), currency) : '');
       setDescription(editing?.description ?? '');
       setSelectedProductId(editing?.product_id ?? null);
       const today = todayIso();

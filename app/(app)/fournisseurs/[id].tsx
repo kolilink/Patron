@@ -78,7 +78,7 @@ function CommandeForm({
             product_id: p.id,
             product_name: `${p.name} (${v.name})`,
             qty: '1',
-            total_cost: v.cost_price > 0 ? formatAmountInput(String(v.cost_price), currency) : '',
+            total_cost: v.cost_price > 0 ? formatAmountInput(String(Math.round(v.cost_price)), currency) : '',
             variant_id: v.id,
           })),
         ]);
@@ -87,7 +87,7 @@ function CommandeForm({
     }
     setLines(prev => [...prev, {
       product_id: p.id, product_name: p.name, qty: '1',
-      total_cost: p.cost_price > 0 ? formatAmountInput(String(p.cost_price), currency) : '',
+      total_cost: p.cost_price > 0 ? formatAmountInput(String(Math.round(p.cost_price)), currency) : '',
     }]);
   }, [businessId, fetchVariants, variantsByProduct]);
 
@@ -122,7 +122,7 @@ function CommandeForm({
                 product_id: p.id,
                 product_name: `${p.name} (${v.name})`,
                 qty: '1',
-                total_cost: v.cost_price > 0 ? formatAmountInput(String(v.cost_price), currency) : '',
+                total_cost: v.cost_price > 0 ? formatAmountInput(String(Math.round(v.cost_price)), currency) : '',
                 variant_id: v.id,
               });
             }
@@ -131,7 +131,7 @@ function CommandeForm({
         }
         seedLines.push({
           product_id: p.id, product_name: p.name, qty: '1',
-          total_cost: p.cost_price > 0 ? formatAmountInput(String(p.cost_price), currency) : '',
+          total_cost: p.cost_price > 0 ? formatAmountInput(String(Math.round(p.cost_price)), currency) : '',
         });
       }
       // Only set if still the same fournisseur (guard against race)
