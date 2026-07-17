@@ -365,6 +365,25 @@ async function migrate(db: SQLite.SQLiteDatabase): Promise<void> {
     );
     await db.execAsync('INSERT OR IGNORE INTO _migrations (version) VALUES (17)');
   }
+
+  if (current < 18) {
+    // client_ledger_cache: the per-client ledger (clients/[name].tsx) had no
+    // offline cache for its payments/record reads — unlike the sales list
+    // (already cached via ventes_cache), a client's payment history came back
+    // empty offline, silently inflating their shown debt to the full lifetime
+    // sale total instead of sale total minus payments. Shares one table for
+    // both reads via key prefix: `${businessId}:payments:${clientKey}` and
+    // `${businessId}:record:${clientKey}` — same generic cache_key shape as
+    // ventes_cache.
+    await db.execAsync(
+      `CREATE TABLE IF NOT EXISTS client_ledger_cache (
+        cache_key TEXT PRIMARY KEY,
+        data      TEXT NOT NULL,
+        cached_at INTEGER NOT NULL
+      )`,
+    );
+    await db.execAsync('INSERT OR IGNORE INTO _migrations (version) VALUES (18)');
+  }
 }
 
 export async function getKV(key: string): Promise<string | null> {
@@ -860,6 +879,35 @@ export async function getApportsCache(businessId: string): Promise<unknown[] | n
   }
 }
 
+// ─── Client ledger read cache ───────────────────────────────────────────────────
+// key = `${businessId}:payments:${clientKey}` or `${businessId}:record:${clientKey}`
+
+export async function saveClientLedgerCache(cacheKey: string, data: unknown): Promise<void> {
+  try {
+    const db = await openDb();
+    const encrypted = await encrypt(JSON.stringify(data));
+    await db.runAsync(
+      'INSERT OR REPLACE INTO client_ledger_cache (cache_key, data, cached_at) VALUES (?, ?, ?)',
+      [cacheKey, encrypted, Date.now()],
+    );
+  } catch { }
+}
+
+export async function getClientLedgerCache(cacheKey: string): Promise<unknown | null> {
+  try {
+    const db = await openDb();
+    const row = await db.getFirstAsync<{ data: string }>(
+      'SELECT data FROM client_ledger_cache WHERE cache_key = ?',
+      [cacheKey],
+    );
+    if (!row) return null;
+    const decrypted = await decrypt(row.data);
+    return JSON.parse(decrypted);
+  } catch {
+    return null;
+  }
+}
+
 // ─── Cache timestamp helper ─────────────────────────────────────────────────────
 // Returns the epoch-ms timestamp when a cache table was last written for a given key.
 // Used by stores to expose staleness info to the UI.
@@ -877,7 +925,8 @@ type CacheTable =
   | 'investor_cache'
   | 'equipe_cache'
   | 'partnerships_cache'
-  | 'apports_cache';
+  | 'apports_cache'
+  | 'client_ledger_cache';
 
 export async function getCacheTimestamp(table: CacheTable, key?: string): Promise<number | null> {
   try {
@@ -886,7 +935,7 @@ export async function getCacheTimestamp(table: CacheTable, key?: string): Promis
       const row = await db.getFirstAsync<{ cached_at: number }>('SELECT cached_at FROM market_cache WHERE id = 1');
       return row?.cached_at ?? null;
     }
-    const keyCol = (table === 'ventes_cache' || table === 'investor_cache') ? 'cache_key' : 'business_id';
+    const keyCol = (table === 'ventes_cache' || table === 'investor_cache' || table === 'client_ledger_cache') ? 'cache_key' : 'business_id';
     const row = await db.getFirstAsync<{ cached_at: number }>(
       `SELECT cached_at FROM ${table} WHERE ${keyCol} = ?`,
       [key ?? ''],
