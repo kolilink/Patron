@@ -3,6 +3,7 @@ import { Alert, Animated, KeyboardAvoidingView, Linking, Platform, Pressable, Sc
 import * as Clipboard from 'expo-clipboard';
 import * as Application from 'expo-application';
 import * as Updates from 'expo-updates';
+import { getCacheDiagnostics } from '@/lib/db';
 import { Screen } from '@/src/components/ui/Screen';
 import { router } from 'expo-router';
 import { Ionicons } from '@expo/vector-icons';
@@ -548,6 +549,19 @@ export default function ParametresScreen() {
                 {`Version ${Application.nativeApplicationVersion ?? '?'}${Updates.isEmbeddedLaunch ? '' : `.${OTA_BUILD_NUMBER}`}`}
               </Text>
             </View>
+            <Pressable
+              style={styles.linkRow}
+              onPress={async () => {
+                const counts = await getCacheDiagnostics();
+                const lines = Object.entries(counts)
+                  .map(([table, c]) => `${table}: ${c < 0 ? 'échec' : c}`)
+                  .join('\n');
+                Alert.alert('État du cache hors ligne', lines);
+              }}
+            >
+              <Text variant="body">Diagnostic cache hors ligne</Text>
+              <Text variant="caption" color="secondary">›</Text>
+            </Pressable>
           </Card>
 
           {/* Apparence */}
