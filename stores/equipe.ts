@@ -4,7 +4,7 @@ import { generateId, generateFallbackName } from '@/lib/id';
 import { translateError } from '@/lib/errors';
 import { notifyEvent } from '@/src/utils/notifications';
 import { saveEquipeCache, getEquipeCache, getCacheTimestamp } from '@/lib/db';
-import { isNetworkError } from '@/lib/sync';
+import { isNetworkError, withTimeout } from '@/lib/sync';
 import type { Role, MemberProductStake } from '@/src/types';
 
 const ROLE_LABELS: Record<string, string> = {
@@ -82,11 +82,13 @@ export const useEquipeStore = create<EquipeStore>((set, get) => ({
   fetchMembres: async (businessId) => {
     set({ loading: true });
 
-    const { data: mData, error: mErr } = await supabase
-      .from('memberships')
-      .select('id, user_id, business_id, role, joined_at, display_name, scope_all_products')
-      .eq('business_id', businessId)
-      .order('joined_at');
+    const { data: mData, error: mErr } = await withTimeout(
+      supabase
+        .from('memberships')
+        .select('id, user_id, business_id, role, joined_at, display_name, scope_all_products')
+        .eq('business_id', businessId)
+        .order('joined_at'),
+    ).catch(err => ({ data: null, error: err }));
 
     if (mErr) {
       if (isNetworkError(mErr)) {
