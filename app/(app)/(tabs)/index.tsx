@@ -177,6 +177,14 @@ export default function AccueilScreen() {
     }
   };
 
+  // Mic on the pill — jumps straight into Alpha with recording already
+  // started there, instead of duplicating the record/transcribe/review UI
+  // on this screen. Only shown while the pill is empty, same swap rule as
+  // the in-chat composer's mic/send glyph.
+  const submitAlphaVoice = () => {
+    router.push({ pathname: '/(app)/alpha', params: { autoRecord: '1' } });
+  };
+
   // Alpha pill glow — a slow-rotating gradient ring around the pill border,
   // purely to draw the eye to the entry point and incentivize first use.
   // Loops forever; cost is negligible (native-driven transform only).
@@ -827,6 +835,11 @@ export default function AccueilScreen() {
                 returnKeyType="send"
                 blurOnSubmit={false}
               />
+              {!alphaText.trim() && (
+                <Pressable onPress={submitAlphaVoice} hitSlop={8}>
+                  <Ionicons name="mic" size={20} color={palette.primary} />
+                </Pressable>
+              )}
             </View>
           </View>
         </View>
