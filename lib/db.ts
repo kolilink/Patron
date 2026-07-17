@@ -945,6 +945,54 @@ export async function getCacheDiagnostics(): Promise<Record<string, number>> {
   return counts;
 }
 
+// getCacheDiagnostics() answered "is anything cached" (no — every table read
+// 0, not -1, so the tables/DB are fine and the writes themselves never land).
+// This runs the exact same steps a real save*Cache/get*Cache call goes
+// through — openDb, encrypt, SQLite insert, SQLite read, decrypt — one at a
+// time against a throwaway scratch row, and reports the real exception
+// message at whichever step actually fails, instead of a caller's blanket
+// `catch {}` swallowing it. Cleans up its own scratch row either way.
+export async function testCacheWritePath(): Promise<string> {
+  const steps: string[] = [];
+  const SCRATCH_KEY = '__diag_test__';
+  try {
+    steps.push('1. openDb: début');
+    const db = await openDb();
+    steps.push('1. openDb: OK');
+
+    steps.push('2. encrypt: début');
+    const plaintext = JSON.stringify({ test: true, ts: Date.now() });
+    const encrypted = await encrypt(plaintext);
+    steps.push(`2. encrypt: OK (${encrypted.length} caractères)`);
+
+    steps.push('3. écriture SQLite: début');
+    await db.runAsync(
+      'INSERT OR REPLACE INTO product_cache (business_id, data, cached_at) VALUES (?, ?, ?)',
+      [SCRATCH_KEY, encrypted, Date.now()],
+    );
+    steps.push('3. écriture SQLite: OK');
+
+    steps.push('4. lecture SQLite: début');
+    const row = await db.getFirstAsync<{ data: string }>(
+      'SELECT data FROM product_cache WHERE business_id = ?',
+      [SCRATCH_KEY],
+    );
+    steps.push(row ? '4. lecture SQLite: OK' : '4. lecture SQLite: AUCUNE LIGNE TROUVÉE');
+
+    if (row) {
+      steps.push('5. decrypt: début');
+      const decrypted = await decrypt(row.data);
+      steps.push(decrypted === plaintext ? '5. decrypt: OK, correspond' : '5. decrypt: ÉCHEC, ne correspond pas');
+    }
+
+    await db.runAsync('DELETE FROM product_cache WHERE business_id = ?', [SCRATCH_KEY]);
+    steps.push('6. nettoyage: OK');
+  } catch (err) {
+    steps.push(`ÉCHEC: ${err instanceof Error ? `${err.name}: ${err.message}` : String(err)}`);
+  }
+  return steps.join('\n');
+}
+
 // ─── Cache timestamp helper ─────────────────────────────────────────────────────
 // Returns the epoch-ms timestamp when a cache table was last written for a given key.
 // Used by stores to expose staleness info to the UI.

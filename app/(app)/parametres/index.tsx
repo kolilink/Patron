@@ -3,7 +3,7 @@ import { Alert, Animated, KeyboardAvoidingView, Linking, Platform, Pressable, Sc
 import * as Clipboard from 'expo-clipboard';
 import * as Application from 'expo-application';
 import * as Updates from 'expo-updates';
-import { getCacheDiagnostics } from '@/lib/db';
+import { getCacheDiagnostics, testCacheWritePath } from '@/lib/db';
 import { Screen } from '@/src/components/ui/Screen';
 import { router } from 'expo-router';
 import { Ionicons } from '@expo/vector-icons';
@@ -560,6 +560,16 @@ export default function ParametresScreen() {
               }}
             >
               <Text variant="body">Diagnostic cache hors ligne</Text>
+              <Text variant="caption" color="secondary">›</Text>
+            </Pressable>
+            <Pressable
+              style={styles.linkRow}
+              onPress={async () => {
+                const result = await testCacheWritePath();
+                Alert.alert('Test du chemin d\'écriture', result);
+              }}
+            >
+              <Text variant="body">Tester écriture cache (détaillé)</Text>
               <Text variant="caption" color="secondary">›</Text>
             </Pressable>
           </Card>
