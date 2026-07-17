@@ -1,6 +1,7 @@
 import { useEffect, useMemo, useRef, useState } from 'react';
 import { Alert, Animated, KeyboardAvoidingView, Linking, Platform, Pressable, ScrollView, Share, StyleSheet, TextInput, View } from 'react-native';
 import * as Clipboard from 'expo-clipboard';
+import * as Updates from 'expo-updates';
 import { Screen } from '@/src/components/ui/Screen';
 import { router } from 'expo-router';
 import { Ionicons } from '@expo/vector-icons';
@@ -534,6 +535,14 @@ export default function ParametresScreen() {
               <Text variant="body">Contacter le support</Text>
               <Text variant="caption" color="secondary">›</Text>
             </Pressable>
+            <View style={styles.linkRow}>
+              <Text variant="body">Version</Text>
+              <Text variant="caption" color="secondary" selectable>
+                {Updates.isEmbeddedLaunch
+                  ? 'native uniquement (aucune mise à jour)'
+                  : `OTA ${Updates.updateId?.slice(0, 8) ?? '?'} · ${Updates.createdAt?.toLocaleString('fr-FR') ?? '?'}`}
+              </Text>
+            </View>
           </Card>
 
           {/* Apparence */}
