@@ -3,7 +3,7 @@ import { supabase } from '@/lib/supabase';
 import { translateError } from '@/lib/errors';
 import { generateId } from '@/lib/id';
 import { enqueue, getQueueCount, saveExpenseCache, getExpenseCache, getCacheTimestamp } from '@/lib/db';
-import { isNetworkError } from '@/lib/sync';
+import { isNetworkError, withTimeout } from '@/lib/sync';
 import { useSyncStore } from '@/stores/sync';
 import { notifyEvent } from '@/src/utils/notifications';
 import { useAuthStore } from '@/stores/auth';
@@ -48,12 +48,14 @@ export const useExpensesStore = create<ExpensesStore>((set, get) => ({
   fetchExpenses: async (businessId) => {
     set({ loading: true, error: null });
     try {
-      const { data, error } = await supabase
-        .from('expenses')
-        .select('*, product:products(name)')
-        .eq('business_id', businessId)
-        .order('date', { ascending: false })
-        .order('created_at', { ascending: false });
+      const { data, error } = await withTimeout(
+        supabase
+          .from('expenses')
+          .select('*, product:products(name)')
+          .eq('business_id', businessId)
+          .order('date', { ascending: false })
+          .order('created_at', { ascending: false }),
+      );
 
       if (error) throw error;
 

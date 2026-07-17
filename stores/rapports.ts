@@ -127,6 +127,15 @@ export const useRapportsStore = create<RapportsState>((set) => ({
 
   fetchReportsSnapshot: async (businessId, periodDays, role, userId, today) => {
     set({ snapshotLoading: true });
+    // rapports_cache's `business_id` column is a plain TEXT PRIMARY KEY (no FK),
+    // so it doubles as a generic cache key here — packing in periodDays/role/userId
+    // is a value-only change, no migration needed. Without this, Semaine/Mois/
+    // Trimestre all overwrote the same single slot, so offline always showed
+    // whichever period tab happened to be fetched last, regardless of which
+    // tab was actually open; role/userId are included too since a vendeur's
+    // personal figures and an admin's full-business figures must never be
+    // served from each other's cache slot on a shared device.
+    const cacheKey = `${businessId}:${role}:${userId}:${periodDays}`;
     const { data, error } = await withTimeout(
       supabase.rpc('get_reports_snapshot', {
         p_business_id: businessId,
@@ -138,9 +147,9 @@ export const useRapportsStore = create<RapportsState>((set) => ({
     ).catch(err => ({ data: null, error: err }));
     if (error || !data) {
       if (isNetworkError(error)) {
-        const cached = await getRapportsCache(businessId);
+        const cached = await getRapportsCache(cacheKey);
         if (cached) {
-          const ts = await getCacheTimestamp('rapports_cache', businessId);
+          const ts = await getCacheTimestamp('rapports_cache', cacheKey);
           set({
             snapshot: parseSnapshot(cached as Record<string, unknown>),
             snapshotLoading: false,
@@ -155,7 +164,7 @@ export const useRapportsStore = create<RapportsState>((set) => ({
       set({ snapshotLoading: false });
       return;
     }
-    void saveRapportsCache(businessId, data);
+    void saveRapportsCache(cacheKey, data);
     set({ snapshot: parseSnapshot(data as Record<string, unknown>), snapshotLoading: false, offline: false, offlineSince: null });
   },
 
