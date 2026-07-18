@@ -1,5 +1,6 @@
 import { useEffect, useRef } from 'react';
 import { Alert, AppState, Pressable, View } from 'react-native';
+import { useSafeAreaInsets } from 'react-native-safe-area-context';
 import { Redirect, Stack, router } from 'expo-router';
 import { BusinessDrawer } from '@/src/components/BusinessDrawer';
 import { TrialWelcomeOverlay } from '@/src/components/TrialWelcomeOverlay';
@@ -29,9 +30,18 @@ const BACKGROUND_MS = 3 * 60_000;
 
 function SyncBanner() {
   const { palette } = useTheme();
+  const insets = useSafeAreaInsets();
   const pendingCount = useSyncStore(s => s.pendingCount);
   const syncing = useSyncStore(s => s.syncing);
   const sync = useSyncStore(s => s.sync);
+  // Mounted as a sibling of <Stack/> at the root layout, not inside a
+  // <Screen>/SafeAreaView — so unlike every real screen, it has no built-in
+  // top-inset awareness and was rendering flush against the physical top
+  // edge, bleeding behind the status bar/notch on every device. DemoBanner
+  // (mounted right above this one) already consumes insets.top when demo
+  // mode is on, so skip it here too or the two banners get a double gap —
+  // same rule Screen.tsx already follows for the same reason.
+  const isDemoMode = useAuthStore(s => s.session?.isDemoMode ?? false);
 
   if (pendingCount === 0) return null;
 
@@ -49,7 +59,15 @@ function SyncBanner() {
 
   return (
     <Pressable
-      style={{ backgroundColor: palette.warning, flexDirection: 'row', alignItems: 'center', paddingHorizontal: spacing[5], paddingVertical: spacing[2], gap: spacing[3] }}
+      style={{
+        backgroundColor: palette.warning,
+        flexDirection: 'row',
+        alignItems: 'center',
+        paddingHorizontal: spacing[5],
+        paddingTop: (isDemoMode ? 0 : insets.top) + spacing[2],
+        paddingBottom: spacing[2],
+        gap: spacing[3],
+      }}
       onPress={syncing ? undefined : handleSync}
     >
       <Text variant="caption" style={{ color: palette.textPrimary, flex: 1 }}>

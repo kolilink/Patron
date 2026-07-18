@@ -362,7 +362,7 @@ function ProductFormModal({ visible, editing, onClose, onSave, saving, currency,
             >
               {formError && (
                 <View style={styles.formError}>
-                  <Text variant="bodySmall" color="danger">{formError}</Text>
+                  <Text variant="bodySmall" color="warning">{formError}</Text>
                 </View>
               )}
 
@@ -1606,7 +1606,7 @@ function makeStyles(p: Palette) {
     modalFooter: {
       padding: spacing[5], borderTopWidth: 1, borderTopColor: p.border, backgroundColor: p.surface,
     },
-    formError: { backgroundColor: p.dangerLight, borderRadius: radius.md, padding: spacing[3] },
+    formError: { backgroundColor: p.warningLight, borderRadius: radius.md, padding: spacing[3] },
 
     formStack: {},
     fieldBlock: {
