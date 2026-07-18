@@ -34,6 +34,19 @@ jest.mock('@/lib/supabase', () => ({
 jest.mock('@/lib/analytics', () => ({ trackEvent: jest.fn() }));
 jest.mock('@/lib/haptics',   () => ({ haptics: { success: jest.fn(), error: jest.fn(), tap: jest.fn() } }));
 
+// fetchProducts() now guards every set() with isStaleBusiness(businessId), which
+// reads useAuthStore.getState().session.activeBusiness.id — real fix for a real
+// bug (a slow fetch resolving after the user switches businesses must not
+// overwrite the new business's state with the old one's data). Without this
+// mock, the real (unmocked) auth store's initial session is null, so every
+// fetch in this file would look "stale" and every assertion below would
+// silently fail against untouched initial state. Business id must match
+// BUSINESS_ID below — can't reference the const directly, jest.mock is hoisted
+// above it.
+jest.mock('@/stores/auth', () => ({
+  useAuthStore: { getState: () => ({ session: { activeBusiness: { id: 'biz-offline-test' } } }) },
+}));
+
 import { isNetworkError } from '@/lib/sync';
 import { useProductStore } from '@/stores/products';
 import { supabase } from '@/lib/supabase';
