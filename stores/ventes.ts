@@ -10,6 +10,13 @@ import { notifyEvent } from '@/src/utils/notifications';
 import { useAuthStore } from '@/stores/auth';
 import { formatAmount } from '@/src/utils/format';
 
+// See stores/products.ts for the full explanation — a fetch already in
+// flight when the user switches businesses must not overwrite the new
+// business's state once it finally resolves.
+function isStaleBusiness(businessId: string): boolean {
+  return useAuthStore.getState().session?.activeBusiness?.id !== businessId;
+}
+
 export interface VenteLigne {
   id: string;
   product_id: string;
@@ -85,6 +92,7 @@ export const useVentesStore = create<VentesStore>((set, get) => ({
     // Seed from cache on first load so the list is visible while the network fetch runs
     if (get().sales.length === 0) {
       const cached = await getVentesCache(cacheKey) as Vente[] | null;
+      if (isStaleBusiness(businessId)) return;
       if (cached) {
         set({ sales: cached, loading: false, error: null });
       } else {
@@ -104,11 +112,14 @@ export const useVentesStore = create<VentesStore>((set, get) => ({
     if (since) query = query.gte('sale_date', since);
 
     const { data, error: fetchErr } = await withTimeout(query).catch(err => ({ data: null, error: err }));
+    if (isStaleBusiness(businessId)) return;
     if (fetchErr) {
       if (isNetworkError(fetchErr)) {
         const cached = await getVentesCache(cacheKey) as Vente[] | null;
+        if (isStaleBusiness(businessId)) return;
         if (cached) {
           const ts = await getCacheTimestamp('ventes_cache', cacheKey);
+          if (isStaleBusiness(businessId)) return;
           set({ sales: cached, loading: false, offline: true, offlineSince: ts, error: null });
           return;
         }
@@ -212,6 +223,7 @@ export const useVentesStore = create<VentesStore>((set, get) => ({
       } as Vente;
     });
     void saveVentesCache(cacheKey, sales as unknown[]);
+    if (isStaleBusiness(businessId)) return;
     set({ sales, loading: false, offline: false, offlineSince: null });
   },
 

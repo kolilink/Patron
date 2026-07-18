@@ -5,9 +5,24 @@ import { generateId } from '@/lib/id';
 import { saveProductCache, getProductCache, enqueue, getQueueCount, getCacheTimestamp } from '@/lib/db';
 import { isNetworkError, withTimeout } from '@/lib/sync';
 import { useSyncStore } from '@/stores/sync';
+import { useAuthStore } from '@/stores/auth';
 import { trackEvent } from '@/lib/analytics';
 import { notifyEvent } from '@/src/utils/notifications';
 import type { Product, ProductVariant } from '@/src/types';
+
+// Every fetch* function below is called with a specific businessId, but by
+// the time its network/cache round trip resolves, the user may have already
+// switched to a different business — selectBusiness() (stores/auth.ts)
+// resets every store's in-memory state synchronously on switch, but a
+// fetch already in flight from the *previous* business doesn't know that
+// happened and, without this check, would go on to overwrite the new
+// business's freshly-loaded state with stale cross-business data once it
+// finally resolves. Longer round trips (offline, the 12s network timeout
+// added earlier) make this race far more likely to actually land, not just
+// theoretical. Call right before every set() that writes fetched data.
+function isStaleBusiness(businessId: string): boolean {
+  return useAuthStore.getState().session?.activeBusiness?.id !== businessId;
+}
 
 // Per-session deduplication: avoid notifying the same low-stock product twice per session.
 // Reset happens when the store resets (logout / business switch).
@@ -91,7 +106,7 @@ export const useProductStore = create<ProductStore>((set, get) => ({
     if (get().products.length === 0) {
       set({ loading: true, error: null });
       const cached = await getProductCache(businessId);
-      if (cached) {
+      if (cached && !isStaleBusiness(businessId)) {
         set({ products: cached, loading: false });
       }
     } else {
@@ -109,6 +124,7 @@ export const useProductStore = create<ProductStore>((set, get) => ({
       );
 
       if (error) throw error;
+      if (isStaleBusiness(businessId)) return; // switched away while this was in flight
       const products = (data as Product[]).map(p => ({
         ...p,
         cost_price: p.cost_price / 100,
@@ -139,13 +155,16 @@ export const useProductStore = create<ProductStore>((set, get) => ({
           .from('membership_product_scope')
           .select('product_id')
           .eq('membership_id', membershipId);
+        if (isStaleBusiness(businessId)) return;
         set({ vendeurProductScope: (scopeRows ?? []).map((r: any) => r.product_id as string) });
       }
     } catch (err) {
       if (isNetworkError(err)) {
         const cached = await getProductCache(businessId);
+        if (isStaleBusiness(businessId)) return;
         if (cached) {
           const ts = await getCacheTimestamp('product_cache', businessId);
+          if (isStaleBusiness(businessId)) return;
           set({ products: cached, loading: false, offline: true, offlineSince: ts });
           return;
         }
@@ -157,6 +176,7 @@ export const useProductStore = create<ProductStore>((set, get) => ({
         });
         return;
       }
+      if (isStaleBusiness(businessId)) return;
       set({ error: translateError(err, 'Erreur de chargement'), loading: false });
     }
   },
@@ -172,6 +192,7 @@ export const useProductStore = create<ProductStore>((set, get) => ({
         .order('name');
 
       if (error) throw error;
+      if (isStaleBusiness(businessId)) return;
       const archivedProducts = (data as Product[]).map(p => ({
         ...p,
         cost_price: p.cost_price / 100,
@@ -180,6 +201,7 @@ export const useProductStore = create<ProductStore>((set, get) => ({
       }));
       set({ archivedProducts });
     } catch (err) {
+      if (isStaleBusiness(businessId)) return;
       set({ error: translateError(err, 'Erreur de chargement') });
     }
   },

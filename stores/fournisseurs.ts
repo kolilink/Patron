@@ -5,7 +5,13 @@ import { generateId } from '@/lib/id';
 import { saveFournisseurCache, getFournisseurCache, saveCommandeCache, getCommandeCache, getCacheTimestamp } from '@/lib/db';
 import { isNetworkError, withTimeout } from '@/lib/sync';
 import { useProductStore } from '@/stores/products';
+import { useAuthStore } from '@/stores/auth';
 import { notifyEvent } from '@/src/utils/notifications';
+
+// See stores/products.ts for the full explanation.
+function isStaleBusiness(businessId: string): boolean {
+  return useAuthStore.getState().session?.activeBusiness?.id !== businessId;
+}
 
 export interface Fournisseur {
   id: string;
@@ -118,11 +124,14 @@ export const useFournisseursStore = create<FournisseursStore>((set, get) => ({
       withTimeout(supabase.from('supplier_debts').select('*').eq('business_id', businessId).order('date', { ascending: false }))
         .catch(err => ({ data: null, error: err })),
     ]);
+    if (isStaleBusiness(businessId)) return;
     if (suppliersRes.error) {
       if (isNetworkError(suppliersRes.error)) {
         const cached = await getFournisseurCache(businessId) as Fournisseur[] | null;
+        if (isStaleBusiness(businessId)) return;
         if (cached) {
           const ts = await getCacheTimestamp('fournisseur_cache', businessId);
+          if (isStaleBusiness(businessId)) return;
           set({ fournisseurs: cached, loading: false, offline: true, offlineSince: ts, error: null });
           return;
         }
@@ -221,17 +230,22 @@ export const useFournisseursStore = create<FournisseursStore>((set, get) => ({
 
   fetchCommandes: async (businessId) => {
     set({ loading: true });
-    const { data, error } = await supabase
-      .from('purchase_orders')
-      .select('*, supplier:suppliers(name)')
-      .eq('business_id', businessId)
-      .order('ordered_at', { ascending: false });
+    const { data, error } = await withTimeout(
+      supabase
+        .from('purchase_orders')
+        .select('*, supplier:suppliers(name)')
+        .eq('business_id', businessId)
+        .order('ordered_at', { ascending: false }),
+    ).catch(err => ({ data: null, error: err }));
 
+    if (isStaleBusiness(businessId)) return;
     if (error) {
       if (isNetworkError(error)) {
         const cached = await getCommandeCache(businessId) as CommandeAchat[] | null;
+        if (isStaleBusiness(businessId)) return;
         if (cached) {
           const ts = await getCacheTimestamp('commande_cache', businessId);
+          if (isStaleBusiness(businessId)) return;
           set({ commandes: cached, loading: false, offline: true, offlineSince: ts, error: null });
           return;
         }
@@ -247,6 +261,7 @@ export const useFournisseursStore = create<FournisseursStore>((set, get) => ({
       supplier_name: (c.supplier as { name: string } | null)?.name ?? '—',
     } as CommandeAchat));
     void saveCommandeCache(businessId, commandes as unknown[]);
+    if (isStaleBusiness(businessId)) return;
     set({ commandes, loading: false, offline: false, offlineSince: null });
   },
 
@@ -371,6 +386,7 @@ export const useFournisseursStore = create<FournisseursStore>((set, get) => ({
       .eq('business_id', businessId)
       .order('date', { ascending: false });
     if (error) return;
+    if (isStaleBusiness(businessId)) return;
     const debts: SupplierDebt[] = (data ?? []).map((d: Record<string, unknown>) => ({
       id: d.id as string,
       business_id: d.business_id as string,

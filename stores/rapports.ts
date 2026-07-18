@@ -2,6 +2,12 @@ import { create } from 'zustand';
 import { supabase } from '@/lib/supabase';
 import { saveRapportsCache, getRapportsCache, getCacheTimestamp } from '@/lib/db';
 import { isNetworkError, withTimeout } from '@/lib/sync';
+import { useAuthStore } from '@/stores/auth';
+
+// See stores/products.ts for the full explanation.
+function isStaleBusiness(businessId: string): boolean {
+  return useAuthStore.getState().session?.activeBusiness?.id !== businessId;
+}
 
 export interface StockVelocityItem {
   item_id: string;
@@ -145,11 +151,14 @@ export const useRapportsStore = create<RapportsState>((set) => ({
         p_today:       today ?? new Date().toISOString().split('T')[0],
       }),
     ).catch(err => ({ data: null, error: err }));
+    if (isStaleBusiness(businessId)) return;
     if (error || !data) {
       if (isNetworkError(error)) {
         const cached = await getRapportsCache(cacheKey);
+        if (isStaleBusiness(businessId)) return;
         if (cached) {
           const ts = await getCacheTimestamp('rapports_cache', cacheKey);
+          if (isStaleBusiness(businessId)) return;
           set({
             snapshot: parseSnapshot(cached as Record<string, unknown>),
             snapshotLoading: false,
@@ -170,9 +179,12 @@ export const useRapportsStore = create<RapportsState>((set) => ({
 
   fetchStockVelocity: async (businessId) => {
     set({ velocityLoading: true });
-    const { data, error } = await supabase.rpc('get_stock_velocity', {
-      p_business_id: businessId,
-    });
+    const { data, error } = await withTimeout(
+      supabase.rpc('get_stock_velocity', {
+        p_business_id: businessId,
+      }),
+    ).catch(err => ({ data: null, error: err }));
+    if (isStaleBusiness(businessId)) return;
     if (error || !data) { set({ velocityLoading: false }); return; }
     set({
       stockVelocity: (data as Record<string, unknown>[]).map(r => ({

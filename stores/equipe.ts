@@ -5,7 +5,13 @@ import { translateError } from '@/lib/errors';
 import { notifyEvent } from '@/src/utils/notifications';
 import { saveEquipeCache, getEquipeCache, getCacheTimestamp } from '@/lib/db';
 import { isNetworkError, withTimeout } from '@/lib/sync';
+import { useAuthStore } from '@/stores/auth';
 import type { Role, MemberProductStake } from '@/src/types';
+
+// See stores/products.ts for the full explanation.
+function isStaleBusiness(businessId: string): boolean {
+  return useAuthStore.getState().session?.activeBusiness?.id !== businessId;
+}
 
 const ROLE_LABELS: Record<string, string> = {
   administrateur: 'Administrateur',
@@ -90,11 +96,14 @@ export const useEquipeStore = create<EquipeStore>((set, get) => ({
         .order('joined_at'),
     ).catch(err => ({ data: null, error: err }));
 
+    if (isStaleBusiness(businessId)) return;
     if (mErr) {
       if (isNetworkError(mErr)) {
         const cached = await getEquipeCache(businessId);
+        if (isStaleBusiness(businessId)) return;
         if (cached) {
           const ts = await getCacheTimestamp('equipe_cache', businessId);
+          if (isStaleBusiness(businessId)) return;
           set({ membres: cached as Membre[], loading: false, hasFetched: true, offline: true, offlineSince: ts });
           return;
         }
@@ -134,6 +143,7 @@ export const useEquipeStore = create<EquipeStore>((set, get) => ({
       scope_all_products: (m.scope_all_products as boolean) ?? true,
     }));
     void saveEquipeCache(businessId, membres);
+    if (isStaleBusiness(businessId)) return;
     set({
       membres,
       loading: false,

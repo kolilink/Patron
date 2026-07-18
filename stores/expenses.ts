@@ -10,6 +10,11 @@ import { useAuthStore } from '@/stores/auth';
 import { formatAmount } from '@/src/utils/format';
 import type { Expense, ExpenseStatus } from '@/src/types';
 
+// See stores/products.ts for the full explanation.
+function isStaleBusiness(businessId: string): boolean {
+  return useAuthStore.getState().session?.activeBusiness?.id !== businessId;
+}
+
 export interface CreateExpenseData {
   amount: number;
   description: string;
@@ -58,6 +63,7 @@ export const useExpensesStore = create<ExpensesStore>((set, get) => ({
       );
 
       if (error) throw error;
+      if (isStaleBusiness(businessId)) return;
 
       const expenses = (data ?? []) as Expense[];
       const fromCents = (e: Expense) => ({ ...e, amount: e.amount / 100 });
@@ -85,12 +91,15 @@ export const useExpensesStore = create<ExpensesStore>((set, get) => ({
         }));
       }
       void saveExpenseCache(businessId, result as unknown[]);
+      if (isStaleBusiness(businessId)) return;
       set({ expenses: result, loading: false, offline: false, offlineSince: null });
     } catch (err) {
       if (isNetworkError(err)) {
         const cached = await getExpenseCache(businessId) as Expense[] | null;
+        if (isStaleBusiness(businessId)) return;
         if (cached) {
           const ts = await getCacheTimestamp('expense_cache', businessId);
+          if (isStaleBusiness(businessId)) return;
           set({ expenses: cached, loading: false, offline: true, offlineSince: ts, error: null });
           return;
         }
@@ -101,6 +110,7 @@ export const useExpensesStore = create<ExpensesStore>((set, get) => ({
         });
         return;
       }
+      if (isStaleBusiness(businessId)) return;
       set({ error: translateError(err, 'Erreur de chargement'), loading: false });
     }
   },

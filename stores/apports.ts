@@ -4,6 +4,12 @@ import { translateError } from '@/lib/errors';
 import { generateFallbackName } from '@/lib/id';
 import { saveApportsCache, getApportsCache, getCacheTimestamp } from '@/lib/db';
 import { isNetworkError, withTimeout } from '@/lib/sync';
+import { useAuthStore } from '@/stores/auth';
+
+// See stores/products.ts for the full explanation.
+function isStaleBusiness(businessId: string): boolean {
+  return useAuthStore.getState().session?.activeBusiness?.id !== businessId;
+}
 
 export interface Apport {
   id: string;
@@ -67,6 +73,7 @@ export const useAportsStore = create<AportsStore>((set, get) => ({
   fetchApports: async (businessId) => {
     if (get().apports.length === 0) {
       const cached = await getApportsCache(businessId) as Apport[] | null;
+      if (isStaleBusiness(businessId)) return;
       if (cached) {
         set({ apports: cached, loading: false, error: null });
       } else {
@@ -84,11 +91,14 @@ export const useAportsStore = create<AportsStore>((set, get) => ({
         .order('injected_at', { ascending: false }),
     ).catch(err => ({ data: null, error: err }));
 
+    if (isStaleBusiness(businessId)) return;
     if (error) {
       if (isNetworkError(error)) {
         const cached = await getApportsCache(businessId) as Apport[] | null;
+        if (isStaleBusiness(businessId)) return;
         if (cached) {
           const ts = await getCacheTimestamp('apports_cache', businessId);
+          if (isStaleBusiness(businessId)) return;
           set({ apports: cached, loading: false, offline: true, offlineSince: ts, error: null });
           return;
         }
@@ -116,6 +126,7 @@ export const useAportsStore = create<AportsStore>((set, get) => ({
     }));
 
     void saveApportsCache(businessId, apports as unknown[]);
+    if (isStaleBusiness(businessId)) return;
     set({ apports, loading: false, offline: false, offlineSince: null });
   },
 
