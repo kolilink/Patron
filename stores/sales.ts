@@ -2,7 +2,7 @@ import { create } from 'zustand';
 import { supabase } from '@/lib/supabase';
 import { translateError } from '@/lib/errors';
 import { enqueue, getQueueCount, saveProductCache, getProductCache, saveVentesCache, getVentesCache } from '@/lib/db';
-import { isNetworkError } from '@/lib/sync';
+import { isNetworkError, withTimeout } from '@/lib/sync';
 import { generateId } from '@/lib/id';
 import { useSyncStore } from '@/stores/sync';
 import { useVentesStore } from '@/stores/ventes';
@@ -132,16 +132,18 @@ export const useSalesStore = create<SalesStore>((set, get) => ({
         ),
       });
     } else {
-      set({ cart: [...cart, {
-        product,
-        qty: Math.min(qty, variant.stock_qty),
-        unit_price: variant.sale_price,
-        is_bulk: false,
-        variant_id: variant.id,
-        variant_name: variant.name,
-        variant_cost_price: variant.cost_price,
-        variant_stock_qty: variant.stock_qty,
-      }] });
+      set({
+        cart: [...cart, {
+          product,
+          qty: Math.min(qty, variant.stock_qty),
+          unit_price: variant.sale_price,
+          is_bulk: false,
+          variant_id: variant.id,
+          variant_name: variant.name,
+          variant_cost_price: variant.cost_price,
+          variant_stock_qty: variant.stock_qty,
+        }]
+      });
     }
   },
 
@@ -206,12 +208,14 @@ export const useSalesStore = create<SalesStore>((set, get) => ({
   clearCart: () => set({ cart: [] }),
 
   submitCarnetDebt: async (businessId, userId, customerName, amountCents) => {
-    const { error } = await supabase.rpc('submit_carnet_debt', {
-      p_business_id:   businessId,
-      p_seller_id:     userId,
-      p_customer_name: customerName.trim(),
-      p_amount:        amountCents,
-    });
+    const { error } = await withTimeout(
+      supabase.rpc('submit_carnet_debt', {
+        p_business_id: businessId,
+        p_seller_id: userId,
+        p_customer_name: customerName.trim(),
+        p_amount: amountCents,
+      }),
+    );
     if (error) {
       console.error('[submitCarnetDebt]', error.code, error.message, error.details);
       useToastStore.getState().show(error.message ?? translateError(error, 'Erreur inconnue'), 'warning');
@@ -247,33 +251,33 @@ export const useSalesStore = create<SalesStore>((set, get) => ({
         : 1;
 
       const cartJson = cartSnapshot.map(l => ({
-        product_id:   l.product.id,
-        qty:          l.qty,
-        unit_price:   Math.round(l.unit_price * priceRatio * 100),
-        is_bulk:      l.is_bulk,
+        product_id: l.product.id,
+        qty: l.qty,
+        unit_price: Math.round(l.unit_price * priceRatio * 100),
+        is_bulk: l.is_bulk,
         product_name: l.product.name,
-        variant_id:   l.variant_id ?? null,
+        variant_id: l.variant_id ?? null,
         variant_name: l.variant_name ?? null,
       }));
 
       const rpcPayload = {
-        p_business_id:      businessId,
-        p_seller_id:        userId,
-        p_customer_name:    customerName?.trim() || null,
-        p_sale_date:        saleDate || today,
-        p_total_amount:     Math.round(totalAmount * 100),
-        p_discount_amount:  Math.round(discount * 100),
-        p_is_credit:        isCredit,
-        p_cart:             cartJson,
-        p_pay_method:       payment?.method  ?? null,
-        p_pay_amount:       payment?.amount  != null ? Math.round(payment.amount * 100) : null,
-        p_pay_ref:          payment?.ref_external ?? null,
-        p_idempotency_key:  idempotencyKey,
-        p_client_id:        clientId ?? null,
+        p_business_id: businessId,
+        p_seller_id: userId,
+        p_customer_name: customerName?.trim() || null,
+        p_sale_date: saleDate || today,
+        p_total_amount: Math.round(totalAmount * 100),
+        p_discount_amount: Math.round(discount * 100),
+        p_is_credit: isCredit,
+        p_cart: cartJson,
+        p_pay_method: payment?.method ?? null,
+        p_pay_amount: payment?.amount != null ? Math.round(payment.amount * 100) : null,
+        p_pay_ref: payment?.ref_external ?? null,
+        p_idempotency_key: idempotencyKey,
+        p_client_id: clientId ?? null,
         ...(dueDate ? { p_due_date: dueDate } : {}),
       };
 
-      const { data: newSaleId, error: rpcErr } = await supabase.rpc('submit_sale', rpcPayload);
+      const { data: newSaleId, error: rpcErr } = await withTimeout(supabase.rpc('submit_sale', rpcPayload));
       if (rpcErr) throw rpcErr;
 
       // Notify managers/admins of the completed sale (online path only)
@@ -301,12 +305,12 @@ export const useSalesStore = create<SalesStore>((set, get) => ({
       set({ cart: [], submitting: false, lastSubmitQueued: false, lastSubmitSaleId: newSaleId as string });
       haptics.heavy();
       trackEvent('sale_submitted', businessId, userId, {
-        is_credit:      isCredit,
-        items_count:    cartSnapshot.length,
-        has_discount:   (discountAmount ?? 0) > 0,
+        is_credit: isCredit,
+        items_count: cartSnapshot.length,
+        has_discount: (discountAmount ?? 0) > 0,
         payment_method: payment?.method ?? (isCredit ? 'credit' : null),
-        currency:       useAuthStore.getState().session?.activeBusiness?.currency,
-        total_amount:   totalAmount,
+        currency: useAuthStore.getState().session?.activeBusiness?.currency,
+        total_amount: totalAmount,
       });
       return true;
     } catch (err) {
@@ -324,27 +328,27 @@ export const useSalesStore = create<SalesStore>((set, get) => ({
           : 1;
 
         await enqueue('submit_sale', {
-          p_business_id:     businessId,
-          p_seller_id:       userId,
-          p_customer_name:   customerName?.trim() || null,
-          p_sale_date:       saleDate || today,
-          p_total_amount:    Math.round(totalAmount * 100),
+          p_business_id: businessId,
+          p_seller_id: userId,
+          p_customer_name: customerName?.trim() || null,
+          p_sale_date: saleDate || today,
+          p_total_amount: Math.round(totalAmount * 100),
           p_discount_amount: Math.round(discount * 100),
-          p_is_credit:       isCredit,
-          p_cart:            cartSnapshot.map(l => ({
-            product_id:   l.product.id,
-            qty:          l.qty,
-            unit_price:   Math.round(l.unit_price * priceRatioOffline * 100),
-            is_bulk:      l.is_bulk,
+          p_is_credit: isCredit,
+          p_cart: cartSnapshot.map(l => ({
+            product_id: l.product.id,
+            qty: l.qty,
+            unit_price: Math.round(l.unit_price * priceRatioOffline * 100),
+            is_bulk: l.is_bulk,
             product_name: l.product.name,
-            variant_id:   l.variant_id ?? null,
+            variant_id: l.variant_id ?? null,
             variant_name: l.variant_name ?? null,
           })),
-          p_pay_method:      payment?.method  ?? null,
-          p_pay_amount:      payment?.amount  != null ? Math.round(payment.amount * 100) : null,
-          p_pay_ref:         payment?.ref_external ?? null,
+          p_pay_method: payment?.method ?? null,
+          p_pay_amount: payment?.amount != null ? Math.round(payment.amount * 100) : null,
+          p_pay_ref: payment?.ref_external ?? null,
           p_idempotency_key: idempotencyKey,
-          p_client_id:       clientId ?? null,
+          p_client_id: clientId ?? null,
           ...(dueDate ? { p_due_date: dueDate } : {}),
         });
 
@@ -399,13 +403,13 @@ export const useSalesStore = create<SalesStore>((set, get) => ({
             profit: null,
             lines: cartSnapshot.map(l => ({
               id: generateId(),
-              product_id:   l.product.id,
+              product_id: l.product.id,
               product_name: l.product.name,
-              qty:          l.qty,
-              unit_price:   l.unit_price,
-              is_bulk:      l.is_bulk,
-              cost_price:   l.variant_cost_price ?? l.product.cost_price ?? 0,
-              variant_id:   l.variant_id ?? null,
+              qty: l.qty,
+              unit_price: l.unit_price,
+              is_bulk: l.is_bulk,
+              cost_price: l.variant_cost_price ?? l.product.cost_price ?? 0,
+              variant_id: l.variant_id ?? null,
               variant_name: l.variant_name ?? null,
             })),
             payments: payment ? [{

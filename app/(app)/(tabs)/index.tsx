@@ -24,7 +24,7 @@ import { useInvestorStore } from '@/stores/investor';
 import type { MemberProductStake } from '@/src/types';
 import { formatAmount, formatAmountInput, parseAmountInput } from '@/src/utils/format';
 import { supabase } from '@/lib/supabase';
-import { isNetworkError } from '@/lib/sync';
+import { isNetworkError, withTimeout } from '@/lib/sync';
 import { saveDashboardKpiCache, getDashboardKpiCache, getKV, setKV } from '@/lib/db';
 import { SkeletonKpiGrid } from '@/src/components/ui/SkeletonPlaceholder';
 import { haptics } from '@/lib/haptics';
@@ -340,10 +340,12 @@ export default function AccueilScreen() {
 
   const loadKpis = async () => {
     const localDate = new Date().toLocaleDateString('en-CA'); // YYYY-MM-DD device local date
-    const { data, error } = await supabase.rpc('get_dashboard_kpis', {
-      p_business_id: businessId,
-      p_today:       localDate,
-    });
+    const { data, error } = await withTimeout(
+      supabase.rpc('get_dashboard_kpis', {
+        p_business_id: businessId,
+        p_today:       localDate,
+      }),
+    );
 
     if (error) {
       if (isNetworkError(error)) {
@@ -390,11 +392,13 @@ export default function AccueilScreen() {
     const now = new Date();
     const monthStart = `${now.getFullYear()}-${String(now.getMonth() + 1).padStart(2, '0')}-01`;
 
-    const { data, error: bsErr } = await supabase.rpc('get_best_sellers', {
-      p_business_id: businessId,
-      p_month_start: monthStart,
-      p_limit:       5,
-    });
+    const { data, error: bsErr } = await withTimeout(
+      supabase.rpc('get_best_sellers', {
+        p_business_id: businessId,
+        p_month_start: monthStart,
+        p_limit:       5,
+      }),
+    );
     if (bsErr) throw bsErr;
 
     setBestSellers(

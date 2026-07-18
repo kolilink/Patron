@@ -49,10 +49,15 @@ export function isNetworkError(err: unknown): boolean {
 // existing catch/fallback code. 12s is generous for a slow 3G connection
 // (this app's core use case) while still guaranteeing the UI never hangs.
 export function withTimeout<T>(promise: PromiseLike<T>, ms = 12000): Promise<T> {
+  let timer: ReturnType<typeof setTimeout>;
   const timeout = new Promise<never>((_, reject) => {
-    setTimeout(() => reject(new Error(`Network timeout after ${ms}ms`)), ms);
+    timer = setTimeout(() => reject(new Error(`Network timeout after ${ms}ms`)), ms);
   });
-  return Promise.race([Promise.resolve(promise), timeout]);
+  // Without this, every call leaves its setTimeout running for the full
+  // `ms` even after the real promise already settled — harmless in the app
+  // (just a dangling timer per call) but adds up in tests, where dozens of
+  // calls across a suite can leave the Jest worker unable to exit cleanly.
+  return Promise.race([Promise.resolve(promise), timeout]).finally(() => clearTimeout(timer));
 }
 
 // Builds the "{qty} {product}" fragment for the sale-completed notification,

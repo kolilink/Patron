@@ -1,7 +1,7 @@
 import { create } from 'zustand';
 import { supabase } from '@/lib/supabase';
 import { translateError } from '@/lib/errors';
-import { isNetworkError } from '@/lib/sync';
+import { isNetworkError, withTimeout } from '@/lib/sync';
 import { getKV, setKV, saveMarketCache, getMarketCache, getCacheTimestamp } from '@/lib/db';
 import { toast } from '@/stores/toast';
 import type { MarketPost, MarketComment, MarketCategory } from '@/src/types';
@@ -81,13 +81,13 @@ export const useMarketStore = create<MarketStore>((set, get) => ({
         .limit(50);
       if (category) q = q.eq('category', category);
 
-      const [postsRes, postLikesRes, commentLikesRes, profileRes, visitTs] = await Promise.all([
+      const [postsRes, postLikesRes, commentLikesRes, profileRes, visitTs] = await withTimeout(Promise.all([
         q,
         supabase.from('post_likes').select('post_id').eq('user_id', userId),
         supabase.from('comment_likes').select('comment_id').eq('user_id', userId),
         supabase.from('profiles').select('points, community_level').eq('id', userId).single(),
         getKV(MARKET_VISIT_KEY),
-      ]);
+      ]));
 
       if (postsRes.error) throw postsRes.error;
 
@@ -96,10 +96,12 @@ export const useMarketStore = create<MarketStore>((set, get) => ({
       // Resolve current author names so old posts reflect name changes
       const authorIds = [...new Set(posts.map(p => p.author_id))];
       if (authorIds.length > 0) {
-        const { data: authorProfiles } = await supabase
-          .from('profiles')
-          .select('id, name')
-          .in('id', authorIds);
+        const { data: authorProfiles } = await withTimeout(
+          supabase
+            .from('profiles')
+            .select('id, name')
+            .in('id', authorIds),
+        );
         if (authorProfiles && authorProfiles.length > 0) {
           const nameMap: Record<string, string | null> = Object.fromEntries(
             authorProfiles.map(p => [p.id, (p.name as string | null) ?? null]),
@@ -190,7 +192,7 @@ export const useMarketStore = create<MarketStore>((set, get) => ({
   fetchPostDetail: async (postId, userId) => {
     set({ loadingDetail: true, activePost: null, comments: [] });
     try {
-      const [postRes, commentsRes, commentLikesRes, postLikesRes] = await Promise.all([
+      const [postRes, commentsRes, commentLikesRes, postLikesRes] = await withTimeout(Promise.all([
         supabase.from('market_posts').select('*').eq('id', postId).single(),
         supabase
           .from('market_comments')
@@ -199,7 +201,7 @@ export const useMarketStore = create<MarketStore>((set, get) => ({
           .order('created_at', { ascending: true }),
         supabase.from('comment_likes').select('comment_id').eq('user_id', userId),
         supabase.from('post_likes').select('post_id').eq('user_id', userId),
-      ]);
+      ]));
       if (postRes.error) throw postRes.error;
       if (commentsRes.error) throw commentsRes.error;
       let comments = (commentsRes.data ?? []).map((c: any) => ({
@@ -214,10 +216,12 @@ export const useMarketStore = create<MarketStore>((set, get) => ({
         ...comments.map(c => c.author_id),
       ])];
       if (allAuthorIds.length > 0) {
-        const { data: authorProfiles } = await supabase
-          .from('profiles')
-          .select('id, name')
-          .in('id', allAuthorIds);
+        const { data: authorProfiles } = await withTimeout(
+          supabase
+            .from('profiles')
+            .select('id, name')
+            .in('id', allAuthorIds),
+        );
         if (authorProfiles && authorProfiles.length > 0) {
           const nameMap: Record<string, string | null> = Object.fromEntries(
             authorProfiles.map(p => [p.id, (p.name as string | null) ?? null]),

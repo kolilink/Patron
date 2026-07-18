@@ -1,7 +1,7 @@
 import { create } from 'zustand';
 import { supabase } from '@/lib/supabase';
 import { translateError } from '@/lib/errors';
-import { isNetworkError } from '@/lib/sync';
+import { isNetworkError, withTimeout } from '@/lib/sync';
 import type { AlphaConversation, AlphaMessage, AlphaQuotaStatus } from '@/src/types';
 
 function dedupeAppend(messages: AlphaMessage[], msg: AlphaMessage): AlphaMessage[] {
@@ -59,18 +59,22 @@ export const useAlphaStore = create<AlphaStore>((set, get) => ({
   load: async (businessId) => {
     set({ loading: get().messages.length === 0, error: null });
     try {
-      const { data: conv, error: convErr } = await supabase.rpc('open_or_get_alpha_conversation', {
-        p_business_id: businessId,
-      });
+      const { data: conv, error: convErr } = await withTimeout(
+        supabase.rpc('open_or_get_alpha_conversation', {
+          p_business_id: businessId,
+        }),
+      );
       if (convErr) throw convErr;
 
       const conversation = conv as AlphaConversation;
-      const { data: msgs, error: msgsErr } = await supabase
-        .from('alpha_messages')
-        .select('*')
-        .eq('conversation_id', conversation.id)
-        .order('created_at', { ascending: true })
-        .limit(200);
+      const { data: msgs, error: msgsErr } = await withTimeout(
+        supabase
+          .from('alpha_messages')
+          .select('*')
+          .eq('conversation_id', conversation.id)
+          .order('created_at', { ascending: true })
+          .limit(200),
+      );
       if (msgsErr) throw msgsErr;
 
       set({ conversation, messages: msgs ?? [], loading: false, offline: false });
@@ -103,10 +107,12 @@ export const useAlphaStore = create<AlphaStore>((set, get) => ({
     get().appendMessage(optimisticMsg);
 
     try {
-      const { data, error } = await supabase.rpc('send_alpha_message', {
-        p_business_id: businessId,
-        p_content: trimmed,
-      });
+      const { data, error } = await withTimeout(
+        supabase.rpc('send_alpha_message', {
+          p_business_id: businessId,
+          p_content: trimmed,
+        }),
+      );
       if (error) throw error;
 
       const realMsg = data as AlphaMessage;
@@ -130,9 +136,16 @@ export const useAlphaStore = create<AlphaStore>((set, get) => ({
       // the caller's `await sendMessage(...)` no longer blocks on it.
       (async () => {
         try {
-          const { data: invokeData } = await supabase.functions.invoke('alpha-chat', {
-            body: { conversation_id: realMsg.conversation_id, business_id: businessId },
-          });
+          // Longer cap than the default 12s — a real LLM reply (with up to
+          // 3 rounds of tool-calling, see CLAUDE.md's "On-demand tool-calling")
+          // can legitimately take longer than a plain DB read, and a
+          // premature timeout here would cut off an in-progress answer.
+          const { data: invokeData } = await withTimeout(
+            supabase.functions.invoke('alpha-chat', {
+              body: { conversation_id: realMsg.conversation_id, business_id: businessId },
+            }),
+            45000,
+          );
           const replyMsg = (invokeData as { message?: AlphaMessage } | null)?.message;
           if (replyMsg) get().appendMessage(replyMsg);
           set({ sending: false });

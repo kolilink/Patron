@@ -3,7 +3,7 @@ import { supabase } from '@/lib/supabase';
 import { translateError } from '@/lib/errors';
 import { generateFallbackName } from '@/lib/id';
 import { saveInvestorCache, getInvestorCache, getCacheTimestamp } from '@/lib/db';
-import { isNetworkError } from '@/lib/sync';
+import { isNetworkError, withTimeout } from '@/lib/sync';
 
 export interface InvestorPayout {
   id: string;
@@ -52,12 +52,14 @@ export const useInvestorStore = create<InvestorStore>((set, get) => ({
 
   fetchBalance: async (businessId, investorId) => {
     set({ loading: true, error: null });
-    const { data, error } = await supabase
-      .from('investor_balance')
-      .select('balance')
-      .eq('business_id', businessId)
-      .eq('investor_id', investorId)
-      .maybeSingle();
+    const { data, error } = await withTimeout(
+      supabase
+        .from('investor_balance')
+        .select('balance')
+        .eq('business_id', businessId)
+        .eq('investor_id', investorId)
+        .maybeSingle(),
+    );
 
     if (error) {
       if (isNetworkError(error)) {
@@ -92,7 +94,7 @@ export const useInvestorStore = create<InvestorStore>((set, get) => ({
       query = query.eq('investor_id', investorId);
     }
 
-    const { data, error } = await query;
+    const { data, error } = await withTimeout(query);
 
     if (error) {
       if (isNetworkError(error)) {
