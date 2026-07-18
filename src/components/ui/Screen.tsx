@@ -4,6 +4,7 @@ import type { ViewStyle } from 'react-native';
 import { SafeAreaView, type Edge } from 'react-native-safe-area-context';
 import { useTheme } from '@/src/theme';
 import { useAuthStore } from '@/stores/auth';
+import { useSyncStore } from '@/stores/sync';
 
 interface ScreenProps {
   children: ReactNode;
@@ -22,13 +23,16 @@ interface ScreenProps {
 export function Screen({ children, tab = false, style, edges }: ScreenProps) {
   const { palette } = useTheme();
   const isDemoMode = useAuthStore(s => s.session?.isDemoMode ?? false);
+  const hasPendingSync = useSyncStore(s => s.pendingCount > 0);
 
-  // DemoBanner already consumes insets.top — don't add it again here or you
-  // get a double-gap (black bar). Only applies to the default edge logic;
-  // an explicit `edges` prop always takes full precedence.
+  // DemoBanner and SyncBanner (both mounted above <Stack/> in (app)/_layout.tsx,
+  // outside any Screen) each already consume insets.top for themselves when
+  // visible — don't add it again here or every screen underneath gets a
+  // double gap between the banner and its own content. Only applies to the
+  // default edge logic; an explicit `edges` prop always takes full precedence.
   const defaultEdges: Edge[] = tab ? ['top'] : ['top', 'bottom'];
   const resolvedEdges: Edge[] = edges ?? (
-    isDemoMode ? defaultEdges.filter((e): e is Edge => e !== 'top') : defaultEdges
+    (isDemoMode || hasPendingSync) ? defaultEdges.filter((e): e is Edge => e !== 'top') : defaultEdges
   );
 
   return (

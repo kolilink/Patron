@@ -60,7 +60,7 @@ function SyncBanner() {
   return (
     <Pressable
       style={{
-        backgroundColor: palette.warning,
+        backgroundColor: palette.warningLight,
         flexDirection: 'row',
         alignItems: 'center',
         paddingHorizontal: spacing[5],
@@ -70,10 +70,10 @@ function SyncBanner() {
       }}
       onPress={syncing ? undefined : handleSync}
     >
-      <Text variant="caption" style={{ color: palette.textPrimary, flex: 1 }}>
+      <Text variant="caption" style={{ color: palette.warning, flex: 1 }}>
         {pendingCount} opération{pendingCount > 1 ? 's' : ''} à synchroniser
       </Text>
-      <Text variant="caption" style={{ color: palette.textPrimary, fontWeight: '700', opacity: syncing ? 0.5 : 1 }}>
+      <Text variant="caption" style={{ color: palette.warning, fontWeight: '700', opacity: syncing ? 0.5 : 1 }}>
         {syncing ? 'Synchro…' : '↑ Sync'}
       </Text>
     </Pressable>
