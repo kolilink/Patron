@@ -1,7 +1,7 @@
 import { create } from 'zustand';
 import { supabase } from '@/lib/supabase';
 import { translateError } from '@/lib/errors';
-import { isNetworkError } from '@/lib/sync';
+import { isNetworkError, withTimeout } from '@/lib/sync';
 import { getKV, setKV } from '@/lib/db';
 import { notifyEvent } from '@/src/utils/notifications';
 import { uploadMessageImage } from '@/lib/chatImages';
@@ -120,23 +120,27 @@ export const useSupportChatStore = create<SupportChatStore>((set, get) => ({
   load: async (businessId) => {
     set({ loading: get().messages.length === 0, error: null });
     try {
-      const { data: conv, error: convErr } = await supabase
-        .from('support_conversations')
-        .select('*')
-        .eq('business_id', businessId)
-        .order('last_message_at', { ascending: false })
-        .limit(1)
-        .maybeSingle();
+      const { data: conv, error: convErr } = await withTimeout(
+        supabase
+          .from('support_conversations')
+          .select('*')
+          .eq('business_id', businessId)
+          .order('last_message_at', { ascending: false })
+          .limit(1)
+          .maybeSingle(),
+      );
       if (convErr) throw convErr;
 
       let messages: SupportMessage[] = [];
       if (conv) {
-        const { data: msgs, error: msgsErr } = await supabase
-          .from('support_messages')
-          .select('*')
-          .eq('conversation_id', conv.id)
-          .order('created_at', { ascending: true })
-          .limit(200);
+        const { data: msgs, error: msgsErr } = await withTimeout(
+          supabase
+            .from('support_messages')
+            .select('*')
+            .eq('conversation_id', conv.id)
+            .order('created_at', { ascending: true })
+            .limit(200),
+        );
         if (msgsErr) throw msgsErr;
         messages = msgs ?? [];
       }
@@ -355,11 +359,13 @@ export const useSupportChatStore = create<SupportChatStore>((set, get) => ({
   loadFounderConversations: async () => {
     set({ founderLoading: true, founderError: null });
     try {
-      const { data: convs, error: convErr } = await supabase
-        .from('support_conversations')
-        .select('*, businesses(name)')
-        .order('last_message_at', { ascending: false })
-        .limit(200);
+      const { data: convs, error: convErr } = await withTimeout(
+        supabase
+          .from('support_conversations')
+          .select('*, businesses(name)')
+          .order('last_message_at', { ascending: false })
+          .limit(200),
+      );
       if (convErr) throw convErr;
 
       const withNames = (convs ?? []).map(c => {
@@ -379,11 +385,11 @@ export const useSupportChatStore = create<SupportChatStore>((set, get) => ({
   loadConversationDetail: async (conversationId) => {
     set({ founderDetailLoading: true, founderError: null, founderDraft: null });
     try {
-      const [{ data: conv, error: convErr }, { data: msgs, error: msgsErr }, { data: draft, error: draftErr }] = await Promise.all([
+      const [{ data: conv, error: convErr }, { data: msgs, error: msgsErr }, { data: draft, error: draftErr }] = await withTimeout(Promise.all([
         supabase.from('support_conversations').select('*').eq('id', conversationId).single(),
         supabase.from('support_messages').select('*').eq('conversation_id', conversationId).order('created_at', { ascending: true }),
         supabase.from('support_ai_drafts').select('*').eq('conversation_id', conversationId).order('created_at', { ascending: false }).limit(1).maybeSingle(),
-      ]);
+      ]));
       if (convErr) throw convErr;
       if (msgsErr) throw msgsErr;
       if (draftErr) throw draftErr;
@@ -391,7 +397,7 @@ export const useSupportChatStore = create<SupportChatStore>((set, get) => ({
       const cached = get().founderConversations.find(c => c.id === conversationId);
       let businessName = cached?.business_name;
       if (!businessName) {
-        const { data: biz } = await supabase.from('businesses').select('name').eq('id', (conv as SupportConversation).business_id).maybeSingle();
+        const { data: biz } = await withTimeout(supabase.from('businesses').select('name').eq('id', (conv as SupportConversation).business_id).maybeSingle());
         businessName = (biz as { name: string } | null)?.name ?? '—';
       }
 

@@ -2,7 +2,7 @@ import { create } from 'zustand';
 import { supabase } from '@/lib/supabase';
 import { translateError } from '@/lib/errors';
 import { enqueue, getQueueCount, saveProductCache, getProductCache, saveVentesCache, getVentesCache } from '@/lib/db';
-import { isNetworkError } from '@/lib/sync';
+import { isNetworkError, withTimeout } from '@/lib/sync';
 import { generateId } from '@/lib/id';
 import { useSyncStore } from '@/stores/sync';
 import { useVentesStore } from '@/stores/ventes';
@@ -200,12 +200,14 @@ export const useSalesStore = create<SalesStore>((set, get) => ({
   clearCart: () => set({ cart: [] }),
 
   submitCarnetDebt: async (businessId, userId, customerName, amountCents) => {
-    const { error } = await supabase.rpc('submit_carnet_debt', {
-      p_business_id:   businessId,
-      p_seller_id:     userId,
-      p_customer_name: customerName.trim(),
-      p_amount:        amountCents,
-    });
+    const { error } = await withTimeout(
+      supabase.rpc('submit_carnet_debt', {
+        p_business_id:   businessId,
+        p_seller_id:     userId,
+        p_customer_name: customerName.trim(),
+        p_amount:        amountCents,
+      }),
+    );
     if (error) {
       console.error('[submitCarnetDebt]', error.code, error.message, error.details);
       useToastStore.getState().show(error.message ?? translateError(error, 'Erreur inconnue'), 'warning');
@@ -267,7 +269,7 @@ export const useSalesStore = create<SalesStore>((set, get) => ({
         ...(dueDate ? { p_due_date: dueDate } : {}),
       };
 
-      const { error: rpcErr } = await supabase.rpc('submit_sale', rpcPayload);
+      const { error: rpcErr } = await withTimeout(supabase.rpc('submit_sale', rpcPayload));
       if (rpcErr) throw rpcErr;
 
       // Notify managers/admins of the completed sale (online path only)

@@ -2,7 +2,7 @@ import { create } from 'zustand';
 import { supabase } from '@/lib/supabase';
 import { translateError } from '@/lib/errors';
 import { getKV, setKV, savePartnershipsCache, getPartnershipsCache, getCacheTimestamp } from '@/lib/db';
-import { isNetworkError } from '@/lib/sync';
+import { isNetworkError, withTimeout } from '@/lib/sync';
 import { notifyEvent } from '@/src/utils/notifications';
 import type { PartnerData, PendingRequest, PartnerInviteCode } from '@/src/types';
 
@@ -63,16 +63,18 @@ export const usePartnershipsStore = create<PartnershipsStore>((set, get) => ({
     set({ loading: true, error: null });
     try {
       // 1. Fetch partnerships with embedded business names
-      const { data: rows, error: pErr } = await supabase
-        .from('business_partnerships')
-        .select(`
-          *,
-          requester:requester_id(id, name),
-          recipient:recipient_id(id, name)
-        `)
-        .or(`requester_id.eq.${businessId},recipient_id.eq.${businessId}`)
-        .in('status', ['pending', 'accepted'])
-        .order('created_at', { ascending: false });
+      const { data: rows, error: pErr } = await withTimeout(
+        supabase
+          .from('business_partnerships')
+          .select(`
+            *,
+            requester:requester_id(id, name),
+            recipient:recipient_id(id, name)
+          `)
+          .or(`requester_id.eq.${businessId},recipient_id.eq.${businessId}`)
+          .in('status', ['pending', 'accepted'])
+          .order('created_at', { ascending: false }),
+      );
       if (pErr) throw pErr;
 
       const all = rows ?? [];
@@ -94,10 +96,12 @@ export const usePartnershipsStore = create<PartnershipsStore>((set, get) => ({
       // 4. Fetch DM rooms for accepted partnerships
       let dmRooms: Array<{ id: string; partnership_id: string }> = [];
       if (partnershipIds.length > 0) {
-        const { data: rooms } = await supabase
-          .from('chat_rooms')
-          .select('id, partnership_id')
-          .in('partnership_id', partnershipIds);
+        const { data: rooms } = await withTimeout(
+          supabase
+            .from('chat_rooms')
+            .select('id, partnership_id')
+            .in('partnership_id', partnershipIds),
+        );
         dmRooms = (rooms ?? []) as Array<{ id: string; partnership_id: string }>;
       }
 
@@ -105,12 +109,14 @@ export const usePartnershipsStore = create<PartnershipsStore>((set, get) => ({
       const dmRoomIds = dmRooms.map(r => r.id);
       const latestByRoom: Record<string, { content: string; created_at: string; sender_id: string }> = {};
       if (dmRoomIds.length > 0) {
-        const { data: msgs } = await supabase
-          .from('chat_messages')
-          .select('room_id, content, created_at, sender_id')
-          .in('room_id', dmRoomIds)
-          .order('created_at', { ascending: false })
-          .limit(dmRoomIds.length * 10);
+        const { data: msgs } = await withTimeout(
+          supabase
+            .from('chat_messages')
+            .select('room_id, content, created_at, sender_id')
+            .in('room_id', dmRoomIds)
+            .order('created_at', { ascending: false })
+            .limit(dmRoomIds.length * 10),
+        );
         for (const msg of msgs ?? []) {
           if (!latestByRoom[msg.room_id]) latestByRoom[msg.room_id] = msg;
         }

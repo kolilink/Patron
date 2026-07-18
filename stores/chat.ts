@@ -2,7 +2,7 @@ import { create } from 'zustand';
 import * as FileSystem from 'expo-file-system/legacy';
 import { supabase } from '@/lib/supabase';
 import { translateError } from '@/lib/errors';
-import { isNetworkError } from '@/lib/sync';
+import { isNetworkError, withTimeout } from '@/lib/sync';
 import { getKV, setKV, saveChatCache, getChatCache, getCacheTimestamp } from '@/lib/db';
 import { notifyEvent } from '@/src/utils/notifications';
 import { generateId } from '@/lib/id';
@@ -118,10 +118,12 @@ export const useChatStore = create<ChatStore>((set, get) => ({
     }
     try {
       // 1. Fetch both accessible rooms (boutique + global)
-      const { data: rooms, error: roomsErr } = await supabase
-        .from('chat_rooms')
-        .select('*')
-        .or(`business_id.eq.${businessId},is_global.eq.true`);
+      const { data: rooms, error: roomsErr } = await withTimeout(
+        supabase
+          .from('chat_rooms')
+          .select('*')
+          .or(`business_id.eq.${businessId},is_global.eq.true`),
+      );
       if (roomsErr) throw roomsErr;
 
       const boutiqueRoom = (rooms ?? []).find(r => !r.is_global && r.business_id === businessId) ?? null;
@@ -139,22 +141,26 @@ export const useChatStore = create<ChatStore>((set, get) => ({
       const roomIds = [boutiqueRoom?.id, globalRoom?.id].filter(Boolean) as string[];
       let messages: ChatMessage[] = [];
       if (roomIds.length > 0) {
-        const { data: msgs, error: msgsErr } = await supabase
-          .from('chat_messages')
-          .select('*')
-          .in('room_id', roomIds)
-          .order('created_at', { ascending: true })
-          .limit(200);
+        const { data: msgs, error: msgsErr } = await withTimeout(
+          supabase
+            .from('chat_messages')
+            .select('*')
+            .in('room_id', roomIds)
+            .order('created_at', { ascending: true })
+            .limit(200),
+        );
         if (msgsErr) throw msgsErr;
         messages = msgs ?? [];
 
         // Resolve current profile names so old messages reflect name changes
         const senderIds = [...new Set(messages.map(m => m.sender_id))];
         if (senderIds.length > 0) {
-          const { data: profiles } = await supabase
-            .from('profiles')
-            .select('id, name')
-            .in('id', senderIds);
+          const { data: profiles } = await withTimeout(
+            supabase
+              .from('profiles')
+              .select('id, name')
+              .in('id', senderIds),
+          );
           if (profiles && profiles.length > 0) {
             const nameMap: Record<string, string | null> = Object.fromEntries(
               profiles.map(p => [p.id, (p.name as string | null) ?? null]),

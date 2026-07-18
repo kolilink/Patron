@@ -9,6 +9,7 @@ import { generateId } from '@/lib/id';
 import { syncKnownBusinesses } from '@/lib/knownBusinesses';
 import { getKV, setKV } from '@/lib/db';
 import { isLocked, setLocked } from '@/lib/lock';
+import { withTimeout } from '@/lib/sync';
 import type { AppSession, Business, Membership, Role, User } from '@/src/types';
 import { useProductStore } from './products';
 import { useVentesStore } from './ventes';
@@ -220,13 +221,13 @@ interface AuthStore {
 }
 
 async function loadSession(userId: string, authPhone?: string | null, skipCache = false): Promise<AppSession> {
-  const [profileRes, membershipsRes] = await Promise.all([
+  const [profileRes, membershipsRes] = await withTimeout(Promise.all([
     supabase.from('profiles').select('*').eq('id', userId).single(),
     supabase
       .from('memberships')
       .select('*, business:businesses(*)')
       .eq('user_id', userId),
-  ]);
+  ]));
 
   if (profileRes.error) throw profileRes.error;
   if (membershipsRes.error) throw membershipsRes.error;
@@ -319,7 +320,12 @@ export const useAuthStore = create<AuthStore>((set, get) => ({
     }
 
     try {
-      const { data: { session }, error: sessionError } = await supabase.auth.getSession();
+      // withTimeout here matters most for a device with no cachedSession
+      // above (fresh install, or cache cleared) — that's the one path where
+      // `loading` is still `true` at this point, so a hang below would blank
+      // the entire app forever ((app)/_layout.tsx renders null while
+      // loading, see CLAUDE.md's "Critical: auth store loading flag").
+      const { data: { session }, error: sessionError } = await withTimeout(supabase.auth.getSession());
       _currentAccessToken = session?.access_token ?? _currentAccessToken;
 
       // Retry any server-side sign-out that couldn't reach the network last

@@ -16,7 +16,7 @@ import { useVentesStore, type Vente } from '@/stores/ventes';
 import { supabase } from '@/lib/supabase';
 import { formatAmountInput, parseAmountInput } from '@/src/utils/format';
 import { saveClientLedgerCache, getClientLedgerCache } from '@/lib/db';
-import { isNetworkError } from '@/lib/sync';
+import { isNetworkError, withTimeout } from '@/lib/sync';
 import { OfflineNotice } from '@/src/components/ui/OfflineNotice';
 
 function fmt(n: number, cur: string) { return `${Math.round(n).toLocaleString('fr-FR')} ${cur}`; }
@@ -356,7 +356,7 @@ export default function ClientLedgerScreen() {
     } else {
       query = query.eq('name', routeParam);
     }
-    const { data, error } = await query.maybeSingle();
+    const { data, error } = await withTimeout(query.maybeSingle());
     if (error) return; // offline (or any other failure) — cached value above already applied
     const record = data as ClientRecord | null;
     setClientRecord(record);
@@ -381,11 +381,13 @@ export default function ClientLedgerScreen() {
     }
 
     const saleIds = clientSales.map(s => s.id);
-    const { data, error } = await supabase
-      .from('payments')
-      .select('id, order_id, method, amount, date')
-      .in('order_id', saleIds)
-      .order('date', { ascending: true });
+    const { data, error } = await withTimeout(
+      supabase
+        .from('payments')
+        .select('id, order_id, method, amount, date')
+        .in('order_id', saleIds)
+        .order('date', { ascending: true }),
+    );
     if (error) {
       // Network failure: fall back to cache so a client's real debt (sales minus
       // payments) doesn't silently inflate to their full lifetime sale total —
