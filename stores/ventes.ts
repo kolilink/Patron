@@ -36,6 +36,30 @@ export interface VentePayment {
   date: string;
 }
 
+// One entry per edit_sale() call — before/after are the whole-shape snapshots
+// the RPC stores, in display units (already /100), so the detail screen can
+// diff them directly without knowing which fields changed ahead of time.
+export interface SaleEditSnapshot {
+  customer_name: string | null;
+  client_id: string | null;
+  due_date: string | null;
+  total_amount: number;
+  discount_amount: number;
+  lines: { line_id: string; product_name: string; unit_price: number }[];
+  payments: { payment_id: string; method: string; amount: number; ref_external: string | null }[];
+}
+
+export interface SaleEdit {
+  id: string;
+  edit_number: number;
+  edited_by: string;
+  edited_by_name: string;
+  edited_at: string;
+  reason: string | null;
+  before: SaleEditSnapshot;
+  after: SaleEditSnapshot;
+}
+
 export interface Vente {
   id: string;
   business_id: string;
@@ -55,10 +79,15 @@ export interface Vente {
   cancellation_reason: string | null;
   cancelled_by_id?: string | null;
   cancelled_by_name?: string;
+  edit_count: number;
+  last_edited_at: string | null;
+  last_edited_by?: string | null;
+  last_edited_by_name?: string;
   profit: number | null;
   amount_paid?: number;
   lines?: VenteLigne[];
   payments?: VentePayment[];
+  edits?: SaleEdit[];
 }
 
 interface VentesStore {
@@ -74,8 +103,26 @@ interface VentesStore {
   recordClientPayment: (customerName: string, businessId: string, amount: number, method: string, date: string) => Promise<{ ok: boolean; fullySettled: boolean }>;
   cancelSale: (saleId: string, businessId: string, userId: string, reason: string) => Promise<boolean>;
   updateSaleClient: (saleId: string, customerName: string) => Promise<boolean>;
+  editSale: (params: EditSaleParams) => Promise<{ ok: boolean; error?: string }>;
   clearError: () => void;
   reset: () => void;
+}
+
+// Amounts are display-unit (GNF etc, not cents) — converted to bigint cents
+// right before the RPC call, same as every other amount in this store.
+// lineEdits/paymentEdits only need the entries actually being corrected —
+// edit_sale() recomputes total_amount from ALL of so_lines regardless of
+// which lines are listed here.
+export interface EditSaleParams {
+  saleId: string;
+  businessId: string;
+  customerName: string | null;
+  clientId: string | null;
+  dueDate: string | null;
+  discountAmount: number;
+  lineEdits: { lineId: string; unitPrice: number }[];
+  paymentEdits: { paymentId: string; method: string; amount: number; refExternal: string | null }[];
+  reason: string | null;
 }
 
 export const useVentesStore = create<VentesStore>((set, get) => ({
@@ -142,9 +189,14 @@ export const useVentesStore = create<VentesStore>((set, get) => ({
         .map((s: Record<string, unknown>) => s.cancelled_by_id as string | null)
         .filter((id): id is string => !!id)
     )];
-    const allProfileIds = [...new Set([...sellerIds, ...cancellerIds])];
+    const editorIds = [...new Set(
+      data
+        .map((s: Record<string, unknown>) => s.last_edited_by as string | null)
+        .filter((id): id is string => !!id)
+    )];
+    const allProfileIds = [...new Set([...sellerIds, ...cancellerIds, ...editorIds])];
 
-    const allMemberIds = [...new Set([...sellerIds, ...cancellerIds])];
+    const allMemberIds = [...new Set([...sellerIds, ...cancellerIds, ...editorIds])];
     const [profilesRes, linesRes, paysRes, membershipsRes] = await Promise.all([
       supabase.from('profiles').select('id, name').in('id', allProfileIds),
       supabase
@@ -218,6 +270,12 @@ export const useVentesStore = create<VentesStore>((set, get) => ({
         cancelled_by_name: s.cancelled_by_id
           ? (dm[s.cancelled_by_id as string] || pm[s.cancelled_by_id as string] || generateFallbackName(s.cancelled_by_id as string))
           : undefined,
+        edit_count: (s.edit_count as number) ?? 0,
+        last_edited_at: (s.last_edited_at as string | null) ?? null,
+        last_edited_by: (s.last_edited_by as string | null) ?? null,
+        last_edited_by_name: s.last_edited_by
+          ? (dm[s.last_edited_by as string] || pm[s.last_edited_by as string] || generateFallbackName(s.last_edited_by as string))
+          : undefined,
         profit,
         amount_paid: (isCreditStatus || hasDiscount) ? (paidByOrder[s.id as string] ?? 0) : undefined,
       } as Vente;
@@ -228,13 +286,19 @@ export const useVentesStore = create<VentesStore>((set, get) => ({
   },
 
   loadDetail: async (saleId) => {
-    const [linesRes, paysRes] = await Promise.all([
+    const businessId = get().sales.find(s => s.id === saleId)?.business_id;
+    const [linesRes, paysRes, editsRes] = await Promise.all([
       supabase.from('so_lines').select('*, product:products(name, cost_price), variant:product_variants(cost_price)').eq('order_id', saleId),
       supabase
         .from('payments')
         .select('id, method, amount, date')
         .eq('order_id', saleId)
         .order('date', { ascending: true }),
+      supabase
+        .from('sale_order_edits')
+        .select('id, edit_number, edited_by, edited_at, reason, before, after')
+        .eq('order_id', saleId)
+        .order('edit_number', { ascending: false }),
     ]);
 
     if (linesRes.error || paysRes.error) return;
@@ -264,9 +328,61 @@ export const useVentesStore = create<VentesStore>((set, get) => ({
 
     const amount_paid = payments.reduce((s, p) => s + p.amount, 0);
 
+    // Convert a raw before/after snapshot (cents, as stored by edit_sale())
+    // into display units, matching how lines/payments above are converted.
+    const toDisplaySnapshot = (snap: Record<string, unknown>): SaleEditSnapshot => ({
+      customer_name: (snap.customer_name as string | null) ?? null,
+      client_id: (snap.client_id as string | null) ?? null,
+      due_date: (snap.due_date as string | null) ?? null,
+      total_amount: (snap.total_amount as number) / 100,
+      discount_amount: (snap.discount_amount as number) / 100,
+      lines: ((snap.lines as Record<string, unknown>[] | null) ?? []).map(l => ({
+        line_id: l.line_id as string,
+        product_name: l.product_name as string,
+        unit_price: (l.unit_price as number) / 100,
+      })),
+      payments: ((snap.payments as Record<string, unknown>[] | null) ?? []).map(p => ({
+        payment_id: p.payment_id as string,
+        method: p.method as string,
+        amount: (p.amount as number) / 100,
+        ref_external: (p.ref_external as string | null) ?? null,
+      })),
+    });
+
+    let edits: SaleEdit[] | undefined;
+    if (!editsRes.error && editsRes.data) {
+      const editorIds = [...new Set(editsRes.data.map(e => e.edited_by as string))];
+      let nameMap: Record<string, string> = {};
+      if (editorIds.length > 0) {
+        const [{ data: profs }, { data: mems }] = await Promise.all([
+          supabase.from('profiles').select('id, name').in('id', editorIds),
+          businessId
+            ? supabase.from('memberships').select('user_id, display_name').eq('business_id', businessId).in('user_id', editorIds)
+            : Promise.resolve({ data: [] as { user_id: string; display_name: string | null }[] }),
+        ]);
+        const pm: Record<string, string> = {};
+        for (const p of (profs ?? []) as { id: string; name: string }[]) pm[p.id] = p.name;
+        const dm: Record<string, string> = {};
+        for (const m of (mems ?? []) as { user_id: string; display_name: string | null }[]) {
+          if (m.display_name) dm[m.user_id] = m.display_name;
+        }
+        nameMap = { ...pm, ...dm };
+      }
+      edits = editsRes.data.map(e => ({
+        id: e.id as string,
+        edit_number: e.edit_number as number,
+        edited_by: e.edited_by as string,
+        edited_by_name: nameMap[e.edited_by as string] || generateFallbackName(e.edited_by as string),
+        edited_at: e.edited_at as string,
+        reason: (e.reason as string | null) ?? null,
+        before: toDisplaySnapshot(e.before as Record<string, unknown>),
+        after: toDisplaySnapshot(e.after as Record<string, unknown>),
+      }));
+    }
+
     set(state => ({
       sales: state.sales.map(s =>
-        s.id === saleId ? { ...s, lines, payments, amount_paid } : s,
+        s.id === saleId ? { ...s, lines, payments, amount_paid, edits } : s,
       ),
     }));
   },
@@ -507,6 +623,93 @@ export const useVentesStore = create<VentesStore>((set, get) => ({
       saving: false,
     }));
     return true;
+  },
+
+  // Admin/manager only (enforced server-side) — corrects a mistaken sale in
+  // place instead of cancelling it, with a full before/after audit trail.
+  // Deliberately online-only: not queued through the offline sync_queue,
+  // since the 48h edit window is checked against a live server clock and a
+  // queued replay after a connectivity gap could silently fail that check
+  // with no clear signal to the admin. A network error here is a real,
+  // immediate failure the caller should retry once back online, not
+  // something to defer.
+  editSale: async (params) => {
+    set({ saving: true, error: null });
+    const {
+      saleId, businessId, customerName, clientId, dueDate,
+      discountAmount, lineEdits, paymentEdits, reason,
+    } = params;
+
+    const rpcPayload = {
+      p_sale_id: saleId,
+      p_business_id: businessId,
+      p_customer_name: customerName,
+      p_client_id: clientId,
+      p_due_date: dueDate,
+      p_discount_amount: Math.round(discountAmount * 100),
+      p_line_edits: lineEdits.map(l => ({ line_id: l.lineId, unit_price: Math.round(l.unitPrice * 100) })),
+      p_payment_edits: paymentEdits.map(p => ({
+        payment_id: p.paymentId, method: p.method,
+        amount: Math.round(p.amount * 100), ref_external: p.refExternal,
+      })),
+      p_reason: reason,
+    };
+
+    try {
+      const { data, error } = await supabase.rpc('edit_sale', rpcPayload);
+      if (error) throw error;
+      const updated = data as {
+        total_amount: number; discount_amount: number; edit_count: number;
+        last_edited_at: string; last_edited_by: string;
+        customer_name: string | null; client_id: string | null; due_date: string | null;
+      };
+
+      const editorName = useAuthStore.getState().session?.user?.name
+        || generateFallbackName(updated.last_edited_by);
+
+      const newSales = get().sales.map(s =>
+        s.id === saleId
+          ? {
+              ...s,
+              total_amount: updated.total_amount / 100,
+              discount_amount: updated.discount_amount / 100,
+              edit_count: updated.edit_count,
+              last_edited_at: updated.last_edited_at,
+              last_edited_by: updated.last_edited_by,
+              last_edited_by_name: editorName,
+              customer_name: updated.customer_name,
+              client_id: updated.client_id,
+              due_date: updated.due_date,
+            }
+          : s,
+      );
+      set({ sales: newSales, saving: false });
+      void saveVentesCache(`${businessId}:all`, newSales as unknown[]);
+
+      // Refreshes lines/payments/edits — the RPC touched all three and the
+      // headline patch above only covers the sale_orders row itself.
+      await get().loadDetail(saleId);
+
+      const currency = useAuthStore.getState().session?.activeBusiness?.currency ?? 'GNF';
+      notifyEvent({
+        businessId,
+        eventType: 'sale_edited',
+        payload: { editor: editorName, amount: formatAmount(updated.total_amount / 100, currency) },
+        targetRoles: ['administrateur', 'manager'],
+        excludeUserId: useAuthStore.getState().session?.user?.id,
+      });
+
+      return { ok: true };
+    } catch (err) {
+      // edit_sale() raises plain French messages (limite atteinte, délai dépassé,
+      // paiement désynchronisé, etc.) — pass the raw message through as the
+      // fallback so it survives instead of being swallowed by a generic one,
+      // same idiom useAuthStore's joinBusiness already uses for join_business().
+      const raw = err instanceof Error ? err.message : (err as Record<string, unknown>)?.message as string | undefined;
+      const message = translateError(err, raw ?? 'Modification impossible');
+      set({ saving: false, error: message });
+      return { ok: false, error: message };
+    }
   },
 
   clearError: () => set({ error: null }),

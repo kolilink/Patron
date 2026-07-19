@@ -15,7 +15,7 @@ import { useTheme, spacing, radius } from '@/src/theme';
 import type { Palette } from '@/src/theme';
 import { formatAmount, formatAmountInput, parseAmountInput } from '@/src/utils/format';
 import { useAuthStore } from '@/stores/auth';
-import { useVentesStore, type Vente } from '@/stores/ventes';
+import { useVentesStore, type Vente, type EditSaleParams, type SaleEdit } from '@/stores/ventes';
 import { SaleReceiptView, type ReceiptData, type ReceiptItem } from '@/src/components/ui/SaleReceiptView';
 import { haptics } from '@/lib/haptics';
 import { supabase } from '@/lib/supabase';
@@ -331,10 +331,28 @@ interface DetailModalProps {
   onRecordPayment: (amount: number, method: string, date: string) => Promise<{ ok: boolean; fullyPaid: boolean }>;
   onCancel: (reason: string) => void;
   onUpdateClient: (name: string) => void;
+  onEdit: (params: Omit<EditSaleParams, 'saleId' | 'businessId'>) => Promise<{ ok: boolean; error?: string }>;
   saving: boolean;
 }
 
-function DetailModal({ sale, currency, businessName, singleVendor, role, onClose, onRecordPayment, onCancel, onUpdateClient, saving }: DetailModalProps) {
+// Mirrors app_config's live 'sale_edit_max_count' / 'sale_edit_window_hours'
+// (migration_v151.sql) — only used here to hide/disable the entry point
+// early; edit_sale() itself is the real, authoritative check.
+const EDIT_MAX_COUNT = 2;
+const EDIT_WINDOW_HOURS = 48;
+
+function relativeTime(iso: string): string {
+  const diffMs = Date.now() - new Date(iso).getTime();
+  const mins = Math.round(diffMs / 60000);
+  if (mins < 1) return "à l'instant";
+  if (mins < 60) return `il y a ${mins} min`;
+  const hours = Math.round(mins / 60);
+  if (hours < 24) return `il y a ${hours}h`;
+  const days = Math.round(hours / 24);
+  return `il y a ${days}j`;
+}
+
+function DetailModal({ sale, currency, businessName, singleVendor, role, onClose, onRecordPayment, onCancel, onUpdateClient, onEdit, saving }: DetailModalProps) {
   const { palette } = useTheme();
   const styles = useMemo(() => makeStyles(palette), [palette]);
   const businessPhone = useAuthStore(s => s.session?.activeBusiness?.phone ?? null);
@@ -345,6 +363,17 @@ function DetailModal({ sale, currency, businessName, singleVendor, role, onClose
   const [cancelReason, setCancelReason] = useState('');
   const [toast, setToast] = useState('');
   const receiptRef = useRef<View>(null);
+
+  // Sale-edit inline form + history — draft state is keyed by line/payment id
+  // so an arbitrary number of lines/payments each get their own input.
+  const [showEditSale, setShowEditSale] = useState(false);
+  const [showHistory, setShowHistory] = useState(false);
+  const [editSaving, setEditSaving] = useState(false);
+  const [editLinePrices, setEditLinePrices] = useState<Record<string, string>>({});
+  const [editPayments, setEditPayments] = useState<Record<string, { method: string; amountStr: string }>>({});
+  const [editDiscountStr, setEditDiscountStr] = useState('');
+  const [editSaleClient, setEditSaleClient] = useState('');
+  const [editReason, setEditReason] = useState('');
 
   const handleShareReceipt = async () => {
     if (!sale || !receiptRef.current) return;
@@ -385,6 +414,9 @@ function DetailModal({ sale, currency, businessName, singleVendor, role, onClose
       setShowEditClient(false);
       setCancelReason('');
       setShowPaymentSheet(false);
+      setShowEditSale(false);
+      setShowHistory(false);
+      setEditReason('');
     }
   }, [sale?.id]);
 
@@ -441,12 +473,96 @@ function DetailModal({ sale, currency, businessName, singleVendor, role, onClose
   };
 
   const canCancel = displayState !== 'annule' && role !== 'investisseur';
+  const hoursSinceSale = (Date.now() - new Date(sale.created_at).getTime()) / 3_600_000;
+  const canEditSale = (role === 'administrateur' || role === 'manager')
+    && displayState !== 'annule'
+    && sale.edit_count < EDIT_MAX_COUNT
+    && hoursSinceSale <= EDIT_WINDOW_HOURS;
   const showMenuButton = role === 'administrateur' || role === 'manager' || canCancel;
+
+  const openEditSale = () => {
+    const prices: Record<string, string> = {};
+    for (const l of sale.lines ?? []) prices[l.id] = formatAmountInput(String(Math.round(l.unit_price)), currency);
+    setEditLinePrices(prices);
+
+    const pays: Record<string, { method: string; amountStr: string }> = {};
+    for (const p of realPayments) pays[p.id] = { method: p.method, amountStr: formatAmountInput(String(Math.round(p.amount)), currency) };
+    setEditPayments(pays);
+
+    setEditDiscountStr(formatAmountInput(String(Math.round(discount)), currency));
+    setEditSaleClient(sale.customer_name ?? '');
+    setEditReason('');
+    setShowEditSale(true);
+  };
+
+  const isCreditSale = sale.status === 'credit';
+
+  const handleEditSubmit = async () => {
+    const lineEdits = (sale.lines ?? [])
+      .map(l => ({ lineId: l.id, unitPrice: parseAmountInput(editLinePrices[l.id] ?? '', currency), original: l.unit_price }))
+      .filter(l => l.unitPrice !== l.original)
+      .map(({ lineId, unitPrice }) => ({ lineId, unitPrice }));
+
+    const paymentEdits = realPayments
+      .map(p => {
+        const draft = editPayments[p.id];
+        if (!draft) return null;
+        const amount = parseAmountInput(draft.amountStr, currency);
+        if (amount === p.amount && draft.method === p.method) return null;
+        return { paymentId: p.id, method: draft.method, amount, refExternal: null };
+      })
+      .filter((p): p is NonNullable<typeof p> => p !== null);
+
+    // A paye sale has no separate "discount" question for the merchant to
+    // answer — edit_sale() requires payé == total − remise exactly for a
+    // closed sale, so remise is just derived from what they say was actually
+    // paid. Credit sales keep an explicit input: paid < owed is normal there,
+    // so the two numbers are genuinely independent, not derivable from each other.
+    let discountAmount: number;
+    if (isCreditSale) {
+      discountAmount = parseAmountInput(editDiscountStr, currency);
+    } else {
+      const computedTotal = (sale.lines ?? []).reduce((sum, l) => {
+        const priceStr = editLinePrices[l.id];
+        const price = priceStr ? parseAmountInput(priceStr, currency) : l.unit_price;
+        return sum + price * l.qty;
+      }, 0);
+      const newPaidTotal = realPayments.reduce((sum, p) => {
+        const draft = editPayments[p.id];
+        return sum + (draft ? parseAmountInput(draft.amountStr, currency) : p.amount);
+      }, 0);
+      discountAmount = Math.max(0, computedTotal - newPaidTotal);
+    }
+
+    setEditSaving(true);
+    const result = await onEdit({
+      customerName: editSaleClient.trim() || null,
+      clientId: sale.client_id,
+      dueDate: sale.due_date ?? null,
+      discountAmount,
+      lineEdits,
+      paymentEdits,
+      reason: editReason.trim() || null,
+    });
+    setEditSaving(false);
+
+    if (result.ok) {
+      haptics.success();
+      setShowEditSale(false);
+      showToast('Vente modifiée ✓');
+    } else {
+      haptics.error();
+      Alert.alert(result.error ?? 'Modification impossible');
+    }
+  };
 
   const showMenu = () => {
     const options: { text: string; onPress?: () => void; style?: 'cancel' | 'destructive' }[] = [];
     if (role === 'administrateur' || role === 'manager') {
       options.push({ text: 'Modifier le client', onPress: () => setShowEditClient(true) });
+    }
+    if (canEditSale) {
+      options.push({ text: 'Modifier la vente', onPress: openEditSale });
     }
     if (canCancel) {
       options.push({ text: 'Annuler cette vente', onPress: () => setShowCancelForm(true), style: 'destructive' });
@@ -456,6 +572,31 @@ function DetailModal({ sale, currency, businessName, singleVendor, role, onClose
   };
 
   const realPayments = sale.payments?.filter(p => p.method !== 'credit') ?? [];
+
+  // Only the fields that actually changed in a given edit — a price-only
+  // correction shows one row, not the whole sale dumped out.
+  const diffFields = (edit: SaleEdit) => {
+    const rows: { label: string; from: string; to: string }[] = [];
+    if (edit.before.customer_name !== edit.after.customer_name) {
+      rows.push({ label: 'Client', from: edit.before.customer_name ?? '—', to: edit.after.customer_name ?? '—' });
+    }
+    if (edit.before.discount_amount !== edit.after.discount_amount) {
+      rows.push({ label: 'Rabais', from: fmt(edit.before.discount_amount, currency), to: fmt(edit.after.discount_amount, currency) });
+    }
+    for (const beforeLine of edit.before.lines) {
+      const afterLine = edit.after.lines.find(l => l.line_id === beforeLine.line_id);
+      if (afterLine && afterLine.unit_price !== beforeLine.unit_price) {
+        rows.push({ label: `Prix — ${beforeLine.product_name}`, from: fmt(beforeLine.unit_price, currency), to: fmt(afterLine.unit_price, currency) });
+      }
+    }
+    for (const beforePay of edit.before.payments) {
+      const afterPay = edit.after.payments.find(p => p.payment_id === beforePay.payment_id);
+      if (afterPay && afterPay.amount !== beforePay.amount) {
+        rows.push({ label: `Paiement (${methodLabel(beforePay.method)})`, from: fmt(beforePay.amount, currency), to: fmt(afterPay.amount, currency) });
+      }
+    }
+    return rows;
+  };
 
   return (
     <Modal visible animationType="slide" presentationStyle="pageSheet" onRequestClose={onClose}>
@@ -524,6 +665,43 @@ function DetailModal({ sale, currency, businessName, singleVendor, role, onClose
                 ].filter(Boolean).join(' · ')}
               </Text>
             </View>
+          )}
+
+          {sale.edit_count > 0 && sale.edits && sale.edits.length > 0 && (
+            <Pressable onPress={() => setShowHistory(v => !v)} style={[styles.banner, styles.bannerAmber]}>
+              <Text variant="label" style={{ color: palette.warning, flex: 1 }}>
+                {[
+                  '✎',
+                  `Modifiée par ${sale.edits[0].edited_by_name}`,
+                  relativeTime(sale.edits[0].edited_at),
+                  sale.edits[0].reason,
+                ].filter(Boolean).join(' · ')}
+              </Text>
+              <Text variant="caption" style={{ color: palette.warning }}>{showHistory ? '▲' : '▼'}</Text>
+            </Pressable>
+          )}
+
+          {showHistory && sale.edits && (
+            <Card style={{ gap: spacing[3] }}>
+              <Text variant="label" color="secondary">Historique des modifications</Text>
+              {sale.edits.map(edit => (
+                <View key={edit.id} style={{ gap: spacing[2] }}>
+                  <Text variant="caption" color="secondary">
+                    {edit.edited_by_name} · {relativeTime(edit.edited_at)}
+                  </Text>
+                  {diffFields(edit).map((row, i) => (
+                    <View key={i} style={styles.lineRow}>
+                      <Text variant="body" style={{ flex: 1 }}>{row.label}</Text>
+                      <Text variant="caption" color="secondary" style={styles.strikeThrough}>{row.from}</Text>
+                      <Text variant="label">→ {row.to}</Text>
+                    </View>
+                  ))}
+                  {edit.reason && (
+                    <Text variant="caption" color="secondary">Motif : {edit.reason}</Text>
+                  )}
+                </View>
+              ))}
+            </Card>
           )}
 
           {!sale.lines ? <DetailSkeleton /> : (
@@ -618,6 +796,94 @@ function DetailModal({ sale, currency, businessName, singleVendor, role, onClose
                     label={saving ? 'Enregistrement…' : 'Enregistrer'}
                     onPress={() => onUpdateClient(editedClient)}
                     loading={saving}
+                    style={{ flex: 1 }}
+                  />
+                </View>
+              </Card>
+            )}
+
+            {/* Sale-edit inline form — triggered from the "⋯" menu, admin/manager only */}
+            {canEditSale && showEditSale && (
+              <Card style={{ gap: spacing[3] }}>
+                <Text variant="label">Modifier la vente</Text>
+
+                {(sale.lines ?? []).map(l => (
+                  <View key={l.id} style={{ gap: spacing[1] }}>
+                    <Text variant="caption" color="secondary">
+                      {l.product_name}{l.variant_name ? ` · ${l.variant_name}` : ''} — prix unitaire (×{l.qty})
+                    </Text>
+                    <TextInput
+                      style={styles.textInput}
+                      value={editLinePrices[l.id] ?? ''}
+                      onChangeText={v => setEditLinePrices(prev => ({ ...prev, [l.id]: formatAmountInput(v, currency) }))}
+                      keyboardType="numeric"
+                      placeholderTextColor={palette.textDisabled}
+                    />
+                    <Text variant="caption" color="secondary">
+                      Total : {fmt(parseAmountInput(editLinePrices[l.id] ?? '', currency) * l.qty, currency)}
+                    </Text>
+                  </View>
+                ))}
+
+                {isCreditSale && (
+                  <View style={{ gap: spacing[1] }}>
+                    <Text variant="caption" color="secondary">Rabais</Text>
+                    <TextInput
+                      style={styles.textInput}
+                      value={editDiscountStr}
+                      onChangeText={v => setEditDiscountStr(formatAmountInput(v, currency))}
+                      keyboardType="numeric"
+                      placeholderTextColor={palette.textDisabled}
+                    />
+                  </View>
+                )}
+
+                <View style={{ gap: spacing[1] }}>
+                  <Text variant="caption" color="secondary">Client</Text>
+                  <TextInput
+                    style={styles.textInput}
+                    value={editSaleClient}
+                    onChangeText={setEditSaleClient}
+                    placeholder="Nom du client"
+                    placeholderTextColor={palette.textDisabled}
+                  />
+                </View>
+
+                {realPayments.map(p => (
+                  <View key={p.id} style={{ gap: spacing[1] }}>
+                    <Text variant="caption" color="secondary">
+                      {isCreditSale
+                        ? `Paiement — ${methodLabel(p.method)}`
+                        : realPayments.length > 1 ? `Combien le client a payé — ${methodLabel(p.method)}` : 'Combien le client a payé'}
+                    </Text>
+                    <TextInput
+                      style={styles.textInput}
+                      value={editPayments[p.id]?.amountStr ?? ''}
+                      onChangeText={v => setEditPayments(prev => ({ ...prev, [p.id]: { ...prev[p.id], amountStr: formatAmountInput(v, currency) } }))}
+                      keyboardType="numeric"
+                      placeholderTextColor={palette.textDisabled}
+                    />
+                  </View>
+                ))}
+
+                <View style={{ gap: spacing[1] }}>
+                  <Text variant="caption" color="secondary">Motif (optionnel)</Text>
+                  <TextInput
+                    style={styles.textInput}
+                    value={editReason}
+                    onChangeText={setEditReason}
+                    placeholder="Ex. : prix mal saisi"
+                    placeholderTextColor={palette.textDisabled}
+                    multiline
+                  />
+                </View>
+
+                <View style={{ flexDirection: 'row', gap: spacing[2] }}>
+                  <Button label="Annuler" onPress={() => setShowEditSale(false)} variant="outline" style={{ flex: 1 }} />
+                  <Button
+                    label={editSaving ? 'Modification…' : 'Modifier'}
+                    onPress={handleEditSubmit}
+                    loading={editSaving}
                     style={{ flex: 1 }}
                   />
                 </View>
@@ -801,7 +1067,7 @@ export default function VentesScreen() {
     return () => loop.stop();
   }, []);
 
-  const { sales, loading, saving, error, offline, offlineSince, fetchSales, loadDetail, recordPayment, cancelSale, updateSaleClient } = useVentesStore();
+  const { sales, loading, saving, error, offline, offlineSince, fetchSales, loadDetail, recordPayment, cancelSale, updateSaleClient, editSale } = useVentesStore();
   const [selected, setSelected] = useState<Vente | null>(null);
   const [filter, setFilter] = useState<'all' | 'paye' | 'credit' | 'annule'>('all');
   const [showAll, setShowAll] = useState(false);
@@ -963,6 +1229,11 @@ export default function VentesScreen() {
     if (ok) setSelected(null);
   };
 
+  const handleEditSale: DetailModalProps['onEdit'] = async (params) => {
+    if (!selected) return { ok: false, error: 'Vente introuvable' };
+    return editSale({ ...params, saleId: selected.id, businessId });
+  };
+
   const summaryLine = useMemo(
     () => buildSummaryLine(sales, filtered, filter, currency),
     [sales, filtered, filter, currency],
@@ -1096,11 +1367,14 @@ export default function VentesScreen() {
                     </Text>
                   </View>
                   <Text variant="caption" color="secondary">
-                    {isCredit
-                      ? `Crédit · sur ${fmt(sale.total_amount - (sale.discount_amount ?? 0), currency)}`
-                      : ds === 'annule'
-                      ? 'Annulé'
-                      : (sale.discount_amount ?? 0) > 0 ? 'Payé · rabais' : 'Payé'}
+                    {[
+                      isCredit
+                        ? `Crédit · sur ${fmt(sale.total_amount - (sale.discount_amount ?? 0), currency)}`
+                        : ds === 'annule'
+                        ? 'Annulé'
+                        : (sale.discount_amount ?? 0) > 0 ? 'Payé · rabais' : 'Payé',
+                      sale.edit_count > 0 ? 'modifiée' : null,
+                    ].filter(Boolean).join(' · ')}
                   </Text>
                 </View>
               </Pressable>
@@ -1121,6 +1395,7 @@ export default function VentesScreen() {
           onRecordPayment={handleRecordPayment}
           onCancel={handleCancel}
           onUpdateClient={handleUpdateClient}
+          onEdit={handleEditSale}
           saving={saving}
         />
       )}
@@ -1213,6 +1488,7 @@ function makeStyles(p: Palette) {
   },
   bannerGreen: { backgroundColor: p.success + '20', borderWidth: 1, borderColor: p.success + '40' },
   bannerRed: { backgroundColor: p.danger + '15', borderWidth: 1, borderColor: p.danger + '40' },
+  bannerAmber: { backgroundColor: p.warning + '15', borderWidth: 1, borderColor: p.warning + '40' },
 
   heroCredit: {
     alignItems: 'center', gap: spacing[1], paddingVertical: spacing[3],
@@ -1228,6 +1504,7 @@ function makeStyles(p: Palette) {
 
   row: { flexDirection: 'row', alignItems: 'center', justifyContent: 'space-between' },
   lineRow: { flexDirection: 'row', alignItems: 'center', gap: spacing[3] },
+  strikeThrough: { textDecorationLine: 'line-through' },
   divider: { height: 1, backgroundColor: p.border, marginVertical: spacing[1] },
   cardSection: { padding: spacing[4] },
   cardSectionBorder: { borderTopWidth: 1, borderTopColor: p.border },

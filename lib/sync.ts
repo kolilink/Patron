@@ -1,6 +1,6 @@
 import { supabase } from '@/lib/supabase';
 import { getPendingOps, deleteQueueItem, markAttemptFailed } from '@/lib/db';
-import { notifyEvent } from '@/src/utils/notifications';
+import { notifyEvent, resolveSellerDisplayName } from '@/src/utils/notifications';
 import { formatAmount } from '@/src/utils/format';
 
 export type SyncResult = {
@@ -90,16 +90,12 @@ async function notifyQueuedSaleSynced(payload: Record<string, unknown>): Promise
     // list price instead of what the customer was actually charged.
     const totalCents = ((payload.p_total_amount as number) ?? 0) - ((payload.p_discount_amount as number) ?? 0);
 
-    const [{ data: biz }, { data: membership }, { data: profile }] = await Promise.all([
+    const [{ data: biz }, sellerName] = await Promise.all([
       supabase.from('businesses').select('currency').eq('id', businessId).maybeSingle(),
-      supabase.from('memberships').select('display_name').eq('business_id', businessId).eq('user_id', sellerId).maybeSingle(),
-      supabase.from('profiles').select('name').eq('id', sellerId).maybeSingle(),
+      resolveSellerDisplayName(businessId, sellerId),
     ]);
 
     const currency = (biz as { currency: string } | null)?.currency ?? 'GNF';
-    const sellerName = (membership as { display_name: string | null } | null)?.display_name
-      || (profile as { name: string | null } | null)?.name
-      || 'Vendeur';
 
     notifyEvent({
       businessId,

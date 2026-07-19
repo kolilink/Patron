@@ -26,7 +26,7 @@ import type { Role } from '@/src/types';
 // component with its own AppState listener; folded into the existing
 // foreground-sync listener below so backgrounding doesn't also trigger a
 // pointless realtime reconnect + drainQueue() right before the redirect.
-const BACKGROUND_MS = 3 * 60_000;
+const BACKGROUND_MS = 5 * 60_000;
 
 function SyncBanner() {
   const { palette } = useTheme();

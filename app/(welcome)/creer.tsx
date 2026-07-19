@@ -1,7 +1,6 @@
 import { useEffect, useMemo, useRef, useState } from 'react';
 import {
   KeyboardAvoidingView,
-  Linking,
   Platform,
   ScrollView,
   StyleSheet,
@@ -20,8 +19,6 @@ import { useAuthStore } from '@/stores/auth';
 import { useCountdown } from '@/src/hooks/useCountdown';
 import { formatCountdown } from '@/src/utils/format';
 import { inferCurrency } from '@/src/constants/currency';
-
-const SUPPORT_WA_URL = `https://wa.me/16094454809?text=${encodeURIComponent("Bonjour ! J'ai une question sur Patron 🙂")}`;
 
 const OTP_VALIDITY_SECONDS = 600;
 const RESEND_COOLDOWN_SECONDS = 60;
@@ -102,7 +99,7 @@ export default function CreerScreen() {
   const SUBS: Record<Step, string> = {
     phone: 'Entrez votre numéro, on vous enverra un code',
     otp: otpValidity.secondsLeft > 0
-      ? `Votre code Patron a été envoyé par WhatsApp. Valable encore pour ${formatCountdown(otpValidity.secondsLeft)}`
+      ? 'Votre code a été envoyé par WhatsApp.'
       : 'Le code a expiré. Demandez-en un nouveau ci-dessous',
     details: 'Pour commencer donnez un nom à votre commerce  :)',
   };
@@ -182,11 +179,6 @@ export default function CreerScreen() {
                     setResetKey(k => k + 1);
                     verificationIdRef.current = ''; phoneRef.current = '';
                   }}
-                />
-                <Button
-                  label="Besoin d'aide ? Contactez le support"
-                  variant="ghost"
-                  onPress={() => Linking.openURL(SUPPORT_WA_URL)}
                 />
               </View>
             )}

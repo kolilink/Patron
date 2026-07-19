@@ -23,6 +23,25 @@ export function notifyEvent(params: NotifyEventParams): void {
   });
 }
 
+// Seller display-name resolution for the sale_completed notification body —
+// mirrors stores/ventes.ts's resolution order (membership display_name
+// override, set by a manager for a local/nickname, then profile.name, then
+// a flat fallback) so the online submit path and the offline-queue replay
+// path (lib/sync.ts) never disagree on what name a seller's sale shows.
+export async function resolveSellerDisplayName(businessId: string, sellerId: string): Promise<string> {
+  try {
+    const [{ data: membership }, { data: profile }] = await Promise.all([
+      supabase.from('memberships').select('display_name').eq('business_id', businessId).eq('user_id', sellerId).maybeSingle(),
+      supabase.from('profiles').select('name').eq('id', sellerId).maybeSingle(),
+    ]);
+    return (membership as { display_name: string | null } | null)?.display_name
+      || (profile as { name: string | null } | null)?.name
+      || 'Vendeur';
+  } catch {
+    return 'Vendeur';
+  }
+}
+
 export async function registerDeviceToken(
   token: string | null,
   platform: 'ios' | 'android',

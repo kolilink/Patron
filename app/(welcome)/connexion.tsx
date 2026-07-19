@@ -1,7 +1,6 @@
 import { useEffect, useMemo, useRef, useState } from 'react';
 import {
   KeyboardAvoidingView,
-  Linking,
   Platform,
   StyleSheet,
   View,
@@ -152,7 +151,7 @@ export default function ConnexionScreen() {
               {step === 'phone'
                 ? 'Entrez votre numéro, on vous enverra un code'
                 : otpValidity.secondsLeft > 0
-                  ? `Votre code Patron a été envoyé par WhatsApp. Valable encore pour ${formatCountdown(otpValidity.secondsLeft)}`
+                  ? 'Votre code a été envoyé par WhatsApp.'
                   : 'Le code a expiré. Demandez-en un nouveau ci-dessous'}
             </Text>
           </View>
@@ -215,11 +214,6 @@ export default function ConnexionScreen() {
                 label="Changer de numéro"
                 variant="ghost"
                 onPress={handleRetour}
-              />
-              <Button
-                label="Besoin d'aide ? Contactez le support"
-                variant="ghost"
-                onPress={() => Linking.openURL('https://wa.me/16094454809')}
               />
             </View>
           )}

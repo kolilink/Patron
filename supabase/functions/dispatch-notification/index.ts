@@ -12,6 +12,7 @@ const EXPO_PUSH_URL = 'https://exp.host/--/api/v2/push/send';
 const ROUTE_MAP: Record<string, string> = {
   sale_completed:    '/(app)/ventes',
   sale_cancelled:    '/(app)/ventes',
+  sale_edited:       '/(app)/ventes',
   credit_paid:       '/(app)/ventes',
   expense_submitted: '/(app)/depenses',
   expense_approved:  '/(app)/depenses',
@@ -38,6 +39,7 @@ const ROUTE_MAP: Record<string, string> = {
 const SUBTITLE_MAP: Record<string, string | null> = {
   sale_completed:    null, // body already says "a vendu" — a "Vente" subtitle was redundant
   sale_cancelled:    'Vente annulée',
+  sale_edited:       'Vente modifiée',
   credit_paid:       'Crédit soldé',
   expense_submitted: 'Dépense en attente',
   expense_approved:  'Dépense validée',
@@ -64,6 +66,9 @@ function buildBody(eventType: string, p: Record<string, string | number>): strin
     // Subtitle carries "Vente annulée" — body is: amount and reason if any
     case 'sale_cancelled':
       return `${p.amount}${p.reason ? ` — ${p.reason}` : ''}`;
+    // Subtitle carries "Vente modifiée" — body: who corrected it and the new total
+    case 'sale_edited':
+      return `${p.editor} · ${p.amount}`;
     // Subtitle carries "Crédit soldé" — body: client and amount
     case 'credit_paid':
       return `${p.customer} — ${p.amount}`;
@@ -136,6 +141,7 @@ const TIME_SENSITIVE_EVENTS = new Set([
   ...URGENT_EVENTS,
   'expense_approved',
   'expense_rejected',
+  'sale_edited',
 ]);
 
 // ─── iOS notification action categories ─────────────────────────────────────

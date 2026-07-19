@@ -11,7 +11,7 @@ import { useProductStore } from '@/stores/products';
 import { trackEvent } from '@/lib/analytics';
 import { haptics } from '@/lib/haptics';
 import { useToastStore } from '@/stores/toast';
-import { notifyEvent } from '@/src/utils/notifications';
+import { notifyEvent, resolveSellerDisplayName } from '@/src/utils/notifications';
 import { formatAmount } from '@/src/utils/format';
 import type { PaymentMethod, Product, ProductVariant } from '@/src/types';
 
@@ -272,21 +272,25 @@ export const useSalesStore = create<SalesStore>((set, get) => ({
       const { error: rpcErr } = await withTimeout(supabase.rpc('submit_sale', rpcPayload));
       if (rpcErr) throw rpcErr;
 
-      // Notify managers/admins of the completed sale (online path only)
+      // Notify managers/admins of the completed sale (online path only).
+      // Seller name is resolved the same way as ventes.ts's history list
+      // (membership display_name override, then profile.name) — not read off
+      // the session's user.name directly — so a manager-set local/nickname
+      // shows up here too, not just a literal "Vendeur" fallback.
       const _notifSession = useAuthStore.getState().session;
       if (_notifSession?.activeBusiness && !_notifSession.isDemoMode) {
-        notifyEvent({
-          businessId,
-          eventType: 'sale_completed',
-          payload: {
-            seller: _notifSession.user.name || 'Vendeur',
-            desc: describeSaleForNotification(cartSnapshot),
-            // Net of discount — totalAmount alone is the catalog total (see
-            // "discount_amount convention" in CLAUDE.md), which read as the
-            // product's list price instead of what the customer was actually charged.
-            amount: formatAmount(totalAmount - discount, _notifSession.activeBusiness.currency),
-          },
-          targetRoles: ['administrateur', 'manager'],
+        const _saleDesc = describeSaleForNotification(cartSnapshot);
+        // Net of discount — totalAmount alone is the catalog total (see
+        // "discount_amount convention" in CLAUDE.md), which read as the
+        // product's list price instead of what the customer was actually charged.
+        const _saleAmount = formatAmount(totalAmount - discount, _notifSession.activeBusiness.currency);
+        resolveSellerDisplayName(businessId, userId).then(seller => {
+          notifyEvent({
+            businessId,
+            eventType: 'sale_completed',
+            payload: { seller, desc: _saleDesc, amount: _saleAmount },
+            targetRoles: ['administrateur', 'manager'],
+          });
         });
       }
 
@@ -388,6 +392,8 @@ export const useSalesStore = create<SalesStore>((set, get) => ({
             created_at: now,
             cancelled_at: null,
             cancellation_reason: null,
+            edit_count: 0,
+            last_edited_at: null,
             profit: null,
             lines: cartSnapshot.map(l => ({
               id: generateId(),
