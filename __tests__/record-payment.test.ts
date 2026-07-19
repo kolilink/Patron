@@ -46,6 +46,8 @@ const creditSale: Vente = {
   created_at: '2026-06-20T00:00:00Z',
   cancelled_at: null,
   cancellation_reason: null,
+  edit_count: 0,
+  last_edited_at: null,
   profit: null,
   amount_paid: 0,
 };

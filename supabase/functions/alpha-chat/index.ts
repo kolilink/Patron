@@ -48,18 +48,26 @@ import { createClient } from 'https://esm.sh/@supabase/supabase-js@2';
 // code, not by RLS. Tool-calling is bounded to MAX_TOOL_ROUNDS to guarantee
 // termination and cap worst-case cost; the final round is sent WITHOUT the
 // tools param so the model is forced to answer in plain text rather than
-// attempt another call. Assumes Groq's llama-3.3-70b-versatile actually
-// supports OpenAI-compatible tool-calling — if that assumption is ever wrong,
-// the existing Groq→OpenAI fallback below degrades safely (a rejected
-// `tools` param just throws and falls through to OpenAI), at worse cost, not
-// incorrect behavior.
+// attempt another call. Uses Groq's openai/gpt-oss-20b (switched from
+// llama-3.3-70b-versatile 2026-07-16) — an OpenAI open-weight model Groq
+// hosts on the same OpenAI-compatible /chat/completions endpoint, so this
+// was a same-shape model swap, not a new integration: same base URL, same
+// GROQ_API_KEY, same request/response shape. gpt-oss-20b is explicitly
+// positioned by Groq for agentic/tool-use workloads, unlike llama-3.3-70b.
+// One real difference: gpt-oss-20b is a reasoning model, so Groq's response
+// also includes a `message.reasoning` field by default alongside the usual
+// `message.content` — harmless here since callChatCompletions only reads
+// `content`, but worth knowing if this response is ever logged/inspected
+// raw. If the tools param is ever rejected for any reason, the existing
+// Groq→OpenAI fallback below still degrades safely (throws and falls
+// through to OpenAI), at worse cost, not incorrect behavior.
 
 const corsHeaders = {
   'Access-Control-Allow-Origin': '*',
   'Access-Control-Allow-Headers': 'authorization, x-client-info, apikey, content-type',
 };
 
-const GROQ_MODEL = 'llama-3.3-70b-versatile';
+const GROQ_MODEL = 'openai/gpt-oss-20b';
 const OPENAI_MODEL = 'gpt-4o-mini';
 const FALLBACK_MESSAGE = "Désolé, je n'ai pas pu répondre — réessayez dans un instant.";
 const PERIOD_DAYS = 30;
@@ -76,6 +84,35 @@ const LIFETIME_PERIOD_DAYS = 3650;
 // worst-case latency and worst-case token cost — without it, a model that
 // keeps deciding "let me check one more thing" could loop indefinitely.
 const MAX_TOOL_ROUNDS = 3;
+// Was 400 — too tight for what the system prompt actually requires per
+// reply (bolded key figures + trend comparison + a conditional "Action à
+// faire" line, in French, which tokenizes worse than English), and nothing
+// checked whether the model actually finished. That combination is what
+// produced real mid-word cutoffs in production ("...ce qui correspond à
+// environ **1000 maill"): the API returns finish_reason: 'length' when a
+// reply is cut short, but the code just shipped message.content as-is.
+//
+// This isn't a cost control (see CLAUDE.md's Alpha "Billing" note — even a
+// paid user maxing out their daily quota all month costs ~$0.10-0.15) and
+// it isn't meant to shape reply length either — that's the system prompt's
+// job ("phrases courtes", one action line, max 3 bold figures). Omitting
+// max_tokens entirely isn't "uncapped" — the API just falls back to its own
+// default ceiling (effectively the rest of the context window), which is
+// far larger and not tuned to this app. The only real reason to set an
+// explicit number here is as a backstop against a genuine malfunction (a
+// repetition/degeneration loop — rare but real, and this function
+// auto-falls-back between two different models/providers, which doubles
+// the surface for it): on a synchronous, non-streaming mobile screen over
+// the low-bandwidth connections this app targets, a broken generation
+// should fail in a few seconds, not run until it fills the context window.
+// 1000 is picked to sit comfortably above any legitimate reply.
+const MAX_REPLY_TOKENS = 1000;
+// If a reply still hits the token cap, ask the model to continue exactly
+// once more rather than truncating — bounded to 1 so a pathological reply
+// can't multiply latency/cost indefinitely.
+const MAX_CONTINUATIONS = 1;
+const CONTINUE_INSTRUCTION =
+  "Continue ta réponse précédente exactement où tu t'es arrêtée, sans rien répéter, sans redémarrer la phrase ou le mot en cours.";
 // ventes_sur_periode is clamped to this many days so a merchant asking for
 // "since the beginning" via the date-range tool can't return a payload sized
 // like the very per-transaction dump depuis_le_debut was designed to avoid.
@@ -530,28 +567,30 @@ async function callChatCompletions(
 ): Promise<string> {
   const messages: ChatTurn[] = [{ role: 'system', content: systemPrompt }, ...turns];
 
+  const postCompletion = (allowTools: boolean) => fetch(baseUrl, {
+    method: 'POST',
+    headers: {
+      'Content-Type': 'application/json',
+      Authorization: `Bearer ${apiKey}`,
+    },
+    body: JSON.stringify({
+      model,
+      messages,
+      temperature: 0.6,
+      max_tokens: MAX_REPLY_TOKENS,
+      ...(allowTools ? { tools: TOOLS, tool_choice: 'auto' } : {}),
+    }),
+  });
+
   for (let round = 0; round <= MAX_TOOL_ROUNDS; round++) {
-    const allowTools = toolCtx && round < MAX_TOOL_ROUNDS;
-    const resp = await fetch(baseUrl, {
-      method: 'POST',
-      headers: {
-        'Content-Type': 'application/json',
-        Authorization: `Bearer ${apiKey}`,
-      },
-      body: JSON.stringify({
-        model,
-        messages,
-        temperature: 0.6,
-        max_tokens: 400,
-        ...(allowTools ? { tools: TOOLS, tool_choice: 'auto' } : {}),
-      }),
-    });
+    const allowTools = Boolean(toolCtx && round < MAX_TOOL_ROUNDS);
+    const resp = await postCompletion(allowTools);
     if (!resp.ok) {
       const errText = await resp.text().catch(() => '');
       throw new Error(`${model} error ${resp.status}: ${errText.slice(0, 300)}`);
     }
     const json = await resp.json() as {
-      choices?: { message?: { content?: string; tool_calls?: ChatTurn['tool_calls'] } }[];
+      choices?: { message?: { content?: string; tool_calls?: ChatTurn['tool_calls'] }; finish_reason?: string }[];
     };
     const message = json.choices?.[0]?.message;
     const toolCalls = message?.tool_calls;
@@ -569,9 +608,29 @@ async function callChatCompletions(
       continue;
     }
 
-    const content = message?.content?.trim();
-    if (!content) throw new Error(`${model} returned no content`);
-    return content;
+    // Final text answer for this round. If the model hit MAX_REPLY_TOKENS
+    // mid-sentence (finish_reason === 'length'), feed back the partial
+    // content as an assistant turn and ask it to keep going, up to
+    // MAX_CONTINUATIONS times, instead of returning a severed sentence.
+    let content = message?.content ?? '';
+    if (!content.trim()) throw new Error(`${model} returned no content`);
+    let finishReason = json.choices?.[0]?.finish_reason;
+
+    for (let cont = 0; finishReason === 'length' && cont < MAX_CONTINUATIONS; cont++) {
+      messages.push({ role: 'assistant', content });
+      messages.push({ role: 'user', content: CONTINUE_INSTRUCTION });
+      const contResp = await postCompletion(false);
+      if (!contResp.ok) break; // return what we already have rather than fail the whole reply
+      const contJson = await contResp.json() as {
+        choices?: { message?: { content?: string }; finish_reason?: string }[];
+      };
+      const piece = contJson.choices?.[0]?.message?.content;
+      if (!piece) break;
+      content += piece;
+      finishReason = contJson.choices?.[0]?.finish_reason;
+    }
+
+    return content.trim();
   }
   throw new Error(`${model}: exceeded tool-call rounds without a final answer`);
 }

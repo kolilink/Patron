@@ -62,6 +62,22 @@ export default function VerrouilleScreen() {
     // both platforms) would then delay the prompt indefinitely with no
     // visible sign anything is wrong — race it against a flat timeout so the
     // attempt always fires within ~600ms either way.
+    //
+    // Android needs a longer ceiling than iOS: on the background-return path
+    // (app/(app)/_layout.tsx's AppState listener calling lock() the instant
+    // AppState reports 'active'), Android's own window-focus restoration
+    // after returning from background runs on a native timeline separate
+    // from this InteractionManager check — on a low-end/low-memory device
+    // it can still be settling once the 600ms fallback used to fire,
+    // and BiometricPrompt auto-cancels (surfaces as error: 'user_cancel',
+    // indistinguishable from a real dismissal) if invoked before the window
+    // actually has focus. Confirmed via a production Sentry event
+    // (Samsung Galaxy A14 5G, Android 15, "device.class: low", 985MB free)
+    // where the user reported the fingerprint itself succeeded yet still
+    // landed back on this retry screen. This is a probabilistic OS race,
+    // not something a fixed delay eliminates outright — just widens the
+    // margin. iOS hasn't shown this failure mode, so it keeps the tighter
+    // bound instead of slowing every unlock down for everyone.
     let fired = false;
     const fire = () => {
       if (fired) return;
@@ -69,7 +85,7 @@ export default function VerrouilleScreen() {
       attemptBiometric();
     };
     const task = InteractionManager.runAfterInteractions(fire);
-    const timeout = setTimeout(fire, 600);
+    const timeout = setTimeout(fire, Platform.OS === 'android' ? 1200 : 600);
     return () => {
       task.cancel();
       clearTimeout(timeout);
