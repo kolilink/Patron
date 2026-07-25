@@ -25,9 +25,12 @@ export function notifyEvent(params: NotifyEventParams): void {
 
 // Seller display-name resolution for the sale_completed notification body —
 // mirrors stores/ventes.ts's resolution order (membership display_name
-// override, set by a manager for a local/nickname, then profile.name, then
-// a flat fallback) so the online submit path and the offline-queue replay
-// path (lib/sync.ts) never disagree on what name a seller's sale shows.
+// override, set by a manager for a local/nickname, then profile.name) so the
+// online submit path and the offline-queue replay path (lib/sync.ts) never
+// disagree on what name a seller's sale shows. Returns '' when the seller has
+// no name at all — the caller passes that through so the edge function can
+// reframe the sentence product-first ("2 Coca ont été vendus pour …") instead
+// of printing a generic "Vendeur" placeholder.
 export async function resolveSellerDisplayName(businessId: string, sellerId: string): Promise<string> {
   try {
     const [{ data: membership }, { data: profile }] = await Promise.all([
@@ -36,9 +39,9 @@ export async function resolveSellerDisplayName(businessId: string, sellerId: str
     ]);
     return (membership as { display_name: string | null } | null)?.display_name
       || (profile as { name: string | null } | null)?.name
-      || 'Vendeur';
+      || '';
   } catch {
-    return 'Vendeur';
+    return '';
   }
 }
 

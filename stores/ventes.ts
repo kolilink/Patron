@@ -580,7 +580,12 @@ export const useVentesStore = create<VentesStore>((set, get) => ({
         notifyEvent({
           businessId,
           eventType: 'sale_cancelled',
-          payload: { amount: formatAmount(_cancelledSale.total_amount, currency), reason },
+          // Net of discount, matching what the sale_completed notification
+          // showed for this same sale — total_amount alone is the catalog
+          // gross, so a discounted sale sold for e.g. 45 000 was reading back
+          // as "annulée · 50 000" here. Same convention as the owed/net figure
+          // used everywhere else (total_amount − discount_amount).
+          payload: { amount: formatAmount(_cancelledSale.total_amount - (_cancelledSale.discount_amount ?? 0), currency), reason },
           targetUserIds: targetUserIds.length > 0 ? targetUserIds : undefined,
           targetRoles: ['administrateur'],
         });
@@ -694,7 +699,9 @@ export const useVentesStore = create<VentesStore>((set, get) => ({
       notifyEvent({
         businessId,
         eventType: 'sale_edited',
-        payload: { editor: editorName, amount: formatAmount(updated.total_amount / 100, currency) },
+        // Net of discount (RPC returns both in cents), matching the net figure
+        // sale_completed showed — not the recomputed catalog gross.
+        payload: { editor: editorName, amount: formatAmount((updated.total_amount - updated.discount_amount) / 100, currency) },
         targetRoles: ['administrateur', 'manager'],
         excludeUserId: useAuthStore.getState().session?.user?.id,
       });

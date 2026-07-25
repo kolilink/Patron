@@ -280,6 +280,7 @@ export const useSalesStore = create<SalesStore>((set, get) => ({
       const _notifSession = useAuthStore.getState().session;
       if (_notifSession?.activeBusiness && !_notifSession.isDemoMode) {
         const _saleDesc = describeSaleForNotification(cartSnapshot);
+        const _saleQty = cartSnapshot.reduce((s, l) => s + l.qty, 0);
         // Net of discount — totalAmount alone is the catalog total (see
         // "discount_amount convention" in CLAUDE.md), which read as the
         // product's list price instead of what the customer was actually charged.
@@ -288,8 +289,11 @@ export const useSalesStore = create<SalesStore>((set, get) => ({
           notifyEvent({
             businessId,
             eventType: 'sale_completed',
-            payload: { seller, desc: _saleDesc, amount: _saleAmount },
-            targetRoles: ['administrateur', 'manager'],
+            // qty drives singular/plural agreement in the no-seller-name body.
+            payload: { seller, desc: _saleDesc, amount: _saleAmount, qty: _saleQty },
+            // Investisseurs are looped in on every sale too — keeps them
+            // passively in the know without the admin having to report out.
+            targetRoles: ['administrateur', 'manager', 'investisseur'],
           });
         });
       }

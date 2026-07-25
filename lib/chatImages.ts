@@ -12,8 +12,10 @@ export async function uploadMessageImage(params: {
   sourceWidth?: number;
   sourceHeight?: number;
   storagePath: string; // e.g. `chat/${roomId}/${messageId}.jpg`
+  bucket?: string;      // defaults to the chat bucket; transaction proofs pass their own
+  upsert?: boolean;     // proofs upsert so a retry after a partial failure isn't blocked
 }): Promise<{ url: string; width: number; height: number }> {
-  const { fileUri, sourceWidth, sourceHeight, storagePath } = params;
+  const { fileUri, sourceWidth, sourceHeight, storagePath, bucket = 'message-images', upsert = false } = params;
 
   // Resize only if larger than MAX_DIMENSION on the longest edge — never
   // upscale a small image. West-Africa-low-bandwidth is the whole reason
@@ -39,13 +41,13 @@ export async function uploadMessageImage(params: {
   for (let i = 0; i < binary.length; i++) bytes[i] = binary.charCodeAt(i);
 
   const { error: uploadErr } = await supabase.storage
-    .from('message-images')
-    .upload(storagePath, bytes, { contentType: 'image/jpeg', upsert: false });
+    .from(bucket)
+    .upload(storagePath, bytes, { contentType: 'image/jpeg', upsert });
   if (uploadErr) throw uploadErr;
 
   // Public bucket — permanent URL, no expiry, no tokens (same posture as
-  // voice-messages; access is gated at the message-row level by RLS).
-  const { data: urlData } = supabase.storage.from('message-images').getPublicUrl(storagePath);
+  // voice-messages; access is gated at the row level by RLS).
+  const { data: urlData } = supabase.storage.from(bucket).getPublicUrl(storagePath);
 
   return { url: urlData.publicUrl, width: saved.width, height: saved.height };
 }

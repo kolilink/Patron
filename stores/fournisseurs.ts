@@ -46,6 +46,9 @@ export interface CommandeAchat {
   ordered_at: string;
   received_at: string | null;
   total_cost: number;
+  proof_image_url?: string | null;
+  proof_image_width?: number | null;
+  proof_image_height?: number | null;
   lines?: CommandeLigne[];
 }
 

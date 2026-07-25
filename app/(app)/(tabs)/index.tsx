@@ -737,8 +737,9 @@ export default function AccueilScreen() {
               </View>
             </Card>
 
-            {/* ── Zone 2: Attention — conditional ── */}
-            {showAttentionCards ? (
+            {/* ── Zone 2: Attention — conditional. Nothing renders when there's
+                nothing that needs attention (no "all good" placeholder). ── */}
+            {showAttentionCards && (
               <View style={styles.attentionZone}>
                 {(kpis?.credit_count ?? 0) > 0 && (
                   <KpiCard
@@ -758,10 +759,6 @@ export default function AccueilScreen() {
                   />
                 )}
               </View>
-            ) : (
-              <Text variant="caption" color="secondary" style={styles.allGood}>
-                Tout est en ordre ✓
-              </Text>
             )}
 
             {/* ── Best sellers ── */}
@@ -985,7 +982,6 @@ function makeStyles(p: Palette) {
     },
 
     attentionZone: { gap: spacing[3] },
-    allGood: { textAlign: 'center', paddingVertical: spacing[3] },
     monthLine: { textAlign: 'center', paddingVertical: spacing[2] },
 
     sheetBackdrop: {

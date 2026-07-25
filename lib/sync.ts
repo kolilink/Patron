@@ -96,6 +96,7 @@ async function notifyQueuedSaleSynced(payload: Record<string, unknown>): Promise
     ]);
 
     const currency = (biz as { currency: string } | null)?.currency ?? 'GNF';
+    const totalQty = cart.reduce((s, l) => s + l.qty, 0);
 
     notifyEvent({
       businessId,
@@ -104,8 +105,11 @@ async function notifyQueuedSaleSynced(payload: Record<string, unknown>): Promise
         seller: sellerName,
         desc: describeQueuedCart(cart),
         amount: formatAmount(totalCents / 100, currency),
+        // qty drives singular/plural agreement in the no-seller-name body.
+        qty: totalQty,
       },
-      targetRoles: ['administrateur', 'manager'],
+      // Investisseurs are looped in on every sale too (mirrors the online path).
+      targetRoles: ['administrateur', 'manager', 'investisseur'],
     });
   } catch {
     // Best-effort — never let a notification lookup failure affect sync.

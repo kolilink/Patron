@@ -641,7 +641,7 @@ function CommandeDetail({ commande, currency, onClose, onRecevoir, saving }: {
                 ))}
                 {shippingHistory.length > 1 && (
                   <View style={[styles.dr, { paddingTop: spacing[1], borderTopWidth: 1, borderTopColor: palette.border }]}>
-                    <Text variant="caption" color="secondary">Total fret</Text>
+                    <Text variant="caption" color="secondary">Total transport</Text>
                     <Text variant="label" style={{ color: palette.warning }}>
                       {fmt(shippingHistory.reduce((s, e) => s + e.amount, 0), currency)}
                     </Text>

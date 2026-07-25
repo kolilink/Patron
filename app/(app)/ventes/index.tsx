@@ -357,6 +357,7 @@ function DetailModal({ sale, currency, businessName, singleVendor, role, onClose
   const styles = useMemo(() => makeStyles(palette), [palette]);
   const businessPhone = useAuthStore(s => s.session?.activeBusiness?.phone ?? null);
   const [showPaymentSheet, setShowPaymentSheet] = useState(false);
+  const [showReceipt, setShowReceipt] = useState(false);
   const [showCancelForm, setShowCancelForm] = useState(false);
   const [showEditClient, setShowEditClient] = useState(false);
   const [editedClient, setEditedClient] = useState('');
@@ -378,7 +379,11 @@ function DetailModal({ sale, currency, businessName, singleVendor, role, onClose
   const handleShareReceipt = async () => {
     if (!sale || !receiptRef.current) return;
     try {
+      // Capture while the receipt sheet is still mounted (in compositor bounds),
+      // then close it and let the sheet animation finish before the share dialog
+      // opens — see the SaleReceiptView note in CLAUDE.md.
       const uri = await captureRef(receiptRef, { format: 'png', quality: 1 });
+      setShowReceipt(false);
       await new Promise<void>(r => setTimeout(r, 350));
       await Sharing.shareAsync(uri, { mimeType: 'image/png', UTI: 'public.png', dialogTitle: 'Partager le reçu' });
     } catch {
@@ -414,6 +419,7 @@ function DetailModal({ sale, currency, businessName, singleVendor, role, onClose
       setShowEditClient(false);
       setCancelReason('');
       setShowPaymentSheet(false);
+      setShowReceipt(false);
       setShowEditSale(false);
       setShowHistory(false);
       setEditReason('');
@@ -705,7 +711,7 @@ function DetailModal({ sale, currency, businessName, singleVendor, role, onClose
           )}
 
           {!sale.lines ? <DetailSkeleton /> : (
-          <View style={displayState === 'annule' ? { opacity: 0.5 } : undefined}>
+          <View style={[{ gap: spacing[2] }, displayState === 'annule' && { opacity: 0.5 }]}>
             {/* Single unified card — articles, info, payments, profit */}
             <Card style={{ gap: 0, overflow: 'hidden', padding: 0 }}>
               {/* Articles */}
@@ -919,15 +925,14 @@ function DetailModal({ sale, currency, businessName, singleVendor, role, onClose
           </View>
           )}
 
-          {/* Share receipt — only when lines are loaded */}
+          {/* Receipt lives behind this button — tapping it opens the preview
+              sheet the merchant shares from, instead of duplicating the sale
+              inline on this scroll. */}
           {receiptData && (
             <View style={styles.receiptSection}>
               <View style={styles.receiptDivider} />
-              <View ref={receiptRef} collapsable={false}>
-                <SaleReceiptView data={receiptData} />
-              </View>
               <View style={{ paddingHorizontal: spacing[5] }}>
-                <Button label="Partager le reçu" onPress={handleShareReceipt} fullWidth variant="outline" />
+                <Button label="Partager le reçu" onPress={() => setShowReceipt(true)} fullWidth variant="outline" />
               </View>
             </View>
           )}
@@ -941,6 +946,34 @@ function DetailModal({ sale, currency, businessName, singleVendor, role, onClose
           onConfirm={handlePaymentSubmit}
           saving={saving}
         />
+
+        {/* Receipt preview + share */}
+        <Modal
+          visible={showReceipt}
+          animationType="slide"
+          presentationStyle="pageSheet"
+          onRequestClose={() => setShowReceipt(false)}
+        >
+          <SafeAreaView style={styles.modalSafe} edges={['bottom']}>
+            <View style={styles.modalHeader}>
+              <Pressable onPress={() => setShowReceipt(false)}>
+                <Text variant="body" color="secondary">Fermer</Text>
+              </Pressable>
+              <Text variant="h4">Reçu</Text>
+              <View style={{ minWidth: 40 }} />
+            </View>
+            <ScrollView contentContainerStyle={{ paddingVertical: spacing[4] }}>
+              {receiptData && (
+                <View ref={receiptRef} collapsable={false}>
+                  <SaleReceiptView data={receiptData} />
+                </View>
+              )}
+            </ScrollView>
+            <View style={styles.sheetFooter}>
+              <Button label="Partager le reçu" onPress={handleShareReceipt} fullWidth size="lg" />
+            </View>
+          </SafeAreaView>
+        </Modal>
       </SafeAreaView>
     </Modal>
   );

@@ -60,9 +60,18 @@ const SUBTITLE_MAP: Record<string, string | null> = {
 
 function buildBody(eventType: string, p: Record<string, string | number>): string {
   switch (eventType) {
-    // Subtitle carries the "Vente" label — body is: seller a vendu {desc} pour {amount}
-    case 'sale_completed':
-      return `${p.seller} a vendu ${p.desc} pour ${p.amount}`;
+    // Subtitle carries the "Vente" label. With a resolved seller name:
+    // "{seller} a vendu {desc} pour {amount}". When the seller has no name at
+    // all (no membership display_name, no profile name), don't fall back to a
+    // generic "Vendeur" placeholder — reframe product-first: "{desc} a/ont été
+    // vendu(s) pour {amount}". qty drives the singular/plural agreement.
+    case 'sale_completed': {
+      if (p.seller) return `${p.seller} a vendu ${p.desc} pour ${p.amount}`;
+      const saleQty = Number(p.qty) || 0;
+      return saleQty > 1
+        ? `${p.desc} ont été vendus pour ${p.amount}`
+        : `${p.desc} a été vendu pour ${p.amount}`;
+    }
     // Subtitle carries "Vente annulée" — body is: amount and reason if any
     case 'sale_cancelled':
       return `${p.amount}${p.reason ? ` — ${p.reason}` : ''}`;
@@ -376,6 +385,29 @@ serve(async (req) => {
         .map(r => [r.id, r.unread_notification_count]),
     );
 
+    // Per-recipient business-name suppression. The push title is the business
+    // name — but for someone who belongs to exactly one business, repeating it
+    // on every notification is pure noise (they always know which shop it is).
+    // Suppress the title only for a recipient who is a member of *this*
+    // business and has no other membership; anyone in multiple businesses keeps
+    // it (they need the disambiguation), and a non-member recipient — the
+    // founder on a support_message, who is never a member of the merchant's
+    // business — always keeps it, since the business name is the whole point.
+    const { data: recipientMemberships } = await supabase
+      .from('memberships')
+      .select('user_id, business_id')
+      .in('user_id', recipientUserIds);
+    const bizByUser = new Map<string, Set<string>>();
+    for (const m of (recipientMemberships ?? []) as { user_id: string; business_id: string }[]) {
+      const set = bizByUser.get(m.user_id) ?? new Set<string>();
+      set.add(m.business_id);
+      bizByUser.set(m.user_id, set);
+    }
+    const shouldShowBizName = (userId: string): boolean => {
+      const set = bizByUser.get(userId);
+      return !set || set.size !== 1 || !set.has(business_id);
+    };
+
     // Build notification fields
     const body            = buildBody(event_type, payload as Record<string, string | number>);
     const subtitle        = SUBTITLE_MAP[event_type] ?? null;
@@ -393,7 +425,10 @@ serve(async (req) => {
       const chunk = tokens.slice(i, i + CHUNK);
       const messages = chunk.map(({ token: to, user_id }) => ({
         to,
-        title: bizName,                               // business name — always
+        // business name — but only when it actually disambiguates for this
+        // recipient (multi-business, or a non-member like the founder). Omitted
+        // entirely for a single-business member so the body stands on its own.
+        ...(shouldShowBizName(user_id) ? { title: bizName } : {}),
         ...(subtitle ? { subtitle } : {}),            // event category in French
         body,                                         // the core fact
         data: { route, event_type, business_id, ...payload },
