@@ -288,6 +288,7 @@ export const useSalesStore = create<SalesStore>((set, get) => ({
       const _notifSession = useAuthStore.getState().session;
       if (_notifSession?.activeBusiness && !_notifSession.isDemoMode) {
         const _saleDesc = describeSaleForNotification(cartSnapshot);
+        const _saleQty = cartSnapshot.reduce((s, l) => s + l.qty, 0);
         // Net of discount — totalAmount alone is the catalog total (see
         // "discount_amount convention" in CLAUDE.md), which read as the
         // product's list price instead of what the customer was actually charged.
@@ -298,14 +299,17 @@ export const useSalesStore = create<SalesStore>((set, get) => ({
             eventType: 'sale_completed',
             payload: {
               sale_id: newSaleId as string,
-              // seller/desc/amount kept for the notification_log audit trail —
-              // the edge function's registry strips all three before anything
+              // seller/desc/amount/qty kept for the notification_log audit trail —
+              // the edge function's registry strips all but sale_id before anything
               // reaches a device (lock-screen rule: only sale_id survives).
               seller,
               desc: _saleDesc,
               amount: _saleAmount,
+              qty: _saleQty,
             },
-            targetRoles: ['administrateur', 'manager'],
+            // Investisseurs are looped in on every sale too — keeps them
+            // passively in the know without the admin having to report out.
+            targetRoles: ['administrateur', 'manager', 'investisseur'],
           });
         });
       }

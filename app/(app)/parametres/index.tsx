@@ -3,7 +3,6 @@ import { Alert, Animated, KeyboardAvoidingView, Linking, Platform, Pressable, Sc
 import * as Clipboard from 'expo-clipboard';
 import * as Application from 'expo-application';
 import * as Updates from 'expo-updates';
-import { getCacheDiagnostics, testCacheWritePath } from '@/lib/db';
 import { Screen } from '@/src/components/ui/Screen';
 import { router } from 'expo-router';
 import { Ionicons } from '@expo/vector-icons';
@@ -48,7 +47,7 @@ const OTA_BUILD_NUMBER = 1;
 export default function ParametresScreen() {
   const { palette, colorScheme, setColorScheme } = useTheme();
   const styles = useMemo(() => makeStyles(palette), [palette]);
-  const { session, sendEmailOtp, linkRecoveryEmail, emailOtpLoading, error: authError, clearError, lock } = useAuthStore();
+  const { session, sendEmailOtp, linkRecoveryEmail, emailOtpLoading, error: authError, clearError } = useAuthStore();
   const business = session?.activeBusiness;
   const userId   = session?.user.id ?? '';
   const role     = session?.activeMembership?.role;
@@ -507,26 +506,6 @@ export default function ParametresScreen() {
             )}
           </Card>
 
-          {/* Sécurité */}
-          <Card style={styles.section}>
-            <Text variant="label" color="secondary">Sécurité</Text>
-            <Pressable
-              onPress={() => {
-                Alert.alert(
-                  'Verrouiller Patron ?',
-                  'Vous pourrez revenir avec Face ID / Touch ID, sans nouveau code WhatsApp.',
-                  [
-                    { text: 'Annuler', style: 'cancel' },
-                    { text: 'Verrouiller', onPress: () => { void lock(); } },
-                  ],
-                );
-              }}
-              style={styles.linkRow}
-            >
-              <Text variant="body">Verrouiller</Text>
-              <Text variant="caption" color="secondary">›</Text>
-            </Pressable>
-          </Card>
 
           {/* À propos */}
           <Card style={styles.section}>
@@ -539,39 +518,19 @@ export default function ParametresScreen() {
               <Text variant="body">Conditions d'utilisation</Text>
               <Text variant="caption" color="secondary">›</Text>
             </Pressable>
-            <Pressable onPress={() => Linking.openURL('https://wa.me/16094454809')} style={styles.linkRow}>
-              <Text variant="body">Contacter le support</Text>
-              <Text variant="caption" color="secondary">›</Text>
-            </Pressable>
             <View style={styles.linkRow}>
               <Text variant="body">Version</Text>
               <Text variant="caption" color="secondary" selectable>
-                {`Version ${Application.nativeApplicationVersion ?? '?'}${Updates.isEmbeddedLaunch ? '' : `.${OTA_BUILD_NUMBER}`}`}
+                {(() => {
+                  const fullVersion = Application.nativeApplicationVersion ?? '?';
+                  const parts = fullVersion.split('.');
+                  const appVersion = parts.length > 1 && parts[0].length >= 2 && parseInt(parts[0]) >= 50
+                    ? parts.slice(1).join('.')
+                    : fullVersion;
+                  return `${appVersion}${Updates.isEmbeddedLaunch ? '' : ` (${OTA_BUILD_NUMBER})`}`;
+                })()}
               </Text>
             </View>
-            <Pressable
-              style={styles.linkRow}
-              onPress={async () => {
-                const counts = await getCacheDiagnostics();
-                const lines = Object.entries(counts)
-                  .map(([table, c]) => `${table}: ${c < 0 ? 'échec' : c}`)
-                  .join('\n');
-                Alert.alert('État du cache hors ligne', lines);
-              }}
-            >
-              <Text variant="body">Diagnostic cache hors ligne</Text>
-              <Text variant="caption" color="secondary">›</Text>
-            </Pressable>
-            <Pressable
-              style={styles.linkRow}
-              onPress={async () => {
-                const result = await testCacheWritePath();
-                Alert.alert('Test du chemin d\'écriture', result);
-              }}
-            >
-              <Text variant="body">Tester écriture cache (détaillé)</Text>
-              <Text variant="caption" color="secondary">›</Text>
-            </Pressable>
           </Card>
 
           {/* Apparence */}

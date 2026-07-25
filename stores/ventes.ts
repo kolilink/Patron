@@ -411,12 +411,12 @@ export const useVentesStore = create<VentesStore>((set, get) => ({
         sales: state.sales.map(s =>
           s.id === saleId
             ? {
-                ...s,
-                amount_paid: newAmountPaid,
-                status: fullyPaid ? 'paye' : s.status,
-                paid_at: fullyPaid ? now : s.paid_at,
-                payments: s.payments ? [...s.payments, newPaymentEntry] : undefined,
-              }
+              ...s,
+              amount_paid: newAmountPaid,
+              status: fullyPaid ? 'paye' : s.status,
+              paid_at: fullyPaid ? now : s.paid_at,
+              payments: s.payments ? [...s.payments, newPaymentEntry] : undefined,
+            }
             : s,
         ),
         saving: false,
@@ -429,11 +429,11 @@ export const useVentesStore = create<VentesStore>((set, get) => ({
     // for the actual write. This is what stops the same debt being settled
     // twice by two payments that each looked valid on their own device.
     const rpcPayload = {
-      p_sale_id:     saleId,
+      p_sale_id: saleId,
       p_business_id: sale.business_id,
-      p_amount:      amountCents,
-      p_method:      method,
-      p_date:        date,
+      p_amount: amountCents,
+      p_method: method,
+      p_date: date,
     };
 
     try {
@@ -517,11 +517,11 @@ export const useVentesStore = create<VentesStore>((set, get) => ({
     // second payment that arrives after the debt is already settled finds
     // nothing left to allocate against instead of recording extra cash nowhere.
     const rpcPayload = {
-      p_business_id:   businessId,
+      p_business_id: businessId,
       p_customer_name: customerName,
-      p_amount:        Math.round(amount * 100),
-      p_method:        method,
-      p_date:          date,
+      p_amount: Math.round(amount * 100),
+      p_method: method,
+      p_date: date,
     };
     try {
       const { data: rpcData, error: rpcErr } = await supabase.rpc('record_client_payment', rpcPayload);
@@ -599,9 +599,9 @@ export const useVentesStore = create<VentesStore>((set, get) => ({
     };
     try {
       const { error } = await supabase.rpc('cancel_sale', {
-        p_sale_id:     saleId,
+        p_sale_id: saleId,
         p_business_id: businessId,
-        p_reason:      reason,
+        p_reason: reason,
       });
       if (error) throw error;
       set(state => ({
@@ -621,7 +621,11 @@ export const useVentesStore = create<VentesStore>((set, get) => ({
           // amount/reason kept here for the notification_log audit trail —
           // the edge function's registry strips both before anything reaches
           // a device (lock-screen rule: only sale_id survives into the push).
-          payload: { amount: formatAmount(_cancelledSale.total_amount, currency), reason, sale_id: saleId },
+          // Net of discount, matching what the sale_completed notification
+          // showed for this same sale — total_amount alone is the catalog
+          // gross, so a discounted sale sold for e.g. 45 000 was reading back
+          // as "annulée · 50 000" here.
+          payload: { amount: formatAmount(_cancelledSale.total_amount - (_cancelledSale.discount_amount ?? 0), currency), reason, sale_id: saleId },
           targetUserIds: targetUserIds.length > 0 ? targetUserIds : undefined,
           targetRoles: ['administrateur', 'manager'],
         });
@@ -711,17 +715,17 @@ export const useVentesStore = create<VentesStore>((set, get) => ({
       const newSales = get().sales.map(s =>
         s.id === saleId
           ? {
-              ...s,
-              total_amount: updated.total_amount / 100,
-              discount_amount: updated.discount_amount / 100,
-              edit_count: updated.edit_count,
-              last_edited_at: updated.last_edited_at,
-              last_edited_by: updated.last_edited_by,
-              last_edited_by_name: editorName,
-              customer_name: updated.customer_name,
-              client_id: updated.client_id,
-              due_date: updated.due_date,
-            }
+            ...s,
+            total_amount: updated.total_amount / 100,
+            discount_amount: updated.discount_amount / 100,
+            edit_count: updated.edit_count,
+            last_edited_at: updated.last_edited_at,
+            last_edited_by: updated.last_edited_by,
+            last_edited_by_name: editorName,
+            customer_name: updated.customer_name,
+            client_id: updated.client_id,
+            due_date: updated.due_date,
+          }
           : s,
       );
       set({ sales: newSales, saving: false });
@@ -735,7 +739,9 @@ export const useVentesStore = create<VentesStore>((set, get) => ({
       notifyEvent({
         businessId,
         eventType: 'sale_edited',
-        payload: { editor: editorName, amount: formatAmount(updated.total_amount / 100, currency) },
+        // Net of discount (RPC returns both in cents), matching the net figure
+        // sale_completed showed — not the recomputed catalog gross.
+        payload: { editor: editorName, amount: formatAmount((updated.total_amount - updated.discount_amount) / 100, currency) },
         targetRoles: ['administrateur', 'manager'],
         excludeUserId: useAuthStore.getState().session?.user?.id,
       });

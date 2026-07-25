@@ -24,6 +24,9 @@ export interface Apport {
   created_by_name: string | null;
   edited_at: string | null;
   edited_by_name: string | null;
+  proof_image_url: string | null;
+  proof_image_width: number | null;
+  proof_image_height: number | null;
 }
 
 interface AportsStore {
@@ -41,7 +44,7 @@ interface AportsStore {
     sourceName?: string | null;
     note?: string | null;
     injectedAt: string;
-  }) => Promise<boolean>;
+  }) => Promise<string | null>;   // new row id, or null on failure — lets the caller attach a proof photo
   editApport: (params: {
     id: string;
     businessId: string;
@@ -58,7 +61,7 @@ interface AportsStore {
     sourceName?: string | null;
     note?: string | null;
     withdrawnAt: string;
-  }) => Promise<boolean>;
+  }) => Promise<string | null>;   // new row id, or null on failure
   reset: () => void;
 }
 
@@ -123,6 +126,9 @@ export const useAportsStore = create<AportsStore>((set, get) => ({
       created_by_name: (r.creator as { name: string | null } | null)?.name ?? null,
       edited_at: (r.edited_at as string | null) ?? null,
       edited_by_name: (r.editor as { name: string | null } | null)?.name ?? null,
+      proof_image_url: (r.proof_image_url as string | null) ?? null,
+      proof_image_width: (r.proof_image_width as number | null) ?? null,
+      proof_image_height: (r.proof_image_height as number | null) ?? null,
     }));
 
     void saveApportsCache(businessId, apports as unknown[]);
@@ -133,7 +139,7 @@ export const useAportsStore = create<AportsStore>((set, get) => ({
   addApport: async ({ businessId, amount, injectedById, sourceName, note, injectedAt }) => {
     set({ saving: true, error: null });
 
-    const { error } = await supabase.rpc('record_injection', {
+    const { data, error } = await supabase.rpc('record_injection', {
       p_business_id:    businessId,
       p_amount:         Math.round(amount * 100),
       p_injected_by_id: injectedById ?? null,
@@ -144,12 +150,12 @@ export const useAportsStore = create<AportsStore>((set, get) => ({
 
     if (error) {
       set({ saving: false, error: translateError(error, 'Impossible d\'enregistrer') });
-      return false;
+      return null;
     }
 
     set({ saving: false });
     await get().fetchApports(businessId);
-    return true;
+    return (data as string) ?? null;
   },
 
   editApport: async ({ id, businessId, amount, injectedById, sourceName, note, injectedAt }) => {
@@ -177,7 +183,7 @@ export const useAportsStore = create<AportsStore>((set, get) => ({
   recordWithdrawal: async ({ businessId, amount, injectedById, sourceName, note, withdrawnAt }) => {
     set({ saving: true, error: null });
 
-    const { error } = await supabase.rpc('record_withdrawal', {
+    const { data, error } = await supabase.rpc('record_withdrawal', {
       p_business_id:    businessId,
       p_amount:         Math.round(amount * 100),
       p_injected_by_id: injectedById ?? null,
@@ -188,12 +194,12 @@ export const useAportsStore = create<AportsStore>((set, get) => ({
 
     if (error) {
       set({ saving: false, error: translateError(error, 'Impossible d\'enregistrer le retrait') });
-      return false;
+      return null;
     }
 
     set({ saving: false });
     await get().fetchApports(businessId);
-    return true;
+    return (data as string) ?? null;
   },
 
   reset: () => set({ apports: [], loading: false, saving: false, error: null, offline: false, offlineSince: null }),

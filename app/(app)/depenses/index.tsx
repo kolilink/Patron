@@ -19,6 +19,7 @@ import type { Expense } from '@/src/types';
 import { haptics } from '@/lib/haptics';
 import { toast } from '@/stores/toast';
 import { SkeletonList } from '@/src/components/ui/SkeletonPlaceholder';
+import { ProofControl } from '@/src/components/ui/ProofControl';
 import { formatAmountInput, parseAmountInput } from '@/src/utils/format';
 
 function fmt(n: number, cur: string) { return `${n.toLocaleString('fr-FR')} ${cur}`; }
@@ -184,16 +185,23 @@ interface ExpenseCardProps {
   currency: string;
   isManager: boolean;
   canEdit: boolean;
+  businessId: string;
+  userId: string;
+  offline: boolean;
   onApprove: () => void;
   onReject: () => void;
   onEdit: () => void;
+  onProofAttached: () => void;
 }
 
-function ExpenseCard({ expense, currency, isManager, canEdit, onApprove, onReject, onEdit }: ExpenseCardProps) {
+function ExpenseCard({ expense, currency, isManager, canEdit, businessId, userId, offline, onApprove, onReject, onEdit, onProofAttached }: ExpenseCardProps) {
   const { palette } = useTheme();
   const styles = useMemo(() => makeStyles(palette), [palette]);
   const isPending = expense.status === 'en_attente';
   const [confirmAction, setConfirmAction] = useState<'approve' | 'reject' | null>(null);
+  // Matches attach_transaction_proof's gate: admin/manager anytime, or the
+  // creator while the expense is still pending (the vendeur with the receipt).
+  const canAttachProof = isManager || (expense.created_by === userId && expense.status === 'en_attente');
 
   const handleConfirm = () => {
     if (confirmAction === 'approve') onApprove();
@@ -210,7 +218,7 @@ function ExpenseCard({ expense, currency, isManager, canEdit, onApprove, onRejec
             <View style={[styles.productTag, { backgroundColor: INFO_TAG.bg, flexDirection: 'row', alignItems: 'center', gap: 4 }]}>
               <Ionicons name="cube-outline" size={11} color={INFO_TAG.text} />
               <Text variant="caption" style={{ color: INFO_TAG.text }}>
-                {expense.product_name ? `Fret · ${expense.product_name}` : 'Fret'}
+                {expense.product_name ? `Transport · ${expense.product_name}` : 'Transport'}
               </Text>
             </View>
           ) : expense.product_name ? (
@@ -257,6 +265,19 @@ function ExpenseCard({ expense, currency, isManager, canEdit, onApprove, onRejec
           </View>
         )
       )}
+
+      <ProofControl
+        variant="row"
+        kind="expense"
+        id={expense.id}
+        businessId={businessId}
+        imageUrl={expense.proof_image_url}
+        imageWidth={expense.proof_image_width}
+        imageHeight={expense.proof_image_height}
+        canAttach={canAttachProof}
+        offline={offline}
+        onAttached={onProofAttached}
+      />
     </Card>
   );
 }
@@ -270,13 +291,16 @@ interface MonthGroupProps {
   currency: string;
   isManager: boolean;
   userId: string;
+  businessId: string;
+  offline: boolean;
   onApprove: (id: string) => void;
   onReject: (id: string) => void;
   onEdit: (e: Expense) => void;
+  onProofAttached: () => void;
   defaultOpen: boolean;
 }
 
-function MonthGroup({ label, total, items, currency, isManager, userId, onApprove, onReject, onEdit, defaultOpen }: MonthGroupProps) {
+function MonthGroup({ label, total, items, currency, isManager, userId, businessId, offline, onApprove, onReject, onEdit, onProofAttached, defaultOpen }: MonthGroupProps) {
   const { palette } = useTheme();
   const styles = useMemo(() => makeStyles(palette), [palette]);
   const [open, setOpen] = useState(defaultOpen);
@@ -304,9 +328,13 @@ function MonthGroup({ label, total, items, currency, isManager, userId, onApprov
               currency={currency}
               isManager={isManager}
               canEdit={e.status === 'en_attente' && e.created_by === userId}
+              businessId={businessId}
+              userId={userId}
+              offline={offline}
               onApprove={() => onApprove(e.id)}
               onReject={() => onReject(e.id)}
               onEdit={() => onEdit(e)}
+              onProofAttached={onProofAttached}
             />
           ))}
         </View>
@@ -454,9 +482,13 @@ export default function DepensesScreen() {
                   currency={currency}
                   isManager={isManager}
                   canEdit={e.created_by === userId}
+                  businessId={businessId}
+                  userId={userId}
+                  offline={offline}
                   onApprove={() => handleApprove(e.id)}
                   onReject={() => handleReject(e.id)}
                   onEdit={() => handleEdit(e)}
+                  onProofAttached={() => fetchExpenses(businessId)}
                 />
               ))}
             </View>
@@ -471,9 +503,12 @@ export default function DepensesScreen() {
               currency={currency}
               isManager={isManager}
               userId={userId}
+              businessId={businessId}
+              offline={offline}
               onApprove={handleApprove}
               onReject={handleReject}
               onEdit={handleEdit}
+              onProofAttached={() => fetchExpenses(businessId)}
               defaultOpen={false}
             />
           ))}

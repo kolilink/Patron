@@ -46,9 +46,17 @@ export default function VerrouilleScreen() {
   async function attemptBiometric() {
     setPhase('checking');
     const result = await unlockWithBiometric();
-    // 'unlocked' → nothing to do, the route guards redirect automatically
-    // once `locked` flips false.
-    if (result === 'unlocked') return;
+    if (result === 'unlocked') {
+      // unlockWithBiometric() only flips the store's internal `locked`/
+      // `session` state — nothing was actually watching that flip to
+      // navigate away from this screen, so a successful Face ID/Touch ID
+      // read used to leave the user stranded right here. Same
+      // activeBusiness branch every other post-auth screen uses
+      // (connexion.tsx, (welcome)/index.tsx, recuperation.tsx, creer.tsx).
+      const activeBusiness = useAuthStore.getState().session?.activeBusiness;
+      router.replace(activeBusiness ? '/(app)/(tabs)/' : '/(app)/onboarding/');
+      return;
+    }
     if (result === 'retryable') setPhase('retry');
     else if (result === 'restore-failed') setPhase('restore-failed');
     else setPhase('unavailable');
@@ -102,23 +110,12 @@ export default function VerrouilleScreen() {
       <KeyboardAvoidingView behavior={Platform.OS === 'ios' ? 'padding' : 'height'} style={styles.kav}>
         <ScrollView contentContainerStyle={styles.scrollContent} keyboardShouldPersistTaps="handled">
           <View style={styles.content}>
-            <View style={styles.header}>
-              <Animated.View style={{ opacity: (phase === 'checking' || phase === 'retry') ? breathOpacity : 1 }}>
-                <Ionicons name="lock-closed" size={40} color={palette.textSecondary} />
-              </Animated.View>
-            </View>
-
             {(phase === 'checking' || phase === 'retry') && (
-              <>
-                {/* Always visible, even mid-attempt (not just after a failure) — a
-                    silently stalled prompt must never strand the user with only
-                    the full WhatsApp re-login as an escape hatch. Safe to tap
-                    during 'checking' too: unlockWithBiometric()'s in-flight guard
-                    just resolves it to 'retryable' instead of firing a second
-                    native prompt. */}
-                <Button label="Réessayer" onPress={attemptBiometric} fullWidth size="lg" />
-                <Button label="Se connecter via WhatsApp" variant="ghost" onPress={degradeToFullLogin} />
-              </>
+              <View style={styles.lockOnly}>
+                <Animated.View style={{ opacity: breathOpacity }}>
+                  <Ionicons name="lock-closed" size={64} color={palette.textSecondary} />
+                </Animated.View>
+              </View>
             )}
 
             {phase === 'restore-failed' && (
@@ -149,12 +146,8 @@ function makeStyles(_p: Palette) {
   return StyleSheet.create({
     kav:           { flex: 1 },
     scrollContent: { flexGrow: 1 },
-    // flex-start + paddingTop (not centered) — keeps the lock icon and the
-    // Réessayer/WhatsApp buttons within easy one-handed thumb reach near the
-    // top-middle of the screen, instead of sitting dead-center where a thumb
-    // has to stretch down the phone to tap them.
-    content:       { flex: 1, padding: spacing[6], paddingTop: spacing[20], gap: spacing[6], justifyContent: 'flex-start', alignItems: 'center' },
-    header:        { gap: spacing[3], alignItems: 'center' },
+    content:       { flex: 1, padding: spacing[6], paddingTop: spacing[24], gap: spacing[6], justifyContent: 'flex-start', alignItems: 'center' },
+    lockOnly:      { justifyContent: 'center', alignItems: 'center' },
     sub:           { lineHeight: 22, textAlign: 'center' },
     form:          { gap: spacing[4], width: '100%' },
   });

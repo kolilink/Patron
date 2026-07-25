@@ -132,6 +132,7 @@ Règles :
 - "depuis_le_debut" donne les totaux depuis le tout début de l'activité du commerce (pas seulement les 30 derniers jours) — utilise-le quand la question porte sur la performance globale ou l'historique complet ("comment va mon commerce depuis le début ?", "combien j'ai gagné au total ?"), pas seulement sur le mois en cours.
 - Si "credit_en_cours" est élevé par rapport au chiffre d'affaires, mentionne-le comme risque de trésorerie, mais ne prétends JAMAIS savoir quel client précis est en retard, SAUF si tu as utilisé l'outil chercher_client pour ce client précis.
 - Tu as accès à 4 outils pour vérifier des faits précis avant de répondre : chercher_produit (un produit nommé), chercher_client (un client nommé), ventes_sur_periode (une date ou période précise, différente du mois en cours), depenses_detail (le détail des dépenses au lieu du seul total). Utilise l'outil correspondant DÈS QUE le commerçant nomme un produit, un client, ou une date/période précise — ne réponds jamais "je ne sais pas" ou par une généralité si un outil peut vérifier le fait réel. N'utilise ces outils que quand la question le justifie ; pour une question générale ("comment va mon commerce"), les données déjà fournies ci-dessous suffisent.
+- Quand le commerçant parle d'une période relative ("aujourd'hui", "hier", "cette semaine", "les 7 derniers jours", "ce mois-ci", "le mois dernier", etc.), tu connais déjà les dates exactes correspondantes : elles sont dans "Repères de dates" ci-dessous. Convertis toi-même la période en dates AAAA-MM-JJ à partir de ces repères et appelle DIRECTEMENT l'outil ventes_sur_periode. Ne demande JAMAIS au commerçant de te fournir une date ou une plage de dates au format AAAA-MM-JJ — un commerçant ne raisonne pas en plages de dates, et lui renvoyer la question est un échec. Ne demande une précision QUE si la période est réellement ambiguë (ex: "compare deux mois" sans dire lesquels), et dans ce cas propose des choix en langage courant (ex: "cette semaine, ce mois-ci, ou le mois dernier ?"), jamais des dates ISO.
 - Ne cite JAMAIS un chiffre (montant, quantité, date) qui n'apparaît ni dans "Données du commerce" ci-dessous, ni dans le résultat d'un outil que tu as toi-même appelé dans cette réponse. Si tu n'as pas la donnée exacte, dis-le clairement plutôt que d'estimer ou d'arrondir un chiffre qui semble plausible.
 - Si le message du commerçant est trop court ou vague pour être une vraie question (une seule lettre, un mot isolé, un salut sans question, "autre chose", "je ne sais pas", etc.), ta réponse ENTIÈRE doit être UNIQUEMENT une question de clarification courte et amicale, avec 1-2 exemples génériques de sujets (ventes, stock, dépenses, trésorerie, crédit). N'écris RIEN d'autre : pas de chiffre, pas de montant, pas de nom de produit ou de vendeur, et surtout pas le texte "Action à faire" sous aucune forme (ni rempli, ni vide, ni suivi d'un "?") — cette ligne n'existe que dans les réponses de la règle suivante. Cite des données réelles seulement une fois que le commerçant a posé une vraie question sur un sujet précis.
 - Si une question sort du cadre du commerce (ventes, stock, dépenses, crédit, trésorerie), redirige poliment vers ce périmètre.
@@ -316,6 +317,46 @@ function buildDataBlock(
   return { data, nameToLabel };
 }
 
+function isoDay(d: Date): string {
+  return d.toISOString().slice(0, 10);
+}
+
+// The model never knew what "today" was, so it could not turn a relative
+// period ("cette semaine", "les 7 derniers jours", "aujourd'hui") into the
+// AAAA-MM-JJ range ventes_sur_periode requires — it dead-ended by asking the
+// merchant to type an ISO date range (which no shopkeeper thinks in) and
+// looped when the plain-language answer still gave it no dates it could use.
+// Precompute the common ranges here rather than let the model do date math:
+// getting a weekday or a week boundary wrong is the same class of error the
+// "ne fais aucune arithmétique sur les données" rule already guards against.
+// Guinea is GMT year-round (no DST), so the edge function's UTC clock IS the
+// merchant's local date — no timezone conversion needed.
+function buildDateContext(): string {
+  const now = new Date();
+  const today = new Date(Date.UTC(now.getUTCFullYear(), now.getUTCMonth(), now.getUTCDate()));
+  let weekday = '';
+  try {
+    weekday = today.toLocaleDateString('fr-FR', { weekday: 'long', timeZone: 'UTC' });
+  } catch { /* label only — non-critical if the locale is unavailable */ }
+
+  const yesterday = new Date(today); yesterday.setUTCDate(today.getUTCDate() - 1);
+  const sevenAgo = new Date(today); sevenAgo.setUTCDate(today.getUTCDate() - 6);
+  // Monday of the current week (getUTCDay: 0=dim .. 6=sam).
+  const monday = new Date(today); monday.setUTCDate(today.getUTCDate() - ((today.getUTCDay() + 6) % 7));
+  const firstOfMonth = new Date(Date.UTC(today.getUTCFullYear(), today.getUTCMonth(), 1));
+  // First and last day of the previous calendar month.
+  const prevMonthLast = new Date(Date.UTC(today.getUTCFullYear(), today.getUTCMonth(), 0));
+  const prevMonthFirst = new Date(Date.UTC(prevMonthLast.getUTCFullYear(), prevMonthLast.getUTCMonth(), 1));
+
+  return `Repères de dates (le commerçant est en Guinée, fuseau GMT) :
+- aujourd'hui : ${isoDay(today)}${weekday ? ` (${weekday})` : ''}
+- hier : ${isoDay(yesterday)}
+- les 7 derniers jours : ${isoDay(sevenAgo)} au ${isoDay(today)}
+- cette semaine (depuis lundi) : ${isoDay(monday)} au ${isoDay(today)}
+- ce mois-ci : ${isoDay(firstOfMonth)} au ${isoDay(today)}
+- le mois dernier : ${isoDay(prevMonthFirst)} au ${isoDay(prevMonthLast)}`;
+}
+
 function buildSystemPrompt(
   businessName: string,
   businessType: string | null,
@@ -326,6 +367,8 @@ function buildSystemPrompt(
   return `${STATIC_INSTRUCTIONS}
 
 Commerce : ${businessName} (${businessType ?? 'petit commerce'}). Devise : ${currency}. Tu t'adresses à ${roleLabel(role)}.
+
+${buildDateContext()}
 
 Données du commerce (déjà converties en ${currency} affichable, PAS en centimes) :
 ${JSON.stringify(data)}`;

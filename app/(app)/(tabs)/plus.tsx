@@ -96,7 +96,7 @@ export default function PlusScreen() {
             <Text variant="bodySmall">{business?.name}</Text>
             <View style={[styles.badge, { backgroundColor: roleColor + '20' }]}>
               <Text variant="labelSmall" style={{ color: roleColor }}>
-                {role === 'administrateur' ? 'Gérant' : role === 'investisseur' ? 'Observateur' : role.charAt(0).toUpperCase() + role.slice(1)}
+                {`Vous êtes ${role === 'administrateur' ? 'Gérant' : role === 'investisseur' ? 'Observateur' : role.charAt(0).toUpperCase() + role.slice(1)}`}
               </Text>
             </View>
           </View>

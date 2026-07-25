@@ -241,6 +241,9 @@ export interface Expense {
   product_id?: string | null;
   product_name?: string | null;
   purchase_order_id?: string | null;
+  proof_image_url?: string | null;
+  proof_image_width?: number | null;
+  proof_image_height?: number | null;
 }
 
 // ─── Change Proposal ──────────────────────────────────────────────────────────

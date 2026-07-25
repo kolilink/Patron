@@ -11,6 +11,7 @@ import { Button } from '@/src/components/ui/Button';
 import { Card } from '@/src/components/ui/Card';
 import { Input } from '@/src/components/ui/Input';
 import { Text } from '@/src/components/ui/Text';
+import { ProofControl } from '@/src/components/ui/ProofControl';
 import { useTheme, spacing, radius } from '@/src/theme';
 import type { Palette } from '@/src/theme';
 import { useAuthStore } from '@/stores/auth';
@@ -292,8 +293,11 @@ function CommandeForm({
 
 // ── Order detail modal ─────────────────────────────────────────────────────────
 
-function OrderDetail({ order, currency, onClose }: {
-  order: CommandeAchat; currency: string; onClose: () => void;
+function OrderDetail({ order, currency, businessId, canAttach, offline, onClose, onProofAttached }: {
+  order: CommandeAchat; currency: string; businessId: string;
+  canAttach: boolean; offline: boolean;
+  onClose: () => void;
+  onProofAttached: (proof: { url: string; width: number; height: number }) => void;
 }) {
   const { palette } = useTheme();
   const styles = useMemo(() => makeStyles(palette), [palette]);
@@ -323,6 +327,22 @@ function OrderDetail({ order, currency, onClose }: {
               </View>
             </Card>
           ))}
+
+          <View style={{ gap: spacing[2], marginTop: spacing[2] }}>
+            <Text variant="label" color="secondary">Image (facture, bon de livraison)</Text>
+            <ProofControl
+              variant="row"
+              kind="purchase_order"
+              id={order.id}
+              businessId={businessId}
+              imageUrl={order.proof_image_url}
+              imageWidth={order.proof_image_width}
+              imageHeight={order.proof_image_height}
+              canAttach={canAttach}
+              offline={offline}
+              onAttached={onProofAttached}
+            />
+          </View>
         </ScrollView>
       </SafeAreaView>
     </Modal>
@@ -343,10 +363,11 @@ export default function FournisseurProfile() {
 
   const { products, fetchProducts } = useProductStore();
   const {
-    fournisseurs, commandes, debts, payments, saving,
+    fournisseurs, commandes, debts, payments, saving, offline,
     fetchFournisseurs, fetchCommandes, fetchPayments,
     createCommande, loadCommandeLines, deleteFournisseur, payDebt,
   } = useFournisseursStore();
+  const canWrite = role === 'administrateur' || role === 'manager';
 
   const fournisseur    = fournisseurs.find(f => f.id === id);
 
@@ -666,7 +687,23 @@ export default function FournisseurProfile() {
       </Modal>
 
       {detailOrder && (
-        <OrderDetail order={detailOrder} currency={currency} onClose={() => setDetailOrder(null)} />
+        <OrderDetail
+          order={detailOrder}
+          currency={currency}
+          businessId={businessId}
+          canAttach={canWrite}
+          offline={offline}
+          onClose={() => setDetailOrder(null)}
+          onProofAttached={(proof) => {
+            setDetailOrder(prev => prev ? {
+              ...prev,
+              proof_image_url: proof.url,
+              proof_image_width: proof.width,
+              proof_image_height: proof.height,
+            } : prev);
+            void fetchCommandes(businessId);
+          }}
+        />
       )}
     </Screen>
   );

@@ -933,6 +933,13 @@ export default function EquipeScreen() {
 
   const hasManager = membres.some(m => m.role === 'manager');
 
+  // fetchCodes already prunes expired/consumed codes, so `codes` is exactly
+  // the set of active codes. With none, the "Codes d'invitation" tab and its
+  // panel are hidden entirely — nothing to show — and the view falls back to
+  // Membres (generating a code via "+ Inviter" brings the tab back).
+  const hasCodes = codes.length > 0;
+  const effectiveTab = hasCodes ? tab : 'membres';
+
   useFocusEffect(
     useCallback(() => {
       if (!businessId) return;
@@ -953,6 +960,7 @@ export default function EquipeScreen() {
     if (!code) { haptics.error(); Alert.alert('Le code n\'est pas passé. On réessaie :)'); return; }
     haptics.success();
     setShowNewCode(false);
+    setTab('codes');   // the tab reappears now that an active code exists — land on it
     setRevealData({ code, role });
   };
 
@@ -968,17 +976,19 @@ export default function EquipeScreen() {
 
       {offline && <OfflineNotice offlineSince={offlineSince} />}
 
-      <View style={styles.tabs}>
-        {(['membres', 'codes'] as const).map(t => (
-          <Pressable key={t} onPress={() => setTab(t)} style={[styles.tab, tab === t && styles.tabActive]}>
-            <Text variant="label" style={{ color: tab === t ? palette.textInverse : palette.textSecondary }}>
-              {t === 'membres' ? 'Membres' : "Codes d'invitation"}
-            </Text>
-          </Pressable>
-        ))}
-      </View>
+      {hasCodes && (
+        <View style={styles.tabs}>
+          {(['membres', 'codes'] as const).map(t => (
+            <Pressable key={t} onPress={() => setTab(t)} style={[styles.tab, effectiveTab === t && styles.tabActive]}>
+              <Text variant="label" style={{ color: effectiveTab === t ? palette.textInverse : palette.textSecondary }}>
+                {t === 'membres' ? 'Membres' : "Codes d'invitation"}
+              </Text>
+            </Pressable>
+          ))}
+        </View>
+      )}
 
-      {tab === 'membres' ? (
+      {effectiveTab === 'membres' ? (
         (!hasFetched || loading) && membres.length === 0 ? (
           <SkeletonList count={5} />
         ) : !loading && membres.length === 0 && (error || offline) ? (
