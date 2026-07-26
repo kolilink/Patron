@@ -9,7 +9,6 @@ import { Button } from '@/src/components/ui/Button';
 import { DatePickerField } from '@/src/components/ui/DatePickerField';
 import { SkeletonList } from '@/src/components/ui/SkeletonPlaceholder';
 import { OfflineNotice } from '@/src/components/ui/OfflineNotice';
-import { ProofThumbnail } from '@/src/components/ui/ProofThumbnail';
 import { ProofPhotoField, type PickedImage } from '@/src/components/ui/ProofPhotoField';
 import { attachTransactionProof } from '@/lib/proofs';
 import { useTheme, spacing, radius } from '@/src/theme';
@@ -259,6 +258,8 @@ function FormSheet({ visible, mode, editing, businessId, currency, saving, offli
           {/* Photo well — the receipt as a natural field of the form */}
           <ProofPhotoField
             existingUrl={existingProof}
+            existingWidth={editing?.proof_image_width}
+            existingHeight={editing?.proof_image_height}
             value={photo}
             onChange={setPhoto}
             disabled={offline}
@@ -552,22 +553,13 @@ export default function AportsScreen() {
                   </Text>
                   <Text style={styles.rowMeta} numberOfLines={1}>{meta}</Text>
                 </View>
-                <View style={styles.rowRight}>
-                  {item.proof_image_url ? (
-                    <ProofThumbnail
-                      url={item.proof_image_url}
-                      width={item.proof_image_width}
-                      height={item.proof_image_height}
-                    />
-                  ) : null}
-                  <Text style={styles.rowAmount} numberOfLines={1}>
-                    <Text style={isWithdrawal ? { color: palette.warning, fontWeight: '700' } : styles.rowPlus}>
-                      {isWithdrawal ? '− ' : '+ '}
-                    </Text>
-                    {numericPart}
-                    <Text style={styles.rowCurrency}> {currency}</Text>
+                <Text style={styles.rowAmount} numberOfLines={1}>
+                  <Text style={isWithdrawal ? { color: palette.warning, fontWeight: '700' } : styles.rowPlus}>
+                    {isWithdrawal ? '− ' : '+ '}
                   </Text>
-                </View>
+                  {numericPart}
+                  <Text style={styles.rowCurrency}> {currency}</Text>
+                </Text>
               </Pressable>
             );
           }}
