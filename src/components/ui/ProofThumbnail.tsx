@@ -1,5 +1,6 @@
 import { useState } from 'react';
-import { Image, Modal, Pressable, StyleSheet, View } from 'react-native';
+import { Modal, Pressable, StyleSheet, View } from 'react-native';
+import { Image } from 'expo-image';
 import { Ionicons } from '@expo/vector-icons';
 import { radius, colors } from '@/src/theme';
 
@@ -22,13 +23,13 @@ export function ProofThumbnail({
         <Image
           source={{ uri: url }}
           style={{ width: size, height: size, borderRadius: radius.sm, backgroundColor: colors.neutral[100] }}
-          resizeMode="cover"
+          contentFit="cover"
         />
       </Pressable>
 
       <Modal visible={open} transparent animationType="fade" onRequestClose={() => setOpen(false)}>
         <Pressable style={styles.backdrop} onPress={() => setOpen(false)}>
-          <Image source={{ uri: url }} style={styles.full} resizeMode="contain" />
+          <Image source={{ uri: url }} style={styles.full} contentFit="contain" />
           <Pressable style={styles.close} onPress={() => setOpen(false)} hitSlop={12}>
             <Ionicons name="close" size={26} color={colors.neutral[0]} />
           </Pressable>

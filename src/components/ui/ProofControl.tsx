@@ -1,5 +1,6 @@
 import { useState } from 'react';
-import { ActivityIndicator, Image, Modal, Pressable, StyleSheet, View } from 'react-native';
+import { ActivityIndicator, Modal, Pressable, StyleSheet, View } from 'react-native';
+import { Image } from 'expo-image';
 import * as ImagePicker from 'expo-image-picker';
 import { Ionicons } from '@expo/vector-icons';
 import { Text } from '@/src/components/ui/Text';
@@ -79,7 +80,7 @@ export function ProofControl({
   const viewer = hasProof ? (
     <Modal visible={viewerOpen} transparent animationType="fade" onRequestClose={() => setViewerOpen(false)}>
       <Pressable style={styles.backdrop} onPress={() => setViewerOpen(false)}>
-        <Image source={{ uri: imageUrl! }} style={styles.fullImage} resizeMode="contain" />
+        <Image source={{ uri: imageUrl! }} style={styles.fullImage} contentFit="contain" />
         <Pressable style={styles.closeBtn} onPress={() => setViewerOpen(false)} hitSlop={12}>
           <Ionicons name="close" size={26} color={colors.neutral[0]} />
         </Pressable>
@@ -127,7 +128,7 @@ export function ProofControl({
           <Image
             source={{ uri: imageUrl! }}
             style={{ width: 48, height: thumbH, borderRadius: radius.sm }}
-            resizeMode="cover"
+            contentFit="cover"
           />
           <Ionicons name="eye-outline" size={16} color={palette.primary} />
           <Text variant="label" style={{ color: palette.primary }}>Voir l'image</Text>
