@@ -3,7 +3,7 @@
     "name": "Patron",
     "slug": "patron",
     "scheme": "patron",
-    "version": "1.0.4",
+    "version": "1.0.5",
     "orientation": "portrait",
     "icon": "./assets/icon.png",
     "userInterfaceStyle": "automatic",
@@ -21,7 +21,6 @@
     "ios": {
       "supportsTablet": false,
       "bundleIdentifier": "com.awall.patron",
-      "buildNumber": "1",
       "infoPlist": {
         "NSFaceIDUsageDescription": "Utilisé pour déverrouiller votre session en toute sécurité.",
         "NSMicrophoneUsageDescription": "Utilisé pour envoyer des messages vocaux à votre équipe.",
@@ -59,7 +58,6 @@
     },
     "android": {
       "package": "com.awall.patron",
-      "versionCode": 4,
       "adaptiveIcon": {
         "foregroundImage": "./assets/adaptive-icon.png",
         "backgroundColor": "#ffffff"
