@@ -1,5 +1,6 @@
 import { useState } from 'react';
-import { ActivityIndicator, Image, Modal, Pressable, StyleSheet, View } from 'react-native';
+import { ActivityIndicator, Modal, Pressable, StyleSheet, View } from 'react-native';
+import { Image } from 'expo-image';
 import * as ImagePicker from 'expo-image-picker';
 import { Ionicons } from '@expo/vector-icons';
 import { Text } from '@/src/components/ui/Text';
@@ -63,12 +64,12 @@ export function ProofPhotoField({ existingUrl, existingWidth, existingHeight, va
           <Image
             source={{ uri: existingUrl }}
             style={[styles.preview, { aspectRatio: aspectOf(existingWidth, existingHeight) }]}
-            resizeMode="contain"
+            contentFit="contain"
           />
         </Pressable>
         <Modal visible={viewerOpen} transparent animationType="fade" onRequestClose={() => setViewerOpen(false)}>
           <Pressable style={styles.backdrop} onPress={() => setViewerOpen(false)}>
-            <Image source={{ uri: existingUrl }} style={styles.full} resizeMode="contain" />
+            <Image source={{ uri: existingUrl }} style={styles.full} contentFit="contain" />
             <Pressable style={styles.close} onPress={() => setViewerOpen(false)} hitSlop={12}>
               <Ionicons name="close" size={26} color={colors.neutral[0]} />
             </Pressable>
@@ -86,7 +87,7 @@ export function ProofPhotoField({ existingUrl, existingWidth, existingHeight, va
         <Image
           source={{ uri: value.uri }}
           style={[styles.preview, { aspectRatio: aspectOf(value.width, value.height) }]}
-          resizeMode="contain"
+          contentFit="contain"
         />
 
         <View style={styles.actionsRow}>

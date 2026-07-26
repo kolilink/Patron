@@ -1,5 +1,6 @@
 import { useState } from 'react';
-import { Image, ImageStyle, Modal, Pressable, StyleProp, StyleSheet } from 'react-native';
+import { Modal, Pressable, StyleProp, StyleSheet } from 'react-native';
+import { Image, ImageStyle } from 'expo-image';
 import { Ionicons } from '@expo/vector-icons';
 import { colors } from '@/src/theme';
 
@@ -40,13 +41,13 @@ export function ImageMessageBubble({ msg, imageStyle }: { msg: ImageMessageLike;
         <Image
           source={{ uri: msg.image_url }}
           style={[{ width: displayW, height: displayH, borderRadius: 12 }, imageStyle]}
-          resizeMode="cover"
+          contentFit="cover"
         />
       </Pressable>
 
       <Modal visible={viewerOpen} transparent animationType="fade" onRequestClose={() => setViewerOpen(false)}>
         <Pressable style={styles.backdrop} onPress={() => setViewerOpen(false)}>
-          <Image source={{ uri: msg.image_url }} style={styles.fullImage} resizeMode="contain" />
+          <Image source={{ uri: msg.image_url }} style={styles.fullImage} contentFit="contain" />
           <Pressable style={styles.closeBtn} onPress={() => setViewerOpen(false)} hitSlop={12}>
             <Ionicons name="close" size={26} color={colors.neutral[0]} />
           </Pressable>
