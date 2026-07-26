@@ -517,16 +517,55 @@ export async function archiveDeadOps(): Promise<void> {
   await db.runAsync('DELETE FROM sync_queue WHERE attempts >= ?', [MAX_SYNC_ATTEMPTS]);
 }
 
+// ─── Shared encrypted-cache writer ─────────────────────────────────────────────
+// Every store re-fetches and re-writes its whole cache on every screen focus,
+// even when nothing changed. Encryption is pure-JS AES on the JS thread (see
+// lib/encryption.ts — deliberately no native crypto), so re-encrypting an
+// unchanged payload on every navigation is the main driver of nav jank on
+// low-end Android. This guard skips the AES when the payload is identical to
+// the last one written for this key (the common re-focus case), and only then
+// refreshes cached_at so the offline-freshness indicator is unaffected.
+//
+// Safe by construction: a hash match means the row already holds exactly this
+// payload, so skipping the re-encrypt cannot lose anything. The map is
+// in-memory (cleared on restart) — the first write per key each session always
+// runs, refreshing the persisted row; the SQLite cache itself already survives
+// restarts. table/keyCol are hardcoded constants, never user input.
+const _lastCacheHash = new Map<string, number>();
+
+function cheapHash(s: string): number {
+  let h = 0;
+  for (let i = 0; i < s.length; i++) h = (Math.imul(31, h) + s.charCodeAt(i)) | 0;
+  return h;
+}
+
+async function writeCache(opts: {
+  table: string;
+  keyCol: string;
+  keyValue: string | number;
+  json: string;
+  hashKey: string;
+}): Promise<void> {
+  const { table, keyCol, keyValue, json, hashKey } = opts;
+  const h = cheapHash(json);
+  const db = await openDb();
+  if (_lastCacheHash.get(hashKey) === h) {
+    await db.runAsync(`UPDATE ${table} SET cached_at = ? WHERE ${keyCol} = ?`, [Date.now(), keyValue]);
+    return;
+  }
+  const encrypted = await encrypt(json);
+  await db.runAsync(
+    `INSERT OR REPLACE INTO ${table} (${keyCol}, data, cached_at) VALUES (?, ?, ?)`,
+    [keyValue, encrypted, Date.now()],
+  );
+  _lastCacheHash.set(hashKey, h);
+}
+
 // ─── Dashboard KPI cache ──────────────────────────────────────────────────────
 
 export async function saveDashboardKpiCache(businessId: string, kpis: unknown): Promise<void> {
   try {
-    const db = await openDb();
-    const encrypted = await encrypt(JSON.stringify(kpis));
-    await db.runAsync(
-      'INSERT OR REPLACE INTO dashboard_kpi_cache (business_id, data, cached_at) VALUES (?, ?, ?)',
-      [businessId, encrypted, Date.now()],
-    );
+    await writeCache({ table: 'dashboard_kpi_cache', keyCol: 'business_id', keyValue: businessId, json: JSON.stringify(kpis), hashKey: 'dashboard:' + businessId });
   } catch { }
 }
 
@@ -549,12 +588,7 @@ export async function getDashboardKpiCache(businessId: string): Promise<unknown 
 
 export async function saveRapportsCache(businessId: string, snapshot: unknown): Promise<void> {
   try {
-    const db = await openDb();
-    const encrypted = await encrypt(JSON.stringify(snapshot));
-    await db.runAsync(
-      'INSERT OR REPLACE INTO rapports_cache (business_id, data, cached_at) VALUES (?, ?, ?)',
-      [businessId, encrypted, Date.now()],
-    );
+    await writeCache({ table: 'rapports_cache', keyCol: 'business_id', keyValue: businessId, json: JSON.stringify(snapshot), hashKey: 'rapports:' + businessId });
   } catch { }
 }
 
@@ -577,12 +611,7 @@ export async function getRapportsCache(businessId: string): Promise<unknown | nu
 
 export async function saveInvestorCache(cacheKey: string, data: unknown): Promise<void> {
   try {
-    const db = await openDb();
-    const encrypted = await encrypt(JSON.stringify(data));
-    await db.runAsync(
-      'INSERT OR REPLACE INTO investor_cache (cache_key, data, cached_at) VALUES (?, ?, ?)',
-      [cacheKey, encrypted, Date.now()],
-    );
+    await writeCache({ table: 'investor_cache', keyCol: 'cache_key', keyValue: cacheKey, json: JSON.stringify(data), hashKey: 'investor:' + cacheKey });
   } catch { }
 }
 
@@ -605,12 +634,7 @@ export async function getInvestorCache(cacheKey: string): Promise<unknown | null
 
 export async function saveEquipeCache(businessId: string, membres: unknown): Promise<void> {
   try {
-    const db = await openDb();
-    const encrypted = await encrypt(JSON.stringify(membres));
-    await db.runAsync(
-      'INSERT OR REPLACE INTO equipe_cache (business_id, data, cached_at) VALUES (?, ?, ?)',
-      [businessId, encrypted, Date.now()],
-    );
+    await writeCache({ table: 'equipe_cache', keyCol: 'business_id', keyValue: businessId, json: JSON.stringify(membres), hashKey: 'equipe:' + businessId });
   } catch { }
 }
 
@@ -633,12 +657,7 @@ export async function getEquipeCache(businessId: string): Promise<unknown | null
 
 export async function savePartnershipsCache(businessId: string, data: unknown): Promise<void> {
   try {
-    const db = await openDb();
-    const encrypted = await encrypt(JSON.stringify(data));
-    await db.runAsync(
-      'INSERT OR REPLACE INTO partnerships_cache (business_id, data, cached_at) VALUES (?, ?, ?)',
-      [businessId, encrypted, Date.now()],
-    );
+    await writeCache({ table: 'partnerships_cache', keyCol: 'business_id', keyValue: businessId, json: JSON.stringify(data), hashKey: 'partnerships:' + businessId });
   } catch { }
 }
 
@@ -661,12 +680,7 @@ export async function getPartnershipsCache(businessId: string): Promise<unknown 
 
 export async function saveProductCache(businessId: string, products: Product[]): Promise<void> {
   try {
-    const db = await openDb();
-    const encrypted = await encrypt(JSON.stringify(products));
-    await db.runAsync(
-      'INSERT OR REPLACE INTO product_cache (business_id, data, cached_at) VALUES (?, ?, ?)',
-      [businessId, encrypted, Date.now()],
-    );
+    await writeCache({ table: 'product_cache', keyCol: 'business_id', keyValue: businessId, json: JSON.stringify(products), hashKey: 'product:' + businessId });
   } catch { }
 }
 
@@ -690,12 +704,7 @@ export async function getProductCache(businessId: string): Promise<Product[] | n
 
 export async function saveVentesCache(cacheKey: string, data: unknown[]): Promise<void> {
   try {
-    const db = await openDb();
-    const encrypted = await encrypt(JSON.stringify(data));
-    await db.runAsync(
-      'INSERT OR REPLACE INTO ventes_cache (cache_key, data, cached_at) VALUES (?, ?, ?)',
-      [cacheKey, encrypted, Date.now()],
-    );
+    await writeCache({ table: 'ventes_cache', keyCol: 'cache_key', keyValue: cacheKey, json: JSON.stringify(data), hashKey: 'ventes:' + cacheKey });
   } catch { }
 }
 
@@ -718,12 +727,7 @@ export async function getVentesCache(cacheKey: string): Promise<unknown[] | null
 
 export async function saveFournisseurCache(businessId: string, data: unknown[]): Promise<void> {
   try {
-    const db = await openDb();
-    const encrypted = await encrypt(JSON.stringify(data));
-    await db.runAsync(
-      'INSERT OR REPLACE INTO fournisseur_cache (business_id, data, cached_at) VALUES (?, ?, ?)',
-      [businessId, encrypted, Date.now()],
-    );
+    await writeCache({ table: 'fournisseur_cache', keyCol: 'business_id', keyValue: businessId, json: JSON.stringify(data), hashKey: 'fournisseur:' + businessId });
   } catch { }
 }
 
@@ -746,12 +750,7 @@ export async function getFournisseurCache(businessId: string): Promise<unknown[]
 
 export async function saveCommandeCache(businessId: string, data: unknown[]): Promise<void> {
   try {
-    const db = await openDb();
-    const encrypted = await encrypt(JSON.stringify(data));
-    await db.runAsync(
-      'INSERT OR REPLACE INTO commande_cache (business_id, data, cached_at) VALUES (?, ?, ?)',
-      [businessId, encrypted, Date.now()],
-    );
+    await writeCache({ table: 'commande_cache', keyCol: 'business_id', keyValue: businessId, json: JSON.stringify(data), hashKey: 'commande:' + businessId });
   } catch { }
 }
 
@@ -774,12 +773,7 @@ export async function getCommandeCache(businessId: string): Promise<unknown[] | 
 
 export async function saveExpenseCache(businessId: string, data: unknown[]): Promise<void> {
   try {
-    const db = await openDb();
-    const encrypted = await encrypt(JSON.stringify(data));
-    await db.runAsync(
-      'INSERT OR REPLACE INTO expense_cache (business_id, data, cached_at) VALUES (?, ?, ?)',
-      [businessId, encrypted, Date.now()],
-    );
+    await writeCache({ table: 'expense_cache', keyCol: 'business_id', keyValue: businessId, json: JSON.stringify(data), hashKey: 'expense:' + businessId });
   } catch { }
 }
 
@@ -802,12 +796,7 @@ export async function getExpenseCache(businessId: string): Promise<unknown[] | n
 
 export async function saveChatCache(businessId: string, data: unknown): Promise<void> {
   try {
-    const db = await openDb();
-    const encrypted = await encrypt(JSON.stringify(data));
-    await db.runAsync(
-      'INSERT OR REPLACE INTO chat_cache (business_id, data, cached_at) VALUES (?, ?, ?)',
-      [businessId, encrypted, Date.now()],
-    );
+    await writeCache({ table: 'chat_cache', keyCol: 'business_id', keyValue: businessId, json: JSON.stringify(data), hashKey: 'chat:' + businessId });
   } catch { }
 }
 
@@ -830,12 +819,7 @@ export async function getChatCache(businessId: string): Promise<unknown | null> 
 
 export async function saveMarketCache(data: unknown[]): Promise<void> {
   try {
-    const db = await openDb();
-    const encrypted = await encrypt(JSON.stringify(data));
-    await db.runAsync(
-      'INSERT OR REPLACE INTO market_cache (id, data, cached_at) VALUES (1, ?, ?)',
-      [encrypted, Date.now()],
-    );
+    await writeCache({ table: 'market_cache', keyCol: 'id', keyValue: 1, json: JSON.stringify(data), hashKey: 'market' });
   } catch { }
 }
 
@@ -855,12 +839,7 @@ export async function getMarketCache(): Promise<unknown[] | null> {
 
 export async function saveApportsCache(businessId: string, data: unknown[]): Promise<void> {
   try {
-    const db = await openDb();
-    const encrypted = await encrypt(JSON.stringify(data));
-    await db.runAsync(
-      'INSERT OR REPLACE INTO apports_cache (business_id, data, cached_at) VALUES (?, ?, ?)',
-      [businessId, encrypted, Date.now()],
-    );
+    await writeCache({ table: 'apports_cache', keyCol: 'business_id', keyValue: businessId, json: JSON.stringify(data), hashKey: 'apports:' + businessId });
   } catch { }
 }
 
@@ -884,12 +863,7 @@ export async function getApportsCache(businessId: string): Promise<unknown[] | n
 
 export async function saveClientLedgerCache(cacheKey: string, data: unknown): Promise<void> {
   try {
-    const db = await openDb();
-    const encrypted = await encrypt(JSON.stringify(data));
-    await db.runAsync(
-      'INSERT OR REPLACE INTO client_ledger_cache (cache_key, data, cached_at) VALUES (?, ?, ?)',
-      [cacheKey, encrypted, Date.now()],
-    );
+    await writeCache({ table: 'client_ledger_cache', keyCol: 'cache_key', keyValue: cacheKey, json: JSON.stringify(data), hashKey: 'clientLedger:' + cacheKey });
   } catch { }
 }
 

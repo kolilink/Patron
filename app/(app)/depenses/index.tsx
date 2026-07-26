@@ -171,6 +171,8 @@ function ExpenseFormModal({ visible, editing, onClose, onSave, saving, currency,
           {/* Image well — attach a receipt while recording the expense */}
           <ProofPhotoField
             existingUrl={editing?.proof_image_url}
+            existingWidth={editing?.proof_image_width}
+            existingHeight={editing?.proof_image_height}
             value={photo}
             onChange={setPhoto}
             disabled={offline}

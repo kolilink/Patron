@@ -15,14 +15,22 @@ export type PickedImage = { uri: string; width: number; height: number };
 // is shown immutable (add once, never replace — the DB enforces it too).
 interface ProofPhotoFieldProps {
   existingUrl?: string | null;
+  existingWidth?: number | null;
+  existingHeight?: number | null;
   value: PickedImage | null;
   onChange: (v: PickedImage | null) => void;
   disabled?: boolean;   // offline — can't upload
 }
 
-const PREVIEW_H = 180;
+// Show the receipt at its own proportions (never a fixed-height crop, which
+// looked awkward on tall screenshots), capped so a very tall image can't run
+// off the sheet.
+const MAX_PREVIEW_H = 420;
+function aspectOf(w?: number | null, h?: number | null): number {
+  return w && h && w > 0 && h > 0 ? w / h : 4 / 3;
+}
 
-export function ProofPhotoField({ existingUrl, value, onChange, disabled }: ProofPhotoFieldProps) {
+export function ProofPhotoField({ existingUrl, existingWidth, existingHeight, value, onChange, disabled }: ProofPhotoFieldProps) {
   const { palette } = useTheme();
   const styles = makeStyles(palette);
   const [viewerOpen, setViewerOpen] = useState(false);
@@ -51,8 +59,12 @@ export function ProofPhotoField({ existingUrl, value, onChange, disabled }: Proo
     return (
       <View style={{ gap: spacing[2] }}>
         <Text variant="label">Image</Text>
-        <Pressable onPress={() => setViewerOpen(true)} style={styles.previewWrap}>
-          <Image source={{ uri: existingUrl }} style={styles.preview} resizeMode="cover" />
+        <Pressable onPress={() => setViewerOpen(true)}>
+          <Image
+            source={{ uri: existingUrl }}
+            style={[styles.preview, { aspectRatio: aspectOf(existingWidth, existingHeight) }]}
+            resizeMode="contain"
+          />
         </Pressable>
         <Modal visible={viewerOpen} transparent animationType="fade" onRequestClose={() => setViewerOpen(false)}>
           <Pressable style={styles.backdrop} onPress={() => setViewerOpen(false)}>
@@ -71,9 +83,12 @@ export function ProofPhotoField({ existingUrl, value, onChange, disabled }: Proo
     return (
       <View style={{ gap: spacing[2] }}>
         <Text variant="label">Image</Text>
-        <View style={styles.previewWrap}>
-          <Image source={{ uri: value.uri }} style={styles.preview} resizeMode="cover" />
-        </View>
+        <Image
+          source={{ uri: value.uri }}
+          style={[styles.preview, { aspectRatio: aspectOf(value.width, value.height) }]}
+          resizeMode="contain"
+        />
+
         <View style={styles.actionsRow}>
           <Pressable onPress={pick} hitSlop={6}><Text variant="label" style={{ color: palette.primary }}>Changer</Text></Pressable>
           <Pressable onPress={() => onChange(null)} hitSlop={6}><Text variant="label" color="secondary">Retirer</Text></Pressable>
@@ -122,13 +137,12 @@ function makeStyles(p: Palette) {
       gap: spacing[2],
     },
     wellDisabled: { backgroundColor: p.background },
-    previewWrap: {
-      height: PREVIEW_H,
+    preview: {
+      width: '100%',
+      maxHeight: MAX_PREVIEW_H,
       borderRadius: radius.lg,
-      overflow: 'hidden',
       backgroundColor: colors.neutral[100],
     },
-    preview: { width: '100%', height: '100%' },
     actionsRow: { flexDirection: 'row', gap: spacing[5], paddingHorizontal: spacing[1] },
     backdrop: { flex: 1, backgroundColor: 'rgba(0,0,0,0.92)', alignItems: 'center', justifyContent: 'center' },
     full: { width: '100%', height: '80%' },
