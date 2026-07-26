@@ -20,6 +20,8 @@ import { haptics } from '@/lib/haptics';
 import { toast } from '@/stores/toast';
 import { SkeletonList } from '@/src/components/ui/SkeletonPlaceholder';
 import { ProofControl } from '@/src/components/ui/ProofControl';
+import { ProofPhotoField, type PickedImage } from '@/src/components/ui/ProofPhotoField';
+import { attachTransactionProof } from '@/lib/proofs';
 import { formatAmountInput, parseAmountInput } from '@/src/utils/format';
 
 function fmt(n: number, cur: string) { return `${n.toLocaleString('fr-FR')} ${cur}`; }
@@ -39,14 +41,15 @@ interface ExpenseFormProps {
   visible: boolean;
   editing: Expense | null;
   onClose: () => void;
-  onSave: (data: CreateExpenseData) => Promise<void>;
+  onSave: (data: CreateExpenseData, photo: PickedImage | null) => Promise<void>;
   saving: boolean;
   currency: string;
   businessId: string;
   userId: string;
+  offline: boolean;
 }
 
-function ExpenseFormModal({ visible, editing, onClose, onSave, saving, currency, businessId, userId }: ExpenseFormProps) {
+function ExpenseFormModal({ visible, editing, onClose, onSave, saving, currency, businessId, userId, offline }: ExpenseFormProps) {
   const { palette } = useTheme();
   const styles = useMemo(() => makeStyles(palette), [palette]);
   const [amount, setAmount] = useState('');
@@ -54,6 +57,7 @@ function ExpenseFormModal({ visible, editing, onClose, onSave, saving, currency,
   const [date, setDate] = useState(todayIso());
   const [dateMode, setDateMode] = useState<'hier' | 'aujourdhui' | 'autre'>('aujourdhui');
   const [selectedProductId, setSelectedProductId] = useState<string | null>(null);
+  const [photo, setPhoto] = useState<PickedImage | null>(null);
 
   const { products, fetchProducts } = useProductStore();
   const activeProducts = useMemo(
@@ -72,6 +76,7 @@ function ExpenseFormModal({ visible, editing, onClose, onSave, saving, currency,
       setAmount(editing ? formatAmountInput(String(Math.round(editing.amount)), currency) : '');
       setDescription(editing?.description ?? '');
       setSelectedProductId(editing?.product_id ?? null);
+      setPhoto(null);
       const today = todayIso();
       const yesterday = yesterdayIso();
       const d = editing?.date ?? today;
@@ -84,7 +89,7 @@ function ExpenseFormModal({ visible, editing, onClose, onSave, saving, currency,
     const amt = parseAmountInput(amount, currency);
     if (!description.trim()) { Alert.alert('Écrivez un petit mot :)'); return; }
     if (!amt || amt <= 0) { Alert.alert('Vérifiez le montant :)'); return; }
-    await onSave({ amount: amt, description, category: null, date, due_date: null, note: null, product_id: selectedProductId });
+    await onSave({ amount: amt, description, category: null, date, due_date: null, note: null, product_id: selectedProductId }, photo);
   };
 
   const isEdit = !!editing;
@@ -162,6 +167,14 @@ function ExpenseFormModal({ visible, editing, onClose, onSave, saving, currency,
               <DatePickerField value={date} onChange={setDate} maxToday />
             )}
           </View>
+
+          {/* Image well — attach a receipt while recording the expense */}
+          <ProofPhotoField
+            existingUrl={editing?.proof_image_url}
+            value={photo}
+            onChange={setPhoto}
+            disabled={offline}
+          />
         </ScrollView>
 
         <View style={styles.modalFooter}>
@@ -408,17 +421,34 @@ export default function DepensesScreen() {
       .map(([key, g]) => ({ key, ...g }));
   }, [expenses]);
 
-  const handleSave = useCallback(async (data: CreateExpenseData) => {
-    let ok: boolean;
+  const handleSave = useCallback(async (data: CreateExpenseData, photo: PickedImage | null) => {
+    let expenseId: string | null;
     if (editingExpense) {
-      ok = await updateExpense(editingExpense.id, businessId, data);
+      const ok = await updateExpense(editingExpense.id, businessId, data);
+      expenseId = ok ? editingExpense.id : null;
     } else {
-      ok = await createExpense(businessId, userId, data, isManager);
+      expenseId = await createExpense(businessId, userId, data, isManager);
     }
-    if (!ok) {
+    if (!expenseId) {
       Alert.alert('La dépense n\'est pas passée :)');
       return;
     }
+
+    // Attach a picked image to the just-saved expense (best-effort; needs a
+    // live connection, so an offline-created expense gets its image later from
+    // the card). Skip if the expense already has one — it's immutable.
+    if (photo && !editingExpense?.proof_image_url) {
+      try {
+        await attachTransactionProof({
+          kind: 'expense', id: expenseId, businessId,
+          fileUri: photo.uri, sourceWidth: photo.width, sourceHeight: photo.height,
+        });
+        await fetchExpenses(businessId);
+      } catch {
+        toast.info('Dépense enregistrée — ajoutez l\'image plus tard');
+      }
+    }
+
     setShowForm(false);
     setEditingExpense(null);
     if (editingExpense) {
@@ -428,7 +458,7 @@ export default function DepensesScreen() {
     } else {
       haptics.success();
     }
-  }, [editingExpense, businessId, userId, isManager, updateExpense, createExpense]);
+  }, [editingExpense, businessId, userId, isManager, updateExpense, createExpense, fetchExpenses]);
 
   const handleEdit = (expense: Expense) => { setEditingExpense(expense); setShowForm(true); };
   const handleAdd = () => { setEditingExpense(null); setShowForm(true); };
@@ -524,6 +554,7 @@ export default function DepensesScreen() {
         currency={currency}
         businessId={businessId}
         userId={userId}
+        offline={offline}
       />
 
       <Animated.View style={[styles.fabContainer, { opacity: fabOpacity, transform: [{ scale: fabScale }] }]}>

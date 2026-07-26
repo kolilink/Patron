@@ -34,7 +34,9 @@ interface ExpensesStore {
   offlineSince: number | null;
 
   fetchExpenses: (businessId: string) => Promise<void>;
-  createExpense: (businessId: string, userId: string, data: CreateExpenseData, isManager: boolean) => Promise<boolean>;
+  // Returns the new expense id (both online and offline-queued) so a photo
+  // picked during creation can be attached to it; null on hard failure.
+  createExpense: (businessId: string, userId: string, data: CreateExpenseData, isManager: boolean) => Promise<string | null>;
   updateExpense: (id: string, businessId: string, data: CreateExpenseData) => Promise<boolean>;
   approveExpense: (id: string, userId: string) => Promise<boolean>;
   rejectExpense: (id: string, userId: string) => Promise<boolean>;
@@ -154,17 +156,17 @@ export const useExpensesStore = create<ExpensesStore>((set, get) => ({
           });
         }
       }
-      return true;
+      return payload.id;
     } catch (err) {
       if (isNetworkError(err)) {
         await enqueue('create_expense', payload);
         const count = await getQueueCount();
         useSyncStore.setState({ pendingCount: count });
         set({ saving: false });
-        return true;
+        return payload.id;
       }
       set({ error: translateError(err, "Impossible d'enregistrer la dépense"), saving: false });
-      return false;
+      return null;
     }
   },
 
