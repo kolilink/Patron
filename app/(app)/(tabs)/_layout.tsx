@@ -13,8 +13,9 @@ import { trackEvent } from '@/lib/analytics';
 
 type IoniconName = React.ComponentProps<typeof Ionicons>['name'];
 
+const TAB_ICON_SIZE = 26;
 
-function ProfileTabIcon({ focused, size }: { focused: boolean; size: number }) {
+function ProfileTabIcon({ focused }: { focused: boolean }) {
   const session = useAuthStore(s => s.session);
   const { palette, resolvedScheme } = useTheme();
   const role = session?.activeMembership?.role ?? '';
@@ -22,10 +23,10 @@ function ProfileTabIcon({ focused, size }: { focused: boolean; size: number }) {
   const initial = name[0]?.toUpperCase() ?? '?';
   const roleColor = (resolvedScheme === 'dark' ? ROLE_COLORS_DARK : ROLE_COLORS_LIGHT)[role] ?? palette.primary;
 
-  const circleSize = size + 6;
+  const circleSize = TAB_ICON_SIZE + 6;
   return (
     // Outer anchor locked to the same bounding box as Ionicons so flex row treats all tabs equally
-    <View style={{ width: size, height: size, alignItems: 'center', justifyContent: 'center' }}>
+    <View style={{ width: TAB_ICON_SIZE, height: TAB_ICON_SIZE, alignItems: 'center', justifyContent: 'center' }}>
       <View style={{
         width: circleSize, height: circleSize, borderRadius: circleSize / 2,
         backgroundColor: roleColor + '25',
@@ -47,8 +48,8 @@ function ProfileTabIcon({ focused, size }: { focused: boolean; size: number }) {
 }
 
 function tabIcon(name: IoniconName, activeName: IoniconName) {
-  return ({ color, size, focused }: { color: string; size: number; focused: boolean }) => (
-    <Ionicons name={focused ? activeName : name} size={size} color={color} />
+  return ({ color, focused }: { color: string; size: number; focused: boolean }) => (
+    <Ionicons name={focused ? activeName : name} size={TAB_ICON_SIZE} color={color} />
   );
 }
 
@@ -95,18 +96,14 @@ export default function TabsLayout() {
       }}
       screenOptions={{
         headerShown: false,
+        tabBarShowLabel: false,
         tabBarActiveTintColor: palette.primary,
         tabBarInactiveTintColor: palette.tabBarInactive,
-        tabBarLabelStyle: {
-          fontSize: 11,
-          fontWeight: '500',
-          marginTop: 4,
-        },
         tabBarStyle: {
           backgroundColor: palette.surface,
           borderTopColor: palette.border,
           borderTopWidth: 1,
-          height: 66 + insets.bottom,
+          height: 44 + insets.bottom,
           paddingBottom: insets.bottom || 8,
         },
       }}
@@ -142,7 +139,7 @@ export default function TabsLayout() {
         name="plus"
         options={{
           title: 'Moi',
-          tabBarIcon: ({ focused, size }) => <ProfileTabIcon focused={focused} size={size} />,
+          tabBarIcon: ({ focused }) => <ProfileTabIcon focused={focused} />,
         }}
       />
     </Tabs>
