@@ -461,8 +461,13 @@ export default function AccueilScreen() {
     : `Aujourd'hui · ${salesCount} vente${salesCount !== 1 ? 's' : ''}`;
 
   const isEvening = dayPart === 'evening' || dayPart === 'night';
+  const isBusinessCreatedToday = business?.created_at
+    ? new Date(business.created_at).toDateString() === new Date().toDateString()
+    : false;
   const deltaAmt = isPrivate ? `••••• ${currency}` : fmt(Math.abs(delta), currency);
-  const comparisonText = isEvening
+  const comparisonText = isBusinessCreatedToday
+    ? 'Bienvenue'
+    : isEvening
     ? `Ce mois : ${amtOrMask(kpis?.revenue_month ?? 0)}`
     : delta > 0 ? `↑ ${deltaAmt} de plus qu'hier`
     : delta < 0 ? `↓ ${deltaAmt} de moins qu'hier`
