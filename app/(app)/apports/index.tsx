@@ -167,27 +167,32 @@ function FormSheet({ visible, mode, editing, businessId, currency, saving, offli
         <ScrollView contentContainerStyle={styles.formContent} keyboardShouldPersistTaps="handled">
           {isViewMode ? (
             /* An existing entry (usually a withdrawal, which can't be edited)
-               opened only to see it and attach a photo. Money is read-only. */
-            <View style={{ gap: spacing[4] }}>
-              <View style={{ gap: spacing[1] }}>
-                <Text variant="label" color="secondary">{(editing?.amount ?? 0) < 0 ? 'Montant retiré' : 'Montant apporté'}</Text>
+               opened only to see it and attach a photo. Money is read-only.
+               Clean, spacious composition — the amount is the hero, everything
+               else is a quiet label/value pair. */
+            <View style={styles.viewWrap}>
+              <View style={styles.viewHero}>
+                <Text style={styles.viewMicroLabel}>{(editing?.amount ?? 0) < 0 ? 'Montant retiré' : 'Montant apporté'}</Text>
                 <Text style={styles.viewAmount}>{formatAmount(Math.abs(editing?.amount ?? 0), currency)}</Text>
               </View>
-              {contributorLabel ? (
-                <View style={styles.viewRow}>
-                  <Text variant="label" color="secondary">{(editing?.amount ?? 0) < 0 ? 'Retiré à' : 'De la part de'}</Text>
-                  <Text variant="body">{contributorLabel}</Text>
+
+              <View style={styles.viewDetails}>
+                {contributorLabel ? (
+                  <View style={styles.viewDetailRow}>
+                    <Text style={styles.viewMicroLabel}>{(editing?.amount ?? 0) < 0 ? 'Retiré à' : 'De la part de'}</Text>
+                    <Text style={styles.viewValue}>{contributorLabel}</Text>
+                  </View>
+                ) : null}
+                {note.trim() ? (
+                  <View style={styles.viewDetailRow}>
+                    <Text style={styles.viewMicroLabel}>Note</Text>
+                    <Text style={styles.viewValue}>{note}</Text>
+                  </View>
+                ) : null}
+                <View style={styles.viewDetailRow}>
+                  <Text style={styles.viewMicroLabel}>Date</Text>
+                  <Text style={styles.viewValue}>{fmtDate(date)}</Text>
                 </View>
-              ) : null}
-              {note.trim() ? (
-                <View style={styles.viewRow}>
-                  <Text variant="label" color="secondary">Note</Text>
-                  <Text variant="body">{note}</Text>
-                </View>
-              ) : null}
-              <View style={styles.viewRow}>
-                <Text variant="label" color="secondary">Date</Text>
-                <Text variant="body">{fmtDate(date)}</Text>
               </View>
             </View>
           ) : (
@@ -533,10 +538,9 @@ export default function AportsScreen() {
             const name = displayName(item, userId, membres);
             const isWithdrawal = item.amount < 0;
             const numericPart = formatAmount(Math.abs(item.amount), currency).replace(` ${currency}`, '').trim();
-            const metaParts = [fmtDate(item.injected_at), item.note];
-            if (isWithdrawal && item.created_by_name) metaParts.push(`retiré par ${item.created_by_name}`);
-            if (item.edited_at) metaParts.push(`modifié par ${item.edited_by_name ?? '?'}`);
-            const meta = metaParts.filter(Boolean).join(' · ');
+            // Just the date in the list — note, contributor and edit history all
+            // live in the tap-in detail, so the row stays calm and scannable.
+            const meta = fmtDate(item.injected_at);
             return (
               <Pressable
                 style={styles.row}
@@ -652,7 +656,7 @@ function makeStyles(p: Palette) {
     rowLeft: { flex: 1, gap: 5, marginRight: spacing[4] },
     rowRight: { flexDirection: 'row', alignItems: 'center', gap: spacing[3] },
     rowName: { fontSize: 15, fontWeight: '600', color: p.textPrimary, letterSpacing: -0.2 },
-    rowMeta: { fontSize: 11, fontWeight: '400', color: p.textDisabled, letterSpacing: 0.8, textTransform: 'uppercase' },
+    rowMeta: { fontSize: 12, fontWeight: '400', color: p.textDisabled, letterSpacing: 0.1 },
     rowAmount: { fontSize: 17, fontWeight: '700', color: p.textPrimary, letterSpacing: -0.4 },
     rowPlus: { color: p.success, fontWeight: '700' },
     rowCurrency: { fontSize: 12, fontWeight: '400', color: p.textSecondary },
@@ -670,9 +674,15 @@ function makeStyles(p: Palette) {
       padding: spacing[5], borderTopWidth: 1, borderTopColor: p.border,
       backgroundColor: p.surface,
     },
-    // View mode (read-only entry + photo)
-    viewAmount: { fontSize: 28, fontWeight: '700', color: p.textPrimary, letterSpacing: -0.5 },
-    viewRow: { gap: spacing[1] },
+    // View mode (read-only entry + image) — Ive-clean: hero amount, quiet
+    // micro-labels, generous rhythm.
+    viewWrap:       { gap: spacing[7] },
+    viewHero:       { gap: spacing[2] },
+    viewMicroLabel: { fontSize: 11, fontWeight: '600' as const, color: p.textSecondary, letterSpacing: 0.8, textTransform: 'uppercase' as const },
+    viewAmount:     { fontSize: 36, fontWeight: '700' as const, color: p.textPrimary, letterSpacing: -0.5, lineHeight: 46 },
+    viewDetails:    { gap: spacing[5] },
+    viewDetailRow:  { gap: spacing[1] },
+    viewValue:      { fontSize: 17, fontWeight: '500' as const, color: p.textPrimary, lineHeight: 24 },
 
     amountRow: { flexDirection: 'row', alignItems: 'center', gap: spacing[3] },
     amountInput: {
