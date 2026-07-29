@@ -422,8 +422,7 @@ function ProductFormModal({ visible, editing, onClose, onSave, saving, currency,
               {/* 2 — Variant toggle (early, before prices) */}
               <View style={styles.variantToggleRow}>
                 <View style={{ flex: 1 }}>
-                  <Text variant="body" style={{ fontFamily: FF.medium }}>Ce produit a des variétés ?</Text>
-                  <Text variant="caption" color="secondary">Tailles, couleurs, volumes…</Text>
+                  <Text variant="body" style={{ fontFamily: FF.medium }}>Tailles et couleurs</Text>
                 </View>
                 <Switch
                   value={hasVariants}
