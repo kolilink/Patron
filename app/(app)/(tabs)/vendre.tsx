@@ -769,15 +769,24 @@ interface ProductTileProps {
   onAddBulk?: () => void;
   cartQty: number;
   cartBulkQty: number;
+  /** Only meaningful when product.has_variants — undefined while still loading. */
+  variants?: ProductVariant[];
 }
 
-function ProductTile({ product, currency, onAdd, onAddBulk, cartQty, cartBulkQty }: ProductTileProps) {
+function ProductTile({ product, currency, onAdd, onAddBulk, cartQty, cartBulkQty, variants }: ProductTileProps) {
   const { palette } = useTheme();
   const styles = useMemo(() => makeStyles(palette), [palette]);
   const totalInCart = cartQty + cartBulkQty;
-  // Variant products always have stock_qty=0 on the parent — never treat them as out-of-stock.
-  // For plain products, stock already reserved in the cart is no longer sellable this session.
-  const outOfStock = !product.has_variants && product.stock_qty - totalInCart <= 0;
+  // Variant products always have stock_qty=0 on the parent, so that field alone
+  // can't say whether the product is out of stock — a product whose every
+  // variant is at 0 must still show/behave as out-of-stock here, or the tile
+  // stays tappable and opens a picker where nothing can actually be added.
+  // `variants` undefined (not loaded yet) intentionally reads as "not out of
+  // stock" — same fail-open default the grid's own filtering already uses —
+  // rather than flashing every tile as unavailable while variants load.
+  const outOfStock = product.has_variants
+    ? !!(variants && variants.length > 0 && variants.every(v => v.stock_qty <= 0))
+    : product.stock_qty - totalInCart <= 0;
   const hasBulk = !!(product.bulk_price && product.bulk_min_qty);
 
   return (
@@ -801,11 +810,13 @@ function ProductTile({ product, currency, onAdd, onAddBulk, cartQty, cartBulkQty
         </View>
       )}
       <Text variant="label" numberOfLines={2} style={styles.tileName}>{product.name}</Text>
-      {!product.has_variants && (
+      {!product.has_variants ? (
         <Text variant="caption" color="secondary" numberOfLines={1}>
           {outOfStock ? 'Épuisé' : `${product.stock_qty - totalInCart} ${product.unit}`}
         </Text>
-      )}
+      ) : outOfStock ? (
+        <Text variant="caption" color="secondary" numberOfLines={1}>Épuisé</Text>
+      ) : null}
       <View style={{ flexDirection: 'row', alignItems: 'center', justifyContent: 'space-between' }}>
         <Text variant="label" style={{ color: outOfStock ? palette.textDisabled : palette.primary }}>
           {formatAmount(product.sale_price, currency)}
@@ -1605,6 +1616,7 @@ export default function VendreScreen() {
             currency={currency}
             cartQty={cartQtyMap[item.id]?.unit ?? 0}
             cartBulkQty={cartQtyMap[item.id]?.bulk ?? 0}
+            variants={variantsByProduct[item.id]}
             onAdd={() => {
               if (item.sale_price <= 0) {
                 Alert.alert('Prix manquant', 'Ajoutez un prix de vente pour ce produit.');

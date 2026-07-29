@@ -820,14 +820,27 @@ interface ProductRowProps {
   onPress: () => void;
   onLongPress?: () => void;
   archived?: boolean;
+  /** Only meaningful when product.has_variants — undefined while still loading. */
+  variants?: ProductVariant[];
 }
 
-function StockStatus({ product }: { product: Product }) {
+function StockStatus({ product, variants }: { product: Product; variants?: ProductVariant[] }) {
   const { palette } = useTheme();
   const styles = useMemo(() => makeStyles(palette), [palette]);
 
   if (product.has_variants) {
-    return null;
+    // Parent stock_qty is always 0 for a variant product — real stock lives
+    // per-variant. Undefined (not loaded yet) intentionally shows nothing,
+    // same fail-open default the Actifs/Épuisés split already uses, rather
+    // than flashing "Épuisé" while variants are still being fetched.
+    if (!variants || variants.length === 0) return null;
+    const isOut = variants.every(v => v.stock_qty <= 0);
+    if (!isOut) return null;
+    return (
+      <View style={styles.stockOutRow}>
+        <Text style={styles.stockOutText}>Épuisé</Text>
+      </View>
+    );
   }
 
   const isOut = product.stock_qty === 0;
@@ -865,13 +878,17 @@ function productBadgeTextColor(name: string) {
   return PRODUCT_BADGE_PALETTE.text[sum % PRODUCT_BADGE_PALETTE.text.length];
 }
 
-function ProductRow({ product, currency, onPress, onLongPress, archived }: ProductRowProps) {
+function ProductRow({ product, currency, onPress, onLongPress, archived, variants }: ProductRowProps) {
   const { palette } = useTheme();
   const styles = useMemo(() => makeStyles(palette), [palette]);
   const badgeBg = productBadgeColor(product.name);
   const badgeTextColor = productBadgeTextColor(product.name);
   const initial = product.name.charAt(0).toUpperCase();
-  const isOutOfStock = !archived && !product.has_variants && product.stock_qty === 0;
+  const isOutOfStock = !archived && (
+    product.has_variants
+      ? !!(variants && variants.length > 0 && variants.every(v => v.stock_qty <= 0))
+      : product.stock_qty === 0
+  );
 
   if (archived) {
     return (
@@ -911,7 +928,7 @@ function ProductRow({ product, currency, onPress, onLongPress, archived }: Produ
             </View>
           ) : null}
         </View>
-        <StockStatus product={product} />
+        <StockStatus product={product} variants={variants} />
       </View>
       <View style={[styles.productRight, product.has_variants && { alignSelf: 'stretch' }]}>
         <Text style={[styles.priceText, isOutOfStock && { color: palette.textDisabled }]}>
@@ -1398,6 +1415,7 @@ export default function CatalogueScreen() {
               product={item}
               currency={currency}
               archived={tab === 'archives'}
+              variants={variantsByProduct[item.id]}
               onPress={() => {
                 if (tab === 'archives') {
                   setRestoreSheetProduct(item);
@@ -1454,6 +1472,7 @@ export default function CatalogueScreen() {
               <ProductRow
                 product={item}
                 currency={currency}
+                variants={variantsByProduct[item.id]}
                 onPress={() => {
                   setShowOutOfStockModal(false);
                   setTimeout(() => openOptions(item), 350);
