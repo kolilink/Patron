@@ -274,6 +274,7 @@ function ProductFormModal({ visible, editing, onClose, onSave, saving, currency,
   const [hasVariants, setHasVariants] = useState(false);
   const [variantDraft, setVariantDraft] = useState<VariantDraftItem[]>([]);
   const nameRef = useRef<TextInput>(null);
+  const raf2Ref = useRef<number | null>(null);
   const purchasePriceRef = useRef<TextInput>(null);
   const salePriceRef = useRef<TextInput>(null);
   const initialStockRef = useRef<TextInput>(null);
@@ -302,7 +303,23 @@ function ProductFormModal({ visible, editing, onClose, onSave, saving, currency,
       } else {
         setVariantDraft([]);
       }
-      setTimeout(() => nameRef.current?.focus(), 200);
+      // Focus as soon as the native TextInput node actually exists, not on a
+      // flat guessed delay — the old 200ms fired well after the sheet's own
+      // slide-up had mostly finished, so the keyboard's rise started as a
+      // separate, later beat instead of overlapping the sheet's motion. Two
+      // rAFs: the first lets this render's commit flush, the second lets the
+      // native node mount off the back of that — the earliest frame it's
+      // actually safe to call .focus(), so the keyboard starts rising
+      // together with the sheet instead of after it settles.
+      const raf1 = requestAnimationFrame(() => {
+        raf2Ref.current = requestAnimationFrame(() => {
+          nameRef.current?.focus();
+        });
+      });
+      return () => {
+        cancelAnimationFrame(raf1);
+        if (raf2Ref.current !== null) cancelAnimationFrame(raf2Ref.current);
+      };
     }
   }, [visible, editing, initialVariants]);
 
@@ -422,7 +439,7 @@ function ProductFormModal({ visible, editing, onClose, onSave, saving, currency,
               {/* 2 — Variant toggle (early, before prices) */}
               <View style={styles.variantToggleRow}>
                 <View style={{ flex: 1 }}>
-                  <Text variant="body" style={{ fontFamily: FF.medium }}>Tailles et couleurs</Text>
+                  <Text variant="body" color="secondary" style={{ fontFamily: FF.medium }}>Tailles et couleurs</Text>
                 </View>
                 <Switch
                   value={hasVariants}
@@ -1374,7 +1391,7 @@ export default function CatalogueScreen() {
                     ? '1 produit est fini'
                     : `${outOfStockActive.length} produits sont finis`}
                 </Text>
-                <Text style={[styles.statValue, { color: palette.primary }]}>Voir →</Text>
+                <Text style={[styles.statValue, { color: palette.primary }]}>Voir</Text>
               </Pressable>
             </>
           )}

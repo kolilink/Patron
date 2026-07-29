@@ -1,5 +1,5 @@
-import { useEffect } from 'react';
-import { View } from 'react-native';
+import { useEffect, useRef } from 'react';
+import { Animated, View } from 'react-native';
 import { Tabs } from 'expo-router';
 import { router } from 'expo-router';
 import { Ionicons } from '@expo/vector-icons';
@@ -44,6 +44,27 @@ function ProfileTabIcon({ focused }: { focused: boolean }) {
         </Text>
       </View>
     </View>
+  );
+}
+
+// Home only — a small spring "pop" the instant the tab becomes active,
+// instead of the flat instant glyph/color swap every other tab still uses.
+// Scoped deliberately to this one icon (not a shared helper) so the other
+// three tabs are completely untouched by this change.
+function HomeTabIcon({ color, focused }: { color: string; focused: boolean }) {
+  const scale = useRef(new Animated.Value(1)).current;
+
+  useEffect(() => {
+    if (focused) {
+      scale.setValue(0.75);
+      Animated.spring(scale, { toValue: 1, useNativeDriver: true, bounciness: 14, speed: 16 }).start();
+    }
+  }, [focused, scale]);
+
+  return (
+    <Animated.View style={{ transform: [{ scale }] }}>
+      <Ionicons name={focused ? 'home' : 'home-outline'} size={TAB_ICON_SIZE} color={color} />
+    </Animated.View>
   );
 }
 
@@ -112,7 +133,7 @@ export default function TabsLayout() {
         name="index"
         options={{
           title: 'Accueil',
-          tabBarIcon: tabIcon('home-outline', 'home'),
+          tabBarIcon: ({ color, focused }) => <HomeTabIcon color={color} focused={focused} />,
         }}
       />
       <Tabs.Screen
