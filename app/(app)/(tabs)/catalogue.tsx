@@ -26,7 +26,7 @@ import { Text } from '@/src/components/ui/Text';
 import { PhoneInput } from '@/src/components/ui/PhoneInput';
 import { EmptyStateFabArrow } from '@/src/components/ui/EmptyStateFabArrow';
 import { Ionicons } from '@expo/vector-icons';
-import { useTheme, radius, spacing, fontFamily as FF, PRODUCT_BADGE_PALETTE } from '@/src/theme';
+import { useTheme, radius, spacing, shadow, fontFamily as FF, PRODUCT_BADGE_PALETTE } from '@/src/theme';
 import type { Palette } from '@/src/theme';
 import type { Product, ProductVariant } from '@/src/types';
 import { useAuthStore } from '@/stores/auth';
@@ -1674,8 +1674,14 @@ function makeStyles(p: Palette) {
     },
     modalCancel: { minWidth: 64 },
     modalContent: { padding: spacing[5], gap: spacing[4] },
+    // Depth from a soft upward shadow instead of a tinted panel + hairline —
+    // background matches the screen itself so there's no visible "canvas"
+    // behind the button, just enough shadow to read as pinned above the
+    // scrollable content on both platforms (shadow props on iOS, elevation
+    // on Android — shadow.md already bundles both).
     modalFooter: {
-      padding: spacing[5], borderTopWidth: 1, borderTopColor: p.border, backgroundColor: p.surface,
+      padding: spacing[5], backgroundColor: p.background,
+      ...shadow.md, shadowOffset: { width: 0, height: -2 },
     },
     formError: { backgroundColor: p.warningLight, borderRadius: radius.md, padding: spacing[3] },
 
