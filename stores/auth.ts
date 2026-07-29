@@ -9,7 +9,7 @@ import { generateId } from '@/lib/id';
 import { syncKnownBusinesses } from '@/lib/knownBusinesses';
 import { getKV, setKV } from '@/lib/db';
 import { isLocked, setLocked } from '@/lib/lock';
-import { withTimeout } from '@/lib/sync';
+import { withTimeout, withNetworkRetry, reportOfflineFallback } from '@/lib/sync';
 import type { AppSession, Business, Membership, Role, User } from '@/src/types';
 import { useProductStore } from './products';
 import { useVentesStore } from './ventes';
@@ -325,7 +325,7 @@ export const useAuthStore = create<AuthStore>((set, get) => ({
       // `loading` is still `true` at this point, so a hang below would blank
       // the entire app forever ((app)/_layout.tsx renders null while
       // loading, see CLAUDE.md's "Critical: auth store loading flag").
-      const { data: { session }, error: sessionError } = await withTimeout(supabase.auth.getSession());
+      const { data: { session }, error: sessionError } = await withNetworkRetry(() => supabase.auth.getSession());
       _currentAccessToken = session?.access_token ?? _currentAccessToken;
 
       // Retry any server-side sign-out that couldn't reach the network last
@@ -341,7 +341,15 @@ export const useAuthStore = create<AuthStore>((set, get) => ({
         // valid server-side — a stale cached session must not keep being
         // trusted indefinitely just because it happens to exist locally.
         if (sessionError && isAuthRetryableFetchError(sessionError)) {
-          // Offline — cached session (if any) already rendered above.
+          // Offline — cached session (if any) already rendered above. Still
+          // must clear `loading` even when there's NO cache to fall back to
+          // (fresh install, or a cleared cache) — otherwise this branch
+          // returns having never set loading:false, and (app)/_layout.tsx
+          // renders null forever, since nothing else in this function will
+          // ever touch `loading` again for this call. See CLAUDE.md's
+          // "Critical: auth store loading flag."
+          reportOfflineFallback('auth.initialize', sessionError);
+          set({ loading: false });
         } else {
           set({ session: null, loading: false });
         }

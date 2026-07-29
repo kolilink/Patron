@@ -3,7 +3,7 @@ import { supabase } from '@/lib/supabase';
 import { translateError } from '@/lib/errors';
 import { generateId } from '@/lib/id';
 import { enqueue, getQueueCount, saveExpenseCache, getExpenseCache, getCacheTimestamp } from '@/lib/db';
-import { isNetworkError, withTimeout } from '@/lib/sync';
+import { isNetworkError, withTimeout, withNetworkRetry, reportOfflineFallback } from '@/lib/sync';
 import { useSyncStore } from '@/stores/sync';
 import { notifyEvent } from '@/src/utils/notifications';
 import { useAuthStore } from '@/stores/auth';
@@ -55,7 +55,7 @@ export const useExpensesStore = create<ExpensesStore>((set, get) => ({
   fetchExpenses: async (businessId) => {
     set({ loading: true, error: null });
     try {
-      const { data, error } = await withTimeout(
+      const { data, error } = await withNetworkRetry(() =>
         supabase
           .from('expenses')
           .select('*, product:products(name)')
@@ -97,6 +97,7 @@ export const useExpensesStore = create<ExpensesStore>((set, get) => ({
       set({ expenses: result, loading: false, offline: false, offlineSince: null });
     } catch (err) {
       if (isNetworkError(err)) {
+        reportOfflineFallback('expenses.fetchExpenses', err);
         const cached = await getExpenseCache(businessId) as Expense[] | null;
         if (isStaleBusiness(businessId)) return;
         if (cached) {

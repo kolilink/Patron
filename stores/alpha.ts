@@ -1,7 +1,7 @@
 import { create } from 'zustand';
 import { supabase } from '@/lib/supabase';
 import { translateError } from '@/lib/errors';
-import { isNetworkError, withTimeout } from '@/lib/sync';
+import { isNetworkError, withTimeout, withNetworkRetry, reportOfflineFallback } from '@/lib/sync';
 import type { AlphaConversation, AlphaMessage, AlphaQuotaStatus } from '@/src/types';
 
 function dedupeAppend(messages: AlphaMessage[], msg: AlphaMessage): AlphaMessage[] {
@@ -59,7 +59,7 @@ export const useAlphaStore = create<AlphaStore>((set, get) => ({
   load: async (businessId) => {
     set({ loading: get().messages.length === 0, error: null });
     try {
-      const { data: conv, error: convErr } = await withTimeout(
+      const { data: conv, error: convErr } = await withNetworkRetry(() =>
         supabase.rpc('open_or_get_alpha_conversation', {
           p_business_id: businessId,
         }),
@@ -67,7 +67,7 @@ export const useAlphaStore = create<AlphaStore>((set, get) => ({
       if (convErr) throw convErr;
 
       const conversation = conv as AlphaConversation;
-      const { data: msgs, error: msgsErr } = await withTimeout(
+      const { data: msgs, error: msgsErr } = await withNetworkRetry(() =>
         supabase
           .from('alpha_messages')
           .select('*')
@@ -81,6 +81,7 @@ export const useAlphaStore = create<AlphaStore>((set, get) => ({
       void get().fetchQuota(businessId);
     } catch (err) {
       if (isNetworkError(err)) {
+        reportOfflineFallback('alpha.load', err);
         set({ loading: false, offline: true });
       } else {
         set({ loading: false, error: translateError(err, 'Erreur de chargement') });
@@ -179,6 +180,7 @@ export const useAlphaStore = create<AlphaStore>((set, get) => ({
       // translateError only overrides it for known Supabase/auth/network
       // patterns.
       const raw = err instanceof Error ? err.message : (err as Record<string, unknown>)?.message as string | undefined;
+      if (netErr) reportOfflineFallback('alpha.sendMessage', err);
       set(state => ({
         messages: state.messages.filter(m => m.id !== localId),
         sending: false,

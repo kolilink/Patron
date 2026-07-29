@@ -3,7 +3,7 @@ import { supabase } from '@/lib/supabase';
 import { translateError } from '@/lib/errors';
 import { generateFallbackName } from '@/lib/id';
 import { saveInvestorCache, getInvestorCache, getCacheTimestamp } from '@/lib/db';
-import { isNetworkError, withTimeout } from '@/lib/sync';
+import { isNetworkError, withNetworkRetry, reportOfflineFallback } from '@/lib/sync';
 
 export interface InvestorPayout {
   id: string;
@@ -52,17 +52,18 @@ export const useInvestorStore = create<InvestorStore>((set, get) => ({
 
   fetchBalance: async (businessId, investorId) => {
     set({ loading: true, error: null });
-    const { data, error } = await withTimeout(
+    const { data, error } = await withNetworkRetry(() =>
       supabase
         .from('investor_balance')
         .select('balance')
         .eq('business_id', businessId)
         .eq('investor_id', investorId)
         .maybeSingle(),
-    );
+    ).catch(err => ({ data: null, error: err }));
 
     if (error) {
       if (isNetworkError(error)) {
+        reportOfflineFallback('investor.fetchBalance', error);
         const key = balanceCacheKey(businessId, investorId);
         const cached = await getInvestorCache(key);
         if (cached != null) {
@@ -94,10 +95,11 @@ export const useInvestorStore = create<InvestorStore>((set, get) => ({
       query = query.eq('investor_id', investorId);
     }
 
-    const { data, error } = await withTimeout(query);
+    const { data, error } = await withNetworkRetry(() => query).catch(err => ({ data: null, error: err }));
 
     if (error) {
       if (isNetworkError(error)) {
+        reportOfflineFallback('investor.fetchPayouts', error);
         const key = payoutsCacheKey(businessId, investorId);
         const cached = await getInvestorCache(key);
         if (cached) {

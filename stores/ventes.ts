@@ -4,7 +4,7 @@ import { generateId, generateFallbackName } from '@/lib/id';
 import { translateError } from '@/lib/errors';
 import { trackEvent } from '@/lib/analytics';
 import { saveVentesCache, getVentesCache, getCacheTimestamp, enqueue, getQueueCount } from '@/lib/db';
-import { isNetworkError, withTimeout } from '@/lib/sync';
+import { isNetworkError, withTimeout, withNetworkRetry, reportOfflineFallback } from '@/lib/sync';
 import { useSyncStore } from '@/stores/sync';
 import { notifyEvent } from '@/src/utils/notifications';
 import { useAuthStore } from '@/stores/auth';
@@ -163,10 +163,11 @@ export const useVentesStore = create<VentesStore>((set, get) => ({
     if (sellerId) query = query.eq('seller_id', sellerId);
     if (since) query = query.gte('sale_date', since);
 
-    const { data, error: fetchErr } = await withTimeout(query).catch(err => ({ data: null, error: err }));
+    const { data, error: fetchErr } = await withNetworkRetry(() => query).catch(err => ({ data: null, error: err }));
     if (isStaleBusiness(businessId)) return;
     if (fetchErr) {
       if (isNetworkError(fetchErr)) {
+        reportOfflineFallback('ventes.fetchSales', fetchErr);
         const cached = await getVentesCache(cacheKey) as Vente[] | null;
         if (isStaleBusiness(businessId)) return;
         if (cached) {
@@ -399,11 +400,29 @@ export const useVentesStore = create<VentesStore>((set, get) => ({
 
     const alreadyPaid = sale.amount_paid ?? 0;
     const owed = sale.total_amount - (sale.discount_amount ?? 0);
+    const remainingBefore = owed - alreadyPaid;
     const newAmountPaid = alreadyPaid + amount;
     const fullyPaid = newAmountPaid >= owed - 0.01;
     const now = new Date().toISOString();
     const paymentId = generateId();
     const amountCents = Math.round(amount * 100);
+
+    // credit_paid notification — mirrors recordClientPayment below. "total"
+    // states the debt that just got cleared (remainingBefore, not the
+    // original sale total, since prior installments may have already
+    // shrunk it); "partiel" states only the amount just paid. Falls back to
+    // a nameless phrasing when the sale has no customer_name.
+    const notifyCreditPayment = () => {
+      const currency = useAuthStore.getState().session?.activeBusiness?.currency ?? 'GNF';
+      notifyEvent({
+        businessId: sale.business_id,
+        eventType: 'credit_paid',
+        payload: fullyPaid
+          ? { customer: sale.customer_name ?? '', amount: formatAmount(remainingBefore, currency), status: 'total' }
+          : { customer: sale.customer_name ?? '', amount: formatAmount(amount, currency), status: 'partiel' },
+        targetRoles: ['administrateur', 'manager'],
+      });
+    };
 
     const applyOptimistic = () => {
       const newPaymentEntry: VentePayment = { id: paymentId, method, amount, date };
@@ -441,6 +460,7 @@ export const useVentesStore = create<VentesStore>((set, get) => ({
       if (rpcErr) throw rpcErr;
       applyOptimistic();
       const result = data as { fully_paid: boolean; payment_id: string };
+      notifyCreditPayment();
       return { ok: true, fullyPaid: result.fully_paid, paymentId: result.payment_id };
     } catch (err) {
       if (isNetworkError(err)) {
@@ -451,6 +471,7 @@ export const useVentesStore = create<VentesStore>((set, get) => ({
         // Queued offline — the RPC hasn't actually run yet, so there is no
         // real server-generated payment id to undo against yet. No `paymentId`
         // returned here on purpose; callers must treat undo as unavailable.
+        notifyCreditPayment();
         return { ok: true, fullyPaid };
       }
       set({ saving: false, error: translateError(err, 'Paiement impossible') });
@@ -475,6 +496,15 @@ export const useVentesStore = create<VentesStore>((set, get) => ({
       set({ saving: false, error: 'Aucun crédit trouvé pour ce client' });
       return { ok: false, fullySettled: false };
     }
+
+    // Sum of what this client owed across all their credit sales right
+    // before this payment — used for the "total" credit_paid notification
+    // ("a totalement payé sa dette de X"), since that's the actual debt that
+    // just got cleared, not just the amount of this one payment.
+    const totalOwedBefore = creditSales.reduce(
+      (sum, s) => sum + (s.total_amount - (s.discount_amount ?? 0) - (s.amount_paid ?? 0)),
+      0,
+    );
 
     let toAllocate = amount;
     const storeUpdates: { id: string; newAmountPaid: number; fullyPaid: boolean; paidAt: string }[] = [];
@@ -548,12 +578,16 @@ export const useVentesStore = create<VentesStore>((set, get) => ({
     }
 
     trackEvent('debt_payment_recorded', businessId, null, { fully_settled: fullySettled });
-    if (fullySettled) {
+    // Always notify — not just on full settlement — so a partial installment
+    // ("a payé X de son crédit") is visible too, not just the final one.
+    {
       const currency = useAuthStore.getState().session?.activeBusiness?.currency ?? 'GNF';
       notifyEvent({
         businessId,
         eventType: 'credit_paid',
-        payload: { customer: customerName, amount: formatAmount(amount, currency) },
+        payload: fullySettled
+          ? { customer: customerName, amount: formatAmount(totalOwedBefore, currency), status: 'total' }
+          : { customer: customerName, amount: formatAmount(amount, currency), status: 'partiel' },
         targetRoles: ['administrateur', 'manager'],
       });
     }

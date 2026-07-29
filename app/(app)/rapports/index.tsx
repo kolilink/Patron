@@ -1,5 +1,5 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
-import { Animated, Easing, Pressable, ScrollView, StyleSheet, View } from 'react-native';
+import { Animated, Easing, LayoutAnimation, Platform, Pressable, ScrollView, StyleSheet, UIManager, View } from 'react-native';
 import { Screen } from '@/src/components/ui/Screen';
 import { router, useFocusEffect } from 'expo-router';
 import { Card } from '@/src/components/ui/Card';
@@ -174,6 +174,63 @@ export default function RapportsScreen() {
   const [customStart, setCustomStart] = useState('');
   const [customEnd, setCustomEnd]     = useState('');
 
+  // Picking a chip (or stepping/typing a new range) makes a sub-control
+  // and/or the detail panel appear or change shape below the chips row.
+  // Two complementary motions handle this, not one:
+  //  1. A native ease-in-ease-out LayoutAnimation (fade + reflow) smooths
+  //     the content that's already on screen changing shape — no hard cut.
+  //  2. A hand-driven, calm scroll (below) nudges the viewport when the
+  //     new/changed content would otherwise land off-screen — LayoutAnimation
+  //     alone never moves the scroll position, so without this, content
+  //     appearing below the fold is invisible until the user finds it
+  //     themselves.
+  useEffect(() => {
+    if (Platform.OS === 'android') UIManager.setLayoutAnimationEnabledExperimental?.(true);
+  }, []);
+  const animateFilterChange = () => {
+    LayoutAnimation.configureNext(
+      LayoutAnimation.create(280, LayoutAnimation.Types.easeInEaseOut, LayoutAnimation.Properties.opacity),
+    );
+  };
+
+  const scrollRef = useRef<ScrollView>(null);
+  const filterSectionY = useRef(0);
+  const currentScrollY = useRef(0);
+  const scrollAnimFrame = useRef<number | null>(null);
+
+  // RN's ScrollView.scrollTo({animated:true}) has no duration knob — its
+  // native animation is a fixed, fairly quick easing curve, closer to a
+  // flick than the calm/unhurried feel this screen wants. Driven by hand
+  // instead: sample eased intermediate offsets over `duration` via rAF,
+  // applied with animated:false (each frame is already the eased position,
+  // native animation on top would fight it). Sine ease-in-out — a smooth,
+  // continuous half-cosine with no sharp acceleration anywhere in the
+  // curve — is the gentlest of the common easings, the same "don't demand
+  // attention" motion quality as this app's breathing CTA pulse (see
+  // PaywallScreen's BREATH_HALF_CYCLE_MS).
+  const easeInOutSine = (t: number) => -(Math.cos(Math.PI * t) - 1) / 2;
+  const smoothScrollTo = useCallback((targetY: number, duration = 1500) => {
+    if (scrollAnimFrame.current != null) cancelAnimationFrame(scrollAnimFrame.current);
+    const startY = currentScrollY.current;
+    const distance = targetY - startY;
+    const startTime = Date.now();
+    const step = () => {
+      const elapsed = Date.now() - startTime;
+      const t = Math.min(elapsed / duration, 1);
+      scrollRef.current?.scrollTo({ y: startY + distance * easeInOutSine(t), animated: false });
+      if (t < 1) {
+        scrollAnimFrame.current = requestAnimationFrame(step);
+      } else {
+        scrollAnimFrame.current = null;
+      }
+    };
+    scrollAnimFrame.current = requestAnimationFrame(step);
+  }, []);
+
+  useEffect(() => () => {
+    if (scrollAnimFrame.current != null) cancelAnimationFrame(scrollAnimFrame.current);
+  }, []);
+
   // Reset the active filter whenever the business OR the viewed year
   // changes, and re-anchor the week/month steppers inside the newly
   // viewed year (today for the current year, Dec 31 for a past one) —
@@ -182,13 +239,17 @@ export default function RapportsScreen() {
   // month labels no longer repeat the year (it's redundant with the year
   // selector above, so a mismatched anchor would be invisible in the UI).
   useEffect(() => {
+    animateFilterChange();
     setFilterType(null);
     const anchor = year === currentYear ? todayIso() : `${year}-12-31`;
     setWeekAnchor(anchor);
     setMonthAnchor(anchor);
   }, [businessId, year, currentYear]);
 
-  const selectFilter = (key: FilterType) => setFilterType(prev => (prev === key ? null : key));
+  const selectFilter = (key: FilterType) => {
+    animateFilterChange();
+    setFilterType(prev => (prev === key ? null : key));
+  };
 
   const filterRange = useMemo(() => {
     switch (filterType) {
@@ -202,6 +263,24 @@ export default function RapportsScreen() {
         return customStart && customEnd ? clampToToday({ start: customStart, end: customEnd }) : null;
     }
   }, [filterType, weekAnchor, monthAnchor, customStart, customEnd]);
+
+  // Fires when a chip is picked, switched, or its range resolves (e.g.
+  // Personnalisé only gets a filterRange once both dates are typed) — never
+  // on deselect (filterType null), since collapsing content needs no scroll.
+  useEffect(() => {
+    if (!filterType) return;
+    const t = setTimeout(() => {
+      const target = Math.max(filterSectionY.current - spacing[4], 0);
+      // Skip the nudge entirely when we're already this close — otherwise
+      // switching Semaine → Mois while both sit in roughly the same place
+      // re-fires a full scroll each time, which reads as the screen
+      // fighting the tap instead of just swapping the numbers in place.
+      if (Math.abs(target - currentScrollY.current) > 40) {
+        smoothScrollTo(target);
+      }
+    }, 60);
+    return () => clearTimeout(t);
+  }, [filterType, filterRange?.start, filterRange?.end, smoothScrollTo]);
 
   useFocusEffect(
     useCallback(() => {
@@ -238,11 +317,11 @@ export default function RapportsScreen() {
 
   const legend = (
     <View style={styles.legendRow}>
-      <Text variant="caption" color="secondary">Moins</Text>
+      <Text variant="caption" color="secondary">−</Text>
       <View style={[styles.legendSwatch, { backgroundColor: palette.border }]} />
       <View style={[styles.legendSwatch, { backgroundColor: `${palette.success}4D` }]} />
       <View style={[styles.legendSwatch, { backgroundColor: `${palette.success}FF` }]} />
-      <Text variant="caption" color="secondary">Plus</Text>
+      <Text variant="caption" color="secondary">+</Text>
     </View>
   );
 
@@ -261,13 +340,26 @@ export default function RapportsScreen() {
     switch (filterType) {
       case 'semaine': {
         const r = weekRange(dayFromIso(weekAnchor));
+        // Can't step into a week that hasn't happened yet — there's no
+        // sales data for the future. Without this bound, stepping forward
+        // past today's week produced a range clampToToday then silently
+        // collapsed into a confusing single "today" day, while the chip
+        // above still showed the full (fictional) future week.
+        const currentWeekStart = weekRange(new Date()).start;
+        const atLastWeek = r.start >= currentWeekStart;
         return (
           <View style={styles.stepperRow}>
             <Pressable onPress={() => setWeekAnchor(iso => isoOf(new Date(dayFromIso(iso).setDate(dayFromIso(iso).getDate() - 7))))}>
               <Text variant="h4" color="secondary">‹</Text>
             </Pressable>
-            <Text variant="body">Semaine du {fmtDateFr(r.start)} au {fmtDateFr(r.end)}</Text>
-            <Pressable onPress={() => setWeekAnchor(iso => isoOf(new Date(dayFromIso(iso).setDate(dayFromIso(iso).getDate() + 7))))}>
+            <Text variant="body">{fmtDateFr(r.start)} au {fmtDateFr(r.end)}</Text>
+            {/* Hidden entirely (not just greyed) once the next step would
+                land in the future — there's nothing there to go see. */}
+            <Pressable
+              onPress={() => setWeekAnchor(iso => isoOf(new Date(dayFromIso(iso).setDate(dayFromIso(iso).getDate() + 7))))}
+              disabled={atLastWeek}
+              style={atLastWeek ? { opacity: 0 } : undefined}
+            >
               <Text variant="h4" color="secondary">›</Text>
             </Pressable>
           </View>
@@ -290,11 +382,14 @@ export default function RapportsScreen() {
               <Text variant="h4" color={atFirstMonth ? 'disabled' : 'secondary'}>‹</Text>
             </Pressable>
             <Text variant="body">{fmtMonthFr(r.start)}</Text>
+            {/* Hidden entirely (not just greyed) once the next step would
+                land in the future — there's nothing there to go see. */}
             <Pressable
-              onPress={() => !atLastMonth && setMonthAnchor(iso => { const d = dayFromIso(iso); return isoOf(new Date(d.getFullYear(), d.getMonth() + 1, 1)); })}
+              onPress={() => setMonthAnchor(iso => { const d = dayFromIso(iso); return isoOf(new Date(d.getFullYear(), d.getMonth() + 1, 1)); })}
               disabled={atLastMonth}
+              style={atLastMonth ? { opacity: 0 } : undefined}
             >
-              <Text variant="h4" color={atLastMonth ? 'disabled' : 'secondary'}>›</Text>
+              <Text variant="h4" color="secondary">›</Text>
             </Pressable>
           </View>
         );
@@ -303,10 +398,10 @@ export default function RapportsScreen() {
         return (
           <View style={styles.customRow}>
             <View style={{ flex: 1 }}>
-              <DatePickerField label="Début" value={customStart} onChange={setCustomStart} maxToday minDate={`${year}-01-01`} />
+              <DatePickerField label="Début" value={customStart} onChange={v => { animateFilterChange(); setCustomStart(v); }} maxToday minDate={`${year}-01-01`} />
             </View>
             <View style={{ flex: 1 }}>
-              <DatePickerField label="Fin" value={customEnd} onChange={setCustomEnd} maxToday minDate={customStart || `${year}-01-01`} />
+              <DatePickerField label="Fin" value={customEnd} onChange={v => { animateFilterChange(); setCustomEnd(v); }} maxToday minDate={customStart || `${year}-01-01`} />
             </View>
           </View>
         );
@@ -362,7 +457,10 @@ export default function RapportsScreen() {
           <Text variant="h4">{seesWholeBusiness ? 'Les chiffres' : 'Mes chiffres'}</Text>
           <View style={{ width: 60 }} />
         </View>
-        <OfflineNotice offlineSince={periodOfflineSince} />
+        <OfflineNotice
+          offlineSince={periodOfflineSince}
+          onRetry={() => { if (role) fetchYearReport(businessId, year, role, userId); }}
+        />
         <View style={styles.content}>
           <Text variant="body" color="secondary" style={{ textAlign: 'center', marginTop: spacing[8] }}>
             Données non disponibles hors ligne. Ouvrez l'application en ligne une première fois pour activer le mode hors ligne.
@@ -382,9 +480,24 @@ export default function RapportsScreen() {
         <View style={{ width: 60 }} />
       </View>
 
-      {periodOffline && <OfflineNotice offlineSince={periodOfflineSince} />}
+      {periodOffline && (
+        <OfflineNotice
+          offlineSince={periodOfflineSince}
+          onRetry={() => {
+            if (!role) return;
+            if (filterRange) fetchFilterReport(businessId, filterRange.start, filterRange.end, role, userId);
+            else fetchYearReport(businessId, year, role, userId);
+          }}
+        />
+      )}
 
-      <ScrollView contentContainerStyle={styles.content} showsVerticalScrollIndicator={false}>
+      <ScrollView
+        ref={scrollRef}
+        contentContainerStyle={styles.content}
+        showsVerticalScrollIndicator={false}
+        onScroll={e => { currentScrollY.current = e.nativeEvent.contentOffset.y; }}
+        scrollEventThrottle={16}
+      >
 
         {/* ── Year selector — floored at the year the business started ────── */}
         <View style={styles.yearRow}>
@@ -392,8 +505,15 @@ export default function RapportsScreen() {
             <Text variant="h4" color={year <= creationYear ? 'disabled' : 'secondary'}>‹</Text>
           </Pressable>
           <Text variant="h3">{year}</Text>
-          <Pressable onPress={() => year < currentYear && setYear(y => y + 1)} hitSlop={12} disabled={year >= currentYear}>
-            <Text variant="h4" color={year >= currentYear ? 'disabled' : 'secondary'}>›</Text>
+          {/* Hidden entirely (not just greyed) once the next year would be
+              in the future — there's nothing there to go see. */}
+          <Pressable
+            onPress={() => setYear(y => y + 1)}
+            hitSlop={12}
+            disabled={year >= currentYear}
+            style={year >= currentYear ? { opacity: 0 } : undefined}
+          >
+            <Text variant="h4" color="secondary">›</Text>
           </Pressable>
         </View>
 
@@ -431,25 +551,30 @@ export default function RapportsScreen() {
         </Card>
 
         {/* ── Period filter ─────────────────────────────────────────────────── */}
-        {filterChipsRow}
-        {filterSubControl}
+        <View
+          style={{ gap: spacing[4] }}
+          onLayout={e => { filterSectionY.current = e.nativeEvent.layout.y; }}
+        >
+          {filterChipsRow}
+          {filterSubControl}
 
-        {/* ── Period detail panel — only while a filter chip is active. ────────
-             Tapping the active chip again clears it and hides this panel. */}
-        {filterRange && (
-          <>
-            <SectionSep label={periodLabel} />
-            {!isVendeur && (
-              <StatCard
-                label="Bénéfice de la période" loading={filterReportLoading}
-                value={fmt(filterReport?.net_profit ?? 0, currency)}
-                accent={(filterReport?.net_profit ?? 0) >= 0 ? palette.success : palette.warning}
-                bg={(filterReport?.net_profit ?? 0) >= 0 ? palette.successLight : palette.warningLight}
-              />
-            )}
-            {renderVolumeRow(filterReport, filterReportLoading)}
-          </>
-        )}
+          {/* ── Period detail panel — only while a filter chip is active. ──────
+               Tapping the active chip again clears it and hides this panel. */}
+          {filterRange && (
+            <>
+              <SectionSep label={periodLabel} />
+              {!isVendeur && (
+                <StatCard
+                  label="Bénéfice de la période" loading={filterReportLoading}
+                  value={fmt(filterReport?.net_profit ?? 0, currency)}
+                  accent={(filterReport?.net_profit ?? 0) >= 0 ? palette.success : palette.warning}
+                  bg={(filterReport?.net_profit ?? 0) >= 0 ? palette.successLight : palette.warningLight}
+                />
+              )}
+              {renderVolumeRow(filterReport, filterReportLoading)}
+            </>
+          )}
+        </View>
 
 
       </ScrollView>

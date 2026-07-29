@@ -106,7 +106,7 @@ export default function CreerScreen() {
 
   return (
     <Screen>
-      <KeyboardAvoidingView behavior={Platform.OS === 'ios' ? 'padding' : 'height'} style={styles.kav}>
+      <KeyboardAvoidingView behavior={Platform.OS === 'ios' ? 'padding' : undefined} style={styles.kav}>
         <ScrollView
           contentContainerStyle={styles.scrollContent}
           keyboardShouldPersistTaps="handled"
@@ -203,7 +203,7 @@ export default function CreerScreen() {
 function makeStyles(p: Palette) {
   return StyleSheet.create({
     safe:          { flex: 1, backgroundColor: p.background },
-    kav:           { flex: 1 },
+    kav:           { flex: 1, backgroundColor: p.background },
     scrollContent: { flexGrow: 1 },
     content:       { flex: 1, padding: spacing[6], gap: spacing[8], justifyContent: 'center' },
     contentTop:    { justifyContent: 'flex-start', paddingBottom: spacing[10] },

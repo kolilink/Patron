@@ -3,7 +3,7 @@ import { supabase } from '@/lib/supabase';
 import { translateError } from '@/lib/errors';
 import { generateId } from '@/lib/id';
 import { saveProductCache, getProductCache, enqueue, getQueueCount, getCacheTimestamp } from '@/lib/db';
-import { isNetworkError, withTimeout } from '@/lib/sync';
+import { isNetworkError, withNetworkRetry, reportOfflineFallback } from '@/lib/sync';
 import { useSyncStore } from '@/stores/sync';
 import { useAuthStore } from '@/stores/auth';
 import { trackEvent } from '@/lib/analytics';
@@ -113,7 +113,7 @@ export const useProductStore = create<ProductStore>((set, get) => ({
       set({ error: null });
     }
     try {
-      const { data, error } = await withTimeout(
+      const { data, error } = await withNetworkRetry(() =>
         supabase
           .from('products')
           .select('*')
@@ -160,6 +160,7 @@ export const useProductStore = create<ProductStore>((set, get) => ({
       }
     } catch (err) {
       if (isNetworkError(err)) {
+        reportOfflineFallback('products.fetchProducts', err);
         const cached = await getProductCache(businessId);
         if (isStaleBusiness(businessId)) return;
         if (cached) {

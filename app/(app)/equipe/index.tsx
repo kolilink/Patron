@@ -1,8 +1,9 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { Alert, Animated, Easing, FlatList, Linking, Modal, Pressable, ScrollView, Share, StyleSheet, TextInput, View } from 'react-native';
 import { Ionicons } from '@expo/vector-icons';
-import { SafeAreaView, useSafeAreaInsets } from 'react-native-safe-area-context';
+import { SafeAreaView } from 'react-native-safe-area-context';
 import { Screen } from '@/src/components/ui/Screen';
+import { FormSheet } from '@/src/components/ui/FormSheet';
 import { router, useFocusEffect } from 'expo-router';
 import { AppSheet } from '@/src/components/ui/AppSheet';
 import { SkeletonList } from '@/src/components/ui/SkeletonPlaceholder';
@@ -71,7 +72,6 @@ interface ProductScopePickerProps {
 function ProductScopePicker({ visible, onClose, products, selectedIds, onConfirm, currency }: ProductScopePickerProps) {
   const { palette } = useTheme();
   const styles = useMemo(() => makeStyles(palette), [palette]);
-  const insets = useSafeAreaInsets();
   const [search, setSearch] = useState('');
   const [selected, setSelected] = useState<Set<string>>(new Set());
 
@@ -96,16 +96,17 @@ function ProductScopePicker({ visible, onClose, products, selectedIds, onConfirm
   };
 
   return (
-    <Modal visible={visible} animationType="slide" presentationStyle="pageSheet" onRequestClose={onClose}>
-      <SafeAreaView style={[styles.modalSafe, { paddingBottom: insets.bottom }]}>
-        <View style={styles.mhdr}>
-          <Pressable onPress={onClose}><Text variant="body" color="secondary">Annuler</Text></Pressable>
-          <Text variant="h4">Choisir les produits</Text>
-          <Pressable onPress={() => onConfirm([...selected])}>
-            <Text variant="label" style={{ color: palette.primary }}>Confirmer</Text>
-          </Pressable>
-        </View>
-
+    <FormSheet
+      visible={visible}
+      onClose={onClose}
+      title="Choisir les produits"
+      headerRight={
+        <Pressable onPress={() => onConfirm([...selected])}>
+          <Text variant="label" style={{ color: palette.primary }}>Confirmer</Text>
+        </Pressable>
+      }
+      scrollable={false}
+    >
         {/* Search */}
         <View style={styles.pickerSearch}>
           <TextInput
@@ -150,8 +151,7 @@ function ProductScopePicker({ visible, onClose, products, selectedIds, onConfirm
             </View>
           }
         />
-      </SafeAreaView>
-    </Modal>
+    </FormSheet>
   );
 }
 
@@ -307,17 +307,14 @@ function MemberDetailSheet({
   const noScope = scope.length === 0;
 
   return (
-    <Modal visible={visible} animationType="slide" presentationStyle="pageSheet" onRequestClose={onClose}>
-      <SafeAreaView style={styles.modalSafe}>
-        <View style={styles.mhdr}>
-          <Pressable onPress={onClose}><Text variant="body" color="secondary">Fermer</Text></Pressable>
-          <Text variant="h4" numberOfLines={1} style={{ flex: 1, textAlign: 'center' }}>
-            {displayedName}
-          </Text>
-          <View style={{ width: 60 }} />
-        </View>
-
-        <ScrollView contentContainerStyle={styles.mpad} keyboardShouldPersistTaps="handled">
+    <>
+    <FormSheet
+      visible={visible}
+      onClose={onClose}
+      title={displayedName}
+      cancelLabel="Fermer"
+      contentContainerStyle={styles.mpad}
+    >
           {/* Identity */}
           <View style={styles.identityRow}>
             <View style={[styles.avatar, { backgroundColor: avatarColor(displayedName) + '20' }]}>
@@ -553,8 +550,7 @@ function MemberDetailSheet({
               )}
             </>
           )}
-        </ScrollView>
-      </SafeAreaView>
+    </FormSheet>
 
       <ProductScopePicker
         visible={showPicker}
@@ -566,7 +562,14 @@ function MemberDetailSheet({
       />
 
       {/* Payout confirmation sheet */}
-      <Modal visible={showPayoutSheet} transparent animationType="slide" onRequestClose={() => setShowPayoutSheet(false)}>
+      <Modal
+        visible={showPayoutSheet}
+        transparent
+        animationType="slide"
+        onRequestClose={() => setShowPayoutSheet(false)}
+        statusBarTranslucent
+        navigationBarTranslucent
+      >
         <Pressable style={styles.payoutBackdrop} onPress={() => setShowPayoutSheet(false)}>
           <Pressable style={[styles.payoutPanel, { backgroundColor: palette.surface }]} onPress={() => {}}>
             <View style={[styles.payoutHandle, { backgroundColor: palette.border }]} />
@@ -621,7 +624,7 @@ function MemberDetailSheet({
           </Pressable>
         </Pressable>
       </Modal>
-    </Modal>
+    </>
   );
 }
 
@@ -686,7 +689,7 @@ function NewCodeModal({ visible, onClose, onGenerate, saving, hasManager, produc
   };
 
   return (
-    <Modal visible={visible} animationType="slide" presentationStyle="formSheet" onRequestClose={onClose}>
+    <Modal visible={visible} animationType="slide" presentationStyle="formSheet" onRequestClose={onClose} statusBarTranslucent navigationBarTranslucent backdropColor={palette.background}>
       <SafeAreaView style={styles.modalSafe}>
         <View style={styles.mhdr}>
           <Pressable onPress={onClose}><Text variant="body" color="secondary">Annuler</Text></Pressable>
@@ -853,7 +856,7 @@ function CodeRevealModal({ visible, code, role, businessName, onClose }: CodeRev
   const shareMsg = `${businessName} vous invite à rejoindre son équipe sur Patron.\n\nCode d'accès : ${code}\n\nCe code est valable 24 heures.`;
 
   return (
-    <Modal visible={visible} animationType="slide" presentationStyle="formSheet" onRequestClose={onClose}>
+    <Modal visible={visible} animationType="slide" presentationStyle="formSheet" onRequestClose={onClose} statusBarTranslucent navigationBarTranslucent backdropColor={palette.background}>
       <SafeAreaView style={styles.modalSafe}>
         <View style={styles.mhdr}>
           <View style={{ width: 70 }} />
@@ -974,7 +977,9 @@ export default function EquipeScreen() {
         </Pressable>
       </View>
 
-      {offline && <OfflineNotice offlineSince={offlineSince} />}
+      {offline && (
+        <OfflineNotice offlineSince={offlineSince} onRetry={() => fetchMembres(businessId)} />
+      )}
 
       {hasCodes && (
         <View style={styles.tabs}>

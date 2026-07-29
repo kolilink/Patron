@@ -1,5 +1,6 @@
 import { useState } from 'react';
-import { Modal, Pressable, StyleProp, StyleSheet } from 'react-native';
+import { Modal, Platform, Pressable, StyleProp, StyleSheet } from 'react-native';
+import { useSafeAreaInsets } from 'react-native-safe-area-context';
 import { Image, ImageStyle } from 'expo-image';
 import { Ionicons } from '@expo/vector-icons';
 import { colors } from '@/src/theme';
@@ -21,6 +22,11 @@ export interface ImageMessageLike {
 // padded/colored bubble around it), so its own corners ARE the bubble shape.
 export function ImageMessageBubble({ msg, imageStyle }: { msg: ImageMessageLike; imageStyle?: StyleProp<ImageStyle> }) {
   const [viewerOpen, setViewerOpen] = useState(false);
+  const insets = useSafeAreaInsets();
+  // statusBarTranslucent (below) draws the viewer Modal behind the status
+  // bar on Android — nudge the close button down by the real inset so it
+  // doesn't end up under/near the status bar or a camera cutout.
+  const closeTop = Platform.OS === 'android' ? styles.closeBtn.top + insets.top : styles.closeBtn.top;
   if (!msg.image_url) return null;
 
   // Dimensions are known up front (captured at upload time) so the bubble
@@ -45,10 +51,10 @@ export function ImageMessageBubble({ msg, imageStyle }: { msg: ImageMessageLike;
         />
       </Pressable>
 
-      <Modal visible={viewerOpen} transparent animationType="fade" onRequestClose={() => setViewerOpen(false)}>
+      <Modal visible={viewerOpen} transparent animationType="fade" onRequestClose={() => setViewerOpen(false)} statusBarTranslucent navigationBarTranslucent>
         <Pressable style={styles.backdrop} onPress={() => setViewerOpen(false)}>
           <Image source={{ uri: msg.image_url }} style={styles.fullImage} contentFit="contain" />
-          <Pressable style={styles.closeBtn} onPress={() => setViewerOpen(false)} hitSlop={12}>
+          <Pressable style={[styles.closeBtn, { top: closeTop }]} onPress={() => setViewerOpen(false)} hitSlop={12}>
             <Ionicons name="close" size={26} color={colors.neutral[0]} />
           </Pressable>
         </Pressable>

@@ -127,7 +127,7 @@ export default function SupportInboxDetailScreen() {
   };
 
   return (
-    <KeyboardAvoidingView style={{ flex: 1, backgroundColor: palette.background }} behavior={Platform.OS === 'ios' ? 'padding' : 'height'}>
+    <KeyboardAvoidingView style={{ flex: 1, backgroundColor: palette.background }} behavior={Platform.OS === 'ios' ? 'padding' : undefined}>
       <Screen edges={['top']}>
         <View style={styles.header}>
           <Pressable onPress={() => router.back()}>

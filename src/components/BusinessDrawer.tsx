@@ -42,6 +42,10 @@ const DRAWER_CLOSE_DURATION = 300;
 
 const DRAWER_AVATAR_PALETTE = BUSINESS_AVATAR_PALETTE;
 
+// Below this many businesses, the search bar is hidden — most users belong
+// to only one or two, so it's just clutter above a short, glance-able list.
+const SEARCH_MIN_BUSINESSES = 6;
+
 const ROLE_LABEL: Record<Role, string> = {
   administrateur: 'Gérant',
   manager: 'Manager',
@@ -154,12 +158,27 @@ export function BusinessDrawer() {
     router.push('/(app)/onboarding/creer');
   };
 
+  const handleFounderKpi = () => {
+    closeBusinessDrawer();
+    router.push('/(app)/founder-kpi');
+  };
+
   return (
     <Modal
       visible={modalVisible}
       transparent
       animationType="none"
       onRequestClose={closeBusinessDrawer}
+      // This drawer has its own bespoke gesture-driven presentation — it
+      // doesn't fit <FormSheet>'s full-screen slide-up-sheet shape, so it
+      // keeps a raw Modal. But it still contains a keyboard field (the
+      // business search box below), so it needs the same two props
+      // FormSheet sets centrally — see FormSheet.tsx's docstring and
+      // scripts/lib/consistency-checks.js for why: without them, this
+      // Modal's separate Android window isn't edge-to-edge aware while the
+      // rest of the app is, which is what caused the keyboard-flicker bug.
+      statusBarTranslucent
+      navigationBarTranslucent
     >
       {/* Backdrop */}
       <Animated.View style={[StyleSheet.absoluteFillObject, styles.backdrop, backdropAnimStyle]}>
@@ -185,18 +204,20 @@ export function BusinessDrawer() {
             </Pressable>
           </View>
 
-          {/* Search bar */}
-          <View style={styles.searchRow}>
-            <TextInput
-              value={search}
-              onChangeText={setSearch}
-              placeholder="Rechercher…"
-              placeholderTextColor={palette.textDisabled}
-              style={styles.searchInput}
-              returnKeyType="search"
-              clearButtonMode="while-editing"
-            />
-          </View>
+          {/* Search bar — hidden below SEARCH_MIN_BUSINESSES */}
+          {memberships.length > SEARCH_MIN_BUSINESSES && (
+            <View style={styles.searchRow}>
+              <TextInput
+                value={search}
+                onChangeText={setSearch}
+                placeholder="Rechercher…"
+                placeholderTextColor={palette.textDisabled}
+                style={styles.searchInput}
+                returnKeyType="search"
+                clearButtonMode="while-editing"
+              />
+            </View>
+          )}
 
           {/* Business list */}
           <ScrollView
@@ -245,13 +266,25 @@ export function BusinessDrawer() {
           {/* Footer */}
           <View style={styles.footer}>
             {isFounder ? (
-              <Pressable onPress={handleSupportInbox} style={({ pressed }) => [styles.footerRow, pressed && { opacity: 0.6 }]}>
-                <View style={styles.footerIcon}>
-                  <Ionicons name="headset-outline" size={18} color={palette.primary} />
-                </View>
-                <Text style={[styles.footerLabel, { flex: 1 }]}>Service client</Text>
-                {founderUnreadTotal > 0 && <View style={styles.footerUnreadDot} />}
-              </Pressable>
+              <>
+                <Pressable onPress={handleSupportInbox} style={({ pressed }) => [styles.footerRow, pressed && { opacity: 0.6 }]}>
+                  <View style={styles.footerIcon}>
+                    <Ionicons name="headset-outline" size={18} color={palette.primary} />
+                  </View>
+                  <Text style={[styles.footerLabel, { flex: 1 }]}>Service client</Text>
+                  {founderUnreadTotal > 0 && <View style={styles.footerUnreadDot} />}
+                </Pressable>
+                {/* Founder-only growth dashboard — moved off the drawer body
+                    itself (it made "Mes commerces" feel cramped) and into its
+                    own real-time screen, one tap away, same pattern as
+                    "Service client" above. */}
+                <Pressable onPress={handleFounderKpi} style={({ pressed }) => [styles.footerRow, pressed && { opacity: 0.6 }]}>
+                  <View style={styles.footerIcon}>
+                    <Ionicons name="stats-chart-outline" size={18} color={palette.primary} />
+                  </View>
+                  <Text style={[styles.footerLabel, { flex: 1 }]}>KPI</Text>
+                </Pressable>
+              </>
             ) : (
               // Relocated from the Accueil header's headphone icon — same
               // destination (the member's one ongoing thread with the

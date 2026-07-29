@@ -1,5 +1,6 @@
 import { useState } from 'react';
-import { ActivityIndicator, Modal, Pressable, StyleSheet, View } from 'react-native';
+import { ActivityIndicator, Modal, Platform, Pressable, StyleSheet, View } from 'react-native';
+import { useSafeAreaInsets } from 'react-native-safe-area-context';
 import { Image } from 'expo-image';
 import * as ImagePicker from 'expo-image-picker';
 import { Ionicons } from '@expo/vector-icons';
@@ -36,6 +37,11 @@ export function ProofPhotoField({ existingUrl, existingWidth, existingHeight, va
   const styles = makeStyles(palette);
   const [viewerOpen, setViewerOpen] = useState(false);
   const [picking, setPicking] = useState(false);
+  const insets = useSafeAreaInsets();
+  // statusBarTranslucent (below) draws the viewer Modal behind the status
+  // bar on Android — nudge the close button down by the real inset so it
+  // doesn't end up under/near the status bar or a camera cutout.
+  const closeTop = Platform.OS === 'android' ? styles.close.top + insets.top : styles.close.top;
 
   const pick = async () => {
     if (picking) return;
@@ -67,10 +73,10 @@ export function ProofPhotoField({ existingUrl, existingWidth, existingHeight, va
             contentFit="contain"
           />
         </Pressable>
-        <Modal visible={viewerOpen} transparent animationType="fade" onRequestClose={() => setViewerOpen(false)}>
+        <Modal visible={viewerOpen} transparent animationType="fade" onRequestClose={() => setViewerOpen(false)} statusBarTranslucent navigationBarTranslucent>
           <Pressable style={styles.backdrop} onPress={() => setViewerOpen(false)}>
             <Image source={{ uri: existingUrl }} style={styles.full} contentFit="contain" />
-            <Pressable style={styles.close} onPress={() => setViewerOpen(false)} hitSlop={12}>
+            <Pressable style={[styles.close, { top: closeTop }]} onPress={() => setViewerOpen(false)} hitSlop={12}>
               <Ionicons name="close" size={26} color={colors.neutral[0]} />
             </Pressable>
           </Pressable>

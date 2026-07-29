@@ -165,8 +165,11 @@ export default function AccueilScreen() {
 
   // Alpha entry bar — the app's primary AI entry point (docked to the
   // bottom of Accueil rather than a header icon, see CLAUDE.md). Submitting
-  // via the keyboard's own send/enter key launches it — no separate arrow
-  // button, matching a plain search-bar affordance.
+  // via the keyboard's own send/enter key still works, but the pill also
+  // shows a tappable send button once there's text — same mic/send swap as
+  // the in-chat composer — since relying on the keyboard alone left no way
+  // to submit for anyone not currently using it (e.g. dictation/voice-typing
+  // flows where the keyboard's own return key isn't in view).
   const [alphaText, setAlphaText] = useState('');
   const submitAlpha = () => {
     const trimmed = alphaText.trim();
@@ -474,7 +477,7 @@ export default function AccueilScreen() {
     : "Même niveau qu'hier";
 
   return (
-    <KeyboardAvoidingView style={{ flex: 1 }} behavior={Platform.OS === 'ios' ? 'padding' : undefined}>
+    <KeyboardAvoidingView style={{ flex: 1, backgroundColor: palette.background }} behavior={Platform.OS === 'ios' ? 'padding' : undefined}>
     <Screen tab>
       {/* Swipe right from the left edge to open the business drawer —
           complements the header menu icon's tap-to-open. */}
@@ -483,7 +486,14 @@ export default function AccueilScreen() {
       </GestureDetector>
 
       {/* One-time carnet import sheet shown after business creation */}
-      <Modal visible={showCarnetSheet} transparent animationType="slide" onRequestClose={() => setShowCarnetSheet(false)}>
+      <Modal
+        visible={showCarnetSheet}
+        transparent
+        animationType="slide"
+        onRequestClose={() => setShowCarnetSheet(false)}
+        statusBarTranslucent
+        navigationBarTranslucent
+      >
         <View style={styles.sheetBackdrop}>
           <Pressable style={StyleSheet.absoluteFill} onPress={() => setShowCarnetSheet(false)} />
           <View style={[styles.sheetPanel, { backgroundColor: palette.surface }]}>
@@ -512,7 +522,7 @@ export default function AccueilScreen() {
         </View>
       </Modal>
 
-      {isOffline && <OfflineNotice offlineSince={null} />}
+      {isOffline && <OfflineNotice offlineSince={null} onRetry={() => loadAll()} />}
 
       <ScrollView style={{ flex: 1 }} contentContainerStyle={styles.content} showsVerticalScrollIndicator={false}>
 
@@ -798,8 +808,8 @@ export default function AccueilScreen() {
 
       {/* ── Alpha entry bar — primary AI entry point. Google-style: a fully
           rounded pill floating with margin on every side, detached from the
-          tab bar rather than a flush full-width strip. No separate send
-          button — the keyboard's own "send"/enter key launches it. ── */}
+          tab bar rather than a flush full-width strip. Mic swaps to a send
+          button the instant there's text, same rule as the in-chat composer. ── */}
       <View style={styles.alphaBarWrap}>
         {/* Outer wrapper carries the colored ambient shadow — it can't live
             on `alphaGlowContainer` itself, since that view's overflow:hidden
@@ -838,7 +848,15 @@ export default function AccueilScreen() {
                 returnKeyType="send"
                 blurOnSubmit={false}
               />
-              {!alphaText.trim() && (
+              {alphaText.trim() ? (
+                <Pressable
+                  onPress={submitAlpha}
+                  hitSlop={8}
+                  style={({ pressed }) => [styles.alphaPillSendBtn, pressed && { opacity: 0.6 }]}
+                >
+                  <Ionicons name="arrow-up" size={18} color={palette.textInverse} />
+                </Pressable>
+              ) : (
                 <Pressable onPress={submitAlphaVoice} hitSlop={8}>
                   <Ionicons name="mic" size={20} color={palette.primary} />
                 </Pressable>
@@ -849,7 +867,14 @@ export default function AccueilScreen() {
       </View>
 
       {/* ── Withdrawal sheet ── */}
-      <Modal visible={showWithdrawSheet} transparent animationType="slide" onRequestClose={() => setShowWithdrawSheet(false)}>
+      <Modal
+        visible={showWithdrawSheet}
+        transparent
+        animationType="slide"
+        onRequestClose={() => setShowWithdrawSheet(false)}
+        statusBarTranslucent
+        navigationBarTranslucent
+      >
         <Pressable style={styles.sheetBackdrop} onPress={() => setShowWithdrawSheet(false)}>
           <Pressable style={[styles.sheetPanel, { backgroundColor: palette.surface }]} onPress={() => {}}>
             <View style={[styles.sheetHandle, { backgroundColor: palette.border }]} />
@@ -964,6 +989,11 @@ function makeStyles(p: Palette) {
       elevation: 3,
     },
     alphaInput: { flex: 1, fontSize: 15, paddingVertical: 4 },
+    alphaPillSendBtn: {
+      width: 32, height: 32, borderRadius: 16,
+      alignItems: 'center', justifyContent: 'center',
+      backgroundColor: p.primary,
+    },
 
     heroCard: {},
     investorHeroRow: { flexDirection: 'row' as const, alignItems: 'center' as const, gap: spacing[4] },

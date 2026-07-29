@@ -1,7 +1,7 @@
 import { create } from 'zustand';
 import { supabase } from '@/lib/supabase';
 import { translateError } from '@/lib/errors';
-import { isNetworkError, withTimeout } from '@/lib/sync';
+import { isNetworkError, withTimeout, withNetworkRetry, reportOfflineFallback } from '@/lib/sync';
 import { getKV, setKV, saveMarketCache, getMarketCache, getCacheTimestamp } from '@/lib/db';
 import { toast } from '@/stores/toast';
 import type { MarketPost, MarketComment, MarketCategory } from '@/src/types';
@@ -81,13 +81,20 @@ export const useMarketStore = create<MarketStore>((set, get) => ({
         .limit(50);
       if (category) q = q.eq('category', category);
 
-      const [postsRes, postLikesRes, commentLikesRes, profileRes, visitTs] = await withTimeout(Promise.all([
-        q,
-        supabase.from('post_likes').select('post_id').eq('user_id', userId),
-        supabase.from('comment_likes').select('comment_id').eq('user_id', userId),
-        supabase.from('profiles').select('points, community_level').eq('id', userId).single(),
-        getKV(MARKET_VISIT_KEY),
-      ]));
+      // Custom isFailure: a Promise.all's own resolved value is an array, not
+      // a {error} object, so the default check would never fire — retry
+      // based on the one element (posts) this function actually throws on.
+      const [postsRes, postLikesRes, commentLikesRes, profileRes, visitTs] = await withNetworkRetry(
+        () => Promise.all([
+          q,
+          supabase.from('post_likes').select('post_id').eq('user_id', userId),
+          supabase.from('comment_likes').select('comment_id').eq('user_id', userId),
+          supabase.from('profiles').select('points, community_level').eq('id', userId).single(),
+          getKV(MARKET_VISIT_KEY),
+        ]),
+        12000,
+        ([postsRes]) => isNetworkError(postsRes.error),
+      );
 
       if (postsRes.error) throw postsRes.error;
 
@@ -96,7 +103,7 @@ export const useMarketStore = create<MarketStore>((set, get) => ({
       // Resolve current author names so old posts reflect name changes
       const authorIds = [...new Set(posts.map(p => p.author_id))];
       if (authorIds.length > 0) {
-        const { data: authorProfiles } = await withTimeout(
+        const { data: authorProfiles } = await withNetworkRetry(() =>
           supabase
             .from('profiles')
             .select('id, name')
@@ -128,6 +135,7 @@ export const useMarketStore = create<MarketStore>((set, get) => ({
       });
     } catch (err) {
       if (isNetworkError(err)) {
+        reportOfflineFallback('market.fetchPosts', err);
         const cached = await getMarketCache() as MarketPost[] | null;
         if (cached) {
           const ts = await getCacheTimestamp('market_cache');

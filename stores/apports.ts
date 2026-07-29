@@ -3,7 +3,7 @@ import { supabase } from '@/lib/supabase';
 import { translateError } from '@/lib/errors';
 import { generateFallbackName } from '@/lib/id';
 import { saveApportsCache, getApportsCache, getCacheTimestamp } from '@/lib/db';
-import { isNetworkError, withTimeout } from '@/lib/sync';
+import { isNetworkError, withNetworkRetry, reportOfflineFallback } from '@/lib/sync';
 import { useAuthStore } from '@/stores/auth';
 
 // See stores/products.ts for the full explanation.
@@ -86,7 +86,7 @@ export const useAportsStore = create<AportsStore>((set, get) => ({
       set({ error: null });
     }
 
-    const { data, error } = await withTimeout(
+    const { data, error } = await withNetworkRetry(() =>
       supabase
         .from('capital_injections')
         .select('*, injected_by:profiles!injected_by_id(name), creator:profiles!created_by(name), editor:profiles!edited_by(name)')
@@ -97,6 +97,7 @@ export const useAportsStore = create<AportsStore>((set, get) => ({
     if (isStaleBusiness(businessId)) return;
     if (error) {
       if (isNetworkError(error)) {
+        reportOfflineFallback('apports.fetchApports', error);
         const cached = await getApportsCache(businessId) as Apport[] | null;
         if (isStaleBusiness(businessId)) return;
         if (cached) {

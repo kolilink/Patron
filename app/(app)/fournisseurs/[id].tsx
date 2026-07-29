@@ -1,11 +1,12 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import {
-  Alert, ActivityIndicator, KeyboardAvoidingView, Linking, Modal,
+  Alert, ActivityIndicator, Linking, Modal,
   Platform, Pressable, ScrollView, StyleSheet, View,
 } from 'react-native';
 import { Ionicons } from '@expo/vector-icons';
 import { SafeAreaView } from 'react-native-safe-area-context';
 import { Screen } from '@/src/components/ui/Screen';
+import { FormSheet } from '@/src/components/ui/FormSheet';
 import { router, useLocalSearchParams } from 'expo-router';
 import { Button } from '@/src/components/ui/Button';
 import { Card } from '@/src/components/ui/Card';
@@ -153,19 +154,34 @@ function CommandeForm({
     .sort((a, b) => (a.supplier_id === fournisseur.id ? -1 : 0) - (b.supplier_id === fournisseur.id ? -1 : 0));
 
   return (
-    <Modal visible={visible} animationType="slide" presentationStyle="pageSheet" onRequestClose={onClose}>
-      <SafeAreaView style={styles.modalSafe} edges={['bottom']}>
-        <View style={styles.mhdr}>
-          <Pressable onPress={onClose}><Text variant="body" color="secondary">Annuler</Text></Pressable>
-          <Text variant="h4">Nouvelle commande</Text>
-          <View style={{ width: 60 }} />
+    <FormSheet
+      visible={visible}
+      onClose={onClose}
+      title="Nouvelle commande"
+      contentContainerStyle={styles.mpad}
+      footer={
+        <View style={styles.mfooter}>
+          <Button
+            label={saving ? '…' : 'Passer la commande'} loading={saving} fullWidth size="lg"
+            disabled={lines.length === 0 || seeding}
+            onPress={() => {
+              const parsed = lines.map(l => {
+                const qty = parseInt(l.qty) || 0;
+                const tc = parseAmountInput(l.total_cost, currency);
+                return {
+                  product_id: l.product_id, product_name: l.product_name,
+                  qty, unit_cost: qty > 0 ? tc / qty : 0,
+                };
+              });
+              const invalid = parsed.find(l => l.qty <= 0 || l.unit_cost <= 0);
+              if (invalid) { Alert.alert(`Un petit contrôle sur la quantité et le coût :)`, `"${invalid.product_name}"`); return; }
+              const effectivePaid = paymentInput.trim() === '' ? total : parsedPaid;
+              onSave(parsed, effectivePaid);
+            }}
+          />
         </View>
-        <KeyboardAvoidingView
-          style={{ flex: 1 }}
-          behavior={Platform.OS === 'ios' ? 'padding' : 'height'}
-          keyboardVerticalOffset={0}
-        >
-        <ScrollView contentContainerStyle={styles.mpad} keyboardShouldPersistTaps="handled">
+      }
+    >
           <Text variant="label" color="secondary">{fournisseur.name}</Text>
 
           {seeding ? (
@@ -264,30 +280,7 @@ function CommandeForm({
               )}
             </>
           )}
-        </ScrollView>
-        <View style={styles.mfooter}>
-          <Button
-            label={saving ? '…' : 'Passer la commande'} loading={saving} fullWidth size="lg"
-            disabled={lines.length === 0 || seeding}
-            onPress={() => {
-              const parsed = lines.map(l => {
-                const qty = parseInt(l.qty) || 0;
-                const tc = parseAmountInput(l.total_cost, currency);
-                return {
-                  product_id: l.product_id, product_name: l.product_name,
-                  qty, unit_cost: qty > 0 ? tc / qty : 0,
-                };
-              });
-              const invalid = parsed.find(l => l.qty <= 0 || l.unit_cost <= 0);
-              if (invalid) { Alert.alert(`Un petit contrôle sur la quantité et le coût :)`, `"${invalid.product_name}"`); return; }
-              const effectivePaid = paymentInput.trim() === '' ? total : parsedPaid;
-              onSave(parsed, effectivePaid);
-            }}
-          />
-        </View>
-        </KeyboardAvoidingView>
-      </SafeAreaView>
-    </Modal>
+    </FormSheet>
   );
 }
 
@@ -302,8 +295,8 @@ function OrderDetail({ order, currency, businessId, canAttach, offline, onClose,
   const { palette } = useTheme();
   const styles = useMemo(() => makeStyles(palette), [palette]);
   return (
-    <Modal visible animationType="slide" presentationStyle="formSheet" onRequestClose={onClose}>
-      <SafeAreaView style={styles.modalSafe} edges={['bottom']}>
+    <Modal visible animationType="slide" presentationStyle="formSheet" onRequestClose={onClose} statusBarTranslucent navigationBarTranslucent backdropColor={palette.background}>
+      <SafeAreaView style={styles.modalSafe} edges={Platform.OS === 'android' ? ['top', 'bottom'] : ['bottom']}>
         <View style={styles.mhdr}>
           <Pressable onPress={onClose}><Text variant="body" color="secondary">Fermer</Text></Pressable>
           <Text variant="h4">Commande</Text>
@@ -649,42 +642,33 @@ export default function FournisseurProfile() {
         }}
       />
 
-      <Modal
+      <FormSheet
         visible={showPay}
-        animationType="slide"
+        onClose={() => { setShowPay(false); setPayAmount(''); }}
+        title="Paiement fournisseur"
         presentationStyle="formSheet"
-        onRequestClose={() => { setShowPay(false); setPayAmount(''); }}>
-        <SafeAreaView style={styles.modalSafe} edges={['bottom']}>
-          <View style={styles.mhdr}>
-            <Pressable onPress={() => { setShowPay(false); setPayAmount(''); }}>
-              <Text variant="body" color="secondary">Annuler</Text>
-            </Pressable>
-            <Text variant="h4">Paiement fournisseur</Text>
-            <View style={{ width: 60 }} />
+        contentContainerStyle={styles.mpad}
+        footer={
+          <View style={styles.mfooter}>
+            <Button
+              label={paying ? '…' : 'Confirmer le paiement'}
+              loading={paying} fullWidth size="lg"
+              onPress={handlePay}
+            />
           </View>
-          <KeyboardAvoidingView behavior={Platform.OS === 'ios' ? 'padding' : 'height'} style={{ flex: 1 }}>
-            <ScrollView contentContainerStyle={styles.mpad} keyboardShouldPersistTaps="handled">
-              <Card style={{ padding: spacing[4], gap: spacing[1] }}>
-                <Text variant="caption" color="secondary">Solde dû à {fournisseur.name}</Text>
-                <Text style={[styles.debtAmt, { color: palette.danger }]}>{fmt(totalOwed, currency)}</Text>
-              </Card>
-              <Input
-                label={`Montant payé (${currency})`}
-                value={payAmount}
-                onChangeText={v => setPayAmount(formatAmountInput(v, currency))}
-                keyboardType="decimal-pad"
-              />
-            </ScrollView>
-            <View style={styles.mfooter}>
-              <Button
-                label={paying ? '…' : 'Confirmer le paiement'}
-                loading={paying} fullWidth size="lg"
-                onPress={handlePay}
-              />
-            </View>
-          </KeyboardAvoidingView>
-        </SafeAreaView>
-      </Modal>
+        }
+      >
+        <Card style={{ padding: spacing[4], gap: spacing[1] }}>
+          <Text variant="caption" color="secondary">Solde dû à {fournisseur.name}</Text>
+          <Text style={[styles.debtAmt, { color: palette.danger }]}>{fmt(totalOwed, currency)}</Text>
+        </Card>
+        <Input
+          label={`Montant payé (${currency})`}
+          value={payAmount}
+          onChangeText={v => setPayAmount(formatAmountInput(v, currency))}
+          keyboardType="decimal-pad"
+        />
+      </FormSheet>
 
       {detailOrder && (
         <OrderDetail

@@ -59,8 +59,7 @@ function base64ToBytes(b64: string): Uint8Array {
 }
 
 function bytesToWordArray(bytes: Uint8Array): CryptoJS.lib.WordArray {
-  // eslint-disable-next-line @typescript-eslint/no-explicit-any
-  return CryptoJS.lib.WordArray.create(bytes as any);
+  return CryptoJS.lib.WordArray.create(bytes as unknown as number[]);
 }
 
 function wordArrayToBytes(wa: CryptoJS.lib.WordArray): Uint8Array {

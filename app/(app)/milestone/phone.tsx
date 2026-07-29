@@ -53,7 +53,7 @@ export default function MilestonePhoneScreen() {
   return (
     <Screen>
       <KeyboardAvoidingView
-        behavior={Platform.OS === 'ios' ? 'padding' : 'height'}
+        behavior={Platform.OS === 'ios' ? 'padding' : undefined}
         style={styles.kav}
       >
         <View style={styles.content}>
@@ -128,7 +128,7 @@ export default function MilestonePhoneScreen() {
 function makeStyles(p: Palette) {
   return StyleSheet.create({
     safe: { flex: 1, backgroundColor: p.background },
-    kav: { flex: 1 },
+    kav: { flex: 1, backgroundColor: p.background },
     content: { flex: 1, padding: spacing[6], justifyContent: 'center', gap: spacing[8] },
     header: { alignItems: 'center', gap: spacing[3] },
     logo: { letterSpacing: -1 },
