@@ -461,7 +461,7 @@ export default function AccueilScreen() {
     ? `Bonjour · ${salesCount} vente${salesCount !== 1 ? 's' : ''}`
     : dayPart === 'evening'
     ? `Ce soir · ${salesCount} vente${salesCount !== 1 ? 's' : ''}`
-    : `Aujourd'hui · ${salesCount} vente${salesCount !== 1 ? 's' : ''}`;
+    : `${salesCount} vente${salesCount !== 1 ? 's' : ''} aujourd'hui`;
 
   const isEvening = dayPart === 'evening' || dayPart === 'night';
   const isBusinessCreatedToday = business?.created_at
