@@ -1,9 +1,11 @@
 import { useEffect, useMemo, useRef, useState } from 'react';
-import { Alert, Animated, Easing, FlatList, KeyboardAvoidingView, LayoutAnimation, Modal, Platform, Pressable, ScrollView, StyleSheet, TextInput, UIManager, View } from 'react-native';
+import { Alert, Animated, Easing, FlatList, LayoutAnimation, Modal, Platform, Pressable, ScrollView, StyleSheet, TextInput, UIManager, View } from 'react-native';
 import { Ionicons } from '@expo/vector-icons';
 import { SafeAreaView } from 'react-native-safe-area-context';
 import { Screen } from '@/src/components/ui/Screen';
+import { FormSheet } from '@/src/components/ui/FormSheet';
 import { OfflineNotice } from '@/src/components/ui/OfflineNotice';
+import { SkeletonList } from '@/src/components/ui/SkeletonPlaceholder';
 import { router } from 'expo-router';
 import { Button } from '@/src/components/ui/Button';
 import { Card } from '@/src/components/ui/Card';
@@ -11,6 +13,7 @@ import { Input } from '@/src/components/ui/Input';
 import { Text } from '@/src/components/ui/Text';
 import { PhoneInput } from '@/src/components/ui/PhoneInput';
 import { DatePickerField } from '@/src/components/ui/DatePickerField';
+import { BouncingSmileyEmpty } from '@/src/components/ui/BouncingSmileyEmpty';
 import { useTheme, spacing, radius, SUPPLIER_AVATAR_PALETTE } from '@/src/theme';
 import type { Palette } from '@/src/theme';
 import type { Product, ProductVariant } from '@/src/types';
@@ -118,17 +121,44 @@ function FournisseurForm({ visible, editing, products, onClose, onSave, saving }
   const allProducts = [...products, ...localProducts];
 
   return (
-    <Modal visible={visible} animationType="slide" presentationStyle="pageSheet" onRequestClose={onClose}>
-      <SafeAreaView style={styles.modalSafe} edges={['bottom']}>
-        <KeyboardAvoidingView behavior={Platform.OS === 'ios' ? 'padding' : 'height'} style={{ flex: 1 }}
-          keyboardVerticalOffset={Platform.OS === 'ios' ? 44 : 0}>
-          <View style={styles.mhdr}>
-            <Pressable onPress={onClose}><Text variant="body" color="secondary">Annuler</Text></Pressable>
-            <Text variant="h4">{editing ? 'Modifier fournisseur' : 'Nouveau fournisseur'}</Text>
-            <View style={{ width: 60 }} />
-          </View>
+    <FormSheet
+      visible={visible}
+      onClose={onClose}
+      title={editing ? 'Modifier fournisseur' : 'Nouveau fournisseur'}
+      contentContainerStyle={styles.mpad}
+      footer={
+        <View style={styles.mfooter}>
+          <Button
+            label={saving ? '…' : 'Enregistrer'}
+            loading={saving} fullWidth size="lg"
+            onPress={() => {
+              if (!name.trim()) { Alert.alert('Ajoutez un nom :)'); return; }
 
-          <ScrollView contentContainerStyle={styles.mpad} keyboardShouldPersistTaps="handled">
+              // Auto-commit any product name typed but not yet confirmed with the checkmark
+              let finalLocalProducts = localProducts;
+              let finalLinkedIds = linkedIds;
+              if (showCreate && newProductName.trim()) {
+                const trimmed = newProductName.trim();
+                const tempId = `temp_${Date.now()}`;
+                finalLocalProducts = [...localProducts, { id: tempId, name: trimmed }];
+                finalLinkedIds = new Set([...linkedIds, tempId]);
+              }
+
+              const existingIds = [...finalLinkedIds].filter(id => !id.startsWith('temp_'));
+              const newProds = finalLocalProducts.filter(p => finalLinkedIds.has(p.id));
+              onSave({
+                name, phone,
+                country: editing?.country ?? '',
+                notes: editing?.notes ?? '',
+                leadDays: editing?.lead_days != null ? String(editing.lead_days) : '',
+                linkedProductIds: existingIds,
+                newProducts: newProds.map(p => ({ name: p.name, unit: 'pcs' })),
+              });
+            }}
+          />
+        </View>
+      }
+    >
             <Input label="Nom du fournisseur" value={name} onChangeText={setName} placeholder="Diallo Import" />
             <PhoneInput label="Téléphone" onChange={(e164) => setPhone(e164)} strict={false} />
 
@@ -215,41 +245,7 @@ function FournisseurForm({ visible, editing, products, onClose, onSave, saving }
                 </View>
               )}
             </View>
-          </ScrollView>
-
-          <View style={styles.mfooter}>
-            <Button
-              label={saving ? '…' : 'Enregistrer'}
-              loading={saving} fullWidth size="lg"
-              onPress={() => {
-                if (!name.trim()) { Alert.alert('Ajoutez un nom :)'); return; }
-
-                // Auto-commit any product name typed but not yet confirmed with the checkmark
-                let finalLocalProducts = localProducts;
-                let finalLinkedIds = linkedIds;
-                if (showCreate && newProductName.trim()) {
-                  const trimmed = newProductName.trim();
-                  const tempId = `temp_${Date.now()}`;
-                  finalLocalProducts = [...localProducts, { id: tempId, name: trimmed }];
-                  finalLinkedIds = new Set([...linkedIds, tempId]);
-                }
-
-                const existingIds = [...finalLinkedIds].filter(id => !id.startsWith('temp_'));
-                const newProds = finalLocalProducts.filter(p => finalLinkedIds.has(p.id));
-                onSave({
-                  name, phone,
-                  country: editing?.country ?? '',
-                  notes: editing?.notes ?? '',
-                  leadDays: editing?.lead_days != null ? String(editing.lead_days) : '',
-                  linkedProductIds: existingIds,
-                  newProducts: newProds.map(p => ({ name: p.name, unit: 'pcs' })),
-                });
-              }}
-            />
-          </View>
-        </KeyboardAvoidingView>
-      </SafeAreaView>
-    </Modal>
+    </FormSheet>
   );
 }
 
@@ -262,8 +258,8 @@ function SuccessSheet({ visible, fournisseur, onCommander, onDette, onDismiss }:
   const { palette } = useTheme();
   const styles = useMemo(() => makeStyles(palette), [palette]);
   return (
-    <Modal visible={visible} animationType="slide" presentationStyle="formSheet" onRequestClose={onDismiss}>
-      <SafeAreaView style={[styles.modalSafe, styles.successSheetSafe]} edges={['bottom']}>
+    <Modal visible={visible} animationType="slide" presentationStyle="formSheet" onRequestClose={onDismiss} statusBarTranslucent navigationBarTranslucent backdropColor={palette.background}>
+      <SafeAreaView style={[styles.modalSafe, styles.successSheetSafe]} edges={Platform.OS === 'android' ? ['top', 'bottom'] : ['bottom']}>
 
         {/* Top-third — badge + confirmation copy */}
         <View style={styles.successTop}>
@@ -312,26 +308,13 @@ function DebtModal({ visible, fournisseur, currency, saving, onClose, onSave }: 
   }, [visible]);
 
   return (
-    <Modal visible={visible} animationType="slide" presentationStyle="formSheet" onRequestClose={onClose}>
-      <SafeAreaView style={styles.modalSafe} edges={['bottom']}>
-        <View style={styles.mhdr}>
-          <Pressable onPress={onClose}><Text variant="body" color="secondary">Annuler</Text></Pressable>
-          <Text variant="h4">Dette fournisseur</Text>
-          <View style={{ width: 60 }} />
-        </View>
-        <ScrollView contentContainerStyle={styles.mpad} keyboardShouldPersistTaps="handled">
-          {fournisseur && (
-            <Card style={[styles.debtCtx, { borderLeftWidth: 3, borderLeftColor: palette.danger }]}>
-              <Text variant="caption" color="secondary">Vous devez à</Text>
-              <Text variant="label">{fournisseur.name}</Text>
-            </Card>
-          )}
-          <Input label={`Montant (${currency})`} value={amount} onChangeText={v => setAmount(formatAmountInput(v, currency))}
-            keyboardType="decimal-pad" />
-          <Input label="Description (optionnel)" value={description} onChangeText={setDescription}
-            placeholder="50 sacs de riz, livraison du 5 juin" />
-          <DatePickerField label="Date" value={date} onChange={setDate} maxToday />
-        </ScrollView>
+    <FormSheet
+      visible={visible}
+      onClose={onClose}
+      title="Dette fournisseur"
+      presentationStyle="formSheet"
+      contentContainerStyle={styles.mpad}
+      footer={
         <View style={styles.mfooter}>
           <Button
             label={saving ? '…' : 'Enregistrer la dette'}
@@ -343,8 +326,20 @@ function DebtModal({ visible, fournisseur, currency, saving, onClose, onSave }: 
             }}
           />
         </View>
-      </SafeAreaView>
-    </Modal>
+      }
+    >
+          {fournisseur && (
+            <Card style={[styles.debtCtx, { borderLeftWidth: 3, borderLeftColor: palette.danger }]}>
+              <Text variant="caption" color="secondary">Vous devez à</Text>
+              <Text variant="label">{fournisseur.name}</Text>
+            </Card>
+          )}
+          <Input label={`Montant (${currency})`} value={amount} onChangeText={v => setAmount(formatAmountInput(v, currency))}
+            keyboardType="decimal-pad" />
+          <Input label="Description (optionnel)" value={description} onChangeText={setDescription}
+            placeholder="50 sacs de riz, livraison du 5 juin" />
+          <DatePickerField label="Date" value={date} onChange={setDate} maxToday />
+    </FormSheet>
   );
 }
 
@@ -398,14 +393,28 @@ function CommandeForm({ visible, fournisseur, currency, onClose, onSave, saving 
     .sort((a, b) => (a.supplier_id === fournisseur?.id ? -1 : 0) - (b.supplier_id === fournisseur?.id ? -1 : 0));
 
   return (
-    <Modal visible={visible} animationType="slide" presentationStyle="pageSheet" onRequestClose={onClose}>
-      <SafeAreaView style={styles.modalSafe} edges={['bottom']}>
-        <View style={styles.mhdr}>
-          <Pressable onPress={onClose}><Text variant="body" color="secondary">Annuler</Text></Pressable>
-          <Text variant="h4">Nouvelle commande</Text>
-          <View style={{ width: 60 }} />
+    <FormSheet
+      visible={visible}
+      onClose={onClose}
+      title="Nouvelle commande"
+      contentContainerStyle={styles.mpad}
+      footer={
+        <View style={styles.mfooter}>
+          <Button label={saving ? '…' : 'Créer la commande'} loading={saving} fullWidth size="lg"
+            disabled={lines.length === 0}
+            onPress={() => {
+              const parsed = lines.map(l => {
+                const qty = parseInt(l.qty) || 0;
+                const tc = parseAmountInput(l.total_cost, currency);
+                return { product_id: l.product_id, product_name: l.product_name, variant_id: l.variant_id ?? null, qty, unit_cost: qty > 0 ? tc / qty : 0 };
+              });
+              const invalid = parsed.find(l => l.qty <= 0 || l.unit_cost <= 0);
+              if (invalid) { Alert.alert(`Un petit contrôle sur la quantité et le coût :)`, `"${invalid.product_name}"`); return; }
+              onSave(parsed);
+            }} />
         </View>
-        <ScrollView contentContainerStyle={styles.mpad} keyboardShouldPersistTaps="handled">
+      }
+    >
           {fournisseur && <Text variant="label" color="secondary">{fournisseur.name}</Text>}
 
           {/* Picker: shown when empty or user opens it to add more */}
@@ -504,23 +513,7 @@ function CommandeForm({ visible, fournisseur, currency, onClose, onSave, saving 
               <Text variant="amountLarge" style={{ color: palette.primary }}>{fmt(total, currency)}</Text>
             </Card>
           )}
-        </ScrollView>
-        <View style={styles.mfooter}>
-          <Button label={saving ? '…' : 'Créer la commande'} loading={saving} fullWidth size="lg"
-            disabled={lines.length === 0}
-            onPress={() => {
-              const parsed = lines.map(l => {
-                const qty = parseInt(l.qty) || 0;
-                const tc = parseAmountInput(l.total_cost, currency);
-                return { product_id: l.product_id, product_name: l.product_name, variant_id: l.variant_id ?? null, qty, unit_cost: qty > 0 ? tc / qty : 0 };
-              });
-              const invalid = parsed.find(l => l.qty <= 0 || l.unit_cost <= 0);
-              if (invalid) { Alert.alert(`Un petit contrôle sur la quantité et le coût :)`, `"${invalid.product_name}"`); return; }
-              onSave(parsed);
-            }} />
-        </View>
-      </SafeAreaView>
-    </Modal>
+    </FormSheet>
   );
 }
 
@@ -590,20 +583,34 @@ function CommandeDetail({ commande, currency, onClose, onRecevoir, saving }: {
   };
 
   return (
-    <Modal visible animationType="slide" presentationStyle="formSheet" onRequestClose={onClose}>
-      <SafeAreaView style={styles.modalSafe} edges={['bottom']}>
-        <View style={styles.mhdr}>
-          {step === 'select' ? (
-            <Pressable onPress={() => setStep('detail')}><Text variant="body" color="secondary">‹ Retour</Text></Pressable>
-          ) : (
-            <Pressable onPress={onClose}><Text variant="body" color="secondary">Fermer</Text></Pressable>
-          )}
-          <Text variant="h4">{step === 'select' ? 'Quantités reçues' : commande.supplier_name}</Text>
-          <View style={{ width: 60 }} />
+    <FormSheet
+      visible
+      onClose={step === 'select' ? () => setStep('detail') : onClose}
+      title={step === 'select' ? 'Quantités reçues' : commande.supplier_name}
+      cancelLabel={step === 'select' ? '‹ Retour' : 'Fermer'}
+      presentationStyle="formSheet"
+      contentContainerStyle={styles.mpad}
+      footer={step === 'select' ? (
+        <View style={styles.mfooter}>
+          <Input
+            label={`Frais de port (${currency}) — optionnel`}
+            value={shippingInput}
+            onChangeText={v => setShippingInput(formatAmountInput(v, currency))}
+            keyboardType="decimal-pad"
+            placeholder="0"
+          />
+          <Button
+            label={saving ? '…' : `Confirmer${activeCount > 0 ? ` (${activeCount} produit${activeCount > 1 ? 's' : ''})` : ''}`}
+            loading={saving} variant="primary" fullWidth
+            disabled={activeCount === 0}
+            onPress={handleConfirm}
+            style={{ marginTop: spacing[3] }}
+          />
         </View>
-
+      ) : undefined}
+    >
         {step === 'detail' ? (
-          <ScrollView contentContainerStyle={styles.mpad}>
+          <>
             <Card style={{ gap: spacing[2] }}>
               <View style={styles.dr}><Text variant="caption" color="secondary">Statut</Text><Text variant="label" style={{ color: getStatusColor(commande.status, palette) }}>{STATUS_LABEL[commande.status]}</Text></View>
               <View style={styles.dr}><Text variant="caption" color="secondary">Date</Text><Text variant="label">{new Date(commande.ordered_at).toLocaleDateString('fr-FR')}</Text></View>
@@ -653,73 +660,51 @@ function CommandeDetail({ commande, currency, onClose, onRecevoir, saving }: {
             {(commande.status === 'brouillon' || commande.status === 'recu_partiel') && (
               <Button label="Confirmer la réception" variant="primary" fullWidth onPress={enterSelect} />
             )}
-          </ScrollView>
+          </>
         ) : (
-          <KeyboardAvoidingView
-            style={{ flex: 1 }}
-            behavior={Platform.OS === 'ios' ? 'padding' : 'height'}
-          >
-            <ScrollView contentContainerStyle={styles.mpad} keyboardShouldPersistTaps="handled">
-              <Pressable style={styles.selectAllRow} onPress={setAll}>
-                <Ionicons name="checkmark-done-outline" size={18} color={palette.primary} />
-                <Text variant="label" style={{ color: palette.primary }}>Tout recevoir</Text>
-              </Pressable>
+          <>
+            <Pressable style={styles.selectAllRow} onPress={setAll}>
+              <Ionicons name="checkmark-done-outline" size={18} color={palette.primary} />
+              <Text variant="label" style={{ color: palette.primary }}>Tout recevoir</Text>
+            </Pressable>
 
-              {unreceivedLines.map(l => {
-                const maxQty = l.qty_ordered - l.qty_received;
-                const qty = receivedQtys.get(l.id) ?? maxQty;
-                const active = qty > 0;
-                return (
-                  <View key={l.id} style={[styles.selectRow, !active && { opacity: 0.4 }]}>
-                    <View style={{ flex: 1 }}>
-                      <Text variant="body">{l.product_name}</Text>
-                      <Text variant="caption" color="secondary">
-                        Commandé : {l.qty_ordered}{l.qty_received > 0 ? ` · Déjà reçu : ${l.qty_received}` : ''}
-                      </Text>
-                    </View>
-                    <View style={styles.stepper}>
-                      <Pressable onPress={() => setQty(l.id, Math.max(0, qty - 1))} style={styles.stepBtn} hitSlop={8}>
-                        <Ionicons name="remove" size={18} color={qty > 0 ? palette.textPrimary : palette.textDisabled} />
-                      </Pressable>
-                      <TextInput
-                        style={[styles.stepVal, !active && { color: palette.textDisabled }]}
-                        value={String(qty)}
-                        onChangeText={v => {
-                          if (v === '' || v === '0') { setQty(l.id, 0); return; }
-                          const n = parseInt(v, 10);
-                          if (!isNaN(n)) setQty(l.id, Math.min(maxQty, Math.max(0, n)));
-                        }}
-                        keyboardType="number-pad"
-                        selectTextOnFocus
-                      />
-                      <Pressable onPress={() => setQty(l.id, Math.min(maxQty, qty + 1))} style={styles.stepBtn} hitSlop={8}>
-                        <Ionicons name="add" size={18} color={qty < maxQty ? palette.textPrimary : palette.textDisabled} />
-                      </Pressable>
-                    </View>
+            {unreceivedLines.map(l => {
+              const maxQty = l.qty_ordered - l.qty_received;
+              const qty = receivedQtys.get(l.id) ?? maxQty;
+              const active = qty > 0;
+              return (
+                <View key={l.id} style={[styles.selectRow, !active && { opacity: 0.4 }]}>
+                  <View style={{ flex: 1 }}>
+                    <Text variant="body">{l.product_name}</Text>
+                    <Text variant="caption" color="secondary">
+                      Commandé : {l.qty_ordered}{l.qty_received > 0 ? ` · Déjà reçu : ${l.qty_received}` : ''}
+                    </Text>
                   </View>
-                );
-              })}
-            </ScrollView>
-            <View style={styles.mfooter}>
-              <Input
-                label={`Frais de port (${currency}) — optionnel`}
-                value={shippingInput}
-                onChangeText={v => setShippingInput(formatAmountInput(v, currency))}
-                keyboardType="decimal-pad"
-                placeholder="0"
-              />
-              <Button
-                label={saving ? '…' : `Confirmer${activeCount > 0 ? ` (${activeCount} produit${activeCount > 1 ? 's' : ''})` : ''}`}
-                loading={saving} variant="primary" fullWidth
-                disabled={activeCount === 0}
-                onPress={handleConfirm}
-                style={{ marginTop: spacing[3] }}
-              />
-            </View>
-          </KeyboardAvoidingView>
+                  <View style={styles.stepper}>
+                    <Pressable onPress={() => setQty(l.id, Math.max(0, qty - 1))} style={styles.stepBtn} hitSlop={8}>
+                      <Ionicons name="remove" size={18} color={qty > 0 ? palette.textPrimary : palette.textDisabled} />
+                    </Pressable>
+                    <TextInput
+                      style={[styles.stepVal, !active && { color: palette.textDisabled }]}
+                      value={String(qty)}
+                      onChangeText={v => {
+                        if (v === '' || v === '0') { setQty(l.id, 0); return; }
+                        const n = parseInt(v, 10);
+                        if (!isNaN(n)) setQty(l.id, Math.min(maxQty, Math.max(0, n)));
+                      }}
+                      keyboardType="number-pad"
+                      selectTextOnFocus
+                    />
+                    <Pressable onPress={() => setQty(l.id, Math.min(maxQty, qty + 1))} style={styles.stepBtn} hitSlop={8}>
+                      <Ionicons name="add" size={18} color={qty < maxQty ? palette.textPrimary : palette.textDisabled} />
+                    </Pressable>
+                  </View>
+                </View>
+              );
+            })}
+          </>
         )}
-      </SafeAreaView>
-    </Modal>
+    </FormSheet>
   );
 }
 
@@ -965,7 +950,12 @@ export default function FournisseursScreen() {
         <View style={{ width: 60 }} />
       </View>
 
-      {offline && <OfflineNotice offlineSince={offlineSince} />}
+      {offline && (
+        <OfflineNotice
+          offlineSince={offlineSince}
+          onRetry={() => { fetchFournisseurs(businessId); fetchCommandes(businessId); }}
+        />
+      )}
 
       {tab === 'fournisseurs' && fournisseurs.length > 0 && (
         <View style={styles.summaryBar}>
@@ -988,19 +978,15 @@ export default function FournisseursScreen() {
 
       {tab === 'fournisseurs' ? (
         loading && fournisseurs.length === 0 ? (
-          <Text variant="body" color="secondary" style={styles.center}>Chargement…</Text>
+          <SkeletonList count={6} />
         ) : !loading && fournisseurs.length === 0 && error ? (
           <View style={styles.empty}><Text variant="body" color="secondary" style={{ textAlign: 'center' }}>Données non disponibles hors ligne</Text></View>
         ) : fournisseurs.length === 0 ? (
           <View style={styles.empty}>
-            <View style={styles.emptyIconWrap}>
-              <Ionicons name="storefront-outline" size={36} color={palette.primary} />
-            </View>
-            <Text variant="h4" style={{ textAlign: 'center', marginBottom: spacing[2] }}>Vos fournisseurs</Text>
-            <Text variant="body" color="secondary" style={{ textAlign: 'center', marginBottom: spacing[6] }}>
-              Commandes, dettes, stocks — tout au même endroit.
-            </Text>
-            <Button label="Ajouter un fournisseur" onPress={() => { setEditF(null); setShowForm(true); }} size="md" />
+            <BouncingSmileyEmpty
+              ctaLabel="Ajouter un fournisseur"
+              onPress={() => { setEditF(null); setShowForm(true); }}
+            />
           </View>
         ) : (
           <FlatList
@@ -1071,11 +1057,13 @@ export default function FournisseursScreen() {
         )
       ) : (
         loading && commandes.length === 0 ? (
-          <Text variant="body" color="secondary" style={styles.center}>Chargement…</Text>
+          <SkeletonList count={6} />
+        ) : !loading && commandes.length === 0 && error ? (
+          <View style={styles.empty}><Text variant="body" color="secondary" style={{ textAlign: 'center' }}>Données non disponibles hors ligne</Text></View>
         ) : commandes.length === 0 ? (
           <View style={styles.empty}>
             <View style={styles.emptyIconWrap}>
-              <Ionicons name="cube-outline" size={36} color={palette.primary} />
+              <Ionicons name="cube-outline" size={36} color={palette.textSecondary} />
             </View>
             <Text variant="h4" style={{ textAlign: 'center', marginBottom: spacing[2] }}>Rien en cours</Text>
             <Text variant="body" color="secondary" style={{ textAlign: 'center' }}>
@@ -1194,7 +1182,7 @@ export default function FournisseursScreen() {
           onClose={() => setDetailCommande(null)} onRecevoir={handleRecevoir} saving={saving} />
       )}
 
-      {tab === 'fournisseurs' && (
+      {tab === 'fournisseurs' && fournisseurs.length > 0 && (
         <Animated.View style={[styles.fabContainer, { opacity: fabOpacity, transform: [{ scale: fabScale }] }]}>
           <Pressable
             onPress={() => { setEditF(null); setShowForm(true); }}
@@ -1253,7 +1241,8 @@ function makeStyles(p: Palette) {
       paddingHorizontal: spacing[5], paddingTop: spacing[3], paddingBottom: spacing[1],
     },
     emptyIconWrap: {
-      width: 72, height: 72, borderRadius: 36, backgroundColor: p.primaryLight,
+      width: 72, height: 72, borderRadius: 36, backgroundColor: 'transparent',
+      borderWidth: 1.5, borderColor: p.border,
       alignItems: 'center', justifyContent: 'center', marginBottom: spacing[4],
     },
     emptyHint: { textAlign: 'center' as const },

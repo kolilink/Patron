@@ -1,7 +1,7 @@
 import { useCallback, useEffect, useMemo, useState } from 'react';
 import { FlatList, Modal, Pressable, ScrollView, StyleSheet, TextInput, View } from 'react-native';
-import { SafeAreaView } from 'react-native-safe-area-context';
 import { Screen } from '@/src/components/ui/Screen';
+import { FormSheet } from '@/src/components/ui/FormSheet';
 import { router, useFocusEffect } from 'expo-router';
 import { Ionicons } from '@expo/vector-icons';
 import { Text } from '@/src/components/ui/Text';
@@ -65,7 +65,7 @@ const FORM_SAVE_LABELS: Record<FormMode, string> = {
   view: 'Enregistrer',
 };
 
-interface FormSheetProps {
+interface ApportFormModalProps {
   visible: boolean;
   mode: FormMode;
   editing: Apport | null;
@@ -84,7 +84,7 @@ interface FormSheetProps {
   }) => void;
 }
 
-function FormSheet({ visible, mode, editing, businessId, currency, saving, offline, onClose, onSave }: FormSheetProps) {
+function ApportFormModal({ visible, mode, editing, businessId, currency, saving, offline, onClose, onSave }: ApportFormModalProps) {
   const { palette } = useTheme();
   const styles = useMemo(() => makeStyles(palette), [palette]);
   const membres = useEquipeStore(s => s.membres);
@@ -153,17 +153,27 @@ function FormSheet({ visible, mode, editing, businessId, currency, saving, offli
   };
 
   return (
-    <Modal visible={visible} animationType="slide" presentationStyle="formSheet" onRequestClose={handleClose}>
-      <SafeAreaView style={styles.modalSafe} edges={['bottom']}>
-        <View style={styles.modalHeader}>
-          <Pressable onPress={handleClose}>
-            <Text variant="body" color="secondary">{isViewMode ? 'Fermer' : 'Annuler'}</Text>
-          </Pressable>
-          <Text variant="h4">{FORM_TITLES[mode]}</Text>
-          <View style={{ width: 60 }} />
+    <>
+    <FormSheet
+      visible={visible}
+      onClose={handleClose}
+      title={FORM_TITLES[mode]}
+      cancelLabel={isViewMode ? 'Fermer' : 'Annuler'}
+      presentationStyle="formSheet"
+      contentContainerStyle={styles.formContent}
+      footer={(!isViewMode || !existingProof) ? (
+        <View style={styles.modalFooter}>
+          <Button
+            label={saving ? 'Enregistrement…' : FORM_SAVE_LABELS[mode]}
+            onPress={handleSave}
+            loading={saving}
+            disabled={isViewMode && !photo}
+            fullWidth
+            size="lg"
+          />
         </View>
-
-        <ScrollView contentContainerStyle={styles.formContent} keyboardShouldPersistTaps="handled">
+      ) : undefined}
+    >
           {isViewMode ? (
             /* An existing entry (usually a withdrawal, which can't be edited)
                opened only to see it and attach a photo. Money is read-only.
@@ -264,24 +274,20 @@ function FormSheet({ visible, mode, editing, businessId, currency, saving, offli
             onChange={setPhoto}
             disabled={offline}
           />
-        </ScrollView>
+    </FormSheet>
 
-        {(!isViewMode || !existingProof) && (
-          <View style={styles.modalFooter}>
-            <Button
-              label={saving ? 'Enregistrement…' : FORM_SAVE_LABELS[mode]}
-              onPress={handleSave}
-              loading={saving}
-              disabled={isViewMode && !photo}
-              fullWidth
-              size="lg"
-            />
-          </View>
-        )}
-      </SafeAreaView>
-
-      {/* Member picker overlay */}
-      <Modal visible={showMemberPicker} transparent animationType="fade" onRequestClose={() => setShowMemberPicker(false)}>
+      {/* Member picker overlay — no keyboard field of its own, but shares
+          this component with one (the amount/source TextInputs above), so
+          it still gets statusBarTranslucent/navigationBarTranslucent for
+          consistency (see scripts/lib/consistency-checks.js). */}
+      <Modal
+        visible={showMemberPicker}
+        transparent
+        animationType="fade"
+        onRequestClose={() => setShowMemberPicker(false)}
+        statusBarTranslucent
+        navigationBarTranslucent
+      >
         <Pressable style={styles.pickerBackdrop} onPress={() => setShowMemberPicker(false)}>
           <View style={[styles.pickerPanel, { backgroundColor: palette.surface }]}>
             <Text variant="label" style={{ marginBottom: spacing[3] }}>
@@ -306,7 +312,7 @@ function FormSheet({ visible, mode, editing, businessId, currency, saving, offli
           </View>
         </Pressable>
       </Modal>
-    </Modal>
+    </>
   );
 }
 
@@ -457,31 +463,35 @@ export default function AportsScreen() {
         )}
       </View>
 
-      {offline && <OfflineNotice offlineSince={offlineSince} />}
+      {offline && (
+        <OfflineNotice offlineSince={offlineSince} onRetry={() => fetchApports(businessId)} />
+      )}
 
-      {/* Title + total */}
-      <View style={styles.headerMeta}>
-        <Text variant="caption" color="secondary" style={{ letterSpacing: 0.4 }}>Capital investi</Text>
-        {!loading && apports.length > 0 ? (
-          <>
-            <Text
-              style={[styles.totalText, { color: palette.success, fontSize: totalFontSize, lineHeight: totalFontSize + 8 }]}
-              numberOfLines={1}
-              adjustsFontSizeToFit
-              minimumFontScale={0.6}
-            >
-              {displayTotal}
-            </Text>
-            {filterMemberId && (
-              <Text variant="caption" color="secondary">
-                sur {formatAmount(total, currency)} au total
+      {/* Title + total — omitted entirely on the true-empty state (no apports
+          at all): a "—" placeholder for a total that doesn't exist yet is
+          just noise above the empty illustration below. */}
+      {(loading || apports.length > 0) && (
+        <View style={styles.headerMeta}>
+          <Text variant="caption" color="secondary" style={{ letterSpacing: 0.4 }}>Capital investi</Text>
+          {!loading && apports.length > 0 && (
+            <>
+              <Text
+                style={[styles.totalText, { color: palette.success, fontSize: totalFontSize, lineHeight: totalFontSize + 8 }]}
+                numberOfLines={1}
+                adjustsFontSizeToFit
+                minimumFontScale={0.6}
+              >
+                {displayTotal}
               </Text>
-            )}
-          </>
-        ) : !loading ? (
-          <Text style={[styles.totalText, { color: palette.textDisabled }]}>—</Text>
-        ) : null}
-      </View>
+              {filterMemberId && (
+                <Text variant="caption" color="secondary">
+                  sur {formatAmount(total, currency)} au total
+                </Text>
+              )}
+            </>
+          )}
+        </View>
+      )}
 
       {loading && apports.length === 0 ? (
         <SkeletonList count={4} />
@@ -527,13 +537,23 @@ export default function AportsScreen() {
             </>
           )}
           ListEmptyComponent={(
-            <View style={styles.empty}>
-              <Text variant="body" color="secondary" style={{ textAlign: 'center' }}>
-                {apports.length === 0
-                  ? 'Aucun apport enregistré.\nAjoutez le capital de départ ou les mises de fonds.'
-                  : 'Aucun apport pour ce contributeur.'}
-              </Text>
-            </View>
+            apports.length === 0 ? (
+              <View style={styles.empty}>
+                <View style={[styles.emptyIconWrap, { backgroundColor: 'transparent', borderWidth: 1.5, borderColor: palette.border }]}>
+                  <Ionicons name="wallet-outline" size={32} color={palette.textSecondary} />
+                </View>
+                <Text variant="h4" style={styles.emptyTitle}>Suivez votre capital investi</Text>
+                <Text variant="body" color="secondary" style={styles.emptyHint}>
+                  Cliquez sur le + pour commencer
+                </Text>
+              </View>
+            ) : (
+              <View style={styles.empty}>
+                <Text variant="body" color="secondary" style={{ textAlign: 'center' }}>
+                  Aucun apport pour ce contributeur.
+                </Text>
+              </View>
+            )
           )}
           renderItem={({ item }) => {
             const name = displayName(item, userId, membres);
@@ -566,7 +586,7 @@ export default function AportsScreen() {
         />
       )}
 
-      <FormSheet
+      <ApportFormModal
         visible={showForm}
         mode={formMode}
         editing={editingApport}
@@ -579,7 +599,14 @@ export default function AportsScreen() {
       />
 
       {/* Add / withdraw chooser */}
-      <Modal visible={showAddChooser} transparent animationType="fade" onRequestClose={() => setShowAddChooser(false)}>
+      <Modal
+        visible={showAddChooser}
+        transparent
+        animationType="fade"
+        onRequestClose={() => setShowAddChooser(false)}
+        statusBarTranslucent
+        navigationBarTranslucent
+      >
         <Pressable style={styles.pickerBackdrop} onPress={() => setShowAddChooser(false)}>
           <View style={[styles.pickerPanel, { backgroundColor: palette.surface }]}>
             <Pressable
@@ -653,6 +680,9 @@ function makeStyles(p: Palette) {
     rowPlus: { color: p.success, fontWeight: '700' },
     rowCurrency: { fontSize: 12, fontWeight: '400', color: p.textSecondary },
     empty: { flex: 1, alignItems: 'center', justifyContent: 'center', paddingHorizontal: spacing[8], paddingVertical: spacing[10] },
+    emptyIconWrap: { width: 72, height: 72, borderRadius: 36, alignItems: 'center', justifyContent: 'center', marginBottom: spacing[4] },
+    emptyTitle: { textAlign: 'center' as const, marginBottom: spacing[2] },
+    emptyHint: { textAlign: 'center' as const },
 
     // Form modal
     modalSafe: { flex: 1, backgroundColor: p.background },

@@ -1,9 +1,9 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
-import { Alert, Animated, Linking, Modal, Pressable, ScrollView, StyleSheet, Text as RNText, TextInput, View } from 'react-native';
+import { Alert, Animated, Linking, Pressable, ScrollView, StyleSheet, Text as RNText, TextInput, View } from 'react-native';
 import { Ionicons } from '@expo/vector-icons';
 import { haptics } from '@/lib/haptics';
-import { SafeAreaView } from 'react-native-safe-area-context';
 import { Screen } from '@/src/components/ui/Screen';
+import { FormSheet } from '@/src/components/ui/FormSheet';
 import { router, useLocalSearchParams } from 'expo-router';
 import { Card } from '@/src/components/ui/Card';
 import { Text } from '@/src/components/ui/Text';
@@ -107,26 +107,25 @@ function EditModal({
   };
 
   return (
-    <Modal visible={visible} animationType="slide" presentationStyle="formSheet" onRequestClose={onClose}>
-      <SafeAreaView style={styles.modalSafe}>
-        <View style={styles.hdr}>
-          <Pressable onPress={onClose}><Text variant="body" color="secondary">Annuler</Text></Pressable>
-          <Text variant="h4">Modifier client</Text>
-          <View style={{ width: 60 }} />
-        </View>
-        <ScrollView contentContainerStyle={styles.pad} keyboardShouldPersistTaps="handled">
-          <Text variant="label">{displayName}</Text>
-          <Input label="Téléphone" value={phone} onChangeText={setPhone}
-            placeholder="620 00 00 00" keyboardType="phone-pad" />
-          <Input label="Notes" value={notes} onChangeText={setNotes}
-            placeholder="Notes sur ce client" multiline />
-        </ScrollView>
+    <FormSheet
+      visible={visible}
+      onClose={onClose}
+      title="Modifier client"
+      presentationStyle="formSheet"
+      contentContainerStyle={styles.pad}
+      footer={
         <View style={styles.footer}>
           <Button label={saving ? 'Enregistrement…' : 'Enregistrer'}
             onPress={handleSave} loading={saving} fullWidth size="lg" />
         </View>
-      </SafeAreaView>
-    </Modal>
+      }
+    >
+      <Text variant="label">{displayName}</Text>
+      <Input label="Téléphone" value={phone} onChangeText={setPhone}
+        placeholder="620 00 00 00" keyboardType="phone-pad" />
+      <Input label="Notes" value={notes} onChangeText={setNotes}
+        placeholder="Notes sur ce client" multiline />
+    </FormSheet>
   );
 }
 
@@ -186,18 +185,19 @@ function PayModal({
   };
 
   return (
-    <Modal visible={visible} animationType="slide" presentationStyle="formSheet" onRequestClose={onClose}>
-      <SafeAreaView style={styles.modalSafe}>
-        <View style={styles.hdr}>
-          <Pressable onPress={onClose} style={{ minWidth: 60 }}>
-            <Text variant="body" color="secondary">Annuler</Text>
-          </Pressable>
-          <Text variant="h4" style={{ flex: 1, textAlign: 'center' }} numberOfLines={1}>
-            {displayName} a payé combien ?
-          </Text>
-          <View style={{ width: 60 }} />
+    <FormSheet
+      visible={visible}
+      onClose={onClose}
+      title={`${displayName} a payé combien ?`}
+      presentationStyle="formSheet"
+      contentContainerStyle={styles.pad}
+      footer={
+        <View style={styles.footer}>
+          <Button label={saving ? 'Enregistrement…' : 'Confirmer le paiement'}
+            onPress={handleRecord} loading={saving} fullWidth size="lg" />
         </View>
-        <ScrollView contentContainerStyle={styles.pad} keyboardShouldPersistTaps="handled">
+      }
+    >
           {/* Context */}
           <Card style={[styles.contextCard, { borderLeftColor: palette.warning, borderLeftWidth: 3 }]}>
             <Text variant="caption" color="secondary">{displayName} vous doit</Text>
@@ -273,13 +273,7 @@ function PayModal({
               </View>
             )}
           </View>
-        </ScrollView>
-        <View style={styles.footer}>
-          <Button label={saving ? 'Enregistrement…' : 'Confirmer le paiement'}
-            onPress={handleRecord} loading={saving} fullWidth size="lg" />
-        </View>
-      </SafeAreaView>
-    </Modal>
+    </FormSheet>
   );
 }
 
@@ -549,7 +543,12 @@ export default function ClientLedgerScreen() {
         )}
       </View>
 
-      {offline && <OfflineNotice offlineSince={offlineSince} />}
+      {offline && (
+        <OfflineNotice
+          offlineSince={offlineSince}
+          onRetry={() => { fetchSales(businessId); void loadClientRecord(); }}
+        />
+      )}
 
       <ScrollView contentContainerStyle={styles.content} showsVerticalScrollIndicator={false}>
 

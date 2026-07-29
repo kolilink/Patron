@@ -16,7 +16,7 @@ import { useVentesStore } from '@/stores/ventes';
 import { useExpensesStore } from '@/stores/expenses';
 import { useSyncStore } from '@/stores/sync';
 import { toast } from '@/stores/toast';
-import { drainQueue } from '@/lib/sync';
+import { drainQueue, debounceAppStateHandler } from '@/lib/sync';
 import { getDeadOps, archiveDeadOps } from '@/lib/db';
 import { supabase } from '@/lib/supabase';
 import type { Role } from '@/src/types';
@@ -27,6 +27,10 @@ import type { Role } from '@/src/types';
 // foreground-sync listener below so backgrounding doesn't also trigger a
 // pointless realtime reconnect + drainQueue() right before the redirect.
 const BACKGROUND_MS = 3 * 60_000;
+
+// debounceAppStateHandler() (guards against Android's rapid AppState
+// flapping — see its own doc comment in lib/sync.ts) now lives there
+// instead of here, so it's importable in isolation for unit tests.
 
 function SyncBanner() {
   const { palette } = useTheme();
@@ -160,12 +164,13 @@ export default function AppLayout() {
 
     open();
 
-    const appStateSub = AppState.addEventListener('change', (nextState) => {
+    const debounced = debounceAppStateHandler((nextState) => {
       if (nextState === 'background') close();
       else if (nextState === 'active') open();
     });
+    const appStateSub = AppState.addEventListener('change', debounced.onChange);
 
-    return () => { close(); appStateSub.remove(); };
+    return () => { close(); appStateSub.remove(); debounced.cancel(); };
   }, [session?.user.id, session?.activeBusiness?.id]);
 
   // Real-time scope subscription for vendeurs — re-fetch their product list
@@ -285,7 +290,7 @@ export default function AppLayout() {
     // Poll chat unread count every 30 seconds while app is open.
     const chatInterval = setInterval(refreshChat, 30_000);
 
-    const sub = AppState.addEventListener('change', (nextState) => {
+    const debounced = debounceAppStateHandler((nextState) => {
       if (nextState === 'background' || nextState === 'inactive') {
         backgroundAt.current = Date.now();
         return;
@@ -303,8 +308,9 @@ export default function AppLayout() {
         trySync();
       }
     });
+    const sub = AppState.addEventListener('change', debounced.onChange);
 
-    return () => { clearInterval(chatInterval); sub.remove(); };
+    return () => { clearInterval(chatInterval); sub.remove(); debounced.cancel(); };
   }, [session?.user.id]);
 
   if (loading) return null;

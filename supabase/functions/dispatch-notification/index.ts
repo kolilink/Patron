@@ -40,7 +40,7 @@ const SUBTITLE_MAP: Record<string, string | null> = {
   sale_completed:    null, // body already says "a vendu" — a "Vente" subtitle was redundant
   sale_cancelled:    'Vente annulée',
   sale_edited:       'Vente modifiée',
-  credit_paid:       'Crédit soldé',
+  credit_paid:       'Crédit',
   expense_submitted: 'Dépense en attente',
   expense_approved:  'Dépense validée',
   expense_rejected:  'Dépense refusée',
@@ -78,16 +78,30 @@ function buildBody(eventType: string, p: Record<string, string | number>): strin
     // Subtitle carries "Vente modifiée" — body: who corrected it and the new total
     case 'sale_edited':
       return `${p.editor} · ${p.amount}`;
-    // Subtitle carries "Crédit soldé" — body: client and amount
-    case 'credit_paid':
-      return `${p.customer} — ${p.amount}`;
-    // Subtitle carries "Dépense en attente" — body: who · amount — description
+    // Subtitle carries "Crédit" — body states in full whether this payment
+    // cleared the debt entirely or was only partial, and names the client
+    // when the sale/credit has one. p.status is 'total' | 'partiel'; p.amount
+    // is the debt just cleared (total) or the amount just paid (partiel) —
+    // never the same figure for both, see stores/ventes.ts.
+    case 'credit_paid': {
+      const hasName = !!p.customer;
+      if (p.status === 'total') {
+        return hasName
+          ? `${p.customer} a totalement payé sa dette de ${p.amount}`
+          : `Une dette de ${p.amount} a été totalement payée`;
+      }
+      return hasName
+        ? `${p.customer} a payé ${p.amount} de son crédit`
+        : `Un paiement de ${p.amount} a été reçu sur un crédit`;
+    }
+    // Subtitle carries "Dépense en attente" — full sentence naming who spent
     case 'expense_submitted':
-      return `${p.name} · ${p.amount} — ${p.description}`;
-    // Subtitle carries result — body: amount and description
+      return `${p.name} a fait une dépense de ${p.amount} — ${p.description}`;
+    // Subtitle carries result — full sentence addressed to the submitter
     case 'expense_approved':
+      return `Votre dépense de ${p.amount} a été confirmée — ${p.description}`;
     case 'expense_rejected':
-      return `${p.amount} — ${p.description}`;
+      return `Votre dépense de ${p.amount} n'a pas été confirmée — ${p.description}`;
     // Subtitle carries "Stock critique" — body: flat, no pronoun, fast to scan
     case 'low_stock':
       return `Il reste ${p.qty} ${p.product} en stock`;
@@ -106,9 +120,13 @@ function buildBody(eventType: string, p: Record<string, string | number>): strin
       return `${p.sender_name} vous a envoyé une demande d'ami`;
     case 'partnership_accepted':
       return `${p.acceptor_name} a accepté votre demande`;
-    // Subtitle carries "Livraison" — body: count and supplier
-    case 'po_received':
-      return `${p.N} article${Number(p.N) > 1 ? 's' : ''} de ${p.supplier}`;
+    // Subtitle carries "Livraison" — full sentence, singular/plural agreement
+    case 'po_received': {
+      const n = Number(p.N) || 0;
+      return n > 1
+        ? `${n} nouveaux produits de ${p.supplier} sont arrivés`
+        : `${n} nouveau produit de ${p.supplier} est arrivé`;
+    }
     // No subtitle — generic full sentence (never the merchant's name or raw
     // message text, same posture as support_reply below)
     case 'support_message':

@@ -6,6 +6,7 @@ jest.mock('@/lib/supabase', () => ({
   supabase: {
     rpc: jest.fn(),
     from: jest.fn(),
+    functions: { invoke: jest.fn().mockResolvedValue({ data: null, error: null }) },
     auth: {
       onAuthStateChange: jest.fn(() => ({
         data: { subscription: { unsubscribe: jest.fn() } },

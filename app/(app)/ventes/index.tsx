@@ -1,9 +1,10 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
-import { Alert, Animated, Easing, FlatList, Modal, Pressable, ScrollView, StyleSheet, TextInput, View } from 'react-native';
+import { Alert, Animated, Easing, FlatList, Modal, Platform, Pressable, ScrollView, StyleSheet, TextInput, View } from 'react-native';
 import { captureRef } from 'react-native-view-shot';
 import * as Sharing from 'expo-sharing';
 import { SafeAreaView } from 'react-native-safe-area-context';
 import { Screen } from '@/src/components/ui/Screen';
+import { FormSheet } from '@/src/components/ui/FormSheet';
 import { Ionicons } from '@expo/vector-icons';
 import { router, useFocusEffect } from 'expo-router';
 import { Card } from '@/src/components/ui/Card';
@@ -20,6 +21,7 @@ import { SaleReceiptView, type ReceiptData, type ReceiptItem } from '@/src/compo
 import { haptics } from '@/lib/haptics';
 import { supabase } from '@/lib/supabase';
 import { SkeletonList } from '@/src/components/ui/SkeletonPlaceholder';
+import { BouncingSmileyEmpty } from '@/src/components/ui/BouncingSmileyEmpty';
 
 function fmt(n: number, cur: string) { return formatAmount(n, cur); }
 
@@ -145,7 +147,7 @@ function buildSummaryLine(all: Vente[], filtered: Vente[], filter: string, curre
 // ─── Day-grouped list ──────────────────────────────────────────────────────────
 
 type ListItem =
-  | { type: 'header'; label: string; key: string; count: number; total: number; hasCredit: boolean }
+  | { type: 'header'; label: string; key: string; count: number; total: number; hasCredit: boolean; soloName?: string }
   | { type: 'sale'; sale: Vente; dateKey: string };
 
 // Build a YYYY-MM-DD key from LOCAL date components — avoids UTC offset shifting the day
@@ -161,7 +163,7 @@ function buildGroupedList(sales: Vente[], currency: string): ListItem[] {
   const currentYear = now.getFullYear();
 
   const dayOrder: string[] = [];
-  const dayStats = new Map<string, { label: string; count: number; total: number; hasCredit: boolean }>();
+  const dayStats = new Map<string, { label: string; count: number; total: number; hasCredit: boolean; soloName?: string }>();
   const daysSales = new Map<string, Vente[]>();
 
   for (const sale of sales) {
@@ -189,8 +191,11 @@ function buildGroupedList(sales: Vente[], currency: string): ListItem[] {
 
     const stats = dayStats.get(key)!;
     const ds = getSaleDisplayState(sale);
-    if (ds !== 'annule') stats.count++;
-    if (ds !== 'annule') stats.total += sale.total_amount - (sale.discount_amount ?? 0);
+    if (ds !== 'annule') {
+      stats.count++;
+      stats.total += sale.total_amount - (sale.discount_amount ?? 0);
+      stats.soloName = stats.count === 1 ? (sale.customer_name || undefined) : undefined;
+    }
     if (ds === 'credit' || ds === 'partiel') stats.hasCredit = true;
     daysSales.get(key)!.push(sale);
   }
@@ -247,19 +252,24 @@ function PaymentSheet({ visible, sale, currency, onClose, onConfirm, saving }: P
   const clientName = sale.customer_name ?? 'le client';
 
   return (
-    <Modal visible={visible} animationType="slide" presentationStyle="formSheet" onRequestClose={onClose}>
-      <SafeAreaView style={styles.modalSafe} edges={['bottom']}>
-        <View style={styles.sheetHeader}>
-          <Pressable onPress={onClose} style={{ minWidth: 60 }}>
-            <Text variant="body" color="secondary">Annuler</Text>
-          </Pressable>
-          <Text variant="h4" style={{ flex: 1, textAlign: 'center' }} numberOfLines={1}>
-            {clientName} a payé combien ?
-          </Text>
-          <View style={{ width: 60 }} />
+    <FormSheet
+      visible={visible}
+      onClose={onClose}
+      title={`${clientName} a payé combien ?`}
+      presentationStyle="formSheet"
+      contentContainerStyle={styles.sheetContent}
+      footer={
+        <View style={styles.sheetFooter}>
+          <Button
+            label={saving ? 'Enregistrement…' : 'Confirmer le paiement'}
+            onPress={handleConfirm}
+            loading={saving}
+            fullWidth
+            size="lg"
+          />
         </View>
-
-        <ScrollView style={{ flex: 1 }} contentContainerStyle={styles.sheetContent} keyboardShouldPersistTaps="handled">
+      }
+    >
           {/* Debt context card */}
           <Card style={[styles.contextCard, { borderLeftColor: palette.warning, borderLeftWidth: 3 }]}>
             <Text variant="caption" color="secondary">{clientName} vous doit</Text>
@@ -303,19 +313,7 @@ function PaymentSheet({ visible, sale, currency, onClose, onConfirm, saving }: P
           </View>
 
           <DatePickerField label="Date" value={date} onChange={setDate} maxToday />
-        </ScrollView>
-
-        <View style={styles.sheetFooter}>
-          <Button
-            label={saving ? 'Enregistrement…' : 'Confirmer le paiement'}
-            onPress={handleConfirm}
-            loading={saving}
-            fullWidth
-            size="lg"
-          />
-        </View>
-      </SafeAreaView>
-    </Modal>
+    </FormSheet>
   );
 }
 
@@ -605,29 +603,27 @@ function DetailModal({ sale, currency, businessName, singleVendor, role, onClose
   };
 
   return (
-    <Modal visible animationType="slide" presentationStyle="pageSheet" onRequestClose={onClose}>
-      <SafeAreaView style={styles.modalSafe} edges={['bottom']}>
-        <View style={styles.modalHeader}>
-          <Pressable onPress={onClose}>
-            <Text variant="body" color="secondary">Fermer</Text>
-          </Pressable>
-          <Text variant="h4">Vente du {headerDate}</Text>
-          {showMenuButton ? (
-            <Pressable onPress={showMenu} style={{ minWidth: 40, alignItems: 'flex-end' }}>
-              <Text variant="body" color="secondary">⋯</Text>
-            </Pressable>
-          ) : (
-            <View style={{ minWidth: 40 }} />
-          )}
-        </View>
-
+    <>
+    <FormSheet
+      visible
+      onClose={onClose}
+      title={`Vente du ${headerDate}`}
+      cancelLabel="Fermer"
+      contentContainerStyle={styles.pad}
+      headerRight={showMenuButton ? (
+        <Pressable onPress={showMenu} style={{ minWidth: 40, alignItems: 'flex-end' }}>
+          <Text variant="body" color="secondary">⋯</Text>
+        </Pressable>
+      ) : (
+        <View style={{ minWidth: 40 }} />
+      )}
+    >
         {toast ? (
           <View style={styles.toast}>
             <Text variant="label" style={{ color: palette.textInverse }}>{toast}</Text>
           </View>
         ) : null}
 
-        <ScrollView contentContainerStyle={styles.pad}>
           {/* Status banner */}
           {displayState === 'paye' && (
             <View style={[styles.banner, styles.bannerGreen]}>
@@ -936,46 +932,38 @@ function DetailModal({ sale, currency, businessName, singleVendor, role, onClose
               </View>
             </View>
           )}
-        </ScrollView>
+    </FormSheet>
 
-        <PaymentSheet
-          visible={showPaymentSheet}
-          sale={sale}
-          currency={currency}
-          onClose={() => setShowPaymentSheet(false)}
-          onConfirm={handlePaymentSubmit}
-          saving={saving}
-        />
+      <PaymentSheet
+        visible={showPaymentSheet}
+        sale={sale}
+        currency={currency}
+        onClose={() => setShowPaymentSheet(false)}
+        onConfirm={handlePaymentSubmit}
+        saving={saving}
+      />
 
-        {/* Receipt preview + share */}
-        <Modal
-          visible={showReceipt}
-          animationType="slide"
-          presentationStyle="pageSheet"
-          onRequestClose={() => setShowReceipt(false)}
-        >
-          <SafeAreaView style={styles.modalSafe} edges={['bottom']}>
-            <View style={styles.modalHeader}>
-              <Pressable onPress={() => setShowReceipt(false)}>
-                <Text variant="body" color="secondary">Fermer</Text>
-              </Pressable>
-              <Text variant="h4">Reçu</Text>
-              <View style={{ minWidth: 40 }} />
-            </View>
-            <ScrollView contentContainerStyle={{ paddingVertical: spacing[4] }}>
-              {receiptData && (
-                <View ref={receiptRef} collapsable={false}>
-                  <SaleReceiptView data={receiptData} />
-                </View>
-              )}
-            </ScrollView>
-            <View style={styles.sheetFooter}>
-              <Button label="Partager le reçu" onPress={handleShareReceipt} fullWidth size="lg" />
-            </View>
-          </SafeAreaView>
-        </Modal>
-      </SafeAreaView>
-    </Modal>
+      {/* Receipt preview + share */}
+      <FormSheet
+        visible={showReceipt}
+        onClose={() => setShowReceipt(false)}
+        title="Reçu"
+        cancelLabel="Fermer"
+        headerRight={<View style={{ minWidth: 40 }} />}
+        contentContainerStyle={{ paddingVertical: spacing[4] }}
+        footer={
+          <View style={styles.sheetFooter}>
+            <Button label="Partager le reçu" onPress={handleShareReceipt} fullWidth size="lg" />
+          </View>
+        }
+      >
+        {receiptData && (
+          <View ref={receiptRef} collapsable={false}>
+            <SaleReceiptView data={receiptData} />
+          </View>
+        )}
+      </FormSheet>
+    </>
   );
 }
 
@@ -1003,8 +991,8 @@ function FilterSheet({ visible, availableProducts, loadingProducts, selectedProd
   const hasAny = selectedProducts.length > 0 || dateFrom !== '' || dateTo !== '';
 
   return (
-    <Modal visible={visible} animationType="slide" presentationStyle="formSheet" onRequestClose={onClose}>
-      <SafeAreaView style={styles.modalSafe} edges={['bottom']}>
+    <Modal visible={visible} animationType="slide" presentationStyle="formSheet" onRequestClose={onClose} statusBarTranslucent navigationBarTranslucent backdropColor={palette.background}>
+      <SafeAreaView style={styles.modalSafe} edges={Platform.OS === 'android' ? ['top', 'bottom'] : ['bottom']}>
         <View style={styles.sheetHeader}>
           <Pressable onPress={onClose} style={{ minWidth: 60 }}>
             <Text variant="body" color="secondary">Fermer</Text>
@@ -1310,7 +1298,12 @@ export default function VentesScreen() {
         ))}
       </View>
 
-      {offline && <OfflineNotice offlineSince={offlineSince} />}
+      {offline && (
+        <OfflineNotice
+          offlineSince={offlineSince}
+          onRetry={() => fetchSales(businessId, isVendeur ? userId : undefined, showAll ? undefined : since90)}
+        />
+      )}
 
       {loading && sales.length === 0 ? (
         <SkeletonList count={7} />
@@ -1320,17 +1313,19 @@ export default function VentesScreen() {
         </View>
       ) : filtered.length === 0 ? (
         <View style={styles.emptyState}>
-          <Text variant="body" color="secondary" style={{ textAlign: 'center' }}>
-            {sales.length === 0
-              ? 'Prêt pour la première vente ? Elle apparaîtra ici.'
-              : 'Pas de vente sur cette période.'}
-          </Text>
-          {sales.length > 0 && (
-            <Pressable onPress={() => setShowAll(v => !v)} style={{ marginTop: spacing[4] }}>
-              <Text variant="caption" style={{ color: palette.primary }}>
-                {showAll ? 'Voir les 90 derniers jours' : "Voir tout l'historique"}
+          {sales.length === 0 ? (
+            <BouncingSmileyEmpty />
+          ) : (
+            <>
+              <Text variant="body" color="secondary" style={{ textAlign: 'center' }}>
+                Pas de vente sur cette période.
               </Text>
-            </Pressable>
+              <Pressable onPress={() => setShowAll(v => !v)} style={{ marginTop: spacing[4] }}>
+                <Text variant="caption" style={{ color: palette.primary }}>
+                  {showAll ? 'Voir les 90 derniers jours' : "Voir tout l'historique"}
+                </Text>
+              </Pressable>
+            </>
           )}
         </View>
       ) : (
@@ -1356,8 +1351,9 @@ export default function VentesScreen() {
                   <View style={{ flex: 1 }}>
                     <Text variant="label" style={styles.dayLabel}>{item.label}</Text>
                     <Text variant="caption" color="secondary">
-                      {item.count} vente{item.count !== 1 ? 's' : ''} · {fmt(item.total, currency)}
-                      {item.hasCredit ? ' · crédit' : ''}
+                      {item.count === 1
+                        ? `${item.soloName ? `${item.soloName} · ` : ''}${fmt(item.total, currency)}`
+                        : `${item.count} ventes pour ${fmt(item.total, currency)}`}
                     </Text>
                   </View>
                   <Ionicons
@@ -1382,14 +1378,9 @@ export default function VentesScreen() {
               >
                 <View style={{ flex: 1, gap: 2 }}>
                   <View style={styles.saleTop}>
-                    {/* Hide "Client au comptant" label — only show real client names */}
-                    {sale.customer_name ? (
-                      <Text variant="label" numberOfLines={1} style={{ flex: 1 }}>
-                        {sale.customer_name}
-                      </Text>
-                    ) : (
-                      <View style={{ flex: 1 }} />
-                    )}
+                    <Text variant="label" numberOfLines={1} style={{ flex: 1, color: rowColor, opacity: 0.85 }}>
+                      {sale.customer_name}
+                    </Text>
                     <Text
                       variant="label"
                       style={{ color: rowColor }}
@@ -1399,16 +1390,11 @@ export default function VentesScreen() {
                       {isCredit ? `Reste ${fmt(remaining, currency)}` : fmt(sale.total_amount - (sale.discount_amount ?? 0), currency)}
                     </Text>
                   </View>
-                  <Text variant="caption" color="secondary">
-                    {[
-                      isCredit
-                        ? `Crédit · sur ${fmt(sale.total_amount - (sale.discount_amount ?? 0), currency)}`
-                        : ds === 'annule'
-                        ? 'Annulé'
-                        : (sale.discount_amount ?? 0) > 0 ? 'Payé · rabais' : 'Payé',
-                      sale.edit_count > 0 ? 'modifiée' : null,
-                    ].filter(Boolean).join(' · ')}
-                  </Text>
+                  <View style={{ flexDirection: 'row', justifyContent: 'flex-end' }}>
+                    <Text variant="caption" style={{ color: rowColor, opacity: 0.85 }} numberOfLines={1}>
+                      Vendeur : {sale.seller_id === userId ? 'Vous' : sale.seller_name}
+                    </Text>
+                  </View>
                 </View>
               </Pressable>
             );

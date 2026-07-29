@@ -1,3 +1,5 @@
+import * as Sentry from '@sentry/react-native';
+import { Platform, type AppStateStatus } from 'react-native';
 import { supabase } from '@/lib/supabase';
 import { getPendingOps, deleteQueueItem, markAttemptFailed } from '@/lib/db';
 import { notifyEvent, resolveSellerDisplayName } from '@/src/utils/notifications';
@@ -14,17 +16,26 @@ export type SyncResult = {
 
 let _running = false;
 
+// Shared by isNetworkError() and reportOfflineFallback() — a raw Error
+// instance is the exception, not the rule, in this codebase: by default
+// (no .throwOnError()), a failed Supabase call resolves with a plain
+// PostgrestError-shaped OBJECT ({ message, code, details, hint }), not a
+// thrown Error. String(plainObject) is the literal text "[object Object]",
+// not its message — isNetworkError() has always special-cased this (see
+// __tests__/offline-resilience.test.ts's regression guard); this used to be
+// duplicated ad hoc rather than shared, and reportOfflineFallback() was
+// missing the object-shape branch entirely, so every Sentry event for the
+// (most common) plain-object case logged "[object Object]" instead of the
+// actual message — silently defeating its own purpose.
+function extractErrorMessage(err: unknown): string {
+  if (err instanceof Error) return err.message;
+  if (err && typeof err === 'object' && 'message' in err) return String((err as { message: unknown }).message);
+  return String(err);
+}
+
 export function isNetworkError(err: unknown): boolean {
   if (err instanceof Error && err.name === 'AbortError') return true;
-  let msg: string;
-  if (err instanceof Error) {
-    msg = err.message;
-  } else if (err && typeof err === 'object' && 'message' in err) {
-    msg = String((err as { message: unknown }).message);
-  } else {
-    msg = String(err);
-  }
-  msg = msg.toLowerCase();
+  const msg = extractErrorMessage(err).toLowerCase();
   return (
     msg.includes('fetch') ||
     msg.includes('network') ||
@@ -35,6 +46,28 @@ export function isNetworkError(err: unknown): boolean {
     msg.includes('offline') ||
     msg.includes('load failed')
   );
+}
+
+// Every store's offline-read-cache fallback (see CLAUDE.md's "Offline read
+// caches") only ever recognizes THAT it fell back to cache, never WHY the
+// live fetch actually failed — so every real recurrence (a device stuck on
+// "Hors ligne" despite a real internet connection) has to be re-diagnosed
+// from scratch, by screenshot, every time. Call this at the same call site
+// as every existing `if (isNetworkError(err))` branch, right before setting
+// `offline: true`, so the raw error + platform land in Sentry instead. This
+// is deliberately its own function rather than a side effect bolted onto
+// isNetworkError() itself — isNetworkError() is also called inline in a few
+// places purely to pick an error message (not to flip an offline flag), and
+// those call sites would otherwise generate a Sentry event for a case that
+// was never actually a "this store went offline" moment.
+export function reportOfflineFallback(context: string, err: unknown): void {
+  Sentry.captureMessage('store_offline_fallback', {
+    extra: {
+      context,
+      platform: Platform.OS,
+      error: extractErrorMessage(err),
+    },
+  });
 }
 
 // None of the Supabase read calls across the stores have a client-side
@@ -58,6 +91,60 @@ export function withTimeout<T>(promise: PromiseLike<T>, ms = 12000): Promise<T> 
   // (just a dangling timer per call) but adds up in tests, where dozens of
   // calls across a suite can leave the Jest worker unable to exit cleanly.
   return Promise.race([Promise.resolve(promise), timeout]).finally(() => clearTimeout(timer));
+}
+
+// A single failed request on a marginal connection (real Wi-Fi with a
+// momentary stumble — see CLAUDE.md's Wi-Fi Assist / OkHttp-fail-fast note
+// on why this hits Android far more than iOS) is common and often just
+// noise, not a real outage — trusting it as "offline" on the first failure
+// alone is what made the read-cache-fallback banner flip on for a blip that
+// would have succeeded a second later. This confirms a network failure with
+// one quick, cheap retry before treating it as real: a genuine outage will
+// still fail the second time; a passing stumble almost never fails twice in
+// a row. Takes a thunk (not a bare promise) since retrying means re-running
+// the request, not re-awaiting an already-settled one.
+//
+// Important: this must check the RESOLVED value, not just catch a rejection.
+// By default (no .throwOnError()), supabase-js never rejects on a network
+// failure — PostgrestBuilder's own executeWithRetry() catches the fetch
+// rejection internally and resolves with `{ data: null, error: {...} }`
+// instead (see node_modules/@supabase/postgrest-js's PostgrestBuilder.ts).
+// A version that only wrapped a try/catch around the call would never
+// actually fire for the common case. supabase-js *does* already retry a
+// failed GET internally (3x with backoff, since GET/HEAD/OPTIONS are the
+// only methods in its own RETRYABLE_METHODS list) — so for a plain
+// `.from().select()` read this is a harmless extra safety net on top of an
+// already-retried call. For `.rpc()` calls (POST, not in that list — every
+// get_period_report/get_reports_snapshot/open_or_get_alpha_conversation
+// call in this codebase) and for supabase.auth.getSession() (a separate
+// client with its own, different retry behavior), there is no such
+// built-in retry at all, and this is the only thing standing between one
+// transient blip and the offline banner.
+//
+// Generic over any result shape with an optional `error` field (which is
+// every Supabase response used in this codebase) — but a `Promise.all([...])`
+// of several such results doesn't itself have a top-level `.error`, so
+// market.ts's fetchPosts passes its own `isFailure` to check the specific
+// element that call site actually throws on.
+const RETRY_CONFIRM_DELAY_MS = 500;
+const RETRY_CONFIRM_TIMEOUT_MS = 5000;
+
+export async function withNetworkRetry<T>(
+  fn: () => PromiseLike<T>,
+  ms = 12000,
+  isFailure: (result: T) => boolean = (result) => isNetworkError((result as { error?: unknown } | null)?.error),
+): Promise<T> {
+  let first: T;
+  try {
+    first = await withTimeout(fn(), ms);
+  } catch (err) {
+    if (!isNetworkError(err)) throw err;
+    await new Promise(resolve => setTimeout(resolve, RETRY_CONFIRM_DELAY_MS));
+    return await withTimeout(fn(), RETRY_CONFIRM_TIMEOUT_MS);
+  }
+  if (!isFailure(first)) return first;
+  await new Promise(resolve => setTimeout(resolve, RETRY_CONFIRM_DELAY_MS));
+  return await withTimeout(fn(), RETRY_CONFIRM_TIMEOUT_MS);
 }
 
 // Builds the "{qty} {product}" fragment for the sale-completed notification,
@@ -261,4 +348,46 @@ export async function drainQueue(): Promise<SyncResult> {
   }
 
   return result;
+}
+
+// A real background→foreground cycle takes at least a second. On some
+// Android devices AppState 'active'/'background' flaps rapidly and
+// repeatedly (dozens of times a second) with nobody touching the phone — a
+// known symptom of a Modal's window not matching the main window's
+// edge-to-edge treatment (see FormSheet.tsx / CLAUDE.md's "Form sheets —
+// Android keyboard flicker"), confirmed live via PostHog session data
+// showing exactly this pattern. app/(app)/_layout.tsx's two AppState
+// listeners used to react to every single raw transition — reopening a
+// realtime channel and re-fetching the business/draining the sync queue
+// each time — so a flapping burst kept the JS thread busy reacting to a
+// phantom signal instead of responding to real taps, which is what
+// actually read as "the app is slow." Routing every raw transition through
+// this debounce means a burst of flaps just keeps resetting the timer; the
+// real handler only runs once the state has genuinely settled, so it can't
+// fire dozens of times a second no matter how much the phone's own
+// window-focus reporting is flapping.
+export const APP_STATE_FLAP_GUARD_MS = 1000;
+
+// Returns both the debounced listener and a way to cancel any timer still
+// pending when the effect that registered it cleans up (e.g. on logout) —
+// removing the AppState subscription itself doesn't cancel an
+// already-scheduled setTimeout, so without this a stray flap right before
+// unmount could still fire the real handler afterwards, against stale state.
+export function debounceAppStateHandler(handler: (state: AppStateStatus) => void): {
+  onChange: (nextState: AppStateStatus) => void;
+  cancel: () => void;
+} {
+  let timer: ReturnType<typeof setTimeout> | null = null;
+  return {
+    onChange: (nextState) => {
+      if (timer) clearTimeout(timer);
+      timer = setTimeout(() => {
+        timer = null;
+        handler(nextState);
+      }, APP_STATE_FLAP_GUARD_MS);
+    },
+    cancel: () => {
+      if (timer) { clearTimeout(timer); timer = null; }
+    },
+  };
 }

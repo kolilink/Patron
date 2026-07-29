@@ -1,7 +1,7 @@
 import { create } from 'zustand';
 import { supabase } from '@/lib/supabase';
 import { saveRapportsCache, getRapportsCache, getCacheTimestamp } from '@/lib/db';
-import { isNetworkError, withTimeout } from '@/lib/sync';
+import { isNetworkError, withTimeout, withNetworkRetry, reportOfflineFallback } from '@/lib/sync';
 import { useAuthStore } from '@/stores/auth';
 
 // See stores/products.ts for the full explanation.
@@ -226,7 +226,7 @@ async function loadPeriodReport(
   set({ [loadingKey]: true } as Partial<RapportsState>);
 
   const cacheKey = `${businessId}:${role}:${userId}:${periodStart}:${periodEnd}`;
-  const { data, error } = await withTimeout(
+  const { data, error } = await withNetworkRetry(() =>
     supabase.rpc('get_period_report', {
       p_business_id:  businessId,
       p_period_start: periodStart,
@@ -239,6 +239,7 @@ async function loadPeriodReport(
 
   if (error || !data) {
     if (isNetworkError(error)) {
+      reportOfflineFallback('rapports.loadPeriodReport', error);
       const cached = await getRapportsCache(cacheKey);
       if (isStaleBusiness(businessId)) return;
       if (cached) {
@@ -293,7 +294,7 @@ export const useRapportsStore = create<RapportsState>((set) => ({
     // personal figures and an admin's full-business figures must never be
     // served from each other's cache slot on a shared device.
     const cacheKey = `${businessId}:${role}:${userId}:${periodDays}`;
-    const { data, error } = await withTimeout(
+    const { data, error } = await withNetworkRetry(() =>
       supabase.rpc('get_reports_snapshot', {
         p_business_id: businessId,
         p_period_days: periodDays,
@@ -305,6 +306,7 @@ export const useRapportsStore = create<RapportsState>((set) => ({
     if (isStaleBusiness(businessId)) return;
     if (error || !data) {
       if (isNetworkError(error)) {
+        reportOfflineFallback('rapports.fetchReportsSnapshot', error);
         const cached = await getRapportsCache(cacheKey);
         if (isStaleBusiness(businessId)) return;
         if (cached) {

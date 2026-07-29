@@ -1,8 +1,8 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
-import { Alert, Animated, Easing, Modal, Pressable, ScrollView, StyleSheet, View } from 'react-native';
+import { Alert, Animated, Easing, Pressable, ScrollView, StyleSheet, View } from 'react-native';
 import { Ionicons } from '@expo/vector-icons';
-import { SafeAreaView } from 'react-native-safe-area-context';
 import { Screen } from '@/src/components/ui/Screen';
+import { FormSheet } from '@/src/components/ui/FormSheet';
 import { router } from 'expo-router';
 import { Button } from '@/src/components/ui/Button';
 import { Card } from '@/src/components/ui/Card';
@@ -21,6 +21,7 @@ import { toast } from '@/stores/toast';
 import { SkeletonList } from '@/src/components/ui/SkeletonPlaceholder';
 import { ProofControl } from '@/src/components/ui/ProofControl';
 import { ProofPhotoField, type PickedImage } from '@/src/components/ui/ProofPhotoField';
+import { BouncingSmileyEmpty } from '@/src/components/ui/BouncingSmileyEmpty';
 import { attachTransactionProof } from '@/lib/proofs';
 import { formatAmountInput, parseAmountInput } from '@/src/utils/format';
 
@@ -95,15 +96,23 @@ function ExpenseFormModal({ visible, editing, onClose, onSave, saving, currency,
   const isEdit = !!editing;
 
   return (
-    <Modal visible={visible} animationType="slide" presentationStyle="pageSheet" onRequestClose={onClose}>
-      <SafeAreaView style={styles.modalSafe}>
-        <View style={styles.modalHeader}>
-          <Pressable onPress={onClose}><Text variant="body" color="secondary">Annuler</Text></Pressable>
-          <Text variant="h4">{isEdit ? 'Modifier la dépense' : 'Nouvelle dépense'}</Text>
-          <View style={{ width: 64 }} />
+    <FormSheet
+      visible={visible}
+      onClose={onClose}
+      title={isEdit ? 'Modifier la dépense' : 'Nouvelle dépense'}
+      contentContainerStyle={styles.modalContent}
+      footer={
+        <View style={styles.modalFooter}>
+          <Button
+            label={saving ? 'Enregistrement…' : (isEdit ? 'Enregistrer les modifications' : 'Enregistrer')}
+            onPress={handleSave}
+            loading={saving}
+            fullWidth
+            size="lg"
+          />
         </View>
-
-        <ScrollView contentContainerStyle={styles.modalContent} keyboardShouldPersistTaps="handled">
+      }
+    >
           <Input
             label={`Montant (${currency})`}
             value={amount}
@@ -177,19 +186,7 @@ function ExpenseFormModal({ visible, editing, onClose, onSave, saving, currency,
             onChange={setPhoto}
             disabled={offline}
           />
-        </ScrollView>
-
-        <View style={styles.modalFooter}>
-          <Button
-            label={saving ? 'Enregistrement…' : (isEdit ? 'Enregistrer les modifications' : 'Enregistrer')}
-            onPress={handleSave}
-            loading={saving}
-            fullWidth
-            size="lg"
-          />
-        </View>
-      </SafeAreaView>
-    </Modal>
+    </FormSheet>
   );
 }
 
@@ -485,7 +482,9 @@ export default function DepensesScreen() {
         <View style={{ width: 64 }} />
       </View>
 
-      {offline && <OfflineNotice offlineSince={offlineSince} />}
+      {offline && (
+        <OfflineNotice offlineSince={offlineSince} onRetry={() => fetchExpenses(businessId)} />
+      )}
 
       {loading && isEmpty ? (
         <SkeletonList count={6} />
@@ -495,8 +494,7 @@ export default function DepensesScreen() {
         </View>
       ) : isEmpty ? (
         <View style={styles.empty}>
-          <Text variant="body" color="secondary" style={{ textAlign: 'center', fontWeight: '600' }}>Aucune dépense ce mois — c'est bon signe.</Text>
-          <Text variant="caption" color="secondary" style={{ textAlign: 'center' }}>Ajoutez-en une dès qu'elle se présente.</Text>
+          <BouncingSmileyEmpty />
         </View>
       ) : (
         <ScrollView contentContainerStyle={styles.list} showsVerticalScrollIndicator={false}>

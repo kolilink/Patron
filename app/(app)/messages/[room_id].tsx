@@ -4,7 +4,6 @@ import {
   Animated as RNAnimated,
   FlatList,
   KeyboardAvoidingView,
-  Modal,
   Platform,
   Pressable,
   ScrollView,
@@ -18,6 +17,7 @@ import * as FileSystem from 'expo-file-system/legacy';
 import * as ImagePicker from 'expo-image-picker';
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
 import { Screen } from '@/src/components/ui/Screen';
+import { FormSheet } from '@/src/components/ui/FormSheet';
 import { router, useLocalSearchParams } from 'expo-router';
 import { Ionicons } from '@expo/vector-icons';
 import { Text } from '@/src/components/ui/Text';
@@ -413,7 +413,7 @@ export default function DmChatScreen() {
   return (
     <KeyboardAvoidingView
       style={{ flex: 1, backgroundColor: palette.background }}
-      behavior={Platform.OS === 'ios' ? 'padding' : 'height'}
+      behavior={Platform.OS === 'ios' ? 'padding' : undefined}
     >
       <Screen edges={['top']}>
         {/* Header */}
@@ -527,26 +527,20 @@ export default function DmChatScreen() {
       </Screen>
 
       {/* Partner settings modal */}
-      <Modal visible={showSettings} animationType="slide" onRequestClose={() => setShowSettings(false)}>
-        <View style={styles.safe}>
-          <View style={[styles.header, { paddingTop: insets.top + spacing[3] }]}>
-            <Pressable onPress={() => setShowSettings(false)} hitSlop={12}>
-              <Text variant="body" color="secondary">Fermer</Text>
-            </Pressable>
-            <Text variant="h4">Options</Text>
-            <Pressable onPress={handleSaveSettings} disabled={settingsSaving} hitSlop={12}>
-              <Text variant="body" style={{ color: settingsSaving ? palette.textDisabled : palette.primary, fontWeight: '600' }}>
-                {settingsSaving ? '…' : 'OK'}
-              </Text>
-            </Pressable>
-          </View>
-
-          <ScrollView
-            style={{ flex: 1 }}
-            contentContainerStyle={[styles.settingsContent, { paddingBottom: insets.bottom + spacing[6] }]}
-            keyboardShouldPersistTaps="handled"
-            alwaysBounceVertical={false}
-          >
+      <FormSheet
+        visible={showSettings}
+        onClose={() => setShowSettings(false)}
+        title="Options"
+        cancelLabel="Fermer"
+        headerRight={
+          <Pressable onPress={handleSaveSettings} disabled={settingsSaving} hitSlop={12}>
+            <Text variant="body" style={{ color: settingsSaving ? palette.textDisabled : palette.primary, fontWeight: '600' }}>
+              {settingsSaving ? '…' : 'OK'}
+            </Text>
+          </Pressable>
+        }
+        contentContainerStyle={[styles.settingsContent, { paddingBottom: insets.bottom + spacing[6] }]}
+      >
             {/* Nickname */}
             <Text variant="caption" color="secondary" style={styles.settingsLabel}>NOM AFFICHÉ</Text>
             <View style={styles.settingsField}>
@@ -596,9 +590,7 @@ export default function DmChatScreen() {
             >
               <Text variant="body" style={{ color: palette.warning }}>Retirer cet ami</Text>
             </Pressable>
-          </ScrollView>
-        </View>
-      </Modal>
+      </FormSheet>
     </KeyboardAvoidingView>
   );
 }

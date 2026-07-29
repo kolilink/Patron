@@ -5,7 +5,8 @@ import {
   Animated,
   Easing,
   FlatList,
-  KeyboardAvoidingView,
+  InputAccessoryView,
+  Keyboard,
   Modal,
   Platform,
   Pressable,
@@ -15,13 +16,15 @@ import {
   TextInput,
   View,
 } from 'react-native';
-import { SafeAreaView, useSafeAreaInsets } from 'react-native-safe-area-context';
+import { useSafeAreaInsets } from 'react-native-safe-area-context';
 import { Screen } from '@/src/components/ui/Screen';
+import { FormSheet } from '@/src/components/ui/FormSheet';
 import { Button } from '@/src/components/ui/Button';
 import { Card } from '@/src/components/ui/Card';
 import { Input } from '@/src/components/ui/Input';
 import { Text } from '@/src/components/ui/Text';
 import { PhoneInput } from '@/src/components/ui/PhoneInput';
+import { EmptyStateFabArrow } from '@/src/components/ui/EmptyStateFabArrow';
 import { Ionicons } from '@expo/vector-icons';
 import { useTheme, radius, spacing, fontFamily as FF, PRODUCT_BADGE_PALETTE } from '@/src/theme';
 import type { Palette } from '@/src/theme';
@@ -207,6 +210,10 @@ function generateLocalKey() {
   return `${Date.now()}-${Math.random().toString(36).slice(2, 7)}`;
 }
 
+// iOS-only: decimal-pad/number-pad keyboards have no built-in return key, so the
+// "Suivant" chain for those fields needs a shared accessory bar above the keyboard.
+const PRICE_ACCESSORY_ID = 'catalogue-product-form-price-accessory';
+
 // Extended local type — _overridePrice tracks whether this variant has custom prices
 type VariantDraftItem = DraftVariant & { _key: string; _overridePrice: boolean };
 
@@ -267,6 +274,10 @@ function ProductFormModal({ visible, editing, onClose, onSave, saving, currency,
   const [hasVariants, setHasVariants] = useState(false);
   const [variantDraft, setVariantDraft] = useState<VariantDraftItem[]>([]);
   const nameRef = useRef<TextInput>(null);
+  const purchasePriceRef = useRef<TextInput>(null);
+  const salePriceRef = useRef<TextInput>(null);
+  const initialStockRef = useRef<TextInput>(null);
+  const [focusedPriceField, setFocusedPriceField] = useState<'purchase_price' | 'sale_price' | 'quantity' | null>(null);
   const scrollRef = useRef<ScrollView>(null);
   const insets = useSafeAreaInsets();
 
@@ -337,29 +348,55 @@ function ProductFormModal({ visible, editing, onClose, onSave, saving, currency,
   const totalVariantStock = variantDraft.reduce((s, v) => s + (v.stock_qty || 0), 0);
   const showLiveCalc = !editing && !hasVariants && liveInvested > 0;
   const showProfitHint = (pp > 0 || computedCost > 0) && sp > 0;
+  // Whether the single plain "Quantité achetée" field is on screen to chain into —
+  // it's replaced by the variant list when hasVariants, and hidden entirely when editing.
+  const quantityFieldVisible = !editing && !hasVariants;
+
+  const handlePriceAccessoryNext = () => {
+    if (focusedPriceField === 'purchase_price') {
+      salePriceRef.current?.focus();
+    } else if (focusedPriceField === 'sale_price' && quantityFieldVisible) {
+      initialStockRef.current?.focus();
+    } else {
+      // Last field in the chain — dismiss only, never auto-submit.
+      Keyboard.dismiss();
+    }
+  };
+  const priceAccessoryLabel =
+    focusedPriceField === 'purchase_price' || (focusedPriceField === 'sale_price' && quantityFieldVisible)
+      ? 'Suivant'
+      : 'Terminé';
 
   return (
-    <Modal visible={visible} animationType="slide" presentationStyle="pageSheet" onRequestClose={onClose}>
-        <KeyboardAvoidingView
-          behavior={Platform.OS === 'ios' ? 'padding' : 'height'}
-          keyboardVerticalOffset={Platform.OS === 'ios' ? 46 : 0}
-          style={{ flex: 1 }}
-        >
-          <SafeAreaView style={styles.modalSafe} edges={['bottom']}>
-            <View style={styles.modalHeader}>
-              <Pressable onPress={onClose} style={styles.modalCancel}>
-                <Text variant="body" color="secondary">Annuler</Text>
+    <FormSheet
+      ref={scrollRef}
+      visible={visible}
+      onClose={onClose}
+      title={editing ? 'Modifier le produit' : 'Nouveau produit'}
+      contentContainerStyle={[styles.formStack, { paddingBottom: 16 }]}
+      footer={
+        <View style={[styles.modalFooter, { paddingBottom: Math.max(insets.bottom, spacing[5]) }]}>
+          <Button label={saving ? (editing ? 'Enregistrement…' : 'Ajout…') : (editing ? 'Enregistrer' : 'Ajouter')} onPress={handleSave}
+            loading={saving} fullWidth size="lg" />
+        </View>
+      }
+      accessory={
+        // decimal-pad/number-pad have no built-in return key on iOS — this bar
+        // stands in for it so Prix d'achat → Prix de vente → Quantité can chain
+        // the same way "Suivant" on the keyboard would. Never wired to handleSave.
+        Platform.OS === 'ios' ? (
+          <InputAccessoryView nativeID={PRICE_ACCESSORY_ID}>
+            <View style={styles.priceAccessoryBar}>
+              <Pressable onPress={handlePriceAccessoryNext} hitSlop={8}>
+                <Text variant="body" style={{ color: palette.primary, fontFamily: FF.semibold }}>
+                  {priceAccessoryLabel}
+                </Text>
               </Pressable>
-              <Text variant="h4">{editing ? 'Modifier le produit' : 'Nouveau produit'}</Text>
-              <View style={{ width: 64 }} />
             </View>
-
-            <ScrollView
-              ref={scrollRef}
-              style={{ flexGrow: 1 }}
-              contentContainerStyle={[styles.formStack, { paddingBottom: 16 }]}
-              keyboardShouldPersistTaps="handled"
-            >
+          </InputAccessoryView>
+        ) : undefined
+      }
+    >
               {formError && (
                 <View style={styles.formError}>
                   <Text variant="bodySmall" color="warning">{formError}</Text>
@@ -376,6 +413,9 @@ function ProductFormModal({ visible, editing, onClose, onSave, saving, currency,
                   onChangeText={setField('name')}
                   placeholder="Nom du produit"
                   placeholderTextColor={palette.textDisabled}
+                  returnKeyType="next"
+                  blurOnSubmit={false}
+                  onSubmitEditing={() => purchasePriceRef.current?.focus()}
                 />
               </View>
 
@@ -404,11 +444,17 @@ function ProductFormModal({ visible, editing, onClose, onSave, saving, currency,
                   {`Prix d'achat unitaire (${currency})`}
                 </Text>
                 <TextInput
+                  ref={purchasePriceRef}
                   style={styles.fieldInput}
                   value={form.purchase_price}
                   onChangeText={v => setForm(prev => ({ ...prev, purchase_price: formatAmountInput(v, currency) }))}
                   keyboardType="decimal-pad"
                   placeholderTextColor={palette.textDisabled}
+                  returnKeyType="next"
+                  blurOnSubmit={false}
+                  onSubmitEditing={() => salePriceRef.current?.focus()}
+                  onFocus={() => setFocusedPriceField('purchase_price')}
+                  inputAccessoryViewID={Platform.OS === 'ios' ? PRICE_ACCESSORY_ID : undefined}
                 />
               </View>
 
@@ -418,11 +464,20 @@ function ProductFormModal({ visible, editing, onClose, onSave, saving, currency,
                   {`Prix de vente unitaire (${currency})`}
                 </Text>
                 <TextInput
+                  ref={salePriceRef}
                   style={styles.fieldInput}
                   value={form.sale_price}
                   onChangeText={v => setForm(prev => ({ ...prev, sale_price: formatAmountInput(v, currency) }))}
                   keyboardType="decimal-pad"
                   placeholderTextColor={palette.textDisabled}
+                  returnKeyType={quantityFieldVisible ? 'next' : 'done'}
+                  blurOnSubmit={false}
+                  onSubmitEditing={() => {
+                    if (quantityFieldVisible) initialStockRef.current?.focus();
+                    else Keyboard.dismiss();
+                  }}
+                  onFocus={() => setFocusedPriceField('sale_price')}
+                  inputAccessoryViewID={Platform.OS === 'ios' ? PRICE_ACCESSORY_ID : undefined}
                 />
                 {(() => {
                   const sp = parseAmountInput(form.sale_price, currency);
@@ -444,11 +499,16 @@ function ProductFormModal({ visible, editing, onClose, onSave, saving, currency,
                   <Text style={styles.fieldLabel}>Quantité achetée</Text>
                   <View style={styles.fieldRow}>
                     <TextInput
+                      ref={initialStockRef}
                       style={[styles.fieldInput, { flex: 1 }]}
                       value={form.initial_stock}
                       onChangeText={setField('initial_stock')}
                       keyboardType="number-pad"
                       placeholderTextColor={palette.textDisabled}
+                      returnKeyType="done"
+                      onSubmitEditing={() => Keyboard.dismiss()}
+                      onFocus={() => setFocusedPriceField('quantity')}
+                      inputAccessoryViewID={Platform.OS === 'ios' ? PRICE_ACCESSORY_ID : undefined}
                     />
                     <Text style={styles.unitTag}>pcs</Text>
                   </View>
@@ -562,16 +622,7 @@ function ProductFormModal({ visible, editing, onClose, onSave, saving, currency,
                   )}
                 </>
               )}
-            </ScrollView>
-          </SafeAreaView>
-
-          {/* Footer outside ScrollView+SafeAreaView so KAV lifts it cleanly above the keyboard */}
-          <View style={[styles.modalFooter, { paddingBottom: Math.max(insets.bottom, spacing[5]) }]}>
-            <Button label={saving ? (editing ? 'Enregistrement…' : 'Ajout…') : (editing ? 'Enregistrer' : 'Ajouter')} onPress={handleSave}
-              loading={saving} fullWidth size="lg" />
-          </View>
-        </KeyboardAvoidingView>
-      </Modal>
+    </FormSheet>
   );
 }
 
@@ -600,43 +651,13 @@ function StockAdjustModal({ visible, product, onClose, onConfirm, saving, curren
   if (!product) return null;
 
   return (
-    <Modal visible={visible} animationType="slide" presentationStyle="formSheet" onRequestClose={onClose}>
-      <SafeAreaView style={styles.modalSafe} edges={['bottom']}>
-        <View style={styles.modalHeader}>
-          <Pressable onPress={onClose} style={styles.modalCancel}>
-            <Text variant="body" color="secondary">Annuler</Text>
-          </Pressable>
-          <Text variant="h4">Ajuster le stock</Text>
-          <View style={{ width: 64 }} />
-        </View>
-
-        <ScrollView contentContainerStyle={styles.modalContent} keyboardShouldPersistTaps="handled">
-          <Card style={styles.stockPreview}>
-            <Text variant="label">{product.name}</Text>
-            <Text variant="amountLarge">{product.stock_qty} {product.unit}</Text>
-            <Text variant="caption" color="secondary">Stock actuel</Text>
-          </Card>
-
-          <View style={styles.typeRow}>
-            <Pressable onPress={() => setType('entree')}
-              style={[styles.typeChip, type === 'entree' && styles.typeChipEntree]}>
-              <Text variant="label" style={{ color: type === 'entree' ? palette.textInverse : palette.textPrimary }}>
-                + Entrée
-              </Text>
-            </Pressable>
-            <Pressable onPress={() => setType('perte')}
-              style={[styles.typeChip, type === 'perte' && styles.typeChipPerte]}>
-              <Text variant="label" style={{ color: type === 'perte' ? palette.textInverse : palette.textPrimary }}>
-                − Perte / Retrait
-              </Text>
-            </Pressable>
-          </View>
-
-          <Input label="Quantité" value={qty} onChangeText={setQty} keyboardType="number-pad" />
-          <Input label="Note (optionnel)" value={note} onChangeText={setNote}
-            placeholder="Livraison, retour client, casse" />
-        </ScrollView>
-
+    <FormSheet
+      visible={visible}
+      onClose={onClose}
+      title="Ajuster le stock"
+      presentationStyle="formSheet"
+      contentContainerStyle={styles.modalContent}
+      footer={
         <View style={styles.modalFooter}>
           <Button
             label={saving ? 'Enregistrement…' : 'Confirmer'}
@@ -649,8 +670,33 @@ function StockAdjustModal({ visible, product, onClose, onConfirm, saving, curren
             variant={type === 'perte' ? 'danger' : 'primary'}
           />
         </View>
-      </SafeAreaView>
-    </Modal>
+      }
+    >
+      <Card style={styles.stockPreview}>
+        <Text variant="label">{product.name}</Text>
+        <Text variant="amountLarge">{product.stock_qty} {product.unit}</Text>
+        <Text variant="caption" color="secondary">Stock actuel</Text>
+      </Card>
+
+      <View style={styles.typeRow}>
+        <Pressable onPress={() => setType('entree')}
+          style={[styles.typeChip, type === 'entree' && styles.typeChipEntree]}>
+          <Text variant="label" style={{ color: type === 'entree' ? palette.textInverse : palette.textPrimary }}>
+            + Entrée
+          </Text>
+        </Pressable>
+        <Pressable onPress={() => setType('perte')}
+          style={[styles.typeChip, type === 'perte' && styles.typeChipPerte]}>
+          <Text variant="label" style={{ color: type === 'perte' ? palette.textInverse : palette.textPrimary }}>
+            − Perte / Retrait
+          </Text>
+        </Pressable>
+      </View>
+
+      <Input label="Quantité" value={qty} onChangeText={setQty} keyboardType="number-pad" />
+      <Input label="Note (optionnel)" value={note} onChangeText={setNote}
+        placeholder="Livraison, retour client, casse" />
+    </FormSheet>
   );
 }
 
@@ -698,76 +744,71 @@ function ProductStatsModal({ visible, product, onClose, businessId, currency, fe
   const profitColor = stats && stats.profit >= 0 ? palette.success : palette.danger;
 
   return (
-    <Modal visible={visible} animationType="slide" presentationStyle="formSheet" onRequestClose={onClose}>
-      <SafeAreaView style={styles.modalSafe} edges={['bottom']}>
-        <View style={styles.modalHeader}>
-          <Pressable onPress={onClose} style={styles.modalCancel}>
-            <Text variant="body" color="secondary">Fermer</Text>
-          </Pressable>
-          <Text variant="h4" numberOfLines={1} style={{ flex: 1, textAlign: 'center' }}>Rentabilité</Text>
-          <View style={{ width: 64 }} />
+    <FormSheet
+      visible={visible}
+      onClose={onClose}
+      title="Rentabilité"
+      cancelLabel="Fermer"
+      presentationStyle="formSheet"
+      contentContainerStyle={styles.modalContent}
+    >
+      <Text variant="label" color="secondary" style={{ textAlign: 'center' }}>{product.name}</Text>
+
+      {/* Period toggle */}
+      <View style={styles.typeRow}>
+        <Pressable onPress={() => setPeriod('mois')}
+          style={[styles.typeChip, period === 'mois' && styles.typeChipEntree]}>
+          <Text variant="label" style={{ color: period === 'mois' ? palette.textInverse : palette.textPrimary }}>
+            Ce mois
+          </Text>
+        </Pressable>
+        <Pressable onPress={() => setPeriod('tout')}
+          style={[styles.typeChip, period === 'tout' && styles.typeChipEntree]}>
+          <Text variant="label" style={{ color: period === 'tout' ? palette.textInverse : palette.textPrimary }}>
+            Depuis le début
+          </Text>
+        </Pressable>
+      </View>
+
+      {loading ? (
+        <View style={{ alignItems: 'center', paddingVertical: 32 }}>
+          <Text variant="body" color="secondary">Chargement…</Text>
         </View>
-
-        <ScrollView contentContainerStyle={styles.modalContent}>
-          <Text variant="label" color="secondary" style={{ textAlign: 'center' }}>{product.name}</Text>
-
-          {/* Period toggle */}
-          <View style={styles.typeRow}>
-            <Pressable onPress={() => setPeriod('mois')}
-              style={[styles.typeChip, period === 'mois' && styles.typeChipEntree]}>
-              <Text variant="label" style={{ color: period === 'mois' ? palette.textInverse : palette.textPrimary }}>
-                Ce mois
-              </Text>
-            </Pressable>
-            <Pressable onPress={() => setPeriod('tout')}
-              style={[styles.typeChip, period === 'tout' && styles.typeChipEntree]}>
-              <Text variant="label" style={{ color: period === 'tout' ? palette.textInverse : palette.textPrimary }}>
-                Depuis le début
-              </Text>
-            </Pressable>
+      ) : stats ? (
+        <Card style={{ gap: 0 }}>
+          <View style={styles.statsRow}>
+            <Text variant="body" color="secondary">Encaissé</Text>
+            <Text variant="body" style={{ fontFamily: 'System', fontWeight: '600' }}>
+              {formatAmount(stats.revenue, currency)}
+            </Text>
           </View>
-
-          {loading ? (
-            <View style={{ alignItems: 'center', paddingVertical: 32 }}>
-              <Text variant="body" color="secondary">Chargement…</Text>
-            </View>
-          ) : stats ? (
-            <Card style={{ gap: 0 }}>
-              <View style={styles.statsRow}>
-                <Text variant="body" color="secondary">Encaissé</Text>
-                <Text variant="body" style={{ fontFamily: 'System', fontWeight: '600' }}>
-                  {formatAmount(stats.revenue, currency)}
-                </Text>
-              </View>
-              <View style={[styles.statsRow, styles.statsRowBorder]}>
-                <Text variant="body" color="secondary">Coût d'achat</Text>
-                <Text variant="body" style={{ fontFamily: 'System', fontWeight: '600' }}>
-                  {formatAmount(stats.capital, currency)}
-                </Text>
-              </View>
-              {stats.linkedExpenses > 0 && (
-                <View style={[styles.statsRow, styles.statsRowBorder]}>
-                  <Text variant="body" color="secondary">Dépenses liées</Text>
-                  <Text variant="body" style={{ fontFamily: 'System', fontWeight: '600' }}>
-                    {formatAmount(stats.linkedExpenses, currency)}
-                  </Text>
-                </View>
-              )}
-              <View style={[styles.statsRow, styles.statsRowBorder]}>
-                <Text variant="body">Bénéfice</Text>
-                <Text variant="body" style={{ fontFamily: 'System', fontWeight: '700', color: profitColor }}>
-                  {stats.profit >= 0 ? '+' : ''}{formatAmount(stats.profit, currency)}
-                </Text>
-              </View>
-            </Card>
-          ) : (
-            <View style={{ alignItems: 'center', paddingVertical: 32 }}>
-              <Text variant="body" color="secondary">Aucune donnée disponible.</Text>
+          <View style={[styles.statsRow, styles.statsRowBorder]}>
+            <Text variant="body" color="secondary">Coût d'achat</Text>
+            <Text variant="body" style={{ fontFamily: 'System', fontWeight: '600' }}>
+              {formatAmount(stats.capital, currency)}
+            </Text>
+          </View>
+          {stats.linkedExpenses > 0 && (
+            <View style={[styles.statsRow, styles.statsRowBorder]}>
+              <Text variant="body" color="secondary">Dépenses liées</Text>
+              <Text variant="body" style={{ fontFamily: 'System', fontWeight: '600' }}>
+                {formatAmount(stats.linkedExpenses, currency)}
+              </Text>
             </View>
           )}
-        </ScrollView>
-      </SafeAreaView>
-    </Modal>
+          <View style={[styles.statsRow, styles.statsRowBorder]}>
+            <Text variant="body">Bénéfice</Text>
+            <Text variant="body" style={{ fontFamily: 'System', fontWeight: '700', color: profitColor }}>
+              {stats.profit >= 0 ? '+' : ''}{formatAmount(stats.profit, currency)}
+            </Text>
+          </View>
+        </Card>
+      ) : (
+        <View style={{ alignItems: 'center', paddingVertical: 32 }}>
+          <Text variant="body" color="secondary">Aucune donnée disponible.</Text>
+        </View>
+      )}
+    </FormSheet>
   );
 }
 
@@ -909,7 +950,7 @@ function RestoreActionSheet({
   if (!product) return null;
 
   return (
-    <Modal visible={visible} transparent animationType="slide" onRequestClose={onClose}>
+    <Modal visible={visible} transparent animationType="slide" onRequestClose={onClose} statusBarTranslucent navigationBarTranslucent>
       <Pressable style={styles.actionSheetOverlay} onPress={onClose} />
       <View style={[styles.actionSheet, { paddingBottom: Math.max(insets.bottom, spacing[4]) }]}>
         <View style={styles.sheetHandle} />
@@ -963,7 +1004,7 @@ function ProductActionSheet({
     : `${product.stock_qty} ${product.unit} · ${formatPrice(product.sale_price, currency)}`;
 
   return (
-    <Modal visible={visible} transparent animationType="slide" onRequestClose={onClose}>
+    <Modal visible={visible} transparent animationType="slide" onRequestClose={onClose} statusBarTranslucent navigationBarTranslucent>
       <Pressable style={styles.actionSheetOverlay} onPress={onClose} />
       <View style={[styles.actionSheet, { paddingBottom: Math.max(insets.bottom, spacing[4]) }]}>
         <View style={styles.sheetHandle} />
@@ -1261,7 +1302,9 @@ export default function CatalogueScreen() {
         </View>
       ) : null}
 
-      {offline && <OfflineNotice offlineSince={offlineSince} />}
+      {offline && (
+        <OfflineNotice offlineSince={offlineSince} onRetry={() => fetchProducts(businessId, userId)} />
+      )}
 
       {/* Header */}
       <View style={styles.header}>
@@ -1286,10 +1329,12 @@ export default function CatalogueScreen() {
         ))}
       </View>
 
-      {/* Search */}
-      <View style={styles.searchRow}>
-        <Input placeholder="Rechercher un produit…" value={search} onChangeText={setSearch} style={{ flex: 1 }} />
-      </View>
+      {/* Search — hidden when the current tab's own list is empty: nothing to search yet */}
+      {(tab === 'actifs' ? products.length > 0 : archivedProducts.length > 0) && (
+        <View style={styles.searchRow}>
+          <Input placeholder="Rechercher un produit…" value={search} onChangeText={setSearch} style={{ flex: 1 }} />
+        </View>
+      )}
 
       {/* Stats row (actifs only) */}
       {products.length > 0 && tab === 'actifs' && (
@@ -1324,17 +1369,21 @@ export default function CatalogueScreen() {
       {loading && products.length === 0 ? (
         <SkeletonList count={8} />
       ) : tab === 'actifs' && products.length === 0 ? (
-        <View style={styles.emptyState}>
-          <Ionicons name={offline ? 'cloud-offline-outline' : 'cube-outline'} size={72} color={palette.textDisabled} />
-          <Text variant="h4">{offline ? 'Catalogue non disponible hors ligne' : 'Catalogue vide'}</Text>
-          <Text variant="body" color="secondary" style={styles.emptyDesc}>
-            {offline
-              ? 'Ouvrez l\'application en ligne une première fois pour activer le mode hors ligne.'
-              : !canEdit
-              ? 'Votre responsable ajoutera les produits bientôt.'
-              : 'Ajoutez votre premier produit pour démarrer.'}
-          </Text>
-        </View>
+        !offline && canEdit ? (
+          // First-run empty state: nothing renders here at all — the "+" FAB
+          // below plus its curved running-lights hint are the whole thing.
+          null
+        ) : (
+          <View style={styles.emptyState}>
+            <Ionicons name={offline ? 'cloud-offline-outline' : 'cube-outline'} size={72} color={palette.textDisabled} />
+            <Text variant="h4">{offline ? 'Catalogue non disponible hors ligne' : 'Catalogue vide'}</Text>
+            <Text variant="body" color="secondary" style={styles.emptyDesc}>
+              {offline
+                ? 'Ouvrez l\'application en ligne une première fois pour activer le mode hors ligne.'
+                : 'Votre responsable ajoutera les produits bientôt.'}
+            </Text>
+          </View>
+        )
       ) : tab === 'archives' && archivedFiltered.length === 0 ? (
         <View style={styles.emptyState}>
           <Ionicons name="cube-outline" size={48} color={palette.textDisabled} />
@@ -1381,6 +1430,8 @@ export default function CatalogueScreen() {
         animationType="slide"
         transparent
         onRequestClose={() => setShowOutOfStockModal(false)}
+        statusBarTranslucent
+        navigationBarTranslucent
       >
         <Pressable style={styles.outOfStockOverlay} onPress={() => setShowOutOfStockModal(false)} />
         <View style={styles.outOfStockSheet}>
@@ -1489,6 +1540,9 @@ export default function CatalogueScreen() {
           </Pressable>
         </Animated.View>
       )}
+      {canEdit && tab === 'actifs' && products.length === 0 && !offline && (
+        <EmptyStateFabArrow tabIndex={1} />
+      )}
     </Screen>
   );
 }
@@ -1585,7 +1639,6 @@ function makeStyles(p: Palette) {
     priceText: { fontFamily: FF.semibold, fontSize: 15, color: p.primary },
     emptyState: { flex: 1, alignItems: 'center', justifyContent: 'center', padding: spacing[8], gap: spacing[3] },
     emptyDesc: { textAlign: 'center', maxWidth: 260 },
-
     fabContainer: { position: 'absolute', bottom: 194, right: spacing[4], zIndex: 10 },
     fab: {
       width: 56, height: 56, borderRadius: radius.full,
@@ -1629,6 +1682,11 @@ function makeStyles(p: Palette) {
       paddingHorizontal: spacing[5], paddingVertical: spacing[3],
       alignItems: 'center' as const,
       borderBottomWidth: 1, borderBottomColor: p.border,
+    },
+    priceAccessoryBar: {
+      flexDirection: 'row', justifyContent: 'flex-end',
+      paddingHorizontal: spacing[4], paddingVertical: spacing[2.5],
+      backgroundColor: p.surface, borderTopWidth: 1, borderTopColor: p.border,
     },
 
     pickerField: {

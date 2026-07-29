@@ -46,7 +46,7 @@ export function TrialWelcomeOverlay({ businessName, onStart }: Props) {
   }, []);
 
   return (
-    <Modal animationType="fade" transparent={false} visible>
+    <Modal animationType="fade" transparent={false} visible statusBarTranslucent navigationBarTranslucent backdropColor={palette.background}>
       <SafeAreaView style={styles.safe}>
         <ScrollView
           contentContainerStyle={styles.container}

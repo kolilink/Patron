@@ -107,7 +107,7 @@ export default function VerrouilleScreen() {
 
   return (
     <Screen>
-      <KeyboardAvoidingView behavior={Platform.OS === 'ios' ? 'padding' : 'height'} style={styles.kav}>
+      <KeyboardAvoidingView behavior={Platform.OS === 'ios' ? 'padding' : undefined} style={styles.kav}>
         <ScrollView contentContainerStyle={styles.scrollContent} keyboardShouldPersistTaps="handled">
           <View style={styles.content}>
             {(phase === 'checking' || phase === 'retry') && (
@@ -142,9 +142,9 @@ export default function VerrouilleScreen() {
   );
 }
 
-function makeStyles(_p: Palette) {
+function makeStyles(p: Palette) {
   return StyleSheet.create({
-    kav:           { flex: 1 },
+    kav:           { flex: 1, backgroundColor: p.background },
     scrollContent: { flexGrow: 1 },
     content:       { flex: 1, padding: spacing[6], paddingTop: spacing[24], gap: spacing[6], justifyContent: 'flex-start', alignItems: 'center' },
     lockOnly:      { justifyContent: 'center', alignItems: 'center' },

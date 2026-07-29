@@ -3,7 +3,7 @@ import { supabase } from '@/lib/supabase';
 import { translateError } from '@/lib/errors';
 import { generateId } from '@/lib/id';
 import { saveFournisseurCache, getFournisseurCache, saveCommandeCache, getCommandeCache, getCacheTimestamp } from '@/lib/db';
-import { isNetworkError, withTimeout } from '@/lib/sync';
+import { isNetworkError, withTimeout, withNetworkRetry, reportOfflineFallback } from '@/lib/sync';
 import { useProductStore } from '@/stores/products';
 import { useAuthStore } from '@/stores/auth';
 import { notifyEvent } from '@/src/utils/notifications';
@@ -122,7 +122,7 @@ export const useFournisseursStore = create<FournisseursStore>((set, get) => ({
   fetchFournisseurs: async (businessId) => {
     set({ loading: true });
     const [suppliersRes, debtsRes] = await Promise.all([
-      withTimeout(supabase.from('suppliers').select('*').eq('business_id', businessId).order('name'))
+      withNetworkRetry(() => supabase.from('suppliers').select('*').eq('business_id', businessId).order('name'))
         .catch(err => ({ data: null, error: err })),
       withTimeout(supabase.from('supplier_debts').select('*').eq('business_id', businessId).order('date', { ascending: false }))
         .catch(err => ({ data: null, error: err })),
@@ -130,6 +130,7 @@ export const useFournisseursStore = create<FournisseursStore>((set, get) => ({
     if (isStaleBusiness(businessId)) return;
     if (suppliersRes.error) {
       if (isNetworkError(suppliersRes.error)) {
+        reportOfflineFallback('fournisseurs.fetchFournisseurs', suppliersRes.error);
         const cached = await getFournisseurCache(businessId) as Fournisseur[] | null;
         if (isStaleBusiness(businessId)) return;
         if (cached) {
@@ -233,7 +234,7 @@ export const useFournisseursStore = create<FournisseursStore>((set, get) => ({
 
   fetchCommandes: async (businessId) => {
     set({ loading: true });
-    const { data, error } = await withTimeout(
+    const { data, error } = await withNetworkRetry(() =>
       supabase
         .from('purchase_orders')
         .select('*, supplier:suppliers(name)')
@@ -244,6 +245,7 @@ export const useFournisseursStore = create<FournisseursStore>((set, get) => ({
     if (isStaleBusiness(businessId)) return;
     if (error) {
       if (isNetworkError(error)) {
+        reportOfflineFallback('fournisseurs.fetchCommandes', error);
         const cached = await getCommandeCache(businessId) as CommandeAchat[] | null;
         if (isStaleBusiness(businessId)) return;
         if (cached) {

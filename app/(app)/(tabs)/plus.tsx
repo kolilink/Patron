@@ -18,11 +18,10 @@ type IoniconName = React.ComponentProps<typeof Ionicons>['name'];
 interface MenuRowProps {
   iconName: IoniconName;
   label: string;
-  sub?: string;
   onPress: () => void;
 }
 
-function MenuRow({ iconName, label, sub, onPress }: MenuRowProps) {
+function MenuRow({ iconName, label, onPress }: MenuRowProps) {
   const { palette } = useTheme();
   const styles = useMemo(() => makeStyles(palette), [palette]);
   return (
@@ -32,9 +31,7 @@ function MenuRow({ iconName, label, sub, onPress }: MenuRowProps) {
       </View>
       <View style={{ flex: 1 }}>
         <Text variant="label">{label}</Text>
-        {sub && <Text variant="caption" color="secondary">{sub}</Text>}
       </View>
-      <Text variant="body" color="secondary">›</Text>
     </Card>
   );
 }
@@ -91,9 +88,15 @@ export default function PlusScreen() {
               <Text variant="label">{user?.name || generateFallbackName(user?.id ?? '')}</Text>
               <Text variant="caption" color="secondary">{user?.email}</Text>
             </View>
+            {/* Right-aligned with a marginRight matching the badge's own
+                internal padding below, so the last letter lines up with the
+                text inside "Vous êtes {role}" rather than the pill's outer
+                edge — a deliberate slight inset, not flush to the card edge. */}
+            <Text variant="bodySmall" color="secondary" style={styles.bizNameTop} numberOfLines={1}>
+              {business?.name}
+            </Text>
           </View>
           <View style={styles.bizRow}>
-            <Text variant="bodySmall">{business?.name}</Text>
             <View style={[styles.badge, { backgroundColor: roleColor + '20' }]}>
               <Text variant="labelSmall" style={{ color: roleColor }}>
                 {`Vous êtes ${role === 'administrateur' ? 'Gérant' : role === 'investisseur' ? 'Observateur' : role.charAt(0).toUpperCase() + role.slice(1)}`}
@@ -106,11 +109,11 @@ export default function PlusScreen() {
         {isVendeur && (
           <View style={styles.section}>
             <Text variant="overline" color="secondary">Mes activités</Text>
-            <MenuRow iconName="receipt-outline" label="Mes ventes" sub="Mes ventes passées" onPress={() => router.push('/ventes')} />
-            <MenuRow iconName="card-outline" label="Clients qui doivent" sub="Voir qui vous doit de l'argent" onPress={() => router.push('/credits')} />
-            <MenuRow iconName="people-outline" label="Mes clients" sub="Mes clients et crédits" onPress={() => router.push('/clients')} />
-            <MenuRow iconName="cash-outline" label="Dépenses" sub="Noter une dépense" onPress={() => router.push('/depenses')} />
-            <MenuRow iconName="arrow-down-circle-outline" label="Mes apports" sub="Capital que j'ai injecté" onPress={() => router.push('/apports')} />
+            <MenuRow iconName="receipt-outline" label="Mes ventes" onPress={() => router.push('/ventes')} />
+            <MenuRow iconName="card-outline" label="Clients qui doivent" onPress={() => router.push('/credits')} />
+            <MenuRow iconName="people-outline" label="Mes clients" onPress={() => router.push('/clients')} />
+            <MenuRow iconName="cash-outline" label="Dépenses" onPress={() => router.push('/depenses')} />
+            <MenuRow iconName="arrow-down-circle-outline" label="Mes apports" onPress={() => router.push('/apports')} />
           </View>
         )}
 
@@ -118,8 +121,8 @@ export default function PlusScreen() {
         {isInvestisseur && (
           <View style={styles.section}>
             <Text variant="overline" color="secondary">Vue d'ensemble</Text>
-            <MenuRow iconName="bar-chart-outline" label="Rapports" sub="Vos chiffres" onPress={() => router.push('/rapports')} />
-            <MenuRow iconName="arrow-down-circle-outline" label="Capital investi" sub="Apports de fonds" onPress={() => router.push('/apports')} />
+            <MenuRow iconName="bar-chart-outline" label="Bilan" onPress={() => router.push('/rapports')} />
+            <MenuRow iconName="arrow-down-circle-outline" label="Capital investi" onPress={() => router.push('/apports')} />
           </View>
         )}
 
@@ -128,25 +131,25 @@ export default function PlusScreen() {
           <>
             <View style={styles.section}>
               <Text variant="overline" color="secondary">Ventes & Clients</Text>
-              <MenuRow iconName="receipt-outline" label="Ventes passées" sub="Toutes les ventes" onPress={() => router.push('/ventes')} />
-              <MenuRow iconName="card-outline" label="Clients qui doivent" sub="Voir qui vous doit de l'argent" onPress={() => router.push('/credits')} />
-              <MenuRow iconName="people-outline" label="Clients" sub="Informations clients" onPress={() => router.push('/clients')} />
+              <MenuRow iconName="receipt-outline" label="Ventes passées" onPress={() => router.push('/ventes')} />
+              <MenuRow iconName="card-outline" label="Clients qui doivent" onPress={() => router.push('/credits')} />
+              <MenuRow iconName="people-outline" label="Clients" onPress={() => router.push('/clients')} />
             </View>
 
             <View style={styles.section}>
               <Text variant="overline" color="secondary">Finances</Text>
-              <MenuRow iconName="cash-outline" label="Dépenses" sub="Suivre vos dépenses" onPress={() => router.push('/depenses')} />
-              <MenuRow iconName="arrow-down-circle-outline" label="Capital investi" sub="Apports de fonds" onPress={() => router.push('/apports')} />
+              <MenuRow iconName="cash-outline" label="Dépenses" onPress={() => router.push('/depenses')} />
+              <MenuRow iconName="arrow-down-circle-outline" label="Capital investi" onPress={() => router.push('/apports')} />
             </View>
 
             <View style={styles.section}>
               <Text variant="overline" color="secondary">Achats</Text>
-              <MenuRow iconName="business-outline" label="Fournisseurs" sub="Gérer vos fournisseurs" onPress={() => router.push('/fournisseurs')} />
+              <MenuRow iconName="business-outline" label="Fournisseurs" onPress={() => router.push('/fournisseurs')} />
             </View>
 
             <View style={styles.section}>
               <Text variant="overline" color="secondary">Analyse</Text>
-              <MenuRow iconName="bar-chart-outline" label="Rapports" sub="Ventes, gains, stock" onPress={() => router.push('/rapports')} />
+              <MenuRow iconName="bar-chart-outline" label="Bilan" onPress={() => router.push('/rapports')} />
             </View>
           </>
         )}
@@ -155,8 +158,8 @@ export default function PlusScreen() {
         {isAdmin && (
           <View style={styles.section}>
             <Text variant="overline" color="secondary">Administration</Text>
-            <MenuRow iconName="people-outline" label="Équipe" sub="Membres & invitations" onPress={() => router.push('/equipe')} />
-            <MenuRow iconName="settings-outline" label="Paramètres" sub="Nom du commerce, monnaie" onPress={() => router.push('/parametres')} />
+            <MenuRow iconName="people-outline" label="Équipe" onPress={() => router.push('/equipe')} />
+            <MenuRow iconName="settings-outline" label="Paramètres" onPress={() => router.push('/parametres')} />
           </View>
         )}
 
@@ -164,12 +167,12 @@ export default function PlusScreen() {
         {!isAdmin && (
           <View style={styles.section}>
             <Text variant="overline" color="secondary">Mon compte</Text>
-            <MenuRow iconName="person-outline" label="Mon profil" sub="Modifier mon nom affiché" onPress={() => router.push('/parametres')} />
+            <MenuRow iconName="person-outline" label="Mon profil" onPress={() => router.push('/parametres')} />
           </View>
         )}
 
         {removedBusinesses.length > 0 && (
-          <View style={styles.section}>
+          <View style={[styles.section, { marginTop: spacing[3] }]}>
             <Text variant="overline" color="secondary">Anciens commerces</Text>
             {removedBusinesses.map(b => (
               <Card
@@ -211,16 +214,24 @@ export default function PlusScreen() {
 function makeStyles(p: Palette) {
   return StyleSheet.create({
     safe: { flex: 1, backgroundColor: p.background },
-    content: { padding: spacing[5], gap: spacing[4], paddingBottom: spacing[10] },
+    content: { paddingHorizontal: spacing[4], paddingTop: spacing[5], gap: spacing[4], paddingBottom: spacing[10] },
     profileCard: { gap: spacing[3] },
-    profileRow: { flexDirection: 'row', alignItems: 'center', gap: spacing[3] },
+    // flex-start (not 'center') so the business name — a plain sibling with
+    // no vertical offset of its own — lands at the same y as the first line
+    // of the name/email column, per the top-right layout above.
+    profileRow: { flexDirection: 'row', alignItems: 'flex-start', gap: spacing[3] },
     avatar: { width: 44, height: 44, borderRadius: 22, alignItems: 'center', justifyContent: 'center' },
-    bizRow: { flexDirection: 'row', alignItems: 'center', justifyContent: 'space-between' },
+    bizNameTop: {
+      maxWidth: 140,
+      marginRight: spacing[2], // matches the badge's own paddingHorizontal below
+      textAlign: 'right',
+    },
+    bizRow: { flexDirection: 'row', alignItems: 'center', justifyContent: 'flex-end' },
     badge: { paddingHorizontal: spacing[2], paddingVertical: 2, borderRadius: 6 },
     section: { gap: spacing[2] },
     menuRow: {
       flexDirection: 'row', alignItems: 'center',
-      paddingHorizontal: spacing[4], paddingVertical: spacing[3], gap: spacing[3],
+      paddingHorizontal: spacing[4], paddingVertical: spacing[5], gap: spacing[3],
     },
     menuIconWrap: { width: 28, alignItems: 'center' },
     switchCard: { gap: 2 },

@@ -10,6 +10,7 @@ import type { Palette } from '@/src/theme';
 import { useAuthStore } from '@/stores/auth';
 import { useVentesStore } from '@/stores/ventes';
 import { OfflineNotice } from '@/src/components/ui/OfflineNotice';
+import { SkeletonList } from '@/src/components/ui/SkeletonPlaceholder';
 
 function fmt(n: number, cur: string) { return `${Math.round(n).toLocaleString('fr-FR')} ${cur}`; }
 
@@ -38,7 +39,7 @@ type FilterType = 'tous' | 'doivent' | 'actifs';
 
 const FILTERS: { key: FilterType; label: string }[] = [
   { key: 'tous', label: 'Tous' },
-  { key: 'doivent', label: 'Doivent' },
+  { key: 'doivent', label: 'En dette' },
   { key: 'actifs', label: 'Actifs' },
 ];
 
@@ -142,16 +143,28 @@ export default function ClientsScreen() {
         </View>
       )}
 
-      {offline && <OfflineNotice offlineSince={offlineSince} />}
+      {offline && (
+        <OfflineNotice
+          offlineSince={offlineSince}
+          onRetry={() => fetchSales(businessId, isVendeur ? userId : undefined)}
+        />
+      )}
 
       {loading && allClients.length === 0 ? (
-        <Text variant="body" color="secondary" style={styles.center}>Chargement…</Text>
+        <SkeletonList count={6} />
       ) : !loading && allClients.length === 0 && error ? (
         <View style={styles.empty}>
           <Text variant="body" color="secondary" style={{ textAlign: 'center' }}>Données non disponibles hors ligne</Text>
         </View>
       ) : displayedClients.length === 0 ? (
-        filter === 'doivent' ? (
+        search.trim() ? (
+          <View style={styles.empty}>
+            <Ionicons name="search-outline" size={40} color={palette.textDisabled} />
+            <Text variant="body" color="secondary" style={[styles.emptyHint, { marginTop: spacing[3] }]}>
+              Aucun résultat pour "{search}"
+            </Text>
+          </View>
+        ) : filter === 'doivent' ? (
           <View style={styles.empty}>
             <View style={[styles.emptyIconWrap, { backgroundColor: palette.successLight }]}>
               <Ionicons name="checkmark-circle" size={32} color={palette.success} />
@@ -226,7 +239,7 @@ function makeStyles(p: Palette) {
       padding: spacing[5], borderBottomWidth: 1, borderBottomColor: p.border,
     },
     filterRow: {
-      flexDirection: 'row', paddingHorizontal: spacing[5], paddingVertical: spacing[3], gap: spacing[2],
+      flexDirection: 'row', justifyContent: 'center', paddingHorizontal: spacing[5], paddingVertical: spacing[3], gap: spacing[2],
     },
     searchRow: { paddingHorizontal: spacing[5], paddingBottom: spacing[2] },
     filterChip: {

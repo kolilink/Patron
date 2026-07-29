@@ -1,5 +1,6 @@
 import { useState } from 'react';
-import { Modal, Pressable, StyleSheet, View } from 'react-native';
+import { Modal, Platform, Pressable, StyleSheet, View } from 'react-native';
+import { useSafeAreaInsets } from 'react-native-safe-area-context';
 import { Image } from 'expo-image';
 import { Ionicons } from '@expo/vector-icons';
 import { radius, colors } from '@/src/theme';
@@ -17,6 +18,13 @@ export function ProofThumbnail({
   size?: number;
 }) {
   const [open, setOpen] = useState(false);
+  const insets = useSafeAreaInsets();
+  // statusBarTranslucent (below) means this Modal now draws behind the
+  // status bar on Android — the close button's fixed `top: 56` was tuned
+  // for the previous non-translucent Modal, where Android itself already
+  // kept content clear of the status bar. Nudge it down by the real inset
+  // so it doesn't end up under/near the status bar or a camera cutout.
+  const closeTop = Platform.OS === 'android' ? styles.close.top + insets.top : styles.close.top;
   return (
     <>
       <Pressable onPress={() => setOpen(true)} hitSlop={8}>
@@ -27,10 +35,10 @@ export function ProofThumbnail({
         />
       </Pressable>
 
-      <Modal visible={open} transparent animationType="fade" onRequestClose={() => setOpen(false)}>
+      <Modal visible={open} transparent animationType="fade" onRequestClose={() => setOpen(false)} statusBarTranslucent navigationBarTranslucent>
         <Pressable style={styles.backdrop} onPress={() => setOpen(false)}>
           <Image source={{ uri: url }} style={styles.full} contentFit="contain" />
-          <Pressable style={styles.close} onPress={() => setOpen(false)} hitSlop={12}>
+          <Pressable style={[styles.close, { top: closeTop }]} onPress={() => setOpen(false)} hitSlop={12}>
             <Ionicons name="close" size={26} color={colors.neutral[0]} />
           </Pressable>
         </Pressable>

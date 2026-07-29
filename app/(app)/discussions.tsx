@@ -5,7 +5,6 @@ import {
   Keyboard,
   KeyboardAvoidingView,
   Linking,
-  Modal,
   Platform,
   Pressable,
   ScrollView,
@@ -26,8 +25,9 @@ import Animated, {
   withTiming,
   runOnJS,
 } from 'react-native-reanimated';
-import { SafeAreaView, useSafeAreaInsets } from 'react-native-safe-area-context';
+import { useSafeAreaInsets } from 'react-native-safe-area-context';
 import { Screen } from '@/src/components/ui/Screen';
+import { FormSheet } from '@/src/components/ui/FormSheet';
 import { router, useFocusEffect } from 'expo-router';
 import { Ionicons } from '@expo/vector-icons';
 import { Text } from '@/src/components/ui/Text';
@@ -951,7 +951,7 @@ export default function DiscussionsScreen() {
   return (
     <KeyboardAvoidingView
       style={{ flex: 1, backgroundColor: palette.background }}
-      behavior={Platform.OS === 'ios' ? 'padding' : 'height'}
+      behavior={Platform.OS === 'ios' ? 'padding' : undefined}
     >
     <Screen edges={['top']}>
 
@@ -1054,7 +1054,9 @@ export default function DiscussionsScreen() {
               <SkeletonList count={6} />
             ) : !boutiqueRoom ? (
               <View style={styles.empty}>
-                <Text variant="body" color="secondary">Chargement…</Text>
+                <Text variant="body" color="secondary">
+                  {chatOffline ? 'Données non disponibles hors ligne' : 'Chargement…'}
+                </Text>
               </View>
             ) : listItems.length === 0 ? (
               <View style={styles.empty}>
@@ -1392,7 +1394,9 @@ export default function DiscussionsScreen() {
             ) : filteredPosts.length === 0 ? (
               <View style={styles.empty}>
                 <Text variant="body" color="secondary" style={{ textAlign: 'center' }}>
-                  {selectedCat === 'tout'
+                  {marketOffline && posts.length === 0
+                    ? 'Données non disponibles hors ligne'
+                    : selectedCat === 'tout'
                     ? 'Le Marché est calme pour l\'instant.\nSoyez le premier à publier.'
                     : 'Aucun post dans cette catégorie.'}
                 </Text>
@@ -1433,27 +1437,22 @@ export default function DiscussionsScreen() {
       </Animated.View>
 
       {/* ── New post modal ── */}
-      <Modal visible={showNewPost} animationType="slide" onRequestClose={closeNewPost}>
-        <KeyboardAvoidingView style={{ flex: 1 }} behavior={Platform.OS === 'ios' ? 'padding' : 'height'}>
-          <SafeAreaView style={styles.modalSafe} edges={['bottom']}>
-            <View style={[styles.modalHeader, { paddingTop: insets.top + spacing[4] }]}>
-              <Pressable onPress={closeNewPost} hitSlop={8}>
-                <Text variant="body" color="secondary">Annuler</Text>
-              </Pressable>
-              <Text variant="h4">Nouveau post</Text>
-              {(() => {
-                const hasContent = newTitle.trim().length > 0 || newContent.trim().length > 0;
-                return (
-                  <Pressable onPress={handleCreatePost} disabled={creating || !hasContent} hitSlop={8}>
-                    <Text variant="body" style={{ color: (creating || !hasContent) ? palette.textDisabled : palette.primary, fontWeight: '600' }}>
-                      {creating ? '…' : 'Publier'}
-                    </Text>
-                  </Pressable>
-                );
-              })()}
-            </View>
-
-            <ScrollView style={{ flex: 1 }} contentContainerStyle={styles.modalContent} keyboardShouldPersistTaps="handled">
+      <FormSheet
+        visible={showNewPost}
+        onClose={closeNewPost}
+        title="Nouveau post"
+        headerRight={(() => {
+          const hasContent = newTitle.trim().length > 0 || newContent.trim().length > 0;
+          return (
+            <Pressable onPress={handleCreatePost} disabled={creating || !hasContent} hitSlop={8}>
+              <Text variant="body" style={{ color: (creating || !hasContent) ? palette.textDisabled : palette.primary, fontWeight: '600' }}>
+                {creating ? '…' : 'Publier'}
+              </Text>
+            </Pressable>
+          );
+        })()}
+        contentContainerStyle={styles.modalContent}
+      >
               <View style={styles.composerCard}>
                 <TextInput
                   style={styles.composerTitle}
@@ -1500,22 +1499,15 @@ export default function DiscussionsScreen() {
                 </Text>
               </View>
             </View>
-            </ScrollView>
-          </SafeAreaView>
-        </KeyboardAvoidingView>
-      </Modal>
+      </FormSheet>
 
       {/* ── Add partner modal ── */}
-      <Modal visible={showAddPartner} animationType="slide" onRequestClose={() => setShowAddPartner(false)}>
-        <KeyboardAvoidingView style={{ flex: 1, backgroundColor: palette.background }} behavior={Platform.OS === 'ios' ? 'padding' : 'height'}>
-          <SafeAreaView style={styles.modalSafe} edges={['bottom']}>
-            <View style={[styles.modalHeader, { paddingTop: insets.top + spacing[4] }]}>
-              <Pressable onPress={() => { setShowAddPartner(false); setPartnerCodeInput(''); setAddPartnerError(''); setAddPartnerSuccess(''); }} hitSlop={8}>
-                <Text variant="body" color="secondary">Fermer</Text>
-              </Pressable>
-              <Text variant="h4">Ajouter un ami</Text>
-              <View style={{ width: 60 }} />
-            </View>
+      <FormSheet
+        visible={showAddPartner}
+        onClose={() => { setShowAddPartner(false); setPartnerCodeInput(''); setAddPartnerError(''); setAddPartnerSuccess(''); }}
+        title="Ajouter un ami"
+        cancelLabel="Fermer"
+      >
             <View style={styles.modalContent}>
               <TextInput
                 style={styles.amisCodeInput}
@@ -1549,9 +1541,7 @@ export default function DiscussionsScreen() {
                 </Text>
               </Pressable>
             </View>
-          </SafeAreaView>
-        </KeyboardAvoidingView>
-      </Modal>
+      </FormSheet>
 
     </Screen>
     </KeyboardAvoidingView>

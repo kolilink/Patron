@@ -27,7 +27,7 @@ export default function CreerCommerceScreen() {
 
   return (
     <Screen>
-      <KeyboardAvoidingView behavior={Platform.OS === 'ios' ? 'padding' : 'height'} style={styles.kav}>
+      <KeyboardAvoidingView behavior={Platform.OS === 'ios' ? 'padding' : undefined} style={styles.kav}>
         <ScrollView contentContainerStyle={styles.content} keyboardShouldPersistTaps="handled">
 
           <View style={styles.header}>
@@ -63,7 +63,7 @@ export default function CreerCommerceScreen() {
 function makeStyles(p: Palette) {
   return StyleSheet.create({
     safe:    { flex: 1, backgroundColor: p.background },
-    kav:     { flex: 1 },
+    kav:     { flex: 1, backgroundColor: p.background },
     content: { flexGrow: 1, padding: spacing[6], gap: spacing[8] },
     header:  { gap: spacing[2] },
     backBtn: { alignSelf: 'flex-start', marginBottom: spacing[2] },

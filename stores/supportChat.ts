@@ -1,7 +1,7 @@
 import { create } from 'zustand';
 import { supabase } from '@/lib/supabase';
 import { translateError } from '@/lib/errors';
-import { isNetworkError, withTimeout } from '@/lib/sync';
+import { isNetworkError, withTimeout, withNetworkRetry, reportOfflineFallback } from '@/lib/sync';
 import { getKV, setKV } from '@/lib/db';
 import { notifyEvent } from '@/src/utils/notifications';
 import { uploadMessageImage } from '@/lib/chatImages';
@@ -120,7 +120,7 @@ export const useSupportChatStore = create<SupportChatStore>((set, get) => ({
   load: async (businessId) => {
     set({ loading: get().messages.length === 0, error: null });
     try {
-      const { data: conv, error: convErr } = await withTimeout(
+      const { data: conv, error: convErr } = await withNetworkRetry(() =>
         supabase
           .from('support_conversations')
           .select('*')
@@ -133,7 +133,7 @@ export const useSupportChatStore = create<SupportChatStore>((set, get) => ({
 
       let messages: SupportMessage[] = [];
       if (conv) {
-        const { data: msgs, error: msgsErr } = await withTimeout(
+        const { data: msgs, error: msgsErr } = await withNetworkRetry(() =>
           supabase
             .from('support_messages')
             .select('*')
@@ -149,6 +149,7 @@ export const useSupportChatStore = create<SupportChatStore>((set, get) => ({
       void get().drainSupportQueue();
     } catch (err) {
       if (isNetworkError(err)) {
+        reportOfflineFallback('supportChat.load', err);
         set({ loading: false, offline: true });
       } else {
         set({ loading: false, error: translateError(err, 'Erreur de chargement') });

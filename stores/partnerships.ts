@@ -2,7 +2,7 @@ import { create } from 'zustand';
 import { supabase } from '@/lib/supabase';
 import { translateError } from '@/lib/errors';
 import { getKV, setKV, savePartnershipsCache, getPartnershipsCache, getCacheTimestamp } from '@/lib/db';
-import { isNetworkError, withTimeout } from '@/lib/sync';
+import { isNetworkError, withNetworkRetry, reportOfflineFallback } from '@/lib/sync';
 import { notifyEvent } from '@/src/utils/notifications';
 import type { PartnerData, PendingRequest, PartnerInviteCode } from '@/src/types';
 
@@ -63,7 +63,7 @@ export const usePartnershipsStore = create<PartnershipsStore>((set, get) => ({
     set({ loading: true, error: null });
     try {
       // 1. Fetch partnerships with embedded business names
-      const { data: rows, error: pErr } = await withTimeout(
+      const { data: rows, error: pErr } = await withNetworkRetry(() =>
         supabase
           .from('business_partnerships')
           .select(`
@@ -96,7 +96,7 @@ export const usePartnershipsStore = create<PartnershipsStore>((set, get) => ({
       // 4. Fetch DM rooms for accepted partnerships
       let dmRooms: Array<{ id: string; partnership_id: string }> = [];
       if (partnershipIds.length > 0) {
-        const { data: rooms } = await withTimeout(
+        const { data: rooms } = await withNetworkRetry(() =>
           supabase
             .from('chat_rooms')
             .select('id, partnership_id')
@@ -109,7 +109,7 @@ export const usePartnershipsStore = create<PartnershipsStore>((set, get) => ({
       const dmRoomIds = dmRooms.map(r => r.id);
       const latestByRoom: Record<string, { content: string; created_at: string; sender_id: string }> = {};
       if (dmRoomIds.length > 0) {
-        const { data: msgs } = await withTimeout(
+        const { data: msgs } = await withNetworkRetry(() =>
           supabase
             .from('chat_messages')
             .select('room_id, content, created_at, sender_id')
@@ -165,6 +165,7 @@ export const usePartnershipsStore = create<PartnershipsStore>((set, get) => ({
       set({ partners, pending, loading: false, offline: false, offlineSince: null });
     } catch (err) {
       if (isNetworkError(err)) {
+        reportOfflineFallback('partnerships.loadPartnerships', err);
         const cached = await getPartnershipsCache(businessId) as { partners: PartnerData[]; pending: PendingRequest[] } | null;
         if (cached) {
           const ts = await getCacheTimestamp('partnerships_cache', businessId);

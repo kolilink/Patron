@@ -1,3 +1,4 @@
+import '@/lib/startupTiming';
 import * as Sentry from '@sentry/react-native';
 import { useEffect, useRef } from 'react';
 import { GestureHandlerRootView } from 'react-native-gesture-handler';
@@ -18,6 +19,7 @@ import { ThemeProvider } from '@/src/theme';
 import { posthog } from '@/lib/posthog';
 import { identifyUser, resetAnalytics } from '@/lib/analytics';
 import { configurePurchases } from '@/lib/purchases';
+import { withStartupTiming, reportFirstScreenRender } from '@/lib/startupTiming';
 
 // Only active when EXPO_PUBLIC_SENTRY_DSN is set (no-op in local dev without it)
 if (process.env.EXPO_PUBLIC_SENTRY_DSN) {
@@ -60,6 +62,9 @@ function RootLayout() {
         previous_screen: previousPathname.current ?? null,
         ...params,
       });
+      if (previousPathname.current === undefined) {
+        reportFirstScreenRender();
+      }
       previousPathname.current = pathname;
     }
   }, [pathname, params]);
@@ -90,7 +95,10 @@ function RootLayout() {
   useEffect(() => {
     if (!fontsLoaded) return;
     const timeout = setTimeout(() => SplashScreen.hideAsync(), 2000);
-    Promise.all([initialize(), openDb()]).finally(() => {
+    Promise.all([
+      withStartupTiming('auth_check', initialize()),
+      withStartupTiming('db_open', openDb()),
+    ]).finally(() => {
       clearTimeout(timeout);
       SplashScreen.hideAsync();
     });

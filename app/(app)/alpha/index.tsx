@@ -327,7 +327,7 @@ export default function AlphaScreen() {
           around fixed chrome like the header above can throw off how much
           bottom padding it computes, leaving the input sitting slightly
           into the keyboard instead of snug above it. */}
-      <KeyboardAvoidingView style={{ flex: 1 }} behavior={Platform.OS === 'ios' ? 'padding' : 'height'}>
+      <KeyboardAvoidingView style={{ flex: 1, backgroundColor: palette.background }} behavior={Platform.OS === 'ios' ? 'padding' : undefined}>
         {offline && (
           <View style={{ paddingHorizontal: spacing[4], paddingTop: spacing[1] }}>
             <Text variant="caption" color="secondary">
@@ -457,7 +457,7 @@ export default function AlphaScreen() {
                       hitSlop={8}
                       style={({ pressed }) => [styles.pillIconBtn, styles.pillSendBtn, (pressed || offline) && { opacity: 0.6 }]}
                     >
-                      <Ionicons name="arrow-forward" size={18} color={palette.textInverse} />
+                      <Ionicons name="arrow-up" size={18} color={palette.textInverse} />
                     </Pressable>
                   ) : (
                     <Pressable
@@ -490,6 +490,9 @@ export default function AlphaScreen() {
         animationType="slide"
         presentationStyle="pageSheet"
         onRequestClose={dismissPaywall}
+        backdropColor={palette.background}
+        statusBarTranslucent
+        navigationBarTranslucent
       >
         {session?.activeBusiness && (
           <PaywallScreen

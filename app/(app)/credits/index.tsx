@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
+import { useCallback, useMemo, useRef, useState } from 'react';
 import { FlatList, KeyboardAvoidingView, Linking, Platform, Pressable, StyleSheet, TextInput, View } from 'react-native';
 import { Ionicons } from '@expo/vector-icons';
 import { Screen } from '@/src/components/ui/Screen';
@@ -14,6 +14,7 @@ import { useSalesStore } from '@/stores/sales';
 import { formatAmountInput, parseAmountInput } from '@/src/utils/format';
 import { SkeletonList } from '@/src/components/ui/SkeletonPlaceholder';
 import { OfflineNotice } from '@/src/components/ui/OfflineNotice';
+import { BouncingSmileyEmpty } from '@/src/components/ui/BouncingSmileyEmpty';
 
 function fmt(n: number, cur: string) { return `${Math.round(n).toLocaleString('fr-FR')} ${cur}`; }
 
@@ -52,7 +53,6 @@ export default function CreditsScreen() {
   const isVendeur = role === 'vendeur';
   const isInvestisseur = role === 'investisseur';
 
-  const businessName = session?.activeBusiness?.name ?? 'notre boutique';
   const { sales, loading, error, offline, offlineSince, fetchSales } = useVentesStore();
   const { submitCarnetDebt } = useSalesStore();
 
@@ -80,13 +80,10 @@ export default function CreditsScreen() {
 
   const sendWhatsAppReminder = (debtor: DebtorClient) => {
     const msg = [
-      `Bonjour ${debtor.name},`,
-      ``,
-      `J'espère que tout va bien de votre côté.`,
-      ``,
-      `Votre solde chez nous est de *${fmt(debtor.totalOwed, currency)}* — dès que c'est possible pour vous, on est là.`,
-      ``,
-      `${businessName}`,
+      `Salut ${debtor.name},`,
+      `Un petit point sur le carnet : il vous reste un solde de *${fmt(debtor.totalOwed, currency)}*.`,
+      `Vous pouvez passer à la boutique ou effectuer un dépôt directement.`,
+      `Bonne journée à vous !`,
     ].join('\n');
     Linking.openURL(`https://wa.me/?text=${encodeURIComponent(msg)}`).catch(() => {});
   };
@@ -152,7 +149,12 @@ export default function CreditsScreen() {
         <View style={{ width: 60 }} />
       </View>
 
-      {offline && <OfflineNotice offlineSince={offlineSince} />}
+      {offline && (
+        <OfflineNotice
+          offlineSince={offlineSince}
+          onRetry={() => fetchSales(businessId, isVendeur ? userId : undefined)}
+        />
+      )}
 
       {/* Total outstanding — hidden when nothing is owed */}
       {debtors.length > 0 && <Card style={styles.totalCard}>
@@ -182,20 +184,12 @@ export default function CreditsScreen() {
       ) : debtors.length === 0 ? (
         <View style={styles.empty}>
           {!showAddForm ? (
-            <>
-              <View style={styles.emptyBadge}>
-                <Ionicons name="checkmark-circle" size={36} color={palette.success} />
-              </View>
-              <Text variant="h4" style={{ textAlign: 'center', marginBottom: spacing[4] }}>Tout est soldé</Text>
-              <Pressable
-                onPress={() => { setShowAddForm(true); setTimeout(() => addNameRef.current?.focus(), 80); }}
-                style={({ pressed }) => [styles.carnetCta, { opacity: pressed ? 0.7 : 1, borderColor: palette.primary }]}
-              >
-                <Text variant="label" style={{ color: palette.primary }}>Ajouter une dette</Text>
-              </Pressable>
-            </>
+            <BouncingSmileyEmpty
+              ctaLabel="Ajouter une dette"
+              onPress={() => { setShowAddForm(true); setTimeout(() => addNameRef.current?.focus(), 80); }}
+            />
           ) : (
-            <KeyboardAvoidingView behavior={Platform.OS === 'ios' ? 'padding' : 'height'} style={{ width: '100%' }}>
+            <KeyboardAvoidingView behavior={Platform.OS === 'ios' ? 'padding' : undefined} style={{ width: '100%', backgroundColor: palette.background }}>
               <View style={{ gap: spacing[3] }}>
                 <Text variant="label" color="secondary" style={{ textAlign: 'center', marginBottom: spacing[1] }}>
                   Qui vous doit de l'argent ?
@@ -316,11 +310,6 @@ function makeStyles(p: Palette) {
   },
   avatar: { width: 40, height: 40, borderRadius: 20, alignItems: 'center', justifyContent: 'center' },
   empty: { flex: 1, alignItems: 'center', justifyContent: 'center', paddingHorizontal: spacing[8] },
-  emptyBadge: { width: 88, height: 88, borderRadius: 44, backgroundColor: p.successLight, alignItems: 'center', justifyContent: 'center', marginBottom: spacing[5] },
-  carnetCta: {
-    paddingVertical: spacing[3], paddingHorizontal: spacing[6],
-    borderWidth: 1, borderRadius: radius.md,
-  },
   addInput: {
     borderWidth: 1, borderRadius: radius.md,
     paddingHorizontal: spacing[3], paddingVertical: spacing[3],

@@ -2,7 +2,7 @@ import { create } from 'zustand';
 import * as FileSystem from 'expo-file-system/legacy';
 import { supabase } from '@/lib/supabase';
 import { translateError } from '@/lib/errors';
-import { isNetworkError, withTimeout } from '@/lib/sync';
+import { isNetworkError, withNetworkRetry, reportOfflineFallback } from '@/lib/sync';
 import { getKV, setKV, saveChatCache, getChatCache, getCacheTimestamp } from '@/lib/db';
 import { notifyEvent } from '@/src/utils/notifications';
 import { generateId } from '@/lib/id';
@@ -118,7 +118,7 @@ export const useChatStore = create<ChatStore>((set, get) => ({
     }
     try {
       // 1. Fetch both accessible rooms (boutique + global)
-      const { data: rooms, error: roomsErr } = await withTimeout(
+      const { data: rooms, error: roomsErr } = await withNetworkRetry(() =>
         supabase
           .from('chat_rooms')
           .select('*')
@@ -141,7 +141,7 @@ export const useChatStore = create<ChatStore>((set, get) => ({
       const roomIds = [boutiqueRoom?.id, globalRoom?.id].filter(Boolean) as string[];
       let messages: ChatMessage[] = [];
       if (roomIds.length > 0) {
-        const { data: msgs, error: msgsErr } = await withTimeout(
+        const { data: msgs, error: msgsErr } = await withNetworkRetry(() =>
           supabase
             .from('chat_messages')
             .select('*')
@@ -155,7 +155,7 @@ export const useChatStore = create<ChatStore>((set, get) => ({
         // Resolve current profile names so old messages reflect name changes
         const senderIds = [...new Set(messages.map(m => m.sender_id))];
         if (senderIds.length > 0) {
-          const { data: profiles } = await withTimeout(
+          const { data: profiles } = await withNetworkRetry(() =>
             supabase
               .from('profiles')
               .select('id, name')
@@ -199,6 +199,7 @@ export const useChatStore = create<ChatStore>((set, get) => ({
       });
     } catch (err) {
       if (isNetworkError(err)) {
+        reportOfflineFallback('chat.load', err);
         const cached = await getChatCache(businessId) as {
           boutiqueRoom: ChatRoom | null;
           globalRoom: ChatRoom | null;

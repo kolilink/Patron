@@ -4,7 +4,7 @@ import { generateId, generateFallbackName } from '@/lib/id';
 import { translateError } from '@/lib/errors';
 import { notifyEvent } from '@/src/utils/notifications';
 import { saveEquipeCache, getEquipeCache, getCacheTimestamp } from '@/lib/db';
-import { isNetworkError, withTimeout } from '@/lib/sync';
+import { isNetworkError, withNetworkRetry, reportOfflineFallback } from '@/lib/sync';
 import { useAuthStore } from '@/stores/auth';
 import type { Role, MemberProductStake } from '@/src/types';
 
@@ -88,7 +88,7 @@ export const useEquipeStore = create<EquipeStore>((set, get) => ({
   fetchMembres: async (businessId) => {
     set({ loading: true });
 
-    const { data: mData, error: mErr } = await withTimeout(
+    const { data: mData, error: mErr } = await withNetworkRetry(() =>
       supabase
         .from('memberships')
         .select('id, user_id, business_id, role, joined_at, display_name, scope_all_products')
@@ -99,6 +99,7 @@ export const useEquipeStore = create<EquipeStore>((set, get) => ({
     if (isStaleBusiness(businessId)) return;
     if (mErr) {
       if (isNetworkError(mErr)) {
+        reportOfflineFallback('equipe.fetchMembres', mErr);
         const cached = await getEquipeCache(businessId);
         if (isStaleBusiness(businessId)) return;
         if (cached) {

@@ -41,6 +41,19 @@ export const colors = {
     700: '#B91C1C',
   },
 
+  // Founder-only KPI health traffic light (FounderDashboard). Kept separate
+  // from success/warning/danger above rather than reusing their [600]
+  // shades — this is a deliberate, scoped exception to the "no red in
+  // Patron UI" rule (that rule is about merchant-facing screens; this
+  // traffic light is founder-only and the whole point is a real red for a
+  // real critical reading), so it must never bleed into a shared token a
+  // merchant-facing screen might reach for by habit.
+  health: {
+    green:  '#22C55E',
+    yellow: '#EAB308',
+    red:    '#EF4444',
+  },
+
   // Neutrals
   neutral: {
     0: '#FFFFFF',
@@ -136,6 +149,10 @@ export const paletteLight = {
   danger:         colors.danger[600],
   dangerLight:    colors.danger[50],
 
+  healthGreen:    colors.health.green,
+  healthYellow:   colors.health.yellow,
+  healthRed:      colors.health.red,
+
   tabBar:         colors.neutral[0],
   tabBarBorder:   colors.neutral[200],
   tabBarActive:   colors.primary[600],
@@ -165,6 +182,14 @@ export const paletteDark = {
   warningLight:   'rgba(252,211,77,0.14)',
   danger:         '#F87171',
   dangerLight:    'rgba(248,113,113,0.14)',
+
+  // Same literal hex as light mode, deliberately — a traffic-light color
+  // has to mean the same thing regardless of theme, unlike the softer
+  // success/warning/danger tones above that get dark-mode-adjusted for
+  // surface contrast.
+  healthGreen:    colors.health.green,
+  healthYellow:   colors.health.yellow,
+  healthRed:      colors.health.red,
 
   tabBar:         '#1A1D27',
   tabBarBorder:   'rgba(255,255,255,0.08)',

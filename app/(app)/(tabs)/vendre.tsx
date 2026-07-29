@@ -17,8 +17,8 @@ import {
 } from 'react-native';
 import { captureRef } from 'react-native-view-shot';
 import * as Sharing from 'expo-sharing';
-import { SafeAreaView } from 'react-native-safe-area-context';
 import { Screen } from '@/src/components/ui/Screen';
+import { FormSheet } from '@/src/components/ui/FormSheet';
 import { Ionicons } from '@expo/vector-icons';
 import { Button } from '@/src/components/ui/Button';
 import { Card } from '@/src/components/ui/Card';
@@ -77,6 +77,10 @@ function fmtDue(iso: string): string {
   if (diff === 0) return "Prévu aujourd'hui";
   return `Prévu le ${d.toLocaleDateString('fr-FR', { day: 'numeric', month: 'long' })}`;
 }
+
+// Below this many catalog products, the search bar is hidden — not enough
+// items to need searching, just clutter above the grid.
+const SEARCH_MIN_PRODUCTS = 8;
 
 // Final payment methods: Wave removed.
 // 'mtn' is labeled "Mobile Money" in the UI (consolidates old mtn/moov).
@@ -369,31 +373,44 @@ function PaymentModal({
   };
 
   return (
-    <Modal visible={visible} animationType="slide" presentationStyle="formSheet" onRequestClose={onClose}>
-      <SafeAreaView style={styles.modalSafe} edges={['bottom']}>
-
-        {/* Header */}
-        <View style={styles.modalHeader}>
-          <Pressable onPress={onClose} style={styles.modalCancel}>
-            <Text variant="body" color="secondary">Retour</Text>
-          </Pressable>
-          <Text variant="h4">{step === 'credit' ? 'Vente à crédit' : 'Paiement'}</Text>
-          <View style={{ width: 64 }} />
+    <FormSheet
+      ref={modalScrollRef}
+      visible={visible}
+      onClose={onClose}
+      title={step === 'credit' ? 'Vente à crédit' : 'Paiement'}
+      cancelLabel="Retour"
+      presentationStyle="formSheet"
+      contentContainerStyle={{ paddingBottom: spacing[6] }}
+      footer={
+        <View style={styles.modalFooter}>
+          {showNewClientForm ? (
+            <Button
+              label="Ajouter ce client"
+              onPress={handleAddNewClient}
+              fullWidth
+              size="lg"
+              disabled={!newClientName.trim()}
+            />
+          ) : (
+            <>
+              {step === 'credit' && !canConfirmCredit && !showClientSection && (
+                <Text variant="caption" style={{ color: palette.warning, textAlign: 'center', marginBottom: spacing[2] }}>
+                  Ajoutez un nom de client pour enregistrer le crédit
+                </Text>
+              )}
+              <Button
+                label={submitting ? 'Enregistrement…' : (step === 'credit' ? (creditUpfrontCoversAll ? 'Enregistrer la vente' : 'Enregistrer le crédit') : 'Confirmer la vente')}
+                onPress={step === 'credit' ? handleConfirmCredit : handleConfirmPay}
+                loading={submitting}
+                fullWidth
+                size="lg"
+                disabled={step === 'credit' ? !canConfirmCredit : !canConfirmPay}
+              />
+            </>
+          )}
         </View>
-
-        <KeyboardAvoidingView
-          behavior={Platform.OS === 'ios' ? 'padding' : 'height'}
-          style={{ flex: 1 }}
-          keyboardVerticalOffset={Platform.OS === 'ios' ? 44 : 0}
-        >
-          {/* Single scroll for all content — keyboard pushes footer up, scroll handles the rest */}
-          <ScrollView
-            ref={modalScrollRef}
-            style={{ flex: 1 }}
-            contentContainerStyle={{ paddingBottom: spacing[6] }}
-            keyboardShouldPersistTaps="handled"
-            showsVerticalScrollIndicator={false}
-          >
+      }
+    >
           <View style={styles.totalSection}>
             <Text variant="caption" color="secondary" style={{ textAlign: 'center' }}>
               {step === 'credit' && (creditDiscount > 0 || creditUpfront > 0) ? 'Reste à payer' : 'Total'}
@@ -699,7 +716,7 @@ function PaymentModal({
                   </>
                 ) : (
                   /* ── New client form ── */
-                  <KeyboardAvoidingView behavior={Platform.OS === 'ios' ? 'padding' : 'height'}>
+                  <KeyboardAvoidingView behavior={Platform.OS === 'ios' ? 'padding' : undefined}>
                     <View style={{ flexDirection: 'row', alignItems: 'center', gap: spacing[2], paddingTop: spacing[2], marginBottom: spacing[1] }}>
                       <Pressable onPress={() => setShowNewClientForm(false)} hitSlop={8}>
                         <Ionicons name="arrow-back" size={18} color={palette.textSecondary} />
@@ -739,39 +756,7 @@ function PaymentModal({
               </Pressable>
             )}
           </View>
-          </ScrollView>
-
-          {/* Footer — morphs based on state, always above keyboard */}
-          <View style={styles.modalFooter}>
-            {showNewClientForm ? (
-              <Button
-                label="Ajouter ce client"
-                onPress={handleAddNewClient}
-                fullWidth
-                size="lg"
-                disabled={!newClientName.trim()}
-              />
-            ) : (
-              <>
-                {step === 'credit' && !canConfirmCredit && !showClientSection && (
-                  <Text variant="caption" style={{ color: palette.warning, textAlign: 'center', marginBottom: spacing[2] }}>
-                    Ajoutez un nom de client pour enregistrer le crédit
-                  </Text>
-                )}
-                <Button
-                  label={submitting ? 'Enregistrement…' : (step === 'credit' ? (creditUpfrontCoversAll ? 'Enregistrer la vente' : 'Enregistrer le crédit') : 'Confirmer la vente')}
-                  onPress={step === 'credit' ? handleConfirmCredit : handleConfirmPay}
-                  loading={submitting}
-                  fullWidth
-                  size="lg"
-                  disabled={step === 'credit' ? !canConfirmCredit : !canConfirmPay}
-                />
-              </>
-            )}
-          </View>
-        </KeyboardAvoidingView>
-      </SafeAreaView>
-    </Modal>
+    </FormSheet>
   );
 }
 
@@ -912,7 +897,14 @@ function VariantPickerSheet({ visible, product, variants, cartQtyByVariant, curr
   };
 
   return (
-    <Modal visible={visible} transparent animationType="none" onRequestClose={onClose}>
+    <Modal
+      visible={visible}
+      transparent
+      animationType="none"
+      onRequestClose={onClose}
+      statusBarTranslucent
+      navigationBarTranslucent
+    >
       <Pressable style={StyleSheet.absoluteFill} onPress={onClose}>
         <View style={{ flex: 1, backgroundColor: 'rgba(0,0,0,0.45)' }} />
       </Pressable>
@@ -1105,6 +1097,13 @@ export default function VendreScreen() {
     products.filter(p => p.has_variants && !variantsByProduct[p.id])
       .forEach(p => fetchVariants(p.id, businessId));
   }, [products, businessId]);
+
+  // The search box is hidden below SEARCH_MIN_PRODUCTS (see the render below) —
+  // clear any typed query when it disappears, so a stale filter can't keep
+  // silently narrowing the grid with no visible input left to clear it.
+  useEffect(() => {
+    if (products.length <= SEARCH_MIN_PRODUCTS) setSearch('');
+  }, [products.length]);
 
   // Variant stock can change from another device or the offline queue while this
   // screen stays mounted in the background — refetch on every focus so the cart's
@@ -1374,6 +1373,13 @@ export default function VendreScreen() {
 
   return (
     <Screen tab>
+      {offline && (
+        <OfflineNotice
+          offlineSince={offlineSince}
+          onRetry={() => fetchProducts(businessId, userId, membershipId, role)}
+        />
+      )}
+
       {/* Error banner */}
       {saleError ? (
         <Pressable onPress={clearError} style={styles.errorBanner}>
@@ -1495,7 +1501,7 @@ export default function VendreScreen() {
               />
               <View>
                 <Text variant="label" color="secondary" style={{ marginBottom: spacing[2] }}>
-                  Combien il vous doit ?
+                  Combien {creditName.trim() || 'il'} vous doit ?
                 </Text>
                 <Animated.View style={[styles.moneyAmountBox, {
                   borderColor: creditBlinkAnim.interpolate({
@@ -1551,21 +1557,25 @@ export default function VendreScreen() {
         </View>
       )}
 
-      {/* Empty state — Vente mode, no products yet */}
-      {mode === 'vente' && products.length === 0 && (
+      {/* Empty state — Vente mode, no products yet. When online and not a
+          vendeur, nothing renders here at all: the "+" FAB below plus its
+          curved running-lights hint are the whole empty state. */}
+      {mode === 'vente' && products.length === 0 && (offline || isVendeur) && (
         <View style={styles.emptyFull}>
-          <Ionicons name="receipt-outline" size={48} color={palette.textDisabled} />
-          <Text variant="h4">Point de vente</Text>
+          <Ionicons name={offline ? 'cloud-offline-outline' : 'receipt-outline'} size={48} color={palette.textDisabled} />
+          <Text variant="h4">{offline ? 'Catalogue non disponible hors ligne' : 'Point de vente'}</Text>
           <Text variant="body" color="secondary" style={styles.emptyDesc}>
-            {isVendeur
-              ? 'Le catalogue est vide — votre responsable prépare les produits.'
-              : 'Ajoutez votre premier produit au catalogue pour commencer à vendre.'}
+            {offline
+              ? 'Ouvrez l\'application en ligne une première fois pour activer le mode hors ligne.'
+              : 'Le catalogue est vide — votre responsable prépare les produits.'}
           </Text>
         </View>
       )}
 
-      {/* Search — only in Vente mode with 3+ products */}
-      {mode === 'vente' && products.length >= 3 && (
+      {/* Search — hidden below SEARCH_MIN_PRODUCTS: a handful of tiles is
+          scannable at a glance, so the search bar is just noise until the
+          catalog is big enough to actually need it. */}
+      {mode === 'vente' && products.length > SEARCH_MIN_PRODUCTS && (
         <View style={styles.searchRow}>
           <Input placeholder="Rechercher un produit…" value={search} onChangeText={setSearch} />
         </View>
@@ -1618,9 +1628,11 @@ export default function VendreScreen() {
           />
         )}
         ListEmptyComponent={
-          <View style={styles.emptySearch}>
-            <Text variant="body" color="secondary">Aucun résultat pour "{search}"</Text>
-          </View>
+          search.trim() ? (
+            <View style={styles.emptySearch}>
+              <Text variant="body" color="secondary">Aucun résultat pour "{search}"</Text>
+            </View>
+          ) : null
         }
       />}
 
@@ -1707,6 +1719,8 @@ export default function VendreScreen() {
         transparent
         animationType="slide"
         onRequestClose={() => setShowConfirmSheet(false)}
+        statusBarTranslucent
+        navigationBarTranslucent
       >
         {/* Receipt at (0,0) — within modal bounds so GPU composites it; captureRef reads it directly */}
         {lastReceipt && (
