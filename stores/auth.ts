@@ -617,68 +617,83 @@ export const useAuthStore = create<AuthStore>((set, get) => ({
 
     const businessId = generateId();
 
-    // create_business_with_membership: SECURITY DEFINER RPC — inserts the
-    // business, lets the on_business_created trigger create the admin
-    // membership in the same transaction, then returns both atomically.
-    // Replaces a separate insert + up-to-5x poll loop (previously up to ~3s
-    // on a slow connection) with a single round trip.
-    const { data: membership, error: rpcErr } = await supabase.rpc('create_business_with_membership', {
-      p_id: businessId,
-      p_name: name,
-      p_type: type ?? null,
-      p_currency: currency,
-      p_phone: session.user.phone ?? null,
-    });
-    if (rpcErr || !membership) {
-      set({ error: translateError(rpcErr, 'Impossible de créer le commerce'), loading: false });
-      return;
-    }
-
-    const m = membership as Membership;
-
-    // Referral code ("Inviter un ami" in Paramètres) is optional and
-    // best-effort — a bad/expired code should never block business
-    // creation. resolve_referral_code is SECURITY DEFINER because this
-    // brand-new user isn't a member of the referrer's business yet, so the
-    // normal is_member(id) SELECT policy on businesses would otherwise
-    // block the lookup. The actual write below is a plain client update,
-    // allowed by the "Administrateurs: modifier leur commerce" policy
-    // since this user is now that business's own admin.
-    if (referralCode?.trim()) {
-      try {
-        const { data: referrerId } = await supabase.rpc('resolve_referral_code', { p_code: referralCode.trim() });
-        if (referrerId && referrerId !== businessId) {
-          await supabase.from('businesses').update({ referred_by_business_id: referrerId }).eq('id', businessId);
-          if (m.business) (m.business as Business).referred_by_business_id = referrerId as string;
-        }
-      } catch (err) {
-        console.warn('[createBusiness] referral code lookup failed:', err);
+    // Wrapped in try/catch (unlike an earlier version of this function) —
+    // the bare RPC call below has no offline queue or retry of its own, so
+    // a network failure has to surface as a translated error and reset
+    // `loading`, not disappear. lib/supabase.ts's global fetchWithTimeout
+    // aborts any hung request after 15s, but an abort is a THROWN rejection,
+    // not a returned `{data,error}` pair — with no catch here, that
+    // rejection had nowhere to go: `loading` stayed true forever and the
+    // "Créer mon commerce" button was left permanently spinning with no
+    // error shown, on literally the last step of onboarding. Same bug class
+    // already found and fixed in stores/investor.ts and stores/sales.ts's
+    // submitCarnetDebt — see "Offline queue" in CLAUDE.md.
+    try {
+      // create_business_with_membership: SECURITY DEFINER RPC — inserts the
+      // business, lets the on_business_created trigger create the admin
+      // membership in the same transaction, then returns both atomically.
+      // Replaces a separate insert + up-to-5x poll loop (previously up to ~3s
+      // on a slow connection) with a single round trip.
+      const { data: membership, error: rpcErr } = await supabase.rpc('create_business_with_membership', {
+        p_id: businessId,
+        p_name: name,
+        p_type: type ?? null,
+        p_currency: currency,
+        p_phone: session.user.phone ?? null,
+      });
+      if (rpcErr || !membership) {
+        set({ error: translateError(rpcErr, 'Impossible de créer le commerce'), loading: false });
+        return;
       }
-    }
 
-    const newMemberships = [...session.memberships, m];
-    // Persist so next cold start lands on the newly created business
-    setKV(`last_business_${session.user.id}`, businessId).catch(() => {});
-    void loginPurchases(businessId);
-    // Seed the cache so first-reload removal detection works immediately
-    syncKnownBusinesses(session.user.id, newMemberships).catch(() => {});
-    resetAllStores();
-    const nextSession: AppSession = {
-      ...session,
-      memberships: newMemberships,
-      activeBusiness: m.business as Business,
-      activeMembership: m,
-    };
-    // Keep the offline session cache in sync — otherwise a cold start that
-    // lands offline right after creating a business would restore a session
-    // that predates it (missing membership, wrong/no active business).
-    void persistSessionCache(nextSession);
-    set({
-      session: nextSession,
-      showTrialWelcome: true,
-      loading: false,
-    });
-    trackEvent('business_created', businessId, session.user.id, { currency, business_type: type ?? null });
+      const m = membership as Membership;
+
+      // Referral code ("Inviter un ami" in Paramètres) is optional and
+      // best-effort — a bad/expired code should never block business
+      // creation. resolve_referral_code is SECURITY DEFINER because this
+      // brand-new user isn't a member of the referrer's business yet, so the
+      // normal is_member(id) SELECT policy on businesses would otherwise
+      // block the lookup. The actual write below is a plain client update,
+      // allowed by the "Administrateurs: modifier leur commerce" policy
+      // since this user is now that business's own admin.
+      if (referralCode?.trim()) {
+        try {
+          const { data: referrerId } = await supabase.rpc('resolve_referral_code', { p_code: referralCode.trim() });
+          if (referrerId && referrerId !== businessId) {
+            await supabase.from('businesses').update({ referred_by_business_id: referrerId }).eq('id', businessId);
+            if (m.business) (m.business as Business).referred_by_business_id = referrerId as string;
+          }
+        } catch (err) {
+          console.warn('[createBusiness] referral code lookup failed:', err);
+        }
+      }
+
+      const newMemberships = [...session.memberships, m];
+      // Persist so next cold start lands on the newly created business
+      setKV(`last_business_${session.user.id}`, businessId).catch(() => {});
+      void loginPurchases(businessId);
+      // Seed the cache so first-reload removal detection works immediately
+      syncKnownBusinesses(session.user.id, newMemberships).catch(() => {});
+      resetAllStores();
+      const nextSession: AppSession = {
+        ...session,
+        memberships: newMemberships,
+        activeBusiness: m.business as Business,
+        activeMembership: m,
+      };
+      // Keep the offline session cache in sync — otherwise a cold start that
+      // lands offline right after creating a business would restore a session
+      // that predates it (missing membership, wrong/no active business).
+      void persistSessionCache(nextSession);
+      set({
+        session: nextSession,
+        showTrialWelcome: true,
+        loading: false,
+      });
+      trackEvent('business_created', businessId, session.user.id, { currency, business_type: type ?? null });
+    } catch (err) {
+      set({ error: translateError(err, 'Impossible de créer le commerce'), loading: false });
+    }
   },
 
   deleteBusiness: async (businessId) => {

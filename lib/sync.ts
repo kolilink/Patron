@@ -197,6 +197,9 @@ async function notifyQueuedSaleSynced(payload: Record<string, unknown>): Promise
       },
       // Investisseurs are looped in on every sale too (mirrors the online path).
       targetRoles: ['administrateur', 'manager', 'investisseur'],
+      // Same exclusion as the online path (stores/sales.ts) — the seller
+      // shouldn't get pushed a notification about their own sale.
+      excludeUserId: sellerId,
     });
   } catch {
     // Best-effort — never let a notification lookup failure affect sync.

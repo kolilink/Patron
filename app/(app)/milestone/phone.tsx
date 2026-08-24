@@ -14,6 +14,8 @@ import { PhoneInput } from '@/src/components/ui/PhoneInput';
 import { useTheme, radius, spacing } from '@/src/theme';
 import type { Palette } from '@/src/theme';
 import { useAuthStore } from '@/stores/auth';
+import { trackEvent, classifyAuthError } from '@/lib/analytics';
+import { openWhatsApp } from '@/src/utils/whatsapp';
 
 export default function MilestonePhoneScreen() {
   const { palette } = useTheme();
@@ -37,6 +39,10 @@ export default function MilestonePhoneScreen() {
       verificationIdRef.current = result.verificationId;
       phoneRef.current = normalized;
       setStep('otp');
+    } else {
+      trackEvent('auth_phone_submit_failed', null, null, {
+        reason: classifyAuthError(useAuthStore.getState().error),
+      });
     }
   };
 
@@ -47,6 +53,10 @@ export default function MilestonePhoneScreen() {
       if (!useAuthStore.getState().error) {
         router.back();
       }
+    } else {
+      trackEvent('auth_failed', null, null, {
+        reason: classifyAuthError(useAuthStore.getState().error),
+      });
     }
   };
 
@@ -106,6 +116,7 @@ export default function MilestonePhoneScreen() {
           ) : (
             <View style={[styles.form, styles.formCentered]}>
               <OtpInput onComplete={handleOtpComplete} disabled={loading} whatsappAutofill />
+              <Button label="Ouvrir WhatsApp" variant="ghost" onPress={openWhatsApp} />
               <Button
                 label="Changer de numéro"
                 variant="ghost"

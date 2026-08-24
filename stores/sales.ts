@@ -307,6 +307,11 @@ export const useSalesStore = create<SalesStore>((set, get) => ({
             // Investisseurs are looped in on every sale too — keeps them
             // passively in the know without the admin having to report out.
             targetRoles: ['administrateur', 'manager', 'investisseur'],
+            // A solo owner (the majority of real administrateurs — no team
+            // yet) making their own sale should never get pushed "you sold
+            // X" for something they just tapped through themselves — only
+            // relevant when someone ELSE on the team did it.
+            excludeUserId: userId,
           });
         });
       }

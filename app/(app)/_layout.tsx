@@ -5,6 +5,7 @@ import { Redirect, Stack, router } from 'expo-router';
 import { BusinessDrawer } from '@/src/components/BusinessDrawer';
 import { TrialWelcomeOverlay } from '@/src/components/TrialWelcomeOverlay';
 import { ActivationForkOverlay } from '@/src/components/ActivationForkOverlay';
+import { NotificationPrimer } from '@/src/components/NotificationPrimer';
 import { AppToastContainer } from '@/src/components/ui/AppToast';
 import { DemoBanner } from '@/src/components/ui/DemoBanner';
 import { NotificationSetup } from '@/src/components/NotificationSetup';
@@ -108,6 +109,13 @@ export default function AppLayout() {
   // fresh every render from live product/sale counts + business age, same
   // as before — no persisted flag, nothing that can go stale.
   const suppressActivationFork = useAuthStore(s => s.suppressActivationFork);
+
+  // Starts true (pessimistic) so ActivationForkOverlay can't flash in during
+  // the brief async window before NotificationPrimer has determined whether
+  // it needs to show itself — see NotificationPrimer's own doc comment for
+  // why these two must never be visible at the same time.
+  const [notifPrimerBlocking, setNotifPrimerBlocking] = useState(true);
+
   const forkProducts = useProductStore(s => s.products);
   const forkSales = useVentesStore(s => s.sales);
   const forkRole = session?.activeMembership?.role;
@@ -400,6 +408,11 @@ export default function AppLayout() {
       </Stack>
 
       <BusinessDrawer />
+      <NotificationPrimer
+        userId={session.user.id}
+        active={!!activeBusiness && !isDemoMode}
+        onBlockingChange={setNotifPrimerBlocking}
+      />
       {PAYWALL_ENABLED && showTrialWelcome && activeBusiness && (
         <TrialWelcomeOverlay
           businessName={activeBusiness.name}
@@ -412,8 +425,11 @@ export default function AppLayout() {
           both overlays go true at the same instant right after business
           creation, and letting two Modals race for the screen is the exact
           bug already fixed twice elsewhere this session. Cheap insurance
-          against re-enabling the paywall silently reintroducing it. */}
-      {showFork && !forkNavigating && !suppressActivationFork && !(PAYWALL_ENABLED && showTrialWelcome) && activeBusiness && (
+          against re-enabling the paywall silently reintroducing it.
+          !notifPrimerBlocking — same reasoning, for NotificationPrimer:
+          it's the first thing a brand-new business should see, and letting
+          the fork show underneath/alongside it is the same race. */}
+      {showFork && !forkNavigating && !suppressActivationFork && !notifPrimerBlocking && !(PAYWALL_ENABLED && showTrialWelcome) && activeBusiness && (
         <ActivationForkOverlay
           userName={session.user.name}
           onSelectProduct={() => {
