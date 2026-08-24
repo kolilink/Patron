@@ -23,7 +23,12 @@ const ANDROID_API_KEY = process.env.EXPO_PUBLIC_REVENUECAT_API_KEY_ANDROID ?? ''
 
 // Master killswitch for the entire Alpha Pro paywall/upsell surface (the
 // full-screen + inline PaywallScreen, the WhatsApp-reminder consent ask, and
-// the "ALPHA PRO"/"gratuite" tier wording — all in app/(app)/alpha/index.tsx).
+// the "ALPHA PRO"/"gratuite" tier wording — all in app/(app)/alpha/index.tsx —
+// plus the post-business-creation TrialWelcomeOverlay in app/(app)/_layout.tsx,
+// which pitches "premier mois offert, ensuite 2,99$/mois" and was originally
+// wired unconditionally, independent of this flag — found 2026-07-30 when a
+// merchant reported still seeing a paywall-like screen after this was set to
+// false).
 // Set to false 2026-07-16 on explicit product direction: no upsell should be
 // visible to anyone — including App Store/Play Store reviewers — until the
 // app has a real base of active users (order of 100s). Alpha itself stays

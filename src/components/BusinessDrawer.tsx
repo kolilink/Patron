@@ -1,5 +1,6 @@
 import { useEffect, useMemo, useState } from 'react';
 import {
+  Alert,
   Dimensions,
   Modal,
   Pressable,
@@ -64,6 +65,7 @@ export function BusinessDrawer() {
   const session = useAuthStore(s => s.session);
   const businessDrawerOpen = useAuthStore(s => s.businessDrawerOpen);
   const closeBusinessDrawer = useAuthStore(s => s.closeBusinessDrawer);
+  const markBusinessDrawerFullyClosed = useAuthStore(s => s.markBusinessDrawerFullyClosed);
   const selectBusiness = useAuthStore(s => s.selectBusiness);
   const insets = useSafeAreaInsets();
   const isFounder = isFounderPhone(session?.user.phone);
@@ -81,7 +83,14 @@ export function BusinessDrawer() {
       translateX.value = withTiming(0, { duration: DRAWER_OPEN_DURATION, easing: DRAWER_EASE });
     } else {
       translateX.value = withTiming(-DRAWER_WIDTH, { duration: DRAWER_CLOSE_DURATION, easing: DRAWER_EASE }, (finished) => {
-        if (finished) runOnJS(setModalVisible)(false);
+        if (finished) {
+          runOnJS(setModalVisible)(false);
+          // Signals ActivationForkOverlay (and anything else waiting) that
+          // this Modal is genuinely gone now, not just that close was
+          // requested — see businessDrawerFullyClosed's doc comment in
+          // stores/auth.ts for why the distinction matters.
+          runOnJS(markBusinessDrawerFullyClosed)();
+        }
       });
     }
   }, [businessDrawerOpen]);
@@ -302,7 +311,7 @@ export function BusinessDrawer() {
               </View>
               <Text style={styles.footerLabel}>Rejoindre un commerce</Text>
             </Pressable>
-            {!isAlreadyAdmin && (
+            {(!isAlreadyAdmin || isFounder) && (
               <Pressable onPress={handleCreate} style={({ pressed }) => [styles.footerRow, pressed && { opacity: 0.6 }]}>
                 <View style={styles.footerIcon}>
                   <Ionicons name="add-circle-outline" size={18} color={palette.textSecondary} />

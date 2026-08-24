@@ -58,7 +58,7 @@ function CommandeForm({
 }: {
   visible: boolean; fournisseur: Fournisseur; products: Product[];
   currency: string; saving: boolean; businessId: string; onClose: () => void;
-  onSave: (lines: { product_id: string; product_name: string; qty: number; unit_cost: number }[], amountPaid: number) => Promise<void>;
+  onSave: (lines: { product_id: string; product_name: string; qty: number; unit_cost: number; variant_id: string | null }[], amountPaid: number) => Promise<void>;
 }) {
   const { palette } = useTheme();
   const styles = useMemo(() => makeStyles(palette), [palette]);
@@ -171,6 +171,7 @@ function CommandeForm({
                 return {
                   product_id: l.product_id, product_name: l.product_name,
                   qty, unit_cost: qty > 0 ? tc / qty : 0,
+                  variant_id: l.variant_id ?? null,
                 };
               });
               const invalid = parsed.find(l => l.qty <= 0 || l.unit_cost <= 0);

@@ -79,7 +79,10 @@ export default function WelcomeScreen() {
 
       <Pressable
         style={styles.whatsappCorner}
-        onPress={() => Linking.openURL(SUPPORT_WA_URL)}
+        // No WhatsApp installed (or no app registered for the wa.me scheme)
+        // rejects instead of resolving — unhandled here previously, surfacing
+        // as a Sentry error for any unauthenticated visitor without WhatsApp.
+        onPress={() => Linking.openURL(SUPPORT_WA_URL).catch(() => {})}
         hitSlop={12}
       >
         <Ionicons name="logo-whatsapp" size={13} color={palette.textSecondary} />

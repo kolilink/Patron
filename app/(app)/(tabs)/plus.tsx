@@ -110,7 +110,6 @@ export default function PlusScreen() {
           <View style={styles.section}>
             <Text variant="overline" color="secondary">Mes activités</Text>
             <MenuRow iconName="receipt-outline" label="Mes ventes" onPress={() => router.push('/ventes')} />
-            <MenuRow iconName="card-outline" label="Clients qui doivent" onPress={() => router.push('/credits')} />
             <MenuRow iconName="people-outline" label="Mes clients" onPress={() => router.push('/clients')} />
             <MenuRow iconName="cash-outline" label="Dépenses" onPress={() => router.push('/depenses')} />
             <MenuRow iconName="arrow-down-circle-outline" label="Mes apports" onPress={() => router.push('/apports')} />
@@ -122,7 +121,7 @@ export default function PlusScreen() {
           <View style={styles.section}>
             <Text variant="overline" color="secondary">Vue d'ensemble</Text>
             <MenuRow iconName="bar-chart-outline" label="Bilan" onPress={() => router.push('/rapports')} />
-            <MenuRow iconName="arrow-down-circle-outline" label="Capital investi" onPress={() => router.push('/apports')} />
+            <MenuRow iconName="arrow-down-circle-outline" label="Apports" onPress={() => router.push('/apports')} />
           </View>
         )}
 
@@ -131,25 +130,20 @@ export default function PlusScreen() {
           <>
             <View style={styles.section}>
               <Text variant="overline" color="secondary">Ventes & Clients</Text>
-              <MenuRow iconName="receipt-outline" label="Ventes passées" onPress={() => router.push('/ventes')} />
-              <MenuRow iconName="card-outline" label="Clients qui doivent" onPress={() => router.push('/credits')} />
+              <MenuRow iconName="receipt-outline" label="Ventes" onPress={() => router.push('/ventes')} />
               <MenuRow iconName="people-outline" label="Clients" onPress={() => router.push('/clients')} />
             </View>
 
             <View style={styles.section}>
-              <Text variant="overline" color="secondary">Finances</Text>
+              <Text variant="overline" color="secondary">Argent</Text>
+              <MenuRow iconName="bar-chart-outline" label="Bilan" onPress={() => router.push('/rapports')} />
               <MenuRow iconName="cash-outline" label="Dépenses" onPress={() => router.push('/depenses')} />
-              <MenuRow iconName="arrow-down-circle-outline" label="Capital investi" onPress={() => router.push('/apports')} />
+              <MenuRow iconName="arrow-down-circle-outline" label="Apports" onPress={() => router.push('/apports')} />
             </View>
 
             <View style={styles.section}>
               <Text variant="overline" color="secondary">Achats</Text>
               <MenuRow iconName="business-outline" label="Fournisseurs" onPress={() => router.push('/fournisseurs')} />
-            </View>
-
-            <View style={styles.section}>
-              <Text variant="overline" color="secondary">Analyse</Text>
-              <MenuRow iconName="bar-chart-outline" label="Bilan" onPress={() => router.push('/rapports')} />
             </View>
           </>
         )}

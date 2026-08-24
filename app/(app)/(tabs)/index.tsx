@@ -1,6 +1,7 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { Animated, Easing, KeyboardAvoidingView, Modal, Platform, Pressable, ScrollView, StyleSheet, TextInput, View } from 'react-native';
 import { Gesture, GestureDetector } from 'react-native-gesture-handler';
+import { useSafeAreaInsets } from 'react-native-safe-area-context';
 import { runOnJS } from 'react-native-reanimated';
 import { LinearGradient } from 'expo-linear-gradient';
 import { Screen } from '@/src/components/ui/Screen';
@@ -60,6 +61,11 @@ function fmt(n: number, cur: string) {
 // before claiming the gesture, generous vertical tolerance so it doesn't
 // fight the KPI ScrollView underneath.
 const EDGE_SWIPE_WIDTH = 24;
+// Approximate height of the header row (menu icon + business name) below
+// the safe area — the catcher starts after insets.top + this, not a flat
+// guess, so it can't creep into the header's own tap targets on devices
+// with a taller inset.
+const HEADER_ROW_HEIGHT = 56;
 const EDGE_SWIPE_OPEN_DISTANCE = 40;
 const EDGE_SWIPE_OPEN_VELOCITY = 600;
 
@@ -85,35 +91,9 @@ function KpiCard({ label, value, sub, onPress, accent }: {
   );
 }
 
-function OnboardingStep({ number, label, done, active }: {
-  number: number; label: string; done: boolean; active: boolean;
-}) {
-  const { palette } = useTheme();
-  const styles = useMemo(() => makeStyles(palette), [palette]);
-  return (
-    <View style={styles.onboardingStep}>
-      <View style={[
-        styles.onboardingBubble,
-        done   && styles.onboardingBubbleDone,
-        active && styles.onboardingBubbleActive,
-      ]}>
-        <Text variant="label" style={{ color: done || active ? palette.textInverse : palette.textDisabled }}>
-          {done ? '✓' : String(number)}
-        </Text>
-      </View>
-      <Text variant="body" style={{
-        flex: 1,
-        color: done ? palette.textSecondary : active ? palette.textPrimary : palette.textDisabled,
-        textDecorationLine: done ? 'line-through' : 'none',
-      }}>
-        {label}
-      </Text>
-    </View>
-  );
-}
-
 export default function AccueilScreen() {
   const { palette, resolvedScheme } = useTheme();
+  const insets = useSafeAreaInsets();
   const styles = useMemo(() => makeStyles(palette), [palette]);
   const session = useAuthStore(s => s.session);
   const openBusinessPicker = useAuthStore(s => s.openBusinessDrawer);
@@ -150,6 +130,7 @@ export default function AccueilScreen() {
   }, [isFounder]);
 
   const { products, fetchProducts } = useProductStore();
+  const ventesSales = useVentesStore(s => s.sales);
   const { snapshot: rapportsSnapshot, fetchReportsSnapshot } = useRapportsStore();
   const { fetchMemberScope } = useEquipeStore();
   const { balance, payouts, saving: investorSaving, fetchBalance, fetchPayouts, requestPayout } = useInvestorStore();
@@ -207,8 +188,6 @@ export default function AccueilScreen() {
   }, [alphaGlowRotation]);
   const alphaGlowSpin = alphaGlowRotation.interpolate({ inputRange: [0, 1], outputRange: ['0deg', '360deg'] });
 
-  const welcomeBtnScale = useRef(new Animated.Value(1)).current;
-  const welcomeBtnOpacity = useRef(new Animated.Value(1)).current;
   const loadedForRef = useRef<string | null>(null);
 
   const isOwner = !isInvestisseur && !isVendeur;
@@ -224,6 +203,15 @@ export default function AccueilScreen() {
 
   useEffect(() => {
     if (!userId || !businessId || !isOwner) { setOnboardingDismissed(true); return; }
+    // Reset to "unknown" the instant businessId changes, before the async
+    // KV read below resolves. Switching business in-session (as opposed to
+    // a cold start) doesn't remount this screen, so without this line
+    // onboardingDismissed keeps holding whatever it last resolved to for
+    // the PREVIOUS business until the new lookup finishes — showOnboarding
+    // (and the mark-done/carnet-sheet effects that key off it) would
+    // briefly judge the newly-active business using a different business's
+    // state otherwise.
+    setOnboardingDismissed(null);
     const key = `onboarding_done_${userId}_${businessId}`;
     getKV(key).then(val => {
       if (val !== null) { setOnboardingDismissed(true); return; }
@@ -238,12 +226,16 @@ export default function AccueilScreen() {
     }).catch(() => setOnboardingDismissed(true));
   }, [userId, businessId, isOwner, business?.created_at]);
 
-  // Show carnet import sheet once — but only AFTER the onboarding steps card is gone.
-  // Showing both simultaneously creates visual clutter and confuses new users.
+  // Show carnet import sheet once — but only once onboarding is genuinely
+  // dismissed (both steps done, or the 7-day grandfather). Showing this
+  // alongside the activation fork would be exactly the double-nudge
+  // confusion both were designed to avoid; in practice the two never
+  // overlap by construction — the fork requires the business to still be
+  // empty, this requires it not to be.
   useEffect(() => {
     if (!userId || !businessId || !isOwner) return;
     if (session?.isDemoMode) return;
-    if (onboardingDismissed !== true) return; // wait until step card is fully done
+    if (onboardingDismissed !== true) return; // wait until fully dismissed
     const ageMs = business?.created_at ? Date.now() - new Date(business.created_at).getTime() : Infinity;
     if (ageMs > 7 * 24 * 60 * 60 * 1000) return;
     const key = `carnet_prompt_seen_${userId}_${businessId}`;
@@ -255,38 +247,41 @@ export default function AccueilScreen() {
   }, [userId, businessId, isOwner, business?.created_at, onboardingDismissed]);
 
   const step2Done = products.length > 0;
-  const step3Done = (kpis?.revenue_month ?? 0) > 0;
+  // Any real sale ever (paye OR credit) counts as "done" — using kpis.revenue_month here
+  // used to miss credit sales entirely (that RPC only sums status='paye') and reset every
+  // calendar month, so a merchant whose first sale was on credit, or made near month-end,
+  // kept seeing "Faire une vente" as an unfinished step despite already having made one.
+  const step3Done = ventesSales.some(s => s.business_id === businessId && s.status !== 'annule');
   const showOnboarding = isOwner && onboardingDismissed === false;
 
-  // Permanently write flag once all steps complete
+  // The activation fork itself ("On enregistre quoi aujourd'hui ?") now
+  // lives in app/(app)/_layout.tsx, not here — it needs to show on top of
+  // ANY screen (Catalogue, Vendre, ...) while a business is still empty and
+  // under 24h old, not just Accueil, so it's evaluated at the root layout
+  // that wraps every screen instead of one tab. step2Done/step3Done stay
+  // here only because the mark-done effect below (a different, narrower
+  // concern — the 7-day grandfather + carnet-sheet gating) still needs them.
+
+  // Permanently write flag once all steps complete. This write is
+  // effectively irreversible (no in-app way to clear it) — so it re-verifies
+  // against LIVE store state right before writing, not the step2Done/
+  // step3Done captured by this render. Effects always run a tick or more
+  // after the render that scheduled them; if a business switch happened in
+  // that gap, the closed-over values here could still belong to whichever
+  // business was active when this render happened, not the one actually
+  // named in the businessId captured alongside them. Re-reading
+  // .getState() fresh, for the same businessId this effect is about to
+  // write against, is the only way to be sure the two actually match.
   useEffect(() => {
     if (!showOnboarding || loading || !step2Done || !step3Done) return;
+    const liveProducts = useProductStore.getState().products;
+    const liveSales = useVentesStore.getState().sales;
+    const liveStep2 = liveProducts.length > 0;
+    const liveStep3 = liveSales.some(s => s.business_id === businessId && s.status !== 'annule');
+    if (!liveStep2 || !liveStep3) return;
     setKV(`onboarding_done_${userId}_${businessId}`, '1').catch(() => {});
     setOnboardingDismissed(true);
   }, [showOnboarding, loading, step2Done, step3Done, userId, businessId]);
-
-  useEffect(() => {
-    if (showOnboarding && !loading) {
-      const easing = Easing.inOut(Easing.sin);
-      const loop = Animated.loop(
-        Animated.sequence([
-          Animated.parallel([
-            Animated.timing(welcomeBtnScale,   { toValue: 1.06, duration: 2000, easing, useNativeDriver: true }),
-            Animated.timing(welcomeBtnOpacity, { toValue: 0.85, duration: 2000, easing, useNativeDriver: true }),
-          ]),
-          Animated.parallel([
-            Animated.timing(welcomeBtnScale,   { toValue: 1,    duration: 2000, easing, useNativeDriver: true }),
-            Animated.timing(welcomeBtnOpacity, { toValue: 1,    duration: 2000, easing, useNativeDriver: true }),
-          ]),
-        ])
-      );
-      loop.start();
-      return () => loop.stop();
-    } else {
-      welcomeBtnScale.setValue(1);
-      welcomeBtnOpacity.setValue(1);
-    }
-  }, [showOnboarding, loading]);
 
   const loadAll = useCallback(async () => {
     if (!businessId) return;
@@ -482,7 +477,15 @@ export default function AccueilScreen() {
       {/* Swipe right from the left edge to open the business drawer —
           complements the header menu icon's tap-to-open. */}
       <GestureDetector gesture={edgeSwipeOpenDrawer}>
-        <View style={styles.edgeSwipeCatcher} pointerEvents="box-only" />
+        {/* top was a flat 64 — didn't account for the device's real safe-area
+            inset, so on a phone with a taller inset (Dynamic Island models
+            especially) this could still reach up into the header row and
+            steal the hamburger icon's taps before the underlying Pressable
+            ever saw them — reported as the icon having zero press feedback,
+            not just "opens nothing", which pointed at a touch being
+            intercepted rather than a broken onPress. insets.top is measured
+            fresh per device now, not guessed. */}
+        <View style={[styles.edgeSwipeCatcher, { top: insets.top + HEADER_ROW_HEIGHT }]} pointerEvents="box-only" />
       </GestureDetector>
 
       {/* One-time carnet import sheet shown after business creation */}
@@ -570,36 +573,6 @@ export default function AccueilScreen() {
 
         {loading ? (
           <SkeletonKpiGrid />
-        ) : showOnboarding ? (
-          /* ── Onboarding tracker: persisted flag, never re-shows once dismissed ── */
-          <Card style={styles.onboarding}>
-            <View style={{ flexDirection: 'row', alignItems: 'center', justifyContent: 'space-between', marginBottom: spacing[2] }}>
-              <Text variant="label" color="secondary">Pour commencer</Text>
-              <Pressable
-                hitSlop={12}
-                onPress={() => {
-                  setKV(`onboarding_done_${userId}_${businessId}`, '1').catch(() => {});
-                  setOnboardingDismissed(true);
-                }}
-              >
-                <Text variant="caption" color="secondary">Passer</Text>
-              </Pressable>
-            </View>
-            <OnboardingStep number={1} label="Votre commerce a été créé" done                      active={false} />
-            <OnboardingStep number={2} label="Ajouter un produit"        done={step2Done}            active={!step2Done} />
-            <OnboardingStep number={3} label="Faire une vente"           done={step3Done}            active={step2Done && !step3Done} />
-            <Animated.View style={{ width: '100%', marginTop: spacing[4], opacity: welcomeBtnOpacity, transform: [{ scale: welcomeBtnScale }] }}>
-              <Button
-                label={!step2Done ? 'Ajouter un produit' : 'Faire une vente'}
-                onPress={() => !step2Done
-                  ? router.push({ pathname: '/(app)/(tabs)/catalogue', params: { openForm: '1' } })
-                  : router.push('/(app)/(tabs)/vendre')
-                }
-                fullWidth
-                size="lg"
-              />
-            </Animated.View>
-          </Card>
         ) : isVendeur && products.length === 0 ? (
           /* ── Empty state for vendeur: no products configured yet ── */
           <Card style={styles.welcome}>
@@ -760,7 +733,7 @@ export default function AccueilScreen() {
                   <KpiCard
                     label={`${kpis?.credit_count} client${(kpis?.credit_count ?? 0) > 1 ? 's' : ''} qui doivent`}
                     value={amtOrMask(kpis?.credit_total ?? 0)}
-                    onPress={() => router.push('/credits')}
+                    onPress={() => router.push({ pathname: '/(app)/clients', params: { filter: 'doivent' } })}
                     accent={palette.warning}
                   />
                 )}
@@ -936,11 +909,10 @@ function makeStyles(p: Palette) {
   return StyleSheet.create({
     safe: { flex: 1, backgroundColor: p.background },
     edgeSwipeCatcher: {
+      // top is set inline (insets.top + HEADER_ROW_HEIGHT) at the call site
+      // — device-aware, not a flat guess. See the comment there.
       position: 'absolute',
       left: 0,
-      // Starts below the header row so it never shadows the hamburger menu
-      // icon's own tap-to-open target (that icon sits at roughly this x/y).
-      top: 64,
       bottom: 0,
       width: EDGE_SWIPE_WIDTH,
       zIndex: 20,
@@ -1040,11 +1012,6 @@ function makeStyles(p: Palette) {
 
     welcome: { alignItems: 'center', gap: spacing[4], paddingVertical: spacing[8], paddingHorizontal: spacing[6] },
     welcomeEmoji: { fontSize: 52, lineHeight: 72 },
-    onboarding: { gap: spacing[2], paddingVertical: spacing[6], paddingHorizontal: spacing[5] },
-    onboardingStep: { flexDirection: 'row', alignItems: 'center', gap: spacing[3], paddingVertical: spacing[2] },
-    onboardingBubble: { width: 32, height: 32, borderRadius: radius.full, borderWidth: 1.5, borderColor: p.border, alignItems: 'center', justifyContent: 'center' },
-    onboardingBubbleDone: { backgroundColor: p.success, borderColor: p.success },
-    onboardingBubbleActive: { backgroundColor: p.primary, borderColor: p.primary },
 
     section: {
       backgroundColor: p.surface,

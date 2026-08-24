@@ -340,7 +340,7 @@ function PaymentModal({
   const isShort = shortfall > 0.5;
 
   const creditDiscount = parseAmountInput(creditDiscountInput, currency);
-  const creditUpfront  = parseAmountInput(creditUpfrontInput, currency);
+  const creditUpfront = parseAmountInput(creditUpfrontInput, currency);
   const creditEffectiveTotal = total - creditDiscount;
   const creditUpfrontCoversAll = creditUpfront >= creditEffectiveTotal - 0.01 && creditUpfront > 0;
 
@@ -416,351 +416,351 @@ function PaymentModal({
         </View>
       }
     >
-          <View style={styles.totalSection}>
-            <Text variant="caption" color="secondary" style={{ textAlign: 'center' }}>
-              {step === 'credit' && (creditDiscount > 0 || creditUpfront > 0) ? 'Reste à payer' : 'Total'}
-            </Text>
-            <Text
-              style={[styles.totalBig, { color: step === 'credit' ? palette.warning : palette.primary, textAlign: 'center' }]}
-              adjustsFontSizeToFit
-              numberOfLines={1}
-            >
-              {formatAmount(step === 'credit' ? Math.max(0, creditEffectiveTotal - creditUpfront) : total, currency)}
-            </Text>
-            {step === 'credit' && creditDiscount > 0 && (
-              <Text variant="caption" color="secondary" style={{ textAlign: 'center' }}>
-                Réduction de {formatAmount(creditDiscount, currency)} appliquée
-              </Text>
-            )}
+      <View style={styles.totalSection}>
+        <Text variant="caption" color="secondary" style={{ textAlign: 'center' }}>
+          {step === 'credit' && (creditDiscount > 0 || creditUpfront > 0) ? 'Reste à payer' : 'Total'}
+        </Text>
+        <Text
+          style={[styles.totalBig, { color: step === 'credit' ? palette.warning : palette.primary, textAlign: 'center' }]}
+          adjustsFontSizeToFit
+          numberOfLines={1}
+        >
+          {formatAmount(step === 'credit' ? Math.max(0, creditEffectiveTotal - creditUpfront) : total, currency)}
+        </Text>
+        {step === 'credit' && creditDiscount > 0 && (
+          <Text variant="caption" color="secondary" style={{ textAlign: 'center' }}>
+            Réduction de {formatAmount(creditDiscount, currency)} appliquée
+          </Text>
+        )}
+      </View>
+
+      {step === 'credit' && !showClientSection && (
+        <View style={styles.payContent}>
+          {/* Discount */}
+          <View style={{ gap: spacing[2] }}>
+            <Text variant="label" style={styles.sectionLabel}>Réduction</Text>
+            <TextInput
+              style={styles.amountBigInput}
+              value={creditDiscountInput}
+              onChangeText={v => setCreditDiscountInput(formatAmountInput(v, currency))}
+              keyboardType="decimal-pad"
+              placeholderTextColor={palette.textDisabled}
+              selectTextOnFocus
+            />
           </View>
 
-          {step === 'credit' && !showClientSection && (
-            <View style={styles.payContent}>
-              {/* Discount */}
-              <View style={{ gap: spacing[2] }}>
-                <Text variant="label" style={styles.sectionLabel}>Réduction</Text>
-                <TextInput
-                  style={styles.amountBigInput}
-                  value={creditDiscountInput}
-                  onChangeText={v => setCreditDiscountInput(formatAmountInput(v, currency))}
-                  keyboardType="decimal-pad"
-                  placeholderTextColor={palette.textDisabled}
-                  selectTextOnFocus
-                />
-              </View>
+          {/* Upfront payment */}
+          <View style={{ gap: spacing[2] }}>
+            <Text variant="label" style={styles.sectionLabel}>Payé maintenant</Text>
+            <TextInput
+              style={styles.amountBigInput}
+              value={creditUpfrontInput}
+              onChangeText={v => setCreditUpfrontInput(formatAmountInput(v, currency))}
+              keyboardType="decimal-pad"
+              placeholderTextColor={palette.textDisabled}
+              selectTextOnFocus
+            />
+          </View>
 
-              {/* Upfront payment */}
-              <View style={{ gap: spacing[2] }}>
-                <Text variant="label" style={styles.sectionLabel}>Payé maintenant</Text>
-                <TextInput
-                  style={styles.amountBigInput}
-                  value={creditUpfrontInput}
-                  onChangeText={v => setCreditUpfrontInput(formatAmountInput(v, currency))}
-                  keyboardType="decimal-pad"
-                  placeholderTextColor={palette.textDisabled}
-                  selectTextOnFocus
-                />
-              </View>
-
-              {/* Show remaining only when upfront > 0 */}
-              {creditUpfront > 0 && !creditUpfrontCoversAll && (
-                <View style={[styles.disambigBox, { backgroundColor: palette.warningLight, borderColor: palette.warning }]}>
-                  <Text variant="label" style={{ color: palette.warning }}>
-                    Reste à payer : {formatAmount(Math.max(0, creditEffectiveTotal - creditUpfront), currency)}
-                  </Text>
-                </View>
-              )}
-
-              {creditUpfrontCoversAll && (
-                <View style={styles.warnRow}>
-                  <Text variant="caption" style={{ color: palette.warning }}>
-                    Payé en entier — pas de crédit.
-                  </Text>
-                </View>
-              )}
-
-              {/* Payment method — only when upfront entered */}
-              {creditUpfront > 0 && (
-                <View style={styles.methodSection}>
-                  <Text variant="label" style={[styles.sectionLabel, { marginBottom: spacing[2] }]}>Payé en</Text>
-                  <View style={styles.methodGrid}>
-                    {PAY_NOW_METHODS.map(m => (
-                      <Pressable key={m.key} onPress={() => setCreditPayMethod(m.key)}
-                        style={[styles.methodChip, creditPayMethod === m.key && styles.methodChipActive]}>
-                        <Text variant="label" style={{
-                          color: creditPayMethod === m.key ? palette.textInverse : palette.textSecondary,
-                          textAlign: 'center', fontSize: 13,
-                          opacity: creditPayMethod === m.key ? 1 : 0.45,
-                        }}>
-                          {m.label}
-                        </Text>
-                      </Pressable>
-                    ))}
-                  </View>
-                </View>
-              )}
-
-              {/* Due date — optional, only when it's an actual credit */}
-              {!creditUpfrontCoversAll && (
-                <View style={{ gap: spacing[2] }}>
-                  <View style={{ flexDirection: 'row', alignItems: 'center', gap: spacing[2] }}>
-                    <Text variant="label" style={styles.sectionLabel}>Remboursement prévu ?</Text>
-                    <Text variant="caption" style={{ color: palette.textSecondary }}>(optionnel)</Text>
-                  </View>
-                  <View style={styles.methodGrid}>
-                    {(['1w', '1m', 'custom'] as const).map(pill => (
-                      <Pressable
-                        key={pill}
-                        onPress={() => {
-                          haptics.tap();
-                          const next = dueDatePill === pill ? null : pill;
-                          setDueDatePill(next);
-                          if (pill === 'custom' && next === 'custom' && !customDueDateInput) {
-                            const d = new Date(); d.setMonth(d.getMonth() + 1);
-                            setCustomDueDateInput(toISO(d));
-                          }
-                        }}
-                        style={[styles.methodChip, dueDatePill === pill && styles.methodChipActive]}
-                      >
-                        <Text variant="label" style={{
-                          color: dueDatePill === pill ? palette.textInverse : palette.textSecondary,
-                          textAlign: 'center', fontSize: 13,
-                          opacity: dueDatePill === pill ? 1 : 0.45,
-                        }}>
-                          {pill === '1w' ? '1 semaine' : pill === '1m' ? '1 mois' : 'Choisir'}
-                        </Text>
-                      </Pressable>
-                    ))}
-                  </View>
-                  {dueDatePill === 'custom' && (
-                    <DatePickerField
-                      value={customDueDateInput}
-                      onChange={setCustomDueDateInput}
-                      minDate={toISO(new Date())}
-                    />
-                  )}
-                  {computedDueDate !== null && (
-                    <View style={{ flexDirection: 'row', alignItems: 'center', gap: spacing[2] }}>
-                      <Text variant="caption" style={{ color: palette.success }}>
-                        ✓ {fmtDue(computedDueDate)}
-                      </Text>
-                      <Pressable
-                        onPress={() => { setDueDatePill(null); setCustomDueDateInput(''); }}
-                        hitSlop={8}
-                      >
-                        <Text variant="caption" style={{ color: palette.textSecondary }}>✕</Text>
-                      </Pressable>
-                    </View>
-                  )}
-                </View>
-              )}
+          {/* Show remaining only when upfront > 0 */}
+          {creditUpfront > 0 && !creditUpfrontCoversAll && (
+            <View style={[styles.disambigBox, { backgroundColor: palette.warningLight, borderColor: palette.warning }]}>
+              <Text variant="label" style={{ color: palette.warning }}>
+                Reste à payer : {formatAmount(Math.max(0, creditEffectiveTotal - creditUpfront), currency)}
+              </Text>
             </View>
           )}
 
-          {step === 'pay' && !showClientSection && (
-            <View style={styles.payContent}>
-              <View style={{ gap: spacing[2] }}>
-                <Text variant="label" style={styles.sectionLabel}>Vendu pour combien ?</Text>
-                <TextInput
-                  style={styles.amountBigInput}
-                  value={amountInput}
-                  onChangeText={handleAmountChange}
-                  keyboardType="decimal-pad"
-                  placeholder={String(total)}
-                  placeholderTextColor={palette.textDisabled}
-                  selectTextOnFocus
-                />
+          {creditUpfrontCoversAll && (
+            <View style={styles.warnRow}>
+              <Text variant="caption" style={{ color: palette.warning }}>
+                Payé en entier — pas de crédit.
+              </Text>
+            </View>
+          )}
 
-                {isShort && (
-                  <View style={styles.disambigBox}>
-                    <Text variant="caption" style={{ color: palette.textSecondary }}>
-                      <Text style={{ color: palette.textPrimary, fontWeight: '600' }}>{formatAmount(shortfall, currency)}</Text>
-                      {' '}de moins que le prix
+          {/* Payment method — only when upfront entered */}
+          {creditUpfront > 0 && (
+            <View style={styles.methodSection}>
+              <Text variant="label" style={[styles.sectionLabel, { marginBottom: spacing[2] }]}>Payé en</Text>
+              <View style={styles.methodGrid}>
+                {PAY_NOW_METHODS.map(m => (
+                  <Pressable key={m.key} onPress={() => setCreditPayMethod(m.key)}
+                    style={[styles.methodChip, creditPayMethod === m.key && styles.methodChipActive]}>
+                    <Text variant="label" style={{
+                      color: creditPayMethod === m.key ? palette.textInverse : palette.textSecondary,
+                      textAlign: 'center', fontSize: 13,
+                      opacity: creditPayMethod === m.key ? 1 : 0.45,
+                    }}>
+                      {m.label}
                     </Text>
-
-                    <Pressable onPress={() => setDisambig('rabais')} style={styles.radioRow}>
-                      <View style={[styles.radio, disambig === 'rabais' && styles.radioActive]}>
-                        {disambig === 'rabais' && <View style={styles.radioDot} />}
-                      </View>
-                      <View style={{ flex: 1 }}>
-                        <Text variant="label" style={{ color: disambig === 'rabais' ? palette.primary : palette.textPrimary }}>Une réduction</Text>
-                        <Text variant="caption" style={{ color: palette.textSecondary }}>Le client ne doit plus rien</Text>
-                      </View>
-                    </Pressable>
-
-                    <View style={styles.radioSeparator} />
-
-                    <Pressable onPress={() => setDisambig('credit')} style={styles.radioRow}>
-                      <View style={[styles.radio, disambig === 'credit' && styles.radioActive]}>
-                        {disambig === 'credit' && <View style={styles.radioDot} />}
-                      </View>
-                      <View style={{ flex: 1 }}>
-                        <Text variant="label" style={{ color: disambig === 'credit' ? palette.primary : palette.textPrimary }}>Un crédit</Text>
-                        <Text variant="caption" style={{ color: palette.textSecondary }}>
-                          Le client paiera {formatAmount(shortfall, currency)} plus tard
-                        </Text>
-                      </View>
-                    </Pressable>
-                  </View>
-                )}
-
-              </View>
-
-              {/* Payment method grid — inside scroll so all 4 chips are always reachable */}
-              <View style={styles.methodSection}>
-                <Text variant="label" style={[styles.sectionLabel, { marginBottom: spacing[2] }]}>Payé en</Text>
-                <View style={styles.methodGrid}>
-                  {PAY_NOW_METHODS.map(m => (
-                    <Pressable
-                      key={m.key}
-                      onPress={() => setPayMethod(m.key)}
-                      style={[styles.methodChip, payMethod === m.key && styles.methodChipActive]}
-                    >
-                      <Text
-                        variant="label"
-                        style={{
-                          color: payMethod === m.key ? palette.textInverse : palette.textSecondary,
-                          textAlign: 'center', fontSize: 13,
-                          opacity: payMethod === m.key ? 1 : 0.45,
-                        }}
-                      >
-                        {m.label}
-                      </Text>
-                    </Pressable>
-                  ))}
-                </View>
+                  </Pressable>
+                ))}
               </View>
             </View>
           )}
 
-          {/* ── Inline client section ── */}
-          <View style={styles.clientSection}>
-            {clientName ? (
-              /* ── Selected tag ── */
-              <View style={styles.clientSelectedTag}>
-                <Ionicons name="person-circle-outline" size={28} color={palette.primary} />
-                <View style={{ flex: 1 }}>
-                  <Text variant="caption" color="secondary">Client</Text>
-                  <Text variant="label">{clientName}</Text>
-                  {clientPhone ? (
-                    <Text variant="caption" color="secondary">{clientPhone}</Text>
-                  ) : null}
+          {/* Due date — optional, only when it's an actual credit */}
+          {!creditUpfrontCoversAll && (
+            <View style={{ gap: spacing[2] }}>
+              <View style={{ flexDirection: 'row', alignItems: 'center', gap: spacing[2] }}>
+                <Text variant="label" style={styles.sectionLabel}>Remboursement prévu ?</Text>
+                <Text variant="caption" style={{ color: palette.textSecondary }}>(optionnel)</Text>
+              </View>
+              <View style={styles.methodGrid}>
+                {(['1w', '1m', 'custom'] as const).map(pill => (
+                  <Pressable
+                    key={pill}
+                    onPress={() => {
+                      haptics.tap();
+                      const next = dueDatePill === pill ? null : pill;
+                      setDueDatePill(next);
+                      if (pill === 'custom' && next === 'custom' && !customDueDateInput) {
+                        const d = new Date(); d.setMonth(d.getMonth() + 1);
+                        setCustomDueDateInput(toISO(d));
+                      }
+                    }}
+                    style={[styles.methodChip, dueDatePill === pill && styles.methodChipActive]}
+                  >
+                    <Text variant="label" style={{
+                      color: dueDatePill === pill ? palette.textInverse : palette.textSecondary,
+                      textAlign: 'center', fontSize: 13,
+                      opacity: dueDatePill === pill ? 1 : 0.45,
+                    }}>
+                      {pill === '1w' ? '1 semaine' : pill === '1m' ? '1 mois' : 'Choisir'}
+                    </Text>
+                  </Pressable>
+                ))}
+              </View>
+              {dueDatePill === 'custom' && (
+                <DatePickerField
+                  value={customDueDateInput}
+                  onChange={setCustomDueDateInput}
+                  minDate={toISO(new Date())}
+                />
+              )}
+              {computedDueDate !== null && (
+                <View style={{ flexDirection: 'row', alignItems: 'center', gap: spacing[2] }}>
+                  <Text variant="caption" style={{ color: palette.success }}>
+                    ✓ {fmtDue(computedDueDate)}
+                  </Text>
+                  <Pressable
+                    onPress={() => { setDueDatePill(null); setCustomDueDateInput(''); }}
+                    hitSlop={8}
+                  >
+                    <Text variant="caption" style={{ color: palette.textSecondary }}>✕</Text>
+                  </Pressable>
                 </View>
-                <Pressable
-                  onPress={() => { setClientName(''); setClientPhone(''); setClientId(undefined); setClientSearch(''); }}
-                  hitSlop={12}
-                >
-                  <Ionicons name="close-circle" size={20} color={palette.textSecondary} />
+              )}
+            </View>
+          )}
+        </View>
+      )}
+
+      {step === 'pay' && !showClientSection && (
+        <View style={styles.payContent}>
+          <View style={{ gap: spacing[2] }}>
+            <Text variant="label" style={styles.sectionLabel}>Payé par le client</Text>
+            <TextInput
+              style={styles.amountBigInput}
+              value={amountInput}
+              onChangeText={handleAmountChange}
+              keyboardType="decimal-pad"
+              placeholder={String(total)}
+              placeholderTextColor={palette.textDisabled}
+              selectTextOnFocus
+            />
+
+            {isShort && (
+              <View style={styles.disambigBox}>
+                <Text variant="caption" style={{ color: palette.textSecondary }}>
+                  <Text style={{ color: palette.textPrimary, fontWeight: '600' }}>{formatAmount(shortfall, currency)}</Text>
+                  {' '}de moins que le prix
+                </Text>
+
+                <Pressable onPress={() => setDisambig('rabais')} style={styles.radioRow}>
+                  <View style={[styles.radio, disambig === 'rabais' && styles.radioActive]}>
+                    {disambig === 'rabais' && <View style={styles.radioDot} />}
+                  </View>
+                  <View style={{ flex: 1 }}>
+                    <Text variant="label" style={{ color: disambig === 'rabais' ? palette.primary : palette.textPrimary }}>Une réduction</Text>
+                    <Text variant="caption" style={{ color: palette.textSecondary }}>Le client ne doit plus rien</Text>
+                  </View>
+                </Pressable>
+
+                <View style={styles.radioSeparator} />
+
+                <Pressable onPress={() => setDisambig('credit')} style={styles.radioRow}>
+                  <View style={[styles.radio, disambig === 'credit' && styles.radioActive]}>
+                    {disambig === 'credit' && <View style={styles.radioDot} />}
+                  </View>
+                  <View style={{ flex: 1 }}>
+                    <Text variant="label" style={{ color: disambig === 'credit' ? palette.primary : palette.textPrimary }}>Un crédit</Text>
+                    <Text variant="caption" style={{ color: palette.textSecondary }}>
+                      Le client paiera {formatAmount(shortfall, currency)} plus tard
+                    </Text>
+                  </View>
                 </Pressable>
               </View>
+            )}
 
-            ) : showClientSection ? (
-              /* ── Expanded section ── */
-              <View>
-                {/* Search bar — hidden while new client form is open */}
-                {!showNewClientForm && (
-                  <View style={styles.clientSearchRow}>
-                    <TextInput
-                      ref={clientSearchRef}
-                      value={clientSearch}
-                      onChangeText={setClientSearch}
-                      placeholder="Rechercher un client…"
-                      placeholderTextColor={palette.textDisabled}
-                      style={styles.clientSearchInput}
-                      returnKeyType="search"
-                      clearButtonMode="while-editing"
-                    />
-                    <Pressable
-                      onPress={() => { setShowClientSection(false); setClientSearch(''); setShowNewClientForm(false); Keyboard.dismiss(); }}
-                      hitSlop={8}
-                    >
-                      <Text variant="caption" style={{ color: palette.textSecondary }}>Annuler</Text>
-                    </Pressable>
-                  </View>
-                )}
+          </View>
 
-                {!showNewClientForm ? (
-                  <>
-                    {/* Nouveau client — always first */}
-                    <Pressable
-                      onPress={() => { setShowNewClientForm(true); Keyboard.dismiss(); }}
-                      style={({ pressed }) => [styles.clientResultRow, styles.clientResultRowNew, pressed && { opacity: 0.55 }]}
-                    >
-                      <Ionicons name="add-circle-outline" size={16} color={palette.primary} />
-                      <Text variant="body" style={{ color: palette.primary, fontWeight: '600' }}>Nouveau client</Text>
-                    </Pressable>
+          {/* Payment method grid — inside scroll so all 4 chips are always reachable */}
+          <View style={styles.methodSection}>
+            <Text variant="label" style={[styles.sectionLabel, { marginBottom: spacing[2] }]}>Payé en</Text>
+            <View style={styles.methodGrid}>
+              {PAY_NOW_METHODS.map(m => (
+                <Pressable
+                  key={m.key}
+                  onPress={() => setPayMethod(m.key)}
+                  style={[styles.methodChip, payMethod === m.key && styles.methodChipActive]}
+                >
+                  <Text
+                    variant="label"
+                    style={{
+                      color: payMethod === m.key ? palette.textInverse : palette.textSecondary,
+                      textAlign: 'center', fontSize: 13,
+                      opacity: payMethod === m.key ? 1 : 0.45,
+                    }}
+                  >
+                    {m.label}
+                  </Text>
+                </Pressable>
+              ))}
+            </View>
+          </View>
+        </View>
+      )}
 
-                    {filteredClients.length === 0 && clientSearch.length > 0 ? (
-                      <View style={{ paddingVertical: spacing[3], paddingHorizontal: spacing[2] }}>
-                        <Text variant="caption" color="secondary">Aucun résultat pour « {clientSearch} »</Text>
-                      </View>
-                    ) : (
-                      filteredClients.map(c => {
-                        const sum = c.name ? c.name.split('').reduce((acc, ch) => acc + ch.charCodeAt(0), 0) : 0;
-                        const avatarBg = CLIENT_AVATAR_PALETTE[sum % CLIENT_AVATAR_PALETTE.length];
-                        const initial = c.name ? c.name.charAt(0).toUpperCase() : '?';
-                        return (
-                          <Pressable
-                            key={c.id ?? c.name}
-                            onPress={() => handleSelectClient(c.name, c.phone, c.id)}
-                            style={({ pressed }) => [styles.clientResultRow, pressed && { opacity: 0.55 }]}
-                          >
-                            <View style={[styles.clientAvatar, { backgroundColor: avatarBg }]}>
-                              <Text style={styles.clientAvatarText}>{initial}</Text>
-                            </View>
-                            <View style={{ flex: 1 }}>
-                              <Text variant="body">{c.name}</Text>
-                              {c.phone ? (
-                                <Text variant="caption" color="secondary">{c.phone}</Text>
-                              ) : null}
-                            </View>
-                          </Pressable>
-                        );
-                      })
-                    )}
-                  </>
-                ) : (
-                  /* ── New client form ── */
-                  <KeyboardAvoidingView behavior={Platform.OS === 'ios' ? 'padding' : undefined}>
-                    <View style={{ flexDirection: 'row', alignItems: 'center', gap: spacing[2], paddingTop: spacing[2], marginBottom: spacing[1] }}>
-                      <Pressable onPress={() => setShowNewClientForm(false)} hitSlop={8}>
-                        <Ionicons name="arrow-back" size={18} color={palette.textSecondary} />
-                      </Pressable>
-                      <Text variant="label">Nouveau client</Text>
-                    </View>
-                    <ScrollView
-                      contentContainerStyle={{ paddingHorizontal: 16, paddingTop: 12, paddingBottom: 32 }}
-                      showsVerticalScrollIndicator={false}
-                      keyboardShouldPersistTaps="handled"
-                    >
-                      <Input
-                        label="Nom"
-                        value={newClientName}
-                        onChangeText={setNewClientName}
-                        placeholder="Mamadou Diallo"
-                        autoFocus
-                      />
-                      <PhoneInput
-                        label="Téléphone (optionnel)"
-                        onChange={setNewClientPhone}
-                        strict={false}
-                      />
-                    </ScrollView>
-                  </KeyboardAvoidingView>
-                )}
+      {/* ── Inline client section ── */}
+      <View style={styles.clientSection}>
+        {clientName ? (
+          /* ── Selected tag ── */
+          <View style={styles.clientSelectedTag}>
+            <Ionicons name="person-circle-outline" size={28} color={palette.primary} />
+            <View style={{ flex: 1 }}>
+              <Text variant="caption" color="secondary">Client</Text>
+              <Text variant="label">{clientName}</Text>
+              {clientPhone ? (
+                <Text variant="caption" color="secondary">{clientPhone}</Text>
+              ) : null}
+            </View>
+            <Pressable
+              onPress={() => { setClientName(''); setClientPhone(''); setClientId(undefined); setClientSearch(''); }}
+              hitSlop={12}
+            >
+              <Ionicons name="close-circle" size={20} color={palette.textSecondary} />
+            </Pressable>
+          </View>
+
+        ) : showClientSection ? (
+          /* ── Expanded section ── */
+          <View>
+            {/* Search bar — hidden while new client form is open */}
+            {!showNewClientForm && (
+              <View style={styles.clientSearchRow}>
+                <TextInput
+                  ref={clientSearchRef}
+                  value={clientSearch}
+                  onChangeText={setClientSearch}
+                  placeholder="Rechercher un client…"
+                  placeholderTextColor={palette.textDisabled}
+                  style={styles.clientSearchInput}
+                  returnKeyType="search"
+                  clearButtonMode="while-editing"
+                />
+                <Pressable
+                  onPress={() => { setShowClientSection(false); setClientSearch(''); setShowNewClientForm(false); Keyboard.dismiss(); }}
+                  hitSlop={8}
+                >
+                  <Text variant="caption" style={{ color: palette.textSecondary }}>Annuler</Text>
+                </Pressable>
               </View>
+            )}
 
+            {!showNewClientForm ? (
+              <>
+                {/* Nouveau client — always first */}
+                <Pressable
+                  onPress={() => { setShowNewClientForm(true); Keyboard.dismiss(); }}
+                  style={({ pressed }) => [styles.clientResultRow, styles.clientResultRowNew, pressed && { opacity: 0.55 }]}
+                >
+                  <Ionicons name="add-circle-outline" size={16} color={palette.primary} />
+                  <Text variant="body" style={{ color: palette.primary, fontWeight: '600' }}>Nouveau client</Text>
+                </Pressable>
+
+                {filteredClients.length === 0 && clientSearch.length > 0 ? (
+                  <View style={{ paddingVertical: spacing[3], paddingHorizontal: spacing[2] }}>
+                    <Text variant="caption" color="secondary">Aucun résultat pour « {clientSearch} »</Text>
+                  </View>
+                ) : (
+                  filteredClients.map(c => {
+                    const sum = c.name ? c.name.split('').reduce((acc, ch) => acc + ch.charCodeAt(0), 0) : 0;
+                    const avatarBg = CLIENT_AVATAR_PALETTE[sum % CLIENT_AVATAR_PALETTE.length];
+                    const initial = c.name ? c.name.charAt(0).toUpperCase() : '?';
+                    return (
+                      <Pressable
+                        key={c.id ?? c.name}
+                        onPress={() => handleSelectClient(c.name, c.phone, c.id)}
+                        style={({ pressed }) => [styles.clientResultRow, pressed && { opacity: 0.55 }]}
+                      >
+                        <View style={[styles.clientAvatar, { backgroundColor: avatarBg }]}>
+                          <Text style={styles.clientAvatarText}>{initial}</Text>
+                        </View>
+                        <View style={{ flex: 1 }}>
+                          <Text variant="body">{c.name}</Text>
+                          {c.phone ? (
+                            <Text variant="caption" color="secondary">{c.phone}</Text>
+                          ) : null}
+                        </View>
+                      </Pressable>
+                    );
+                  })
+                )}
+              </>
             ) : (
-              /* ── Trigger ── */
-              <Pressable
-                onPress={() => setShowClientSection(true)}
-                style={({ pressed }) => [styles.clientTrigger, pressed && { opacity: 0.55 }]}
-              >
-                <Ionicons name="person-add-outline" size={18} color={palette.textSecondary} />
-                <Text variant="body" style={{ color: palette.textSecondary }}>Nom du client</Text>
-              </Pressable>
+              /* ── New client form ── */
+              <KeyboardAvoidingView behavior={Platform.OS === 'ios' ? 'padding' : undefined}>
+                <View style={{ flexDirection: 'row', alignItems: 'center', gap: spacing[2], paddingTop: spacing[2], marginBottom: spacing[1] }}>
+                  <Pressable onPress={() => setShowNewClientForm(false)} hitSlop={8}>
+                    <Ionicons name="arrow-back" size={18} color={palette.textSecondary} />
+                  </Pressable>
+                  <Text variant="label">Nouveau client</Text>
+                </View>
+                <ScrollView
+                  contentContainerStyle={{ paddingHorizontal: 16, paddingTop: 12, paddingBottom: 32 }}
+                  showsVerticalScrollIndicator={false}
+                  keyboardShouldPersistTaps="handled"
+                >
+                  <Input
+                    label="Nom"
+                    value={newClientName}
+                    onChangeText={setNewClientName}
+                    placeholder="Mamadou Diallo"
+                    autoFocus
+                  />
+                  <PhoneInput
+                    label="Téléphone (optionnel)"
+                    onChange={setNewClientPhone}
+                    strict={false}
+                  />
+                </ScrollView>
+              </KeyboardAvoidingView>
             )}
           </View>
+
+        ) : (
+          /* ── Trigger ── */
+          <Pressable
+            onPress={() => setShowClientSection(true)}
+            style={({ pressed }) => [styles.clientTrigger, pressed && { opacity: 0.55 }]}
+          >
+            <Ionicons name="person-add-outline" size={18} color={palette.textSecondary} />
+            <Text variant="body" style={{ color: palette.textSecondary }}>Nom du client</Text>
+          </Pressable>
+        )}
+      </View>
     </FormSheet>
   );
 }
@@ -926,11 +926,8 @@ function VariantPickerSheet({ visible, product, variants, cartQtyByVariant, curr
       </Pressable>
       <Animated.View style={[styles.variantSheet, { transform: [{ translateY }] }]}>
         <View style={styles.variantSheetHandle} />
-        <View style={{ flexDirection: 'row', alignItems: 'center', justifyContent: 'space-between', marginBottom: spacing[4] }}>
+        <View style={{ marginBottom: spacing[4] }}>
           <Text variant="h4">{product.name}</Text>
-          <Text variant="label" style={{ color: palette.primary }}>
-            {formatAmount(product.sale_price, currency)}
-          </Text>
         </View>
         <ScrollView showsVerticalScrollIndicator={false} keyboardShouldPersistTaps="handled">
           {variants.map(v => {
@@ -943,12 +940,21 @@ function VariantPickerSheet({ visible, product, variants, cartQtyByVariant, curr
             const isEditing = editingId === v.id;
             const atMax = qty >= remaining;
             return (
-              <View
+              <Pressable
                 key={v.id}
+                onPress={() => {
+                  if (!outOfStock && !atMax && !isEditing) {
+                    haptics.selection();
+                    changeQty(v.id, 1, remaining);
+                  }
+                }}
                 style={[styles.variantOption, outOfStock && { opacity: 0.4 }]}
               >
                 <View style={{ flex: 1 }}>
                   <Text variant="body" style={{ fontWeight: '600' }}>{v.name}</Text>
+                  <Text variant="label" style={{ color: palette.primary }}>
+                    {formatAmount(v.sale_price, currency)}
+                  </Text>
                   <Text variant="caption" color="secondary">
                     {outOfStock ? 'Épuisé' : `${remaining} en stock`}
                     {reserved > 0 ? ` · ${reserved} déjà dans le panier` : ''}
@@ -990,13 +996,13 @@ function VariantPickerSheet({ visible, product, variants, cartQtyByVariant, curr
                     <Text variant="label" style={{ color: (outOfStock || atMax) ? palette.textDisabled : palette.primary }}>+</Text>
                   </Pressable>
                 </View>
-              </View>
+              </Pressable>
             );
           })}
         </ScrollView>
         <View style={{ paddingTop: spacing[4] }}>
           <Button
-            label={totalAdded > 0 ? `Ajouter ${totalAdded} article${totalAdded > 1 ? 's' : ''}` : 'Ajouter'}
+            label="Confirmer"
             onPress={confirm}
             fullWidth
             size="lg"
@@ -1013,7 +1019,7 @@ function VariantPickerSheet({ visible, product, variants, cartQtyByVariant, curr
 function AnimatedFAB({ onPress }: { onPress: () => void }) {
   const { palette } = useTheme();
   const styles = useMemo(() => makeStyles(palette), [palette]);
-  const scale   = useRef(new Animated.Value(1)).current;
+  const scale = useRef(new Animated.Value(1)).current;
   const opacity = useRef(new Animated.Value(1)).current;
 
   useEffect(() => {
@@ -1021,12 +1027,12 @@ function AnimatedFAB({ onPress }: { onPress: () => void }) {
     const loop = Animated.loop(
       Animated.sequence([
         Animated.parallel([
-          Animated.timing(scale,   { toValue: 1.06, duration: 2000, easing, useNativeDriver: true }),
+          Animated.timing(scale, { toValue: 1.06, duration: 2000, easing, useNativeDriver: true }),
           Animated.timing(opacity, { toValue: 0.85, duration: 2000, easing, useNativeDriver: true }),
         ]),
         Animated.parallel([
-          Animated.timing(scale,   { toValue: 1,    duration: 2000, easing, useNativeDriver: true }),
-          Animated.timing(opacity, { toValue: 1,    duration: 2000, easing, useNativeDriver: true }),
+          Animated.timing(scale, { toValue: 1, duration: 2000, easing, useNativeDriver: true }),
+          Animated.timing(opacity, { toValue: 1, duration: 2000, easing, useNativeDriver: true }),
         ]),
       ])
     );
@@ -1071,11 +1077,56 @@ export default function VendreScreen() {
   const { cart, submitting, error: saleError, addToCart, addToCartVariant, removeFromCart, setQty, toggleBulk, clearCart, submitSale, submitCarnetDebt, clearError } =
     useSalesStore();
 
-  // activation_nudge_1's deep link (`/(app)/(tabs)/vendre?mode=credit`,
-  // db/migration_v155.sql) opens straight into the Crédit segment instead of
-  // landing on the generic Vente tab.
-  const { mode: modeParam } = useLocalSearchParams<{ mode?: string }>();
-  const [mode, setMode] = useState<'vente' | 'credit'>(modeParam === 'credit' ? 'credit' : 'vente');
+  // ActivationForkOverlay's "Une dette" button links here with ?mode=credit
+  // so a brand-new merchant lands straight in the credit tab instead of the
+  // product grid — same direct-open pattern catalogue.tsx's ?openForm=1 uses.
+  // Vendre is a tab screen and stays mounted after the first visit, so a
+  // useState initializer only ever applies the very first time — every
+  // later "Une dette" tap re-delivers the same param to an already-mounted
+  // screen and got silently ignored, leaving mode stuck on whatever it was
+  // last (usually 'vente'). This effect re-applies it on every fresh
+  // arrival, not just mount, then clears the param the same way
+  // catalogue.tsx clears openForm.
+  const { mode: initialMode } = useLocalSearchParams<{ mode?: string }>();
+  const [mode, setMode] = useState<'vente' | 'credit'>(initialMode === 'credit' ? 'credit' : 'vente');
+  // Vendre is a tab root — normally there's nothing to "go back" to, you
+  // just tap a different tab. Arriving here via a push from the fork breaks
+  // that assumption (no swipe-back, no visible way out) without an explicit
+  // back affordance, so show one for the rest of this screen's lifetime
+  // once we know that's how we got here — not just while mode === 'credit',
+  // since switching back to Vente shouldn't strand them either.
+  const [cameFromFork, setCameFromFork] = useState(false);
+  useEffect(() => {
+    if (initialMode === 'credit') {
+      setMode('credit');
+      setCameFromFork(true);
+      router.setParams({ mode: undefined });
+    }
+  }, [initialMode]);
+
+  // The activation fork (app/(app)/_layout.tsx) only knows to stay away for
+  // a fixed ~1.2s after the "Une dette" tap that can land here — enough to
+  // bridge the navigation, not enough to actually fill in a name, phone,
+  // and amount. Suppress it for as long as credit mode is genuinely active
+  // instead (same fix as catalogue.tsx's add-product form and
+  // vente-rapide.tsx), and deliberately ONLY credit mode — switching to
+  // Vente without finishing the debt should still bring the wall back,
+  // since at that point nothing is actively in progress.
+  //
+  // useFocusEffect, not a plain useEffect — Vendre is a TAB, and tabs don't
+  // unmount when you switch away to a different one, they just go inactive.
+  // A plain useEffect's cleanup only re-runs when `mode` itself changes, so
+  // leaving via the tab bar (Catalogue, Accueil, ...) while still in credit
+  // mode never triggered it at all — suppressActivationFork stayed stuck
+  // true forever, on every other screen, until mode happened to change
+  // again. useFocusEffect's cleanup additionally fires on losing focus,
+  // which switching tabs genuinely is.
+  useFocusEffect(
+    useCallback(() => {
+      useAuthStore.setState({ suppressActivationFork: mode === 'credit' });
+      return () => { useAuthStore.setState({ suppressActivationFork: false }); };
+    }, [mode]),
+  );
   const [creditName, setCreditName] = useState('');
   const [creditPhone, setCreditPhone] = useState('');
   const [creditClientId, setCreditClientId] = useState<string | undefined>();
@@ -1265,10 +1316,10 @@ export default function VendreScreen() {
   }, [showConfirmSheet]);
 
   // Confirmation sheet: pre-computed breakdown for lastReceipt
-  const confirmNet       = lastReceipt ? lastReceipt.total - (lastReceipt.discountAmount ?? 0) : 0;
-  const confirmUpfront   = lastReceipt?.amountPaid ?? 0;
+  const confirmNet = lastReceipt ? lastReceipt.total - (lastReceipt.discountAmount ?? 0) : 0;
+  const confirmUpfront = lastReceipt?.amountPaid ?? 0;
   const confirmRemaining = Math.max(0, confirmNet - confirmUpfront);
-  const confirmIsCredit  = lastReceipt
+  const confirmIsCredit = lastReceipt
     ? lastReceipt.payment === null || confirmRemaining > 0.01
     : false;
 
@@ -1302,7 +1353,7 @@ export default function VendreScreen() {
       resolvedClientId = data?.id ?? undefined;
     }
 
-    const ok = await submitCarnetDebt(businessId, userId, trimmedName, parsed * 100);
+    const ok = await submitCarnetDebt(businessId, userId, trimmedName, parsed * 100, resolvedClientId ?? null);
     setCreditSaving(false);
     if (!ok) {
       setCreditError('Impossible d\'enregistrer. Vérifiez votre connexion et réessayez.');
@@ -1440,7 +1491,13 @@ export default function VendreScreen() {
     }
   };
 
-  if (loading && products.length === 0) {
+  // Gated on mode !== 'credit' — this skeleton is shaped like the product
+  // grid because that's the only thing that ever needed to wait on
+  // `loading` (the product store's fetch flag). Credit mode never reads
+  // products at all, so blocking it behind a product-shaped skeleton was
+  // showing unrelated content before the real destination, not a genuine
+  // loading state for what was actually about to render.
+  if (mode !== 'credit' && loading && products.length === 0) {
     return (
       <Screen tab>
         <SkeletonList count={9} />
@@ -1466,6 +1523,15 @@ export default function VendreScreen() {
       ) : null}
 
       {/* Header + mode toggle */}
+      {cameFromFork && (
+        // router.replace (not back()) deliberately — arriving here is a
+        // push into a tab route from a Modal, which may not always leave a
+        // real "back" entry in history to pop; replacing straight to
+        // Accueil is unambiguous regardless of how that navigation landed.
+        <Pressable onPress={() => router.replace('/(app)/(tabs)/')} hitSlop={12} style={{ paddingHorizontal: spacing[5], paddingTop: spacing[2] }}>
+          <Text variant="body" color="brand">← Retour</Text>
+        </Pressable>
+      )}
       <View style={styles.header}>
         <Text variant="h3">Vendre</Text>
         {mode === 'vente' && cart.length > 0 && (
@@ -1558,7 +1624,6 @@ export default function VendreScreen() {
                   returnKeyType="next"
                   onSubmitEditing={() => creditAmountRef.current?.focus()}
                   autoCapitalize="words"
-                  autoFocus={!creditName}
                 />
                 {creditQuickClients.length > 0 && (
                   <Pressable
@@ -1622,7 +1687,7 @@ export default function VendreScreen() {
           ) : null}
           {creditSessionCount > 0 && !creditError ? (
             <Pressable
-              onPress={() => router.push('/(app)/credits')}
+              onPress={() => router.push({ pathname: '/(app)/clients', params: { filter: 'doivent' } })}
               style={{ flexDirection: 'row', alignItems: 'center', justifyContent: 'center', gap: spacing[1], marginTop: spacing[3] }}
             >
               <Text variant="caption" style={{ color: palette.success }}>
@@ -1748,7 +1813,7 @@ export default function VendreScreen() {
                 {formatAmount(displayTotal, currency)}
               </Text>
             </View>
-            <Button label="Encaisser maintenant" onPress={openPay} size="lg" fullWidth />
+            <Button label="Encaisser" onPress={openPay} size="lg" fullWidth />
             <Pressable onPress={openCredit} style={styles.creditLink}>
               <Text variant="caption" style={{ color: palette.primary }}>ou enregistrer à crédit</Text>
             </Pressable>

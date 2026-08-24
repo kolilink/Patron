@@ -24,7 +24,7 @@ function buildEmail(run: ReconciliationRun, findings: ReconciliationFinding[], s
   const isClean = run.status === 'clean';
   const headerBg = isClean ? '#059669' : run.critical_count > 0 ? '#dc2626' : '#d97706';
   const headerText = isClean
-    ? '✅ Tout est propre — 78 vérifications OK'
+    ? '✅ Tout est propre — 82 vérifications OK'
     : run.critical_count > 0
       ? `🚨 ${run.critical_count} critique(s) · ${run.warning_count} alerte(s)`
       : `⚠️ ${run.warning_count} alerte(s) — aucun critique`;
