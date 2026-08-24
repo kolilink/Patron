@@ -1,5 +1,5 @@
 import React, { useCallback, useEffect, useMemo, useRef, useState } from 'react';
-import { router, useFocusEffect } from 'expo-router';
+import { router, useFocusEffect, useLocalSearchParams } from 'expo-router';
 import {
   Alert,
   Animated,
@@ -555,7 +555,7 @@ function PaymentModal({
           {step === 'pay' && !showClientSection && (
             <View style={styles.payContent}>
               <View style={{ gap: spacing[2] }}>
-                <Text variant="label" style={styles.sectionLabel}>Vendu pour combien ?</Text>
+                <Text variant="label" style={styles.sectionLabel}>Payé par le client</Text>
                 <TextInput
                   style={styles.amountBigInput}
                   value={amountInput}
@@ -921,11 +921,8 @@ function VariantPickerSheet({ visible, product, variants, cartQtyByVariant, curr
       </Pressable>
       <Animated.View style={[styles.variantSheet, { transform: [{ translateY }] }]}>
         <View style={styles.variantSheetHandle} />
-        <View style={{ flexDirection: 'row', alignItems: 'center', justifyContent: 'space-between', marginBottom: spacing[4] }}>
+        <View style={{ marginBottom: spacing[4] }}>
           <Text variant="h4">{product.name}</Text>
-          <Text variant="label" style={{ color: palette.primary }}>
-            {formatAmount(product.sale_price, currency)}
-          </Text>
         </View>
         <ScrollView showsVerticalScrollIndicator={false} keyboardShouldPersistTaps="handled">
           {variants.map(v => {
@@ -938,12 +935,21 @@ function VariantPickerSheet({ visible, product, variants, cartQtyByVariant, curr
             const isEditing = editingId === v.id;
             const atMax = qty >= remaining;
             return (
-              <View
+              <Pressable
                 key={v.id}
+                onPress={() => {
+                  if (!outOfStock && !atMax && !isEditing) {
+                    haptics.selection();
+                    changeQty(v.id, 1, remaining);
+                  }
+                }}
                 style={[styles.variantOption, outOfStock && { opacity: 0.4 }]}
               >
                 <View style={{ flex: 1 }}>
                   <Text variant="body" style={{ fontWeight: '600' }}>{v.name}</Text>
+                  <Text variant="label" style={{ color: palette.primary }}>
+                    {formatAmount(v.sale_price, currency)}
+                  </Text>
                   <Text variant="caption" color="secondary">
                     {outOfStock ? 'Épuisé' : `${remaining} en stock`}
                     {reserved > 0 ? ` · ${reserved} déjà dans le panier` : ''}
@@ -983,13 +989,13 @@ function VariantPickerSheet({ visible, product, variants, cartQtyByVariant, curr
                     <Text variant="label" style={{ color: (outOfStock || atMax) ? palette.textDisabled : palette.primary }}>+</Text>
                   </Pressable>
                 </View>
-              </View>
+              </Pressable>
             );
           })}
         </ScrollView>
         <View style={{ paddingTop: spacing[4] }}>
           <Button
-            label={totalAdded > 0 ? `Ajouter ${totalAdded} article${totalAdded > 1 ? 's' : ''}` : 'Ajouter'}
+            label="Confirmer"
             onPress={confirm}
             fullWidth
             size="lg"
@@ -1064,7 +1070,60 @@ export default function VendreScreen() {
   const { cart, submitting, error: saleError, addToCart, addToCartVariant, removeFromCart, setQty, toggleBulk, clearCart, submitSale, submitCarnetDebt, clearError } =
     useSalesStore();
 
-  const [mode, setMode] = useState<'vente' | 'credit'>('vente');
+  // ActivationForkOverlay's "Une dette" button links here with ?mode=credit
+  // so a brand-new merchant lands straight in the credit tab instead of the
+  // product grid — same direct-open pattern catalogue.tsx's ?openForm=1 uses.
+  // ActivationForkOverlay's "Une dette" button links here with ?mode=credit
+  // so a brand-new merchant lands straight in the credit tab instead of the
+  // product grid — same direct-open pattern catalogue.tsx's ?openForm=1 uses.
+  // Vendre is a tab screen and stays mounted after the first visit, so a
+  // useState initializer only ever applies the very first time — every
+  // later "Une dette" tap re-delivers the same param to an already-mounted
+  // screen and got silently ignored, leaving mode stuck on whatever it was
+  // last (usually 'vente'). This effect re-applies it on every fresh
+  // arrival, not just mount, then clears the param the same way
+  // catalogue.tsx clears openForm.
+  const { mode: initialMode } = useLocalSearchParams<{ mode?: string }>();
+  const [mode, setMode] = useState<'vente' | 'credit'>(initialMode === 'credit' ? 'credit' : 'vente');
+  // Vendre is a tab root — normally there's nothing to "go back" to, you
+  // just tap a different tab. Arriving here via a push from the fork breaks
+  // that assumption (no swipe-back, no visible way out) without an explicit
+  // back affordance, so show one for the rest of this screen's lifetime
+  // once we know that's how we got here — not just while mode === 'credit',
+  // since switching back to Vente shouldn't strand them either.
+  const [cameFromFork, setCameFromFork] = useState(false);
+  useEffect(() => {
+    if (initialMode === 'credit') {
+      setMode('credit');
+      setCameFromFork(true);
+      router.setParams({ mode: undefined });
+    }
+  }, [initialMode]);
+
+  // The activation fork (app/(app)/_layout.tsx) only knows to stay away for
+  // a fixed ~1.2s after the "Une dette" tap that can land here — enough to
+  // bridge the navigation, not enough to actually fill in a name, phone,
+  // and amount. Suppress it for as long as credit mode is genuinely active
+  // instead (same fix as catalogue.tsx's add-product form and
+  // vente-rapide.tsx), and deliberately ONLY credit mode — switching to
+  // Vente without finishing the debt should still bring the wall back,
+  // since at that point nothing is actively in progress.
+  //
+  // useFocusEffect, not a plain useEffect — Vendre is a TAB, and tabs don't
+  // unmount when you switch away to a different one, they just go inactive.
+  // A plain useEffect's cleanup only re-runs when `mode` itself changes, so
+  // leaving via the tab bar (Catalogue, Accueil, ...) while still in credit
+  // mode never triggered it at all — suppressActivationFork stayed stuck
+  // true forever, on every other screen, until mode happened to change
+  // again. useFocusEffect's cleanup additionally fires on losing focus,
+  // which switching tabs genuinely is.
+  useFocusEffect(
+    useCallback(() => {
+      useAuthStore.setState({ suppressActivationFork: mode === 'credit' });
+      return () => { useAuthStore.setState({ suppressActivationFork: false }); };
+    }, [mode]),
+  );
+
   const [creditName, setCreditName] = useState('');
   const [creditPhone, setCreditPhone] = useState('');
   const [creditClientId, setCreditClientId] = useState<string | undefined>();
@@ -1274,7 +1333,7 @@ export default function VendreScreen() {
       resolvedClientId = data?.id ?? undefined;
     }
 
-    const ok = await submitCarnetDebt(businessId, userId, trimmedName, parsed * 100);
+    const ok = await submitCarnetDebt(businessId, userId, trimmedName, parsed * 100, resolvedClientId ?? null);
     setCreditSaving(false);
     if (!ok) {
       setCreditError('Impossible d\'enregistrer. Vérifiez votre connexion et réessayez.');
@@ -1374,7 +1433,13 @@ export default function VendreScreen() {
     }
   };
 
-  if (loading && products.length === 0) {
+  // Gated on mode !== 'credit' — this skeleton is shaped like the product
+  // grid because that's the only thing that ever needed to wait on
+  // `loading` (the product store's fetch flag). Credit mode never reads
+  // products at all, so blocking it behind a product-shaped skeleton was
+  // showing unrelated content before the real destination, not a genuine
+  // loading state for what was actually about to render.
+  if (mode !== 'credit' && loading && products.length === 0) {
     return (
       <Screen tab>
         <SkeletonList count={9} />
@@ -1400,6 +1465,15 @@ export default function VendreScreen() {
       ) : null}
 
       {/* Header + mode toggle */}
+      {cameFromFork && (
+        // router.replace (not back()) deliberately — arriving here is a
+        // push into a tab route from a Modal, which may not always leave a
+        // real "back" entry in history to pop; replacing straight to
+        // Accueil is unambiguous regardless of how that navigation landed.
+        <Pressable onPress={() => router.replace('/(app)/(tabs)/')} hitSlop={12} style={{ paddingHorizontal: spacing[5], paddingTop: spacing[2] }}>
+          <Text variant="body" color="brand">← Retour</Text>
+        </Pressable>
+      )}
       <View style={styles.header}>
         <Text variant="h3">Vendre</Text>
         {mode === 'vente' && cart.length > 0 && (
@@ -1492,7 +1566,6 @@ export default function VendreScreen() {
                   returnKeyType="next"
                   onSubmitEditing={() => creditAmountRef.current?.focus()}
                   autoCapitalize="words"
-                  autoFocus={!creditName}
                 />
                 {creditQuickClients.length > 0 && (
                   <Pressable
@@ -1556,7 +1629,7 @@ export default function VendreScreen() {
           ) : null}
           {creditSessionCount > 0 && !creditError ? (
             <Pressable
-              onPress={() => router.push('/(app)/credits')}
+              onPress={() => router.push({ pathname: '/(app)/clients', params: { filter: 'doivent' } })}
               style={{ flexDirection: 'row', alignItems: 'center', justifyContent: 'center', gap: spacing[1], marginTop: spacing[3] }}
             >
               <Text variant="caption" style={{ color: palette.success }}>
@@ -1682,7 +1755,7 @@ export default function VendreScreen() {
                 {formatAmount(displayTotal, currency)}
               </Text>
             </View>
-            <Button label="Encaisser maintenant" onPress={openPay} size="lg" fullWidth />
+            <Button label="Encaisser" onPress={openPay} size="lg" fullWidth />
             <Pressable onPress={openCredit} style={styles.creditLink}>
               <Text variant="caption" style={{ color: palette.primary }}>ou enregistrer à crédit</Text>
             </Pressable>

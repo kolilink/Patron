@@ -127,6 +127,7 @@ Règles :
 - Réponds en français, ton direct, concret, jamais condescendant. Pas de jargon financier occidental.
 - Base CHAQUE conseil sur les chiffres fournis dans "Données du commerce" ci-dessous. Cite les chiffres réels (montants, noms) plutôt que des généralités du type "vendez plus" ou "réduisez vos coûts".
 - "meilleurs_vendeurs" liste des MEMBRES DE L'ÉQUIPE (des personnes — vendeurs/gérants) classés par chiffre d'affaires généré : ce ne sont jamais des produits, même si le nom ressemble à un nom de produit. "produits_les_plus_vendus" liste de vrais articles du catalogue classés par revenu. Ne confonds jamais les deux catégories.
+- Le résultat de l'outil chercher_produit contient SOIT un "prix_vente"/"stock_actuel" uniques (produit simple), SOIT une liste "variantes" (produit à tailles/couleurs, chacune avec son propre prix et son propre stock) — jamais les deux. Quand "variantes" est présent, ne cite JAMAIS un seul prix ou un seul stock comme si c'était celui du produit entier : donne la fourchette de prix (ex: "entre 10 000 et 15 000 GNF selon la couleur"), ou le prix/stock exact d'une variante précise si le commerçant en a nommé une.
 - Les listes "produits_stock_bas" et "produits_en_rupture" sont déjà calculées — ne recalcule jamais toi-même des jours de stock restant, ne fais aucune arithmétique sur les données fournies : utilise directement les valeurs telles quelles.
 - "evolution_vs_periode_precedente" compare la période actuelle aux 30 jours précédents (déjà calculé — n'invente jamais toi-même un pourcentage). Utilise-la pour dire si les choses vont mieux ou moins bien, pas juste donner un chiffre isolé : un chiffre d'affaires stable en apparence peut être une baisse par rapport au mois dernier, et l'inverse. "evolution_pct: null" veut dire qu'il n'y avait rien à comparer sur la période précédente (pas un chiffre à zéro) — dis-le en mots ("c'est nouveau par rapport au mois dernier"), n'affiche jamais "null" ou "None".
 - "depuis_le_debut" donne les totaux depuis le tout début de l'activité du commerce (pas seulement les 30 derniers jours) — utilise-le quand la question porte sur la performance globale ou l'historique complet ("comment va mon commerce depuis le début ?", "combien j'ai gagné au total ?"), pas seulement sur le mois en cours.
@@ -384,7 +385,7 @@ const TOOLS = [
     function: {
       name: 'chercher_produit',
       description:
-        "Cherche un produit du catalogue par son nom et retourne son stock actuel, son prix, et (pour un rôle qui y a accès) sa rentabilité réelle depuis le début. À utiliser dès que le commerçant nomme un produit précis.",
+        "Cherche un produit du catalogue par son nom et retourne son stock actuel et son prix — soit directement, soit (si le produit a des tailles/couleurs) sous forme d'une liste de variantes ayant chacune son propre prix et stock — et (pour un rôle qui y a accès) sa rentabilité réelle depuis le début. À utiliser dès que le commerçant nomme un produit précis.",
       parameters: {
         type: 'object',
         properties: { nom: { type: 'string', description: 'Nom (ou partie du nom) du produit' } },
@@ -461,7 +462,7 @@ async function executeTool(name: string, args: Record<string, unknown>, ctx: Too
         if (!nom) return { erreur: 'Nom de produit manquant' };
         const { data: products } = await userClient
           .from('products')
-          .select('id, name, category, sale_price, stock_qty')
+          .select('id, name, category, sale_price, stock_qty, has_variants')
           .eq('business_id', businessId)
           .eq('archived', false)
           .ilike('name', `%${nom}%`)
@@ -470,12 +471,31 @@ async function executeTool(name: string, args: Record<string, unknown>, ctx: Too
 
         const canSeeProfit = role === 'administrateur' || role === 'manager' || role === 'investisseur';
         const produits = await Promise.all(products.map(async (p) => {
-          const base: Record<string, unknown> = {
-            nom: p.name,
-            categorie: p.category,
-            stock_actuel: p.stock_qty,
-            prix_vente: Math.round(p.sale_price / 100),
-          };
+          const base: Record<string, unknown> = { nom: p.name, categorie: p.category };
+          // A variant product's own sale_price/stock_qty are not real,
+          // sellable numbers: stock_qty is architecturally always 0 for a
+          // variant parent (submit_sale/cancel_sale only ever touch
+          // product_variants.stock_qty — see migration_v125), and sale_price
+          // is just the template value a new variant gets pre-filled with,
+          // not something anyone can actually buy at. Real numbers live per
+          // variant, so this returns a "variantes" list instead of a single
+          // price/stock — the prompt tells Alpha never to state one flat
+          // price for a product shaped this way.
+          if (p.has_variants) {
+            const { data: variants } = await userClient
+              .from('product_variants')
+              .select('name, sale_price, stock_qty')
+              .eq('product_id', p.id)
+              .eq('archived', false);
+            base.variantes = (variants ?? []).map(v => ({
+              nom: v.name,
+              prix_vente: Math.round(v.sale_price / 100),
+              stock_actuel: v.stock_qty,
+            }));
+          } else {
+            base.prix_vente = Math.round(p.sale_price / 100);
+            base.stock_actuel = p.stock_qty;
+          }
           if (!canSeeProfit) return base;
           const { data: stats } = await userClient.rpc('get_product_stats', {
             p_product_id: p.id, p_business_id: businessId, p_since: null,

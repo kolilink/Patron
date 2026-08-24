@@ -1,9 +1,10 @@
-import { useEffect, useRef } from 'react';
+import { useEffect, useRef, useState } from 'react';
 import { Alert, AppState, Pressable, View } from 'react-native';
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
 import { Redirect, Stack, router } from 'expo-router';
 import { BusinessDrawer } from '@/src/components/BusinessDrawer';
 import { TrialWelcomeOverlay } from '@/src/components/TrialWelcomeOverlay';
+import { ActivationForkOverlay } from '@/src/components/ActivationForkOverlay';
 import { AppToastContainer } from '@/src/components/ui/AppToast';
 import { DemoBanner } from '@/src/components/ui/DemoBanner';
 import { NotificationSetup } from '@/src/components/NotificationSetup';
@@ -19,6 +20,7 @@ import { toast } from '@/stores/toast';
 import { drainQueue, debounceAppStateHandler } from '@/lib/sync';
 import { getDeadOps, archiveDeadOps } from '@/lib/db';
 import { supabase } from '@/lib/supabase';
+import { PAYWALL_ENABLED } from '@/lib/purchases';
 import type { Role } from '@/src/types';
 
 // Re-lock (biometric or full OTP re-login, see verrouille.tsx) after the app
@@ -96,6 +98,64 @@ export default function AppLayout() {
   const handleMembershipRemovedWithFallback = useAuthStore(s => s.handleMembershipRemovedWithFallback);
   const handleRoleChanged = useAuthStore(s => s.handleRoleChanged);
   const clearDismissedFromBusiness = useAuthStore(s => s.clearDismissedFromBusiness);
+
+  // Activation fork ("On enregistre quoi aujourd'hui ?") — evaluated here,
+  // not on Accueil, specifically so it can show on top of ANY screen, not
+  // just Home. It used to live entirely inside (tabs)/index.tsx; the gap
+  // that exposed was that backing out of a sub-flow onto Catalogue's or
+  // Vendre's own screen (without navigating back to Home) left nothing
+  // enforcing anything until the user specifically returned there. Derived
+  // fresh every render from live product/sale counts + business age, same
+  // as before — no persisted flag, nothing that can go stale.
+  const suppressActivationFork = useAuthStore(s => s.suppressActivationFork);
+  const forkProducts = useProductStore(s => s.products);
+  const forkSales = useVentesStore(s => s.sales);
+  const forkRole = session?.activeMembership?.role;
+  const forkIsOwner = forkRole !== 'investisseur' && forkRole !== 'vendeur';
+  const forkBusinessId = session?.activeBusiness?.id ?? '';
+  const forkStep2Done = forkProducts.length > 0;
+  const forkStep3Done = forkSales.some(s => s.business_id === forkBusinessId && s.status !== 'annule');
+  const forkAgeMs = session?.activeBusiness?.created_at
+    ? Date.now() - new Date(session.activeBusiness.created_at).getTime()
+    : Infinity;
+  const showFork = forkIsOwner && !forkStep2Done && !forkStep3Done && forkAgeMs < 24 * 60 * 60 * 1000;
+
+  // forkAgeMs is a snapshot taken at render time, not a live clock — if
+  // nothing else re-renders this component, it never re-evaluates on its
+  // own. In practice something almost always does (foreground returns
+  // already trigger refreshActiveBusiness() below, which changes session
+  // and re-renders this), so this is a backstop, not the primary
+  // mechanism: while the fork is actually showing, force a re-render once a
+  // minute so age crossing 24h is caught even in the pathological case of
+  // the app sitting open, foregrounded, untouched, for a full day straight.
+  // Self-limiting — stops scheduling itself the moment showFork goes false,
+  // whether that's from crossing 24h or from the business no longer being
+  // empty.
+  const [, forkAgeTick] = useState(0);
+  useEffect(() => {
+    if (!showFork) return;
+    const interval = setInterval(() => forkAgeTick(t => t + 1), 60_000);
+    return () => clearInterval(interval);
+  }, [showFork]);
+
+  // Hides the fork for a short window right after tapping one of its three
+  // buttons — otherwise it keeps floating on top of wherever that button
+  // just navigated to, since showFork itself only changes once the
+  // underlying data does. Resets on a timeout (there's no single "focus"
+  // event to hook at this global a level) and also immediately on business
+  // switch. catalogue.tsx's add-product form additionally suppresses via
+  // suppressActivationFork for as long as it's genuinely open, since that
+  // form is its own real Modal and a fixed timeout can't safely predict how
+  // long someone takes to fill it in.
+  const [forkNavigating, setForkNavigating] = useState(false);
+  const forkNavTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
+  useEffect(() => { setForkNavigating(false); }, [forkBusinessId]);
+  useEffect(() => () => { if (forkNavTimerRef.current) clearTimeout(forkNavTimerRef.current); }, []);
+  const beginForkNavigation = () => {
+    setForkNavigating(true);
+    if (forkNavTimerRef.current) clearTimeout(forkNavTimerRef.current);
+    forkNavTimerRef.current = setTimeout(() => setForkNavigating(false), 1200);
+  };
 
   useEffect(() => {
     if (removedBusinessName) {
@@ -328,13 +388,46 @@ export default function AppLayout() {
       <NotificationSetup />
       <DemoBanner />
       <SyncBanner />
-      <Stack screenOptions={{ headerShown: false, animation: 'slide_from_right' }} />
+      <Stack screenOptions={{ headerShown: false, animation: 'slide_from_right' }}>
+        {/* Only reachable from ActivationForkOverlay's "Une vente" button —
+            unlike catalogue/vendre (tab routes, switched in place with no
+            stack transition), this is a genuine stack push, so the default
+            slide-in was visibly two stages: old screen slides away, new one
+            slides in, only then its content is settled. animation: 'none'
+            here removes that — the fork's own Modal already provides the
+            "you made a choice" motion, this arrival doesn't need a second one. */}
+        <Stack.Screen name="onboarding/vente-rapide" options={{ animation: 'none' }} />
+      </Stack>
+
       <BusinessDrawer />
-      {showTrialWelcome && activeBusiness && (
+      {PAYWALL_ENABLED && showTrialWelcome && activeBusiness && (
         <TrialWelcomeOverlay
           businessName={activeBusiness.name}
           trialEndsAt={activeBusiness.trial_ends_at}
           onStart={clearTrialWelcome}
+        />
+      )}
+      {/* !(PAYWALL_ENABLED && showTrialWelcome) — dead weight today since
+          PAYWALL_ENABLED is false (TrialWelcomeOverlay never renders), but
+          both overlays go true at the same instant right after business
+          creation, and letting two Modals race for the screen is the exact
+          bug already fixed twice elsewhere this session. Cheap insurance
+          against re-enabling the paywall silently reintroducing it. */}
+      {showFork && !forkNavigating && !suppressActivationFork && !(PAYWALL_ENABLED && showTrialWelcome) && activeBusiness && (
+        <ActivationForkOverlay
+          userName={session.user.name}
+          onSelectProduct={() => {
+            beginForkNavigation();
+            router.push({ pathname: '/(app)/(tabs)/catalogue', params: { openForm: '1' } });
+          }}
+          onSelectSale={() => {
+            beginForkNavigation();
+            router.push('/(app)/onboarding/vente-rapide');
+          }}
+          onSelectDebt={() => {
+            beginForkNavigation();
+            router.push({ pathname: '/(app)/(tabs)/vendre', params: { mode: 'credit' } });
+          }}
         />
       )}
       <AppToastContainer />

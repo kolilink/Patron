@@ -12,7 +12,19 @@ export function openDb(): Promise<SQLite.SQLiteDatabase> {
       await db.execAsync('PRAGMA journal_mode = WAL');
       await migrate(db);
       return db;
-    })();
+    })().catch(err => {
+      // Without this, a single transient native failure here (e.g. Android's
+      // "Cannot use shared object that was already released" — a real,
+      // observed Sentry crash) permanently wedges _dbPromise as a rejected
+      // promise: `if (!_dbPromise)` is false for a rejected promise too, so
+      // every future openDb() call for the rest of the app session would
+      // return that same dead promise instead of ever retrying — silently
+      // breaking the entire offline SQLite layer (sync queue, every read
+      // cache) until the app is killed and relaunched. Clearing it here lets
+      // the next call open a fresh connection instead.
+      _dbPromise = null;
+      throw err;
+    });
   }
   return _dbPromise;
 }

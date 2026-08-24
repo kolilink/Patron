@@ -19,6 +19,7 @@ import { formatAmount, formatAmountInput, parseAmountInput } from '@/src/utils/f
 import { useAuthStore } from '@/stores/auth';
 import { useSalesStore } from '@/stores/sales';
 import { generateId } from '@/lib/id';
+import { supabase } from '@/lib/supabase';
 
 interface CarnetEntry {
   id: string;
@@ -68,7 +69,15 @@ export default function CarnetScreen() {
     setError(null);
     let failed = 0;
     for (const entry of entries) {
-      const ok = await submitCarnetDebt(businessId, userId, entry.name, entry.amountCents);
+      // Same "resolve or create a real client, then attach the debt to it"
+      // step vendre.tsx's own carnet tab does — without this, a bulk-imported
+      // debt book has no client_id at all, and the balance shown for these
+      // same customers later reads as understated or zero (see migration_v160.sql).
+      const { data } = await supabase.from('clients').upsert(
+        { business_id: businessId, name: entry.name },
+        { onConflict: 'business_id,name' },
+      ).select('id').single();
+      const ok = await submitCarnetDebt(businessId, userId, entry.name, entry.amountCents, data?.id ?? null);
       if (!ok) failed++;
     }
     setSaving(false);

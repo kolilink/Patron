@@ -44,7 +44,7 @@ interface SalesStore {
   setQty: (productId: string, qty: number, isBulk?: boolean, variantId?: string) => void;
   toggleBulk: (productId: string, isBulk?: boolean) => void;
   clearCart: () => void;
-  submitCarnetDebt: (businessId: string, userId: string, customerName: string, amountCents: number) => Promise<boolean>;
+  submitCarnetDebt: (businessId: string, userId: string, customerName: string, amountCents: number, clientId: string | null) => Promise<boolean>;
   submitSale: (
     businessId: string,
     userId: string,
@@ -199,23 +199,36 @@ export const useSalesStore = create<SalesStore>((set, get) => ({
 
   clearCart: () => set({ cart: [] }),
 
-  submitCarnetDebt: async (businessId, userId, customerName, amountCents) => {
-    const { error } = await withTimeout(
-      supabase.rpc('submit_carnet_debt', {
-        p_business_id:   businessId,
-        p_seller_id:     userId,
-        p_customer_name: customerName.trim(),
-        p_amount:        amountCents,
-      }),
-    );
-    if (error) {
-      console.error('[submitCarnetDebt]', error.code, error.message, error.details);
-      useToastStore.getState().show(error.message ?? translateError(error, 'Erreur inconnue'), 'warning');
+  submitCarnetDebt: async (businessId, userId, customerName, amountCents, clientId) => {
+    // Unlike submit_sale, this has no try/catch around it — a genuine timeout
+    // REJECTS withTimeout() (it doesn't resolve to {error}), and neither
+    // caller (vendre.tsx, onboarding/carnet.tsx) wraps this call in try/catch
+    // either, so an uncaught rejection here became an unhandled promise
+    // rejection (Sentry's "Network timeout after 12000ms" reports).
+    try {
+      const { error } = await withTimeout(
+        supabase.rpc('submit_carnet_debt', {
+          p_business_id:   businessId,
+          p_seller_id:     userId,
+          p_customer_name: customerName.trim(),
+          p_amount:        amountCents,
+          p_client_id:     clientId,
+        }),
+      );
+      if (error) {
+        console.error('[submitCarnetDebt]', error.code, error.message, error.details);
+        useToastStore.getState().show(error.message ?? translateError(error, 'Erreur inconnue'), 'warning');
+        haptics.error();
+        return false;
+      }
+      haptics.heavy();
+      return true;
+    } catch (err) {
+      console.error('[submitCarnetDebt]', err);
+      useToastStore.getState().show('Vérifiez votre connexion et réessayez.', 'warning');
       haptics.error();
       return false;
     }
-    haptics.heavy();
-    return true;
   },
 
   submitSale: async (businessId, userId, payment, customerName, saleDate, discountAmount, clientId, overrideTotalAmount, dueDate) => {

@@ -18,6 +18,7 @@ const ROUTE_MAP: Record<string, string> = {
   expense_approved:  '/(app)/depenses',
   expense_rejected:  '/(app)/depenses',
   low_stock:         '/(app)/catalogue',
+  price_changed:     '/(app)/catalogue',
   member_joined:     '/(app)/equipe',
   role_changed:      '/(app)/equipe',
   member_removed:    '/(app)/equipe',
@@ -29,6 +30,20 @@ const ROUTE_MAP: Record<string, string> = {
   support_reply:         '/(app)/support',
   alpha_quota_reset:     '/(app)/alpha',
   daily_digest:          '/(app)/rapports',
+  // nudge_1 skips the wall entirely — the copy promises "une dette, 30
+  // secondes," so tapping it lands exactly where the fork's own "Une dette"
+  // button lands (vendre.tsx's mode=credit quick-debt form), not back on a
+  // generic choice screen. nudge_2 names all three options, so it routes to
+  // the wall itself, which still offers all three.
+  activation_nudge_1:    '/(app)/(tabs)/vendre?mode=credit',
+  activation_nudge_2:    '/(app)/(tabs)/',
+  // All three variants nudge toward selling (directly, or as the natural
+  // next step after a product/debt) — plain Vendre, no mode param, which
+  // defaults to 'vente'.
+  second_action_reminder: '/(app)/(tabs)/vendre',
+  // Same routing as daily_digest — a revenue figure, so Rapports is where
+  // the fuller picture behind the number lives.
+  revenue_milestone: '/(app)/rapports',
 };
 
 // ─── Three-line format ───────────────────────────────────────────────────────
@@ -45,6 +60,7 @@ const SUBTITLE_MAP: Record<string, string | null> = {
   expense_approved:  'Dépense validée',
   expense_rejected:  'Dépense refusée',
   low_stock:         'Stock critique',
+  price_changed:     'Prix modifié',
   member_joined:     'Équipe',
   role_changed:      'Votre compte',
   member_removed:    'Votre compte',
@@ -56,6 +72,10 @@ const SUBTITLE_MAP: Record<string, string | null> = {
   support_reply:         null, // body is a self-explanatory full sentence — no subtitle needed
   alpha_quota_reset:     null, // body is a self-explanatory full sentence — no subtitle needed
   daily_digest:          null, // body is a self-explanatory full sentence — no subtitle needed
+  activation_nudge_1:    null, // body is a self-explanatory full sentence — no subtitle needed
+  activation_nudge_2:    null, // body is a self-explanatory full sentence — no subtitle needed
+  second_action_reminder: null, // body is a self-explanatory full sentence — no subtitle needed
+  revenue_milestone: null, // body is a self-explanatory full sentence — no subtitle needed
 };
 
 function buildBody(eventType: string, p: Record<string, string | number>): string {
@@ -105,6 +125,13 @@ function buildBody(eventType: string, p: Record<string, string | number>): strin
     // Subtitle carries "Stock critique" — body: flat, no pronoun, fast to scan
     case 'low_stock':
       return `Il reste ${p.qty} ${p.product} en stock`;
+    // Subtitle carries "Prix modifié" — full sentence, "de X à Y" (not a bare
+    // arrow) states both figures explicitly so a price quietly lowered is
+    // visible at a glance, not just "something changed".
+    case 'price_changed': {
+      const target = p.variant ? `${p.product} (${p.variant})` : String(p.product);
+      return `${p.editor} a changé le prix de ${target} de ${p.old_price} à ${p.new_price}`;
+    }
     // Subtitle carries "Équipe" — body: name and role
     case 'member_joined':
       return `${p.name} · ${p.role}`;
@@ -143,6 +170,62 @@ function buildBody(eventType: string, p: Record<string, string | number>): strin
       return p.tier === 'bonne'
         ? `La journée est bonne, vous avez fait : ${p.amount}.`
         : 'La journée était calme. On se retrouve demain.';
+    // First activation nudge (~2h after business creation, still nothing
+    // recorded) — targets the debt/carnet action deliberately, not the
+    // product or sale action: most shop owners already track customer debts
+    // on a paper notebook, so "digitize what you already know" is zero new
+    // data entry and the lowest-friction of the three fork actions. Opens
+    // with a question, not a command — "un client vous doit de l'argent ?"
+    // is a near-guaranteed internal "oui" for any shop owner who's been open
+    // more than a day, so the self-recognition happens before the ask
+    // instead of after it. See migration_v161.sql.
+    case 'activation_nudge_1':
+      return "Ah, un client vous doit de l'argent ? Notez-le, ça prend environ 30 secondes";
+    // Second activation nudge (~20h after creation, still nothing recorded)
+    // — this person already didn't act on nudge_1, so it can't just repeat
+    // that pitch. Opens by naming the likely real reason (busy, not
+    // uninterested) instead of nagging, then an honest, ungimmicked claim:
+    // all three fork actions genuinely take "quelques instants" (the
+    // fastest, "une dette," is a 2-field form — see migration_v161.sql's
+    // review notes). Closes on the guide itself ending, not the business
+    // "closing" — the business's ability to add a product/sale/debt never
+    // actually goes away, only ActivationForkOverlay does, at 24h.
+    case 'activation_nudge_2':
+      return "On sait que vous êtes occupé. Saviez-vous qu'ajouter un produit, une vente, ou une dette ne prend que quelques instants ? Et on est encore là pour vous guider";
+    // Second-action reminder ("Segment B" of the post-24h retention map) —
+    // fires once, hours after their one-and-only action so far (see
+    // migration_v163.sql). p.action_type is resolved server-side from
+    // real sale_orders/products rows, never guessed client-side. Product
+    // and debt both redirect toward selling (the one core action they
+    // haven't tried); sale asks for a repeat, not a redirect, since
+    // habit forms from repetition of the same action, not variety.
+    case 'second_action_reminder': {
+      switch (p.action_type) {
+        case 'debt':
+          return 'Vous avez enregistré votre première dette. Vous pouvez aussi noter vos ventes';
+        case 'product':
+          return 'Vous avez ajouté votre premier produit. Vous pouvez aussi noter vos ventes';
+        case 'sale':
+        default:
+          return 'Vous avez enregistré votre première vente. Prêt pour la suivante ?';
+      }
+    }
+    // Revenue milestone — achievement-based, not calendar-based (see
+    // migration_v165.sql). The one deliberate exception to this codebase's
+    // no-emoji push convention: every other event here is a task-ask, where
+    // restraint matters (see the Day-1 nudges' "calm, not needy" register).
+    // A milestone is the one moment that's pure celebration, nothing asked
+    // for — a different register earns different treatment, the same way
+    // the founder dashboard's health-red color is a scoped exception to the
+    // no-red UI rule elsewhere. "Franchi" (crossed) over "dépassé"
+    // (exceeded) — reads as crossing a real threshold, not just posting a
+    // bigger number. Closes by addressing the merchant directly as
+    // "patron" (vocative, not a description) — the same brand-name pun as
+    // an earlier draft ("vous êtes un patron"), delivered more personally:
+    // someone telling them "be proud, boss, you earned it" rather than
+    // stating a fact about them.
+    case 'revenue_milestone':
+      return `🎉 Félicitations. Vous avez franchi ${p.amount} de ventes — soyez fier de vous, patron, vous le méritez`;
     default:
       return String(p.body ?? '');
   }
@@ -206,7 +289,7 @@ const FOUNDER_EVENTS = new Set(['support_reply']);
 // Events dispatched by a background job, not a logged-in user — there is no
 // session to hold a Bearer JWT, so these authenticate via a shared secret
 // instead (see send-alpha-quota-reminders and send-daily-digest).
-const CRON_EVENTS = new Set(['alpha_quota_reset', 'daily_digest']);
+const CRON_EVENTS = new Set(['alpha_quota_reset', 'daily_digest', 'activation_nudge_1', 'activation_nudge_2', 'second_action_reminder', 'revenue_milestone']);
 
 async function callerIsFounder(supabase: ReturnType<typeof createClient>, userId: string): Promise<boolean> {
   const { data: profile } = await supabase.from('profiles').select('phone').eq('id', userId).maybeSingle();

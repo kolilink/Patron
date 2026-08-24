@@ -24,7 +24,6 @@ import { Card } from '@/src/components/ui/Card';
 import { Input } from '@/src/components/ui/Input';
 import { Text } from '@/src/components/ui/Text';
 import { PhoneInput } from '@/src/components/ui/PhoneInput';
-import { EmptyStateFabArrow } from '@/src/components/ui/EmptyStateFabArrow';
 import { Ionicons } from '@expo/vector-icons';
 import { useTheme, radius, spacing, shadow, fontFamily as FF, PRODUCT_BADGE_PALETTE } from '@/src/theme';
 import type { Palette } from '@/src/theme';
@@ -214,38 +213,94 @@ function generateLocalKey() {
 // "Suivant" chain for those fields needs a shared accessory bar above the keyboard.
 const PRICE_ACCESSORY_ID = 'catalogue-product-form-price-accessory';
 
-// Extended local type — _overridePrice tracks whether this variant has custom prices
-type VariantDraftItem = DraftVariant & { _key: string; _overridePrice: boolean };
+// _touched: has the merchant directly typed into THIS row's price field at
+// least once (even if they cleared it back to empty)? Distinct from
+// sale_price===0 alone — an untouched row at 0 is still silently tracking
+// the top price (see VariantRow), while a touched row at 0 was deliberately
+// cleared and must never be auto-filled again or silently resolved at save.
+type VariantDraftItem = DraftVariant & { _key: string; _touched: boolean };
 
 interface VariantRowProps {
   variant: VariantDraftItem;
   currency: string;
+  // The top "Prix de vente unitaire" field's current value (display units).
+  // A variant row still at sale_price=0 tracks this live — see VariantRow.
+  fallbackPrice: number;
   onChange: (patch: Partial<VariantDraftItem>) => void;
   onRemove: () => void;
 }
 
-function VariantRow({ variant, onChange, onRemove }: Omit<VariantRowProps, 'currency'>) {
+// Column widths shared with the header row (variantListHeader below) so the
+// two stay visually aligned — name/price flex, qty and the trailing remove
+// button are fixed. Price gets the larger flex share and a minWidth floor:
+// it's the one field that must never visually truncate (a merchant editing
+// a single variant's price needs to see every digit, not just base products).
+const VARIANT_QTY_WIDTH = 60;
+const VARIANT_REMOVE_WIDTH = 28;
+const VARIANT_NAME_FLEX = 1.3;
+const VARIANT_PRICE_FLEX = 1.2;
+const VARIANT_PRICE_MIN_WIDTH = 118;
+
+function VariantRow({ variant, currency, fallbackPrice, onChange, onRemove }: VariantRowProps) {
   const { palette } = useTheme();
   const styles = useMemo(() => makeStyles(palette), [palette]);
+  // Local formatted text buffer, same pattern as the top-level "Prix de vente"
+  // field — formatAmountInput must run on the raw keystroke string, not on a
+  // round-trip through the stored number, or an in-progress "12," GNF grouping
+  // separator gets clobbered mid-type.
+  const stillTracking = !variant._touched && variant.sale_price === 0;
+  const effectiveInitial = stillTracking ? fallbackPrice : variant.sale_price;
+  const [priceText, setPriceText] = useState(
+    effectiveInitial > 0 ? formatAmountInput(String(Math.round(effectiveInitial)), currency) : ''
+  );
+  // The "Tailles et couleurs" toggle sits above the price field in this form,
+  // so the first variant row is always created before a price exists to
+  // pre-fill from — it's born at sale_price=0. A row that's never been
+  // directly typed into keeps tracking the top field live, right up until
+  // the merchant types their own value — at that point onChangeText below
+  // marks it _touched and this effect stops firing for good, even if they
+  // clear it back to empty afterward. A deliberate clear must never snap
+  // back to the auto price — that's the merchant's own choice to leave it
+  // blank (handleSave then blocks the save with a clear error instead of
+  // silently substituting the top price).
+  useEffect(() => {
+    if (!variant._touched && variant.sale_price === 0) {
+      setPriceText(fallbackPrice > 0 ? formatAmountInput(String(Math.round(fallbackPrice)), currency) : '');
+    }
+  }, [fallbackPrice, variant.sale_price, variant._touched, currency]);
   return (
     <View style={styles.variantRowHeader}>
       <TextInput
-        style={[styles.fieldInput, { flex: 1, fontSize: 17 }]}
+        style={[styles.fieldInput, { flex: VARIANT_NAME_FLEX, fontSize: 17 }]}
         value={variant.name}
         onChangeText={v => onChange({ name: v })}
         placeholder="S, M, L, Rouge, 1L…"
         placeholderTextColor={palette.textDisabled}
       />
       <TextInput
-        style={[styles.fieldInput, { width: 60, textAlign: 'right', fontSize: 17 }]}
+        style={[styles.fieldInput, { width: VARIANT_QTY_WIDTH, textAlign: 'right', fontSize: 17 }]}
         value={variant.stock_qty > 0 ? String(variant.stock_qty) : ''}
         onChangeText={v => onChange({ stock_qty: parseInt(v) || 0 })}
         keyboardType="number-pad"
         placeholder="0"
         placeholderTextColor={palette.textDisabled}
       />
-      <Text style={[styles.unitTag, { marginLeft: 4 }]}>pcs</Text>
-      <Pressable onPress={onRemove} hitSlop={10} style={{ paddingHorizontal: 4 }}>
+      <TextInput
+        style={[
+          styles.fieldInput,
+          { flex: VARIANT_PRICE_FLEX, minWidth: VARIANT_PRICE_MIN_WIDTH, textAlign: 'right', fontSize: 17 },
+        ]}
+        value={priceText}
+        onChangeText={v => {
+          const formatted = formatAmountInput(v, currency);
+          setPriceText(formatted);
+          onChange({ sale_price: parseAmountInput(formatted, currency), _touched: true });
+        }}
+        keyboardType="decimal-pad"
+        placeholder="0"
+        placeholderTextColor={palette.textDisabled}
+      />
+      <Pressable onPress={onRemove} hitSlop={10} style={{ width: VARIANT_REMOVE_WIDTH, alignItems: 'flex-end' }}>
         <Ionicons name="close-circle" size={20} color={palette.textDisabled} />
       </Pressable>
     </View>
@@ -255,9 +310,13 @@ function VariantRow({ variant, onChange, onRemove }: Omit<VariantRowProps, 'curr
 function makeVariantItem(form: FormState, currency: string, overrides?: Partial<VariantDraftItem>): VariantDraftItem {
   return {
     _key: generateLocalKey(),
-    _overridePrice: false,
+    _touched: false,
     name: '',
-    sale_price: parseAmountInput(form.sale_price, currency),
+    // Always starts at 0, never a one-time snapshot of the top price — every
+    // new row (the first auto-created one or a later "Ajouter une variante")
+    // tracks the top field live via VariantRow's fallbackPrice until the
+    // merchant actually types their own value into it. See VariantRow.
+    sale_price: 0,
     cost_price: totalCost(form, currency),
     stock_qty: 0,
     reorder_level: 0,
@@ -293,7 +352,7 @@ function ProductFormModal({ visible, editing, onClose, onSave, saving, currency,
       if (isVariant && initialVariants && initialVariants.length > 0) {
         setVariantDraft(initialVariants.map(v => ({
           _key: v.id,
-          _overridePrice: false,
+          _touched: true, // already has its own saved state — not a fresh auto-tracking row
           name: v.name,
           sale_price: v.sale_price,
           cost_price: v.cost_price,
@@ -337,14 +396,27 @@ function ProductFormModal({ visible, editing, onClose, onSave, saving, currency,
       setFormError('Chaque version doit avoir un nom');
       return;
     }
+    // An untouched row still at 0 has never been directly typed into — it's
+    // been silently tracking the top price on screen (see VariantRow's
+    // fallbackPrice), so resolve it to that same current value here rather
+    // than writing a literal 0. A row the merchant DID touch — even if they
+    // left it empty on purpose — is never auto-resolved: it passes through
+    // as-is, so the check below can correctly catch it as missing instead of
+    // silently substituting a price the merchant deliberately cleared.
+    const resolvedVariants = variantDraft.map(v =>
+      (!v._touched && v.sale_price === 0)
+        ? { ...v, sale_price: parseAmountInput(form.sale_price, currency) }
+        : v,
+    );
+    if (hasVariants && resolvedVariants.some(v => v.sale_price <= 0)) {
+      setFormError('Entrer tous les prix de vente');
+      return;
+    }
     setFormError(null);
-    // Each variant keeps its own loaded price — a new variant already defaults
-    // to the parent form's price at creation time (see makeVariantItem), and an
-    // existing variant's distinct price must not be clobbered by an unrelated edit.
     await onSave(
       formToData(form, currency),
       hasVariants,
-      variantDraft.map(({ _key: _k, _overridePrice: _op, ...v }) => v),
+      resolvedVariants.map(({ _key: _k, _touched: _t, ...v }) => v),
     );
   };
 
@@ -535,14 +607,26 @@ function ProductFormModal({ visible, editing, onClose, onSave, saving, currency,
               {hasVariants && (
                 <View style={styles.variantList}>
                   <View style={styles.variantListHeader}>
-                    <Text style={[styles.fieldLabel, { flex: 1 }]}>Variantes</Text>
-                    <Text style={[styles.fieldLabel, { width: 60, textAlign: 'right' }]}>Qté</Text>
-                    <View style={{ width: 72 }} />
+                    <Text
+                      style={[styles.fieldLabel, { flex: VARIANT_NAME_FLEX, fontSize: 10, letterSpacing: 0 }]}
+                      numberOfLines={1}
+                    >
+                      Variantes
+                    </Text>
+                    <Text style={[styles.fieldLabel, { width: VARIANT_QTY_WIDTH, textAlign: 'right' }]}>Qté</Text>
+                    <Text
+                      style={[styles.fieldLabel, { flex: VARIANT_PRICE_FLEX, minWidth: VARIANT_PRICE_MIN_WIDTH, textAlign: 'right' }]}
+                    >
+                      Prix
+                    </Text>
+                    <View style={{ width: VARIANT_REMOVE_WIDTH }} />
                   </View>
                   {variantDraft.map((v, i) => (
                     <VariantRow
                       key={v._key}
                       variant={v}
+                      currency={currency}
+                      fallbackPrice={sp}
                       onChange={patch => setVariantDraft(prev => prev.map((item, idx) => idx === i ? { ...item, ...patch } : item))}
                       onRemove={() => setVariantDraft(prev => prev.filter((_, idx) => idx !== i))}
                     />
@@ -575,7 +659,7 @@ function ProductFormModal({ visible, editing, onClose, onSave, saving, currency,
               {showProfitHint && (
                 <View style={styles.liveCalcBlock}>
                   <Text style={[styles.liveCalcText, { color: sp > computedCost ? palette.success : palette.danger }]}>
-                    Gain : {(sp - computedCost).toLocaleString('fr-FR')} {currency} par unité
+                    Bénéfice : {(sp - computedCost).toLocaleString('fr-FR')} {currency} par pièce
                   </Text>
                 </View>
               )}
@@ -1114,11 +1198,32 @@ export default function CatalogueScreen() {
     useProductStore();
   const { fournisseurs, fetchFournisseurs } = useFournisseursStore();
 
+  // Mirrors showFork's 24h boundary in app/(app)/_layout.tsx: the
+  // activation fork guides a brand-new merchant to their first product for
+  // the first 24h, then stops showing anywhere. If the catalogue is still
+  // completely empty (no active AND no archived product — archived alone
+  // would mean they've actually used the app before) at that point, this
+  // screen needs its own way forward instead of quietly rendering nothing.
+  const noProductsAtAll = products.length === 0 && archivedProducts.length === 0;
+  const businessAgeMs = business?.created_at
+    ? Date.now() - new Date(business.created_at).getTime()
+    : Infinity;
+  const showActivationEmptyState = canEdit && !offline && noProductsAtAll && businessAgeMs >= 24 * 60 * 60 * 1000;
+
   const [search, setSearch] = useState('');
-  const [showForm, setShowForm] = useState(false);
+  // Initialized straight from the param (not via an effect that fires after
+  // the first render) — an effect-driven open meant the bare catalogue
+  // screen was visible for a frame before the form slid up on top of it,
+  // reading as "arrive, then it opens" instead of one direct motion.
+  const { openForm } = useLocalSearchParams<{ openForm?: string }>();
+  const [showForm, setShowForm] = useState(openForm === '1');
   const [editingProduct, setEditingProduct] = useState<Product | null>(null);
 
-  const { openForm } = useLocalSearchParams<{ openForm?: string }>();
+  // Catalogue is a tab screen and stays mounted after the first visit, so
+  // the useState initializer above only ever fires the very first time —
+  // this effect re-applies openForm on every fresh arrival too (same fix
+  // vendre.tsx needed for its mode param), or every "Un produit" tap after
+  // the first one on an already-mounted Catalogue silently did nothing.
   useEffect(() => {
     if (openForm === '1') {
       setEditingProduct(null);
@@ -1126,6 +1231,21 @@ export default function CatalogueScreen() {
       router.setParams({ openForm: undefined });
     }
   }, [openForm]);
+
+  // The activation fork (app/(app)/_layout.tsx) is evaluated globally so it
+  // can show on top of any screen — but this form is itself a real Modal
+  // (via FormSheet), and the fork trying to show at the same time would be
+  // two Modals visible at once, the same class of bug already fixed twice
+  // elsewhere in this app. Suppress the fork for exactly as long as this
+  // form is genuinely open, not a guessed timeout — someone filling in a
+  // product shouldn't have the wall interrupt mid-form no matter how long
+  // they take, but the moment they close it without saving, it's fair game
+  // again immediately.
+  useEffect(() => {
+    useAuthStore.setState({ suppressActivationFork: showForm });
+    return () => { if (showForm) useAuthStore.setState({ suppressActivationFork: false }); };
+  }, [showForm]);
+
   const [showAdjust, setShowAdjust] = useState(false);
   const [adjustTarget, setAdjustTarget] = useState<Product | null>(null);
   const [tab, setTab] = useState<'actifs' | 'archives'>('actifs');
@@ -1182,6 +1302,11 @@ export default function CatalogueScreen() {
     if (businessId) {
       fetchProducts(businessId, userId);
       fetchFournisseurs(businessId);
+      // Also needed on mount (not just on tab switch, see the effect below)
+      // so showActivationEmptyState can tell "truly zero products anywhere"
+      // apart from "zero active, but some archived" without waiting for the
+      // merchant to visit the Archivés tab first.
+      fetchArchivedProducts(businessId);
     }
   }, [businessId]);
 
@@ -1343,24 +1468,29 @@ export default function CatalogueScreen() {
       <View style={styles.header}>
         <View>
           <Text variant="h3">Produits</Text>
-          <Text variant="caption" color="secondary">
-            {tab === 'actifs'
-              ? `${products.length} produit${products.length !== 1 ? 's' : ''}`
-              : `${archivedProducts.length} archivé${archivedProducts.length !== 1 ? 's' : ''}`}
-          </Text>
+          {!showActivationEmptyState && (
+            <Text variant="caption" color="secondary">
+              {tab === 'actifs'
+                ? `${products.length} produit${products.length !== 1 ? 's' : ''}`
+                : `${archivedProducts.length} archivé${archivedProducts.length !== 1 ? 's' : ''}`}
+            </Text>
+          )}
         </View>
       </View>
 
-      {/* Tabs */}
-      <View style={styles.tabRow}>
-        {(['actifs', 'archives'] as const).map(t => (
-          <Pressable key={t} onPress={() => setTab(t)} style={[styles.tabChip, tab === t && styles.tabChipActive]}>
-            <Text variant="caption" style={{ color: tab === t ? palette.textInverse : palette.textSecondary }}>
-              {t === 'actifs' ? 'Actifs' : 'Archivés'}
-            </Text>
-          </Pressable>
-        ))}
-      </View>
+      {/* Tabs — hidden once the 24h onboarding window has closed on a still
+          completely empty catalogue; nothing to switch between yet. */}
+      {!showActivationEmptyState && (
+        <View style={styles.tabRow}>
+          {(['actifs', 'archives'] as const).map(t => (
+            <Pressable key={t} onPress={() => setTab(t)} style={[styles.tabChip, tab === t && styles.tabChipActive]}>
+              <Text variant="caption" style={{ color: tab === t ? palette.textInverse : palette.textSecondary }}>
+                {t === 'actifs' ? 'Actifs' : 'Archivés'}
+              </Text>
+            </Pressable>
+          ))}
+        </View>
+      )}
 
       {/* Search — hidden when the current tab's own list is empty: nothing to search yet */}
       {(tab === 'actifs' ? products.length > 0 : archivedProducts.length > 0) && (
@@ -1403,9 +1533,29 @@ export default function CatalogueScreen() {
         <SkeletonList count={8} />
       ) : tab === 'actifs' && products.length === 0 ? (
         !offline && canEdit ? (
-          // First-run empty state: nothing renders here at all — the "+" FAB
-          // below plus its curved running-lights hint are the whole thing.
-          null
+          showActivationEmptyState ? (
+            // 24h onboarding window closed with the catalogue still
+            // completely empty and the activation fork no longer showing —
+            // this is now the merchant's only path to their first product,
+            // so it replaces the corner FAB instead of sitting beside it.
+            <View style={styles.emptyState}>
+              <Text variant="h4" style={{ textAlign: 'center' }}>Ajouter un produit</Text>
+              <Pressable
+                onPress={() => { setEditingProduct(null); setShowForm(true); }}
+                style={({ pressed }) => [styles.fab, pressed && { opacity: 0.82 }]}
+                accessibilityLabel="Ajouter un produit"
+                accessibilityRole="button"
+              >
+                <Text style={styles.fabIcon}>+</Text>
+              </Pressable>
+            </View>
+          ) : (
+            // Still inside the 24h window: nothing renders here — the
+            // activation fork (app/(app)/_layout.tsx) is what actually
+            // guides a brand-new merchant to their first product now, so a
+            // second CTA on top of it would be redundant.
+            null
+          )
         ) : (
           <View style={styles.emptyState}>
             <Ionicons name={offline ? 'cloud-offline-outline' : 'cube-outline'} size={72} color={palette.textDisabled} />
@@ -1563,7 +1713,7 @@ export default function CatalogueScreen() {
         fetchStats={fetchProductStats}
       />
 
-      {canEdit && tab === 'actifs' && (
+      {canEdit && tab === 'actifs' && !showActivationEmptyState && (
         <Animated.View style={[styles.fabContainer, { opacity: fabOpacity, transform: [{ scale: fabScale }] }]}>
           <Pressable
             onPress={() => { setEditingProduct(null); setShowForm(true); }}
@@ -1574,9 +1724,6 @@ export default function CatalogueScreen() {
             <Text style={styles.fabIcon}>+</Text>
           </Pressable>
         </Animated.View>
-      )}
-      {canEdit && tab === 'actifs' && products.length === 0 && !offline && (
-        <EmptyStateFabArrow tabIndex={1} />
       )}
     </Screen>
   );
@@ -1790,12 +1937,7 @@ function makeStyles(p: Palette) {
     variantListHeader: {
       flexDirection: 'row', alignItems: 'center',
       paddingHorizontal: spacing[5], paddingTop: spacing[3], paddingBottom: spacing[1],
-    },
-    variantPriceOverride: {
-      flexDirection: 'row',
-      paddingHorizontal: spacing[5], paddingVertical: spacing[2],
-      gap: spacing[4],
-      borderBottomWidth: 1, borderBottomColor: p.border,
+      gap: spacing[2],
     },
     addVariantBtn: {
       flexDirection: 'row', alignItems: 'center',

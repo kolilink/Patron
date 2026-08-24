@@ -350,7 +350,7 @@ type CommandeLine = { product_id: string; product_name: string; variant_id: stri
 function CommandeForm({ visible, fournisseur, currency, onClose, onSave, saving }: {
   visible: boolean; fournisseur: Fournisseur | null; currency: string;
   onClose: () => void;
-  onSave: (lines: { product_id: string; product_name: string; variant_id?: string | null; qty: number; unit_cost: number }[]) => Promise<void>;
+  onSave: (lines: { product_id: string; product_name: string; variant_id: string | null; qty: number; unit_cost: number }[]) => Promise<void>;
   saving: boolean;
 }) {
   const { palette } = useTheme();
@@ -675,7 +675,9 @@ function CommandeDetail({ commande, currency, onClose, onRecevoir, saving }: {
               return (
                 <View key={l.id} style={[styles.selectRow, !active && { opacity: 0.4 }]}>
                   <View style={{ flex: 1 }}>
-                    <Text variant="body">{l.product_name}</Text>
+                    <Text variant="body">
+                      {l.variant_name ? `${l.product_name} (${l.variant_name})` : l.product_name}
+                    </Text>
                     <Text variant="caption" color="secondary">
                       Commandé : {l.qty_ordered}{l.qty_received > 0 ? ` · Déjà reçu : ${l.qty_received}` : ''}
                     </Text>

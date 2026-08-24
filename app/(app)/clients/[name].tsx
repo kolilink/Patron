@@ -28,9 +28,9 @@ function methodLabel(m: string) {
   return 'Autre';
 }
 
-function dateLabel(iso: string) {
-  const d = iso.includes('T') ? new Date(iso) : new Date(iso + 'T00:00:00');
-  return d.toLocaleDateString('fr-FR', { day: 'numeric', month: 'short', year: 'numeric' });
+function timeLabel(iso: string): string {
+  const d = new Date(iso);
+  return `${d.getHours()}h${String(d.getMinutes()).padStart(2, '0')}`;
 }
 
 function fmtDueDate(iso: string): string {
@@ -55,7 +55,7 @@ const PAY_METHODS = [
 ];
 
 interface ClientRecord { id: string; name: string; phone: string | null; notes: string | null; }
-interface LedgerPayment { id: string; order_id: string; method: string; amount: number; date: string; }
+interface LedgerPayment { id: string; order_id: string; method: string; amount: number; date: string; created_at: string; }
 interface DayGroup {
   dateKey: string;
   label: string;
@@ -132,56 +132,37 @@ function EditModal({
 // ─── Payment Modal ────────────────────────────────────────────────────────────
 
 function PayModal({
-  visible, displayName, totalOwed, creditSales, currency, saving,
+  visible, displayName, totalOwed, currency, saving,
   onClose, onRecord,
 }: {
   visible: boolean; displayName: string; totalOwed: number;
-  creditSales: Vente[]; currency: string; saving: boolean;
+  currency: string; saving: boolean;
   onClose: () => void;
-  onRecord: (amount: number, method: string, date: string, specificSaleId?: string) => void;
+  onRecord: (amount: number, method: string, date: string) => void;
 }) {
   const { palette } = useTheme();
   const styles = useMemo(() => makeStyles(palette), [palette]);
   const [amountStr, setAmountStr] = useState('');
   const [method, setMethod] = useState('especes');
   const [date, setDate] = useState(todayISO());
-  const [allocation, setAllocation] = useState<'fifo' | 'specific'>('fifo');
-  const [specificSaleId, setSpecificSaleId] = useState('');
 
   useEffect(() => {
     if (visible) {
       setAmountStr(formatAmountInput(String(Math.round(totalOwed)), currency));
       setMethod('especes');
       setDate(todayISO());
-      setAllocation('fifo');
-      setSpecificSaleId(creditSales[0]?.id ?? '');
     }
   }, [visible, totalOwed]);
 
   const amount = parseAmountInput(amountStr, currency);
 
-  const saleRemaining = (id: string) => {
-    const sale = creditSales.find(s => s.id === id);
-    if (!sale) return 0;
-    return sale.total_amount - (sale.discount_amount ?? 0) - (sale.amount_paid ?? 0);
-  };
-
   const handleRecord = () => {
     if (amount <= 0) { Alert.alert('Vérifiez le montant :)'); return; }
-    if (allocation === 'fifo' && amount > totalOwed + 0.01) {
+    if (amount > totalOwed + 0.01) {
       Alert.alert('Le montant dépasse le total :)');
       return;
     }
-    if (allocation === 'specific') {
-      const max = saleRemaining(specificSaleId);
-      if (amount > max + 0.01) {
-        Alert.alert('Le montant dépasse le total :)');
-        return;
-      }
-      onRecord(amount, method, date, specificSaleId);
-    } else {
-      onRecord(amount, method, date);
-    }
+    onRecord(amount, method, date);
   };
 
   return (
@@ -239,40 +220,6 @@ function PayModal({
               ))}
             </View>
           </View>
-
-          {/* Allocation */}
-          <View style={{ gap: spacing[2] }}>
-            <Text variant="label">Déduire de :</Text>
-            <View style={styles.chipRow}>
-              <Pressable style={[styles.chip, allocation === 'fifo' && styles.chipActive]}
-                onPress={() => setAllocation('fifo')}>
-                <Text variant="caption" style={{ color: allocation === 'fifo' ? palette.textInverse : palette.textPrimary }}>
-                  Dette la plus ancienne
-                </Text>
-              </Pressable>
-              <Pressable style={[styles.chip, allocation === 'specific' && styles.chipActive]}
-                onPress={() => setAllocation('specific')}>
-                <Text variant="caption" style={{ color: allocation === 'specific' ? palette.textInverse : palette.textPrimary }}>
-                  Choisir une dette
-                </Text>
-              </Pressable>
-            </View>
-            {allocation === 'specific' && creditSales.length > 0 && (
-              <View style={{ gap: spacing[1] }}>
-                {creditSales.map(s => {
-                  const rem = s.total_amount - (s.discount_amount ?? 0) - (s.amount_paid ?? 0);
-                  return (
-                    <Pressable key={s.id} onPress={() => setSpecificSaleId(s.id)}
-                      style={[styles.saleOption, specificSaleId === s.id && styles.saleOptionActive]}>
-                      <Text variant="caption" style={{ color: specificSaleId === s.id ? palette.textInverse : palette.textPrimary }}>
-                        {dateLabel(s.sale_date ?? s.created_at)} — {fmt(rem, currency)}
-                      </Text>
-                    </Pressable>
-                  );
-                })}
-              </View>
-            )}
-          </View>
     </FormSheet>
   );
 }
@@ -295,7 +242,7 @@ export default function ClientLedgerScreen() {
   const role = session?.activeMembership?.role;
   const canEdit = role === 'administrateur' || role === 'manager';
 
-  const { sales, loading, saving, offline, offlineSince, fetchSales, recordPayment, recordClientPayment } = useVentesStore();
+  const { sales, loading, saving, offline, offlineSince, fetchSales, recordClientPayment } = useVentesStore();
 
   // Shared key for this client's cached reads (payments + record) — prefixed by
   // route type since routeParam can be either a client UUID or a raw name.
@@ -350,12 +297,21 @@ export default function ClientLedgerScreen() {
     } else {
       query = query.eq('name', routeParam);
     }
-    const { data, error } = await withTimeout(query.maybeSingle());
-    if (error) return; // offline (or any other failure) — cached value above already applied
-    const record = data as ClientRecord | null;
-    setClientRecord(record);
-    if (isClientId && record) setDisplayName(record.name);
-    if (record) void saveClientLedgerCache(recordCacheKey, record);
+    // A genuine timeout REJECTS (unlike a returned Supabase {error}) — must be
+    // caught here, not just checked, or it surfaces as an unhandled promise
+    // rejection (this is what Sentry's "Network timeout after 12000ms" reports
+    // on this screen were: this call had no try/catch and no .catch() at its
+    // fire-and-forget call site in the mount useEffect).
+    try {
+      const { data, error } = await withTimeout(query.maybeSingle());
+      if (error) return; // offline (or any other failure) — cached value above already applied
+      const record = data as ClientRecord | null;
+      setClientRecord(record);
+      if (isClientId && record) setDisplayName(record.name);
+      if (record) void saveClientLedgerCache(recordCacheKey, record);
+    } catch {
+      // timeout — cached value above already applied
+    }
   };
 
   const loadLedgerPayments = async () => {
@@ -375,28 +331,39 @@ export default function ClientLedgerScreen() {
     }
 
     const saleIds = clientSales.map(s => s.id);
-    const { data, error } = await withTimeout(
-      supabase
-        .from('payments')
-        .select('id, order_id, method, amount, date')
-        .in('order_id', saleIds)
-        .order('date', { ascending: true }),
-    );
-    if (error) {
-      // Network failure: fall back to cache so a client's real debt (sales minus
-      // payments) doesn't silently inflate to their full lifetime sale total —
-      // this is what happened before this cache existed (payments = [] offline).
-      if (isNetworkError(error)) {
-        const cached = await getClientLedgerCache(paymentsCacheKey) as LedgerPayment[] | null;
-        if (cached) setLedgerPayments(cached);
+    // Same reject-vs-return distinction as loadClientRecord above: a genuine
+    // timeout rejects withTimeout() rather than resolving with {error}, and
+    // this function is also called fire-and-forget from a useEffect, so an
+    // uncaught rejection here becomes an unhandled promise rejection.
+    try {
+      const { data, error } = await withTimeout(
+        supabase
+          .from('payments')
+          .select('id, order_id, method, amount, date, created_at')
+          .in('order_id', saleIds)
+          .order('date', { ascending: true }),
+      );
+      if (error) {
+        // Network failure: fall back to cache so a client's real debt (sales minus
+        // payments) doesn't silently inflate to their full lifetime sale total —
+        // this is what happened before this cache existed (payments = [] offline).
+        if (isNetworkError(error)) {
+          const cached = await getClientLedgerCache(paymentsCacheKey) as LedgerPayment[] | null;
+          if (cached) setLedgerPayments(cached);
+        }
+        setLoadingLocal(false);
+        return;
       }
+      const payments = (data ?? []).map(p => ({ ...(p as object), amount: (p as { amount: number }).amount / 100 })) as LedgerPayment[];
+      setLedgerPayments(payments);
+      void saveClientLedgerCache(paymentsCacheKey, payments);
       setLoadingLocal(false);
-      return;
+    } catch {
+      // timeout — treat exactly like a returned network error above
+      const cached = await getClientLedgerCache(paymentsCacheKey) as LedgerPayment[] | null;
+      if (cached) setLedgerPayments(cached);
+      setLoadingLocal(false);
     }
-    const payments = (data ?? []).map(p => ({ ...(p as object), amount: (p as { amount: number }).amount / 100 })) as LedgerPayment[];
-    setLedgerPayments(payments);
-    void saveClientLedgerCache(paymentsCacheKey, payments);
-    setLoadingLocal(false);
   };
 
   const clientSales = useMemo(() => {
@@ -489,21 +456,15 @@ export default function ClientLedgerScreen() {
     return next;
   });
 
-  const handleRecord = useCallback(async (amount: number, method: string, date: string, specificSaleId?: string) => {
-    let result: { ok: boolean; fullyPaid?: boolean; fullySettled?: boolean };
-    if (specificSaleId) {
-      result = await recordPayment(specificSaleId, amount, method, date);
-    } else {
-      result = await recordClientPayment(displayName, businessId, amount, method, date);
-    }
+  const handleRecord = useCallback(async (amount: number, method: string, date: string) => {
+    const result = await recordClientPayment(displayName, businessId, amount, method, date);
     if (result.ok) {
       setShowPayModal(false);
       haptics.success();
-      const paidInFull = specificSaleId ? result.fullyPaid : result.fullySettled;
-      if (!paidInFull) setSuccessPayment({ amount });
+      if (!result.fullySettled) setSuccessPayment({ amount });
       loadLedgerPayments();
     }
-  }, [displayName, businessId, recordPayment, recordClientPayment]);
+  }, [displayName, businessId, recordClientPayment]);
 
   const openMenu = useCallback(() => {
     if (!canEdit) return;
@@ -562,7 +523,7 @@ export default function ClientLedgerScreen() {
             </RNText>
             {totalPaid > 0 && (
               <RNText style={styles.repaidLine}>
-                {fmt(totalPaid, currency)} remboursé sur {fmt(totalSold, currency)}
+                {fmt(totalPaid, currency)} payé sur {fmt(totalSold, currency)}
               </RNText>
             )}
             <Pressable
@@ -655,8 +616,8 @@ export default function ClientLedgerScreen() {
                         const isLast = idx === group.sales.length - 1 && group.payments.length === 0;
                         return (
                           <View key={`s-${s.id}`} style={[styles.detailRow, !isLast && styles.detailBorder]}>
-                            <View style={[styles.rowIcon, { backgroundColor: isCredit ? palette.warningLight : palette.background }]}>
-                              <Ionicons name="cart-outline" size={14} color={isCredit ? palette.warning : palette.textDisabled} />
+                            <View style={styles.rowTime}>
+                              <Text variant="caption" color="secondary">{timeLabel(s.created_at)}</Text>
                             </View>
                             <View style={{ flex: 1 }}>
                               <Text variant="body" numberOfLines={1} style={!isCredit && { textDecorationLine: 'line-through', color: palette.textSecondary }}>
@@ -680,8 +641,8 @@ export default function ClientLedgerScreen() {
                         const isLast = idx === group.payments.length - 1;
                         return (
                           <View key={`p-${p.id}`} style={[styles.detailRow, !isLast && styles.detailBorder]}>
-                            <View style={[styles.rowIcon, { backgroundColor: palette.successLight }]}>
-                              <Ionicons name="arrow-down-circle-outline" size={14} color={palette.success} />
+                            <View style={styles.rowTime}>
+                              <Text variant="caption" color="secondary">{timeLabel(p.created_at)}</Text>
                             </View>
                             <View style={{ flex: 1 }}>
                               <Text variant="body">{methodLabel(p.method)}</Text>
@@ -709,7 +670,6 @@ export default function ClientLedgerScreen() {
         visible={showPayModal}
         displayName={displayName}
         totalOwed={totalOwed}
-        creditSales={creditSales}
         currency={currency}
         saving={saving}
         onClose={() => setShowPayModal(false)}
@@ -776,7 +736,7 @@ function makeStyles(p: Palette) {
     },
     bannerAge: { fontSize: 12, color: p.textSecondary, textAlign: 'center', marginTop: 4, marginBottom: 8 },
     repaidLine: { fontSize: 13, color: p.textSecondary, textAlign: 'center', marginBottom: 4 },
-    rowIcon: { width: 28, height: 28, borderRadius: 8, alignItems: 'center', justifyContent: 'center' },
+    rowTime: { width: 44, alignItems: 'center', justifyContent: 'center' },
     contactRow: { flexDirection: 'row', alignItems: 'center', justifyContent: 'space-between' },
 
     // Day-grouped history
@@ -809,7 +769,7 @@ function makeStyles(p: Palette) {
     // Modals
     modalSafe: { flex: 1, backgroundColor: p.background },
     pad: { padding: spacing[5], gap: spacing[4], paddingBottom: spacing[10] },
-    footer: { padding: spacing[5], borderTopWidth: 1, borderTopColor: p.border, backgroundColor: p.surface },
+    footer: { padding: spacing[5], backgroundColor: p.background },
 
     contextCard: { gap: spacing[1] },
     amountRow: { flexDirection: 'row', gap: spacing[3], alignItems: 'center' },
@@ -857,11 +817,5 @@ function makeStyles(p: Palette) {
       paddingVertical: 16, alignItems: 'center',
     },
     successBtnText: { fontSize: 16, fontWeight: '600', color: p.textInverse },
-    saleOption: {
-      paddingHorizontal: spacing[3], paddingVertical: spacing[2],
-      borderRadius: radius.md, borderWidth: 1, borderColor: p.border,
-      backgroundColor: p.surface,
-    },
-    saleOptionActive: { backgroundColor: p.primary, borderColor: p.primary },
   });
 }

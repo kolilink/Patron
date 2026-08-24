@@ -10,6 +10,7 @@ import { syncKnownBusinesses } from '@/lib/knownBusinesses';
 import { getKV, setKV } from '@/lib/db';
 import { isLocked, setLocked } from '@/lib/lock';
 import { withTimeout, withNetworkRetry, reportOfflineFallback } from '@/lib/sync';
+import { isFounderPhone } from '@/src/utils/founder';
 import type { AppSession, Business, Membership, Role, User } from '@/src/types';
 import { useProductStore } from './products';
 import { useVentesStore } from './ventes';
@@ -180,6 +181,8 @@ interface AuthStore {
   selectBusiness: (businessId: string) => void;
   createBusiness: (data: { name: string; type?: string; currency: string; referralCode?: string }) => Promise<void>;
   joinBusiness: (code: string) => Promise<void>;
+  // Founder-only testing tool — see delete_business(), db/migration_v157.sql.
+  deleteBusiness: (businessId: string) => Promise<boolean>;
   loginWithBiometric: () => Promise<boolean>;
   lock: () => Promise<void>;
   // 'retryable' covers cancels/interruptions (worth an immediate re-prompt);
@@ -198,6 +201,29 @@ interface AuthStore {
   businessDrawerOpen: boolean;
   openBusinessDrawer: () => void;
   closeBusinessDrawer: () => void;
+  // businessDrawerOpen flips false the instant close is *requested*, but
+  // BusinessDrawer's own slide-out animation (~300ms) means its Modal stays
+  // genuinely visible for a moment after that. Anything that wants to show
+  // its own Modal only once the drawer is truly gone (ActivationForkOverlay)
+  // needs this instead — two RN Modals visible at once is unreliable,
+  // especially on Android, and gating on the raw open/close intent alone
+  // left a real window where the fork's Modal turned visible=true while the
+  // drawer's Modal was still mid-close, silently swallowing touches with
+  // neither one clearly rendering. Starts true (nothing open, nothing to
+  // wait for); set false the instant an open is requested, set back to true
+  // only from BusinessDrawer's own animation-finished callback.
+  businessDrawerFullyClosed: boolean;
+  markBusinessDrawerFullyClosed: () => void;
+  // Set by catalogue.tsx while its add-product FormSheet is open. The
+  // activation fork is evaluated globally (app/(app)/_layout.tsx) so it can
+  // show on top of whatever screen is active, not just Accueil — but the
+  // add-product form is itself a real <Modal> (via FormSheet), and letting
+  // the fork's own Modal try to show at the same time reintroduces the
+  // exact "two Modals visible at once" bug already fixed twice elsewhere.
+  // No dedicated action — a plain field consumers set directly via
+  // .setState(), same lightweight pattern already used for one-off flags
+  // elsewhere in this codebase.
+  suppressActivationFork: boolean;
 
   sendEmailOtp: (email: string) => Promise<{ verificationId: string } | null>;
   recoverByEmail: (email: string, code: string, verificationId: string) => Promise<void>;
@@ -270,6 +296,8 @@ export const useAuthStore = create<AuthStore>((set, get) => ({
   dismissedFromBusiness: null,
   showTrialWelcome: false,
   businessDrawerOpen: false,
+  businessDrawerFullyClosed: true,
+  suppressActivationFork: false,
 
   initialize: async () => {
     // Register BEFORE getSession() so we never miss a TOKEN_REFRESHED event.
@@ -572,7 +600,13 @@ export const useAuthStore = create<AuthStore>((set, get) => ({
     const { session } = get();
     if (!session) return;
 
-    const alreadyOwns = session.memberships.some(m => m.role === 'administrateur');
+    // The founder is exempt from the 1-business-per-admin limit — he needs
+    // to create and delete many throwaway test businesses while iterating
+    // on onboarding. Mirrors the server-side bypass in
+    // create_business_with_membership (db/migration_v157.sql); this
+    // client-side check is defense-in-depth only, same posture as every
+    // other isFounderPhone gate in the app.
+    const alreadyOwns = !isFounderPhone(session.user.phone) && session.memberships.some(m => m.role === 'administrateur');
     if (alreadyOwns) {
       set({ error: 'Vous avez déjà un commerce actif. Bientôt, vous pourrez en gérer plusieurs.', loading: false });
       return;
@@ -645,6 +679,35 @@ export const useAuthStore = create<AuthStore>((set, get) => ({
       loading: false,
     });
     trackEvent('business_created', businessId, session.user.id, { currency, business_type: type ?? null });
+  },
+
+  deleteBusiness: async (businessId) => {
+    const { session } = get();
+    if (!session) return false;
+
+    const { error } = await supabase.rpc('delete_business', { p_business_id: businessId });
+    if (error) {
+      set({ error: translateError(error, 'Impossible de supprimer ce commerce') });
+      return false;
+    }
+
+    const remaining = session.memberships.filter(m => m.business_id !== businessId);
+    const wasActive = session.activeBusiness?.id === businessId;
+    const fallback = wasActive ? remaining[0] : undefined;
+
+    if (wasActive) resetAllStores();
+    setKV(`last_business_${session.user.id}`, fallback?.business_id ?? '').catch(() => {});
+
+    const nextSession: AppSession = {
+      ...session,
+      memberships: remaining,
+      activeBusiness: wasActive ? ((fallback?.business as Business) ?? null) : session.activeBusiness,
+      activeMembership: wasActive ? (fallback ?? null) : session.activeMembership,
+    };
+    void persistSessionCache(nextSession);
+    set({ session: nextSession, error: null });
+    trackEvent('business_deleted', businessId, session.user.id, {});
+    return true;
   },
 
   joinBusiness: async (code) => {
@@ -1243,6 +1306,7 @@ export const useAuthStore = create<AuthStore>((set, get) => ({
   clearRemovedBusinessesOnLogin: () => set({ removedBusinessesOnLogin: null }),
   clearDismissedFromBusiness: () => set({ dismissedFromBusiness: null }),
 
-  openBusinessDrawer: () => set({ businessDrawerOpen: true }),
+  openBusinessDrawer: () => set({ businessDrawerOpen: true, businessDrawerFullyClosed: false }),
   closeBusinessDrawer: () => set({ businessDrawerOpen: false }),
+  markBusinessDrawerFullyClosed: () => set({ businessDrawerFullyClosed: true }),
 }));

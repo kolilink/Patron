@@ -1,13 +1,14 @@
 import { create } from 'zustand';
 import { supabase } from '@/lib/supabase';
 import { translateError } from '@/lib/errors';
-import { generateId } from '@/lib/id';
+import { generateId, generateFallbackName } from '@/lib/id';
 import { saveProductCache, getProductCache, enqueue, getQueueCount, getCacheTimestamp } from '@/lib/db';
 import { isNetworkError, withNetworkRetry, reportOfflineFallback } from '@/lib/sync';
 import { useSyncStore } from '@/stores/sync';
 import { useAuthStore } from '@/stores/auth';
 import { trackEvent } from '@/lib/analytics';
 import { notifyEvent } from '@/src/utils/notifications';
+import { formatAmount } from '@/src/utils/format';
 import type { Product, ProductVariant } from '@/src/types';
 
 // Every fetch* function below is called with a specific businessId, but by
@@ -282,6 +283,7 @@ export const useProductStore = create<ProductStore>((set, get) => ({
 
   updateProduct: async (businessId, userId, id, data) => {
     set({ saving: true, error: null });
+    const oldProduct = get().products.find(p => p.id === id);
     const patch: Record<string, unknown> = {};
     if (data.name !== undefined) patch.name = data.name.trim();
     if (data.sku !== undefined) patch.sku = data.sku?.trim() || null;
@@ -300,6 +302,34 @@ export const useProductStore = create<ProductStore>((set, get) => ({
       if (error) throw error;
       await get().fetchProducts(businessId, userId);
       set({ saving: false });
+
+      // Catalogue price edits are admin/manager-only, but a manager quietly
+      // lowering a price (or a genuine typo) has had no visibility to anyone
+      // else until now — notify the rest of admin/manager the same way a sale
+      // correction already does (stores/ventes.ts's sale_edited), so this
+      // isn't a silent edit anymore. Only the live-success path notifies —
+      // an offline-queued edit has no reliable "later" moment to fire from.
+      if (
+        patch.sale_price !== undefined &&
+        oldProduct &&
+        Math.round(oldProduct.sale_price * 100) !== patch.sale_price
+      ) {
+        const currency = useAuthStore.getState().session?.activeBusiness?.currency ?? 'GNF';
+        const editorName = useAuthStore.getState().session?.user?.name || generateFallbackName(userId);
+        notifyEvent({
+          businessId,
+          eventType: 'price_changed',
+          payload: {
+            editor: editorName,
+            product: oldProduct.name,
+            old_price: formatAmount(oldProduct.sale_price, currency),
+            new_price: formatAmount((patch.sale_price as number) / 100, currency),
+          },
+          targetRoles: ['administrateur', 'manager'],
+          excludeUserId: userId,
+        });
+      }
+
       return true;
     } catch (err) {
       if (isNetworkError(err)) {
@@ -414,6 +444,13 @@ export const useProductStore = create<ProductStore>((set, get) => ({
 
   upsertVariants: async (businessId, productId, userId, variants) => {
     set({ saving: true, error: null });
+    // upsert_product_variants deletes every existing row and reinserts fresh
+    // ones (see migration_v65.sql) — variant ids never survive a save, so a
+    // before/after diff for the price-change notification below has to match
+    // on name, the only identifier that does survive.
+    const oldByName = new Map(
+      (get().variantsByProduct[productId] ?? []).map(v => [v.name, v]),
+    );
     try {
       const payload = variants.map(v => ({
         name: v.name.trim(),
@@ -431,6 +468,31 @@ export const useProductStore = create<ProductStore>((set, get) => ({
       await get().fetchProducts(businessId, userId);
       await get().fetchVariants(productId, businessId);
       set({ saving: false });
+
+      const product = get().products.find(p => p.id === productId);
+      if (product) {
+        const currency = useAuthStore.getState().session?.activeBusiness?.currency ?? 'GNF';
+        const editorName = useAuthStore.getState().session?.user?.name || generateFallbackName(userId);
+        for (const row of payload) {
+          const old = oldByName.get(row.name);
+          if (old && Math.round(old.sale_price * 100) !== row.sale_price) {
+            notifyEvent({
+              businessId,
+              eventType: 'price_changed',
+              payload: {
+                editor: editorName,
+                product: product.name,
+                variant: row.name,
+                old_price: formatAmount(old.sale_price, currency),
+                new_price: formatAmount(row.sale_price / 100, currency),
+              },
+              targetRoles: ['administrateur', 'manager'],
+              excludeUserId: userId,
+            });
+          }
+        }
+      }
+
       return true;
     } catch (err) {
       set({ error: translateError(err, 'Erreur de mise à jour'), saving: false });

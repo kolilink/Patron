@@ -30,8 +30,12 @@ export interface CommandeLigne {
   po_id: string;
   product_id: string;
   product_name: string;
-  variant_id?: string | null;
-  variant_name?: string | null;
+  // Required-but-nullable, not optional — a construction site that forgets
+  // this must fail to compile, not silently produce a variant-less line
+  // (see migration_v159.sql's check 83, and the CommandeForm bug it exists
+  // to catch: one of two order screens used to drop this field entirely).
+  variant_id: string | null;
+  variant_name: string | null;
   qty_ordered: number;
   qty_received: number;
   unit_cost: number;
@@ -54,7 +58,7 @@ export interface CommandeAchat {
 
 export interface CreateCommandeInput {
   supplierId: string;
-  lines: { product_id: string; product_name: string; variant_id?: string | null; qty: number; unit_cost: number }[];
+  lines: { product_id: string; product_name: string; variant_id: string | null; qty: number; unit_cost: number }[];
   amountPaid?: number; // display units; undefined or >= total means fully paid
 }
 
@@ -326,15 +330,21 @@ export const useFournisseursStore = create<FournisseursStore>((set, get) => ({
   loadCommandeLines: async (commandeId) => {
     const { data, error } = await supabase
       .from('po_lines')
-      .select('*, product:products(name)')
+      .select('*, product:products(name), variant:product_variants(name)')
       .eq('po_id', commandeId);
     if (error) return;
 
+    // variant_id/variant_name were selected but silently dropped here before —
+    // the receiving screen had no way to tell two variant lines of the same
+    // product apart (see stores/fournisseurs.ts history for the fix this
+    // closes alongside the CommandeForm one in app/(app)/fournisseurs/[id].tsx).
     const lines: CommandeLigne[] = (data ?? []).map((l: Record<string, unknown>) => ({
       id: l.id as string,
       po_id: l.po_id as string,
       product_id: l.product_id as string,
       product_name: (l.product as { name: string } | null)?.name ?? '—',
+      variant_id: l.variant_id as string | null,
+      variant_name: (l.variant as { name: string } | null)?.name ?? null,
       qty_ordered: l.qty_ordered as number,
       qty_received: l.qty_received as number,
       unit_cost: l.unit_cost as number,

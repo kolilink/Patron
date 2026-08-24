@@ -1,7 +1,7 @@
 import type { SupabaseClient } from 'https://esm.sh/@supabase/supabase-js@2';
 
 // Shared between send-reconciliation-report (nightly, standalone) and
-// send-report-email (daily combined report) so the 78-check reconciliation
+// send-report-email (daily combined report) so the 82-check reconciliation
 // run + financial snapshot logic lives in exactly one place.
 
 export interface ReconciliationRun {
@@ -62,8 +62,9 @@ export function escapeHtml(str: string): string {
     .replace(/"/g, '&quot;');
 }
 
-// Runs the 68 structural checks + 10 display checks, refreshes totals, and
-// fetches the run/findings/financial snapshot. Requires a service-role client.
+// Runs the 68 structural checks + 12 display checks + 2 variant-price
+// checks (82 total), refreshes totals, and fetches the run/findings/
+// financial snapshot. Requires a service-role client.
 export async function runReconciliation(serviceClient: SupabaseClient): Promise<{
   run: ReconciliationRun;
   findings: ReconciliationFinding[];
@@ -75,7 +76,11 @@ export async function runReconciliation(serviceClient: SupabaseClient): Promise<
 
   const { error: displayErr } = await serviceClient.rpc('run_display_checks', { p_run_id: runId });
   if (displayErr) console.error('run_display_checks failed:', displayErr.message);
-  else {
+
+  const { error: variantErr } = await serviceClient.rpc('run_variant_price_checks', { p_run_id: runId });
+  if (variantErr) console.error('run_variant_price_checks failed:', variantErr.message);
+
+  if (!displayErr || !variantErr) {
     const { error: refreshErr } = await serviceClient.rpc('refresh_reconciliation_run', { p_run_id: runId });
     if (refreshErr) console.error('refresh_reconciliation_run failed:', refreshErr.message);
   }
@@ -233,7 +238,7 @@ export function renderReconciliationSection(
             Tous les comptes sont exacts
           </p>
           <p style="margin:0;font-size:13px;color:#4b5563;">
-            78 contrôles exécutés · 0 anomalie · ${run.businesses_checked} boutiques vérifiées
+            82 contrôles exécutés · 0 anomalie · ${run.businesses_checked} boutiques vérifiées
           </p>
         </td></tr>
       </table>

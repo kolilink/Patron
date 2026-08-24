@@ -8,6 +8,7 @@ import { useTheme, radius, spacing } from '@/src/theme';
 import type { Palette } from '@/src/theme';
 import { useAuthStore } from '@/stores/auth';
 import { inferCurrency } from '@/src/constants/currency';
+import { isFounderPhone } from '@/src/utils/founder';
 
 export default function CreerCommerceScreen() {
   const { palette } = useTheme();
@@ -15,7 +16,9 @@ export default function CreerCommerceScreen() {
   const { createBusiness, loading, error, clearError } = useAuthStore();
   const session     = useAuthStore(s => s.session);
   const memberships = session?.memberships ?? [];
-  const alreadyOwns = memberships.some(m => m.role === 'administrateur');
+  // The founder can create as many test businesses as he wants — see
+  // migration_v157.sql and the matching bypass in stores/auth.ts.
+  const alreadyOwns = !isFounderPhone(session?.user.phone) && memberships.some(m => m.role === 'administrateur');
 
   const handleSubmit = async (data: { name: string; currency: string; referralCode?: string }) => {
     clearError();

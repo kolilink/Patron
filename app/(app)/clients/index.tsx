@@ -1,7 +1,7 @@
 import { useCallback, useMemo, useState } from 'react';
-import { FlatList, Pressable, StyleSheet, View } from 'react-native';
+import { FlatList, Linking, Pressable, StyleSheet, View } from 'react-native';
 import { Screen } from '@/src/components/ui/Screen';
-import { router, useFocusEffect } from 'expo-router';
+import { router, useFocusEffect, useLocalSearchParams } from 'expo-router';
 import { Ionicons } from '@expo/vector-icons';
 import { Text } from '@/src/components/ui/Text';
 import { Input } from '@/src/components/ui/Input';
@@ -14,15 +14,18 @@ import { SkeletonList } from '@/src/components/ui/SkeletonPlaceholder';
 
 function fmt(n: number, cur: string) { return `${Math.round(n).toLocaleString('fr-FR')} ${cur}`; }
 
-function relativeDate(iso: string) {
-  const d = iso.includes('T') ? new Date(iso) : new Date(iso + 'T00:00:00');
-  const now = new Date();
-  const todayStart = new Date(now.getFullYear(), now.getMonth(), now.getDate()).getTime();
-  const dStart = new Date(d.getFullYear(), d.getMonth(), d.getDate()).getTime();
-  const diff = Math.floor((todayStart - dStart) / 86400000);
-  if (diff === 0) return "Aujourd'hui";
-  if (diff === 1) return 'Hier';
-  return d.toLocaleDateString('fr-FR', { day: 'numeric', month: 'short' });
+function getDaysAgo(dateStr: string): number {
+  const d = dateStr.includes('T') ? new Date(dateStr) : new Date(dateStr + 'T00:00:00');
+  return Math.floor((Date.now() - d.getTime()) / (1000 * 60 * 60 * 24));
+}
+
+function fmtDue(iso: string): string {
+  const d = new Date(iso + 'T00:00:00');
+  const diff = Math.round((d.getTime() - Date.now()) / 86400000);
+  if (diff < 0) return `En retard de ${Math.abs(diff)} j`;
+  if (diff === 0) return "Prévu aujourd'hui";
+  if (diff <= 3) return `Dans ${diff} jour${diff > 1 ? 's' : ''}`;
+  return `Prévu le ${d.toLocaleDateString('fr-FR', { day: 'numeric', month: 'short' })}`;
 }
 
 interface Client {
@@ -33,6 +36,9 @@ interface Client {
   nbCommandes: number;
   lastSaleDate: string;
   sellers: string[];
+  oldestDebtDate: string;
+  daysOldestDebt: number;
+  nearestDueDate: string | null;
 }
 
 type FilterType = 'tous' | 'doivent' | 'actifs';
@@ -56,9 +62,11 @@ export default function ClientsScreen() {
   const currency = session?.activeBusiness?.currency ?? 'GNF';
   const role = session?.activeMembership?.role;
   const isVendeur = role === 'vendeur';
+  const isInvestisseur = role === 'investisseur';
 
+  const { filter: filterParam } = useLocalSearchParams<{ filter?: FilterType }>();
   const { sales, loading, error, offline, offlineSince, fetchSales } = useVentesStore();
-  const [filter, setFilter] = useState<FilterType>('tous');
+  const [filter, setFilter] = useState<FilterType>(filterParam === 'doivent' || filterParam === 'actifs' ? filterParam : 'tous');
   const [search, setSearch] = useState('');
 
   useFocusEffect(
@@ -67,6 +75,16 @@ export default function ClientsScreen() {
     }, [businessId]),
   );
 
+  const sendWhatsAppReminder = (client: Client) => {
+    const msg = [
+      `Salut ${client.name},`,
+      `Un petit point sur le carnet : il vous reste un solde de *${fmt(client.totalCredit, currency)}*.`,
+      `Vous pouvez passer à la boutique ou effectuer un dépôt directement.`,
+      `Bonne journée à vous !`,
+    ].join('\n');
+    Linking.openURL(`https://wa.me/?text=${encodeURIComponent(msg)}`).catch(() => {});
+  };
+
   const allClients = useMemo<Client[]>(() => {
     const map = new Map<string, Client>();
     for (const s of sales) {
@@ -74,7 +92,10 @@ export default function ClientsScreen() {
       if (!name) continue;
       // Key by client_id when available — prevents two "Mamadou"s from merging
       const key = s.client_id ?? name;
-      const existing = map.get(key) ?? { name, clientId: s.client_id ?? undefined, totalAchats: 0, totalCredit: 0, nbCommandes: 0, lastSaleDate: '', sellers: [] };
+      const existing = map.get(key) ?? {
+        name, clientId: s.client_id ?? undefined, totalAchats: 0, totalCredit: 0, nbCommandes: 0,
+        lastSaleDate: '', sellers: [], oldestDebtDate: '', daysOldestDebt: 0, nearestDueDate: null,
+      };
       if (s.status !== 'annule') {
         existing.totalAchats += s.total_amount - (s.discount_amount ?? 0);
         const sDate = s.sale_date ?? s.created_at.split('T')[0];
@@ -84,7 +105,18 @@ export default function ClientsScreen() {
       }
       if (s.status === 'credit') {
         const remaining = s.total_amount - (s.discount_amount ?? 0) - (s.amount_paid ?? 0);
-        if (remaining > 0.01) existing.totalCredit += remaining;
+        if (remaining > 0.01) {
+          existing.totalCredit += remaining;
+          const saleDate = s.sale_date ?? s.created_at.split('T')[0];
+          if (!existing.oldestDebtDate || saleDate < existing.oldestDebtDate) {
+            existing.oldestDebtDate = saleDate;
+            existing.daysOldestDebt = getDaysAgo(saleDate);
+          }
+          const dd = s.due_date ?? null;
+          if (dd && (!existing.nearestDueDate || dd < existing.nearestDueDate)) {
+            existing.nearestDueDate = dd;
+          }
+        }
       }
       existing.nbCommandes += 1;
       if (s.seller_name && !existing.sellers.includes(s.seller_name)) {
@@ -97,7 +129,9 @@ export default function ClientsScreen() {
 
   const displayedClients = useMemo<Client[]>(() => {
     let list = allClients;
-    if (filter === 'doivent') list = list.filter(c => c.totalCredit > 0);
+    if (filter === 'doivent') {
+      list = list.filter(c => c.totalCredit > 0).sort((a, b) => b.daysOldestDebt - a.daysOldestDebt);
+    }
     if (filter === 'actifs') list = [...list].sort((a, b) => b.lastSaleDate.localeCompare(a.lastSaleDate));
     const q = search.trim().toLowerCase();
     if (q) list = list.filter(c => c.name.toLowerCase().includes(q));
@@ -137,7 +171,7 @@ export default function ClientsScreen() {
         ))}
       </View>
 
-      {allClients.length >= 3 && (
+      {allClients.length >= 15 && (
         <View style={styles.searchRow}>
           <Input placeholder="Rechercher un client…" value={search} onChangeText={setSearch} />
         </View>
@@ -201,27 +235,39 @@ export default function ClientsScreen() {
               </View>
               <View style={{ flex: 1, gap: 2 }}>
                 <Text variant="label">{item.name}</Text>
-                {item.lastSaleDate ? (
-                  <Text variant="caption" color="secondary">
-                    Dernier achat · {relativeDate(item.lastSaleDate)}
+                {item.totalCredit > 0 && item.nearestDueDate && (
+                  <Text variant="caption" style={{
+                    color: new Date(item.nearestDueDate + 'T00:00:00') < new Date() ? palette.warning : palette.textSecondary,
+                  }}>
+                    {fmtDue(item.nearestDueDate)}
                   </Text>
-                ) : null}
+                )}
                 {!isVendeur && item.sellers.length > 0 && (
                   <Text variant="caption" color="secondary">
                     Vendeur: {item.sellers.join(', ')}
                   </Text>
                 )}
               </View>
-              <View style={{ flexDirection: 'row', alignItems: 'center', justifyContent: 'flex-end' }}>
-                {item.totalCredit > 0 ? (
-                  <Text variant="label" style={{ color: palette.warning, marginRight: 8 }}>
-                    {fmt(item.totalCredit, currency)}
-                  </Text>
-                ) : (
+              {item.totalCredit > 0 ? (
+                <View style={{ alignItems: 'flex-end', gap: 6 }}>
+                  <Text variant="label" style={{ color: palette.warning }}>{fmt(item.totalCredit, currency)}</Text>
+                  {!isInvestisseur && (
+                    <Pressable
+                      onPress={() => sendWhatsAppReminder(item)}
+                      hitSlop={8}
+                      style={({ pressed }) => [styles.waBtn, { opacity: pressed ? 0.6 : 1 }]}
+                    >
+                      <Ionicons name="logo-whatsapp" size={14} color={palette.primary} />
+                      <Text variant="caption" style={styles.waBtnText}>Rappeler</Text>
+                    </Pressable>
+                  )}
+                </View>
+              ) : (
+                <View style={{ flexDirection: 'row', alignItems: 'center', justifyContent: 'flex-end' }}>
                   <Text variant="caption" style={{ color: palette.success, fontWeight: '600', marginRight: 8 }}>À jour</Text>
-                )}
-                <Text variant="caption" color="secondary">›</Text>
-              </View>
+                  <Text variant="caption" color="secondary">›</Text>
+                </View>
+              )}
             </Pressable>
           )}
           ItemSeparatorComponent={() => <View style={{ height: 1, backgroundColor: palette.border }} />}
@@ -258,5 +304,12 @@ function makeStyles(p: Palette) {
     emptyTitle: { textAlign: 'center' as const, marginBottom: spacing[2] },
     emptyHint: { textAlign: 'center' as const },
     center: { textAlign: 'center', marginTop: spacing[10] },
+    waBtn: {
+      flexDirection: 'row', alignItems: 'center', gap: 4,
+      paddingHorizontal: spacing[2], paddingVertical: 3,
+      borderRadius: radius.sm, borderWidth: 1, borderColor: p.primary + '40',
+      backgroundColor: p.primary + '12',
+    },
+    waBtnText: { color: p.primary, fontSize: 11 },
   });
 }
