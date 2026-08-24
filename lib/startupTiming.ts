@@ -52,3 +52,18 @@ export function reportFirstScreenRender(): void {
   firstScreenReported = true;
   reportStep('first_screen_render', Date.now() - appLaunchedAt);
 }
+
+let firstInteractionReported = false;
+
+// Call from the very first touch anywhere in the app after a cold start —
+// see app/_layout.tsx's onStartShouldSetResponderCapture, which observes
+// every touch during the capture phase without claiming it (returns false),
+// so this never changes what actually handles the tap. Scoped to cold start
+// only for now (same appLaunchedAt origin as the steps above); a separate
+// warm/foreground-return version would need its own origin timestamp from
+// the AppState listener in app/(app)/_layout.tsx and isn't covered by this.
+export function reportFirstInteraction(): void {
+  if (firstInteractionReported) return;
+  firstInteractionReported = true;
+  reportStep('first_interaction', Date.now() - appLaunchedAt);
+}

@@ -1,6 +1,7 @@
 import '@/lib/startupTiming';
 import * as Sentry from '@sentry/react-native';
 import { useEffect, useRef } from 'react';
+import { View } from 'react-native';
 import { GestureHandlerRootView } from 'react-native-gesture-handler';
 import { Stack, usePathname, useGlobalSearchParams } from 'expo-router';
 import * as SplashScreen from 'expo-splash-screen';
@@ -19,7 +20,7 @@ import { ThemeProvider } from '@/src/theme';
 import { posthog } from '@/lib/posthog';
 import { identifyUser, resetAnalytics } from '@/lib/analytics';
 import { configurePurchases } from '@/lib/purchases';
-import { withStartupTiming, reportFirstScreenRender } from '@/lib/startupTiming';
+import { withStartupTiming, reportFirstScreenRender, reportFirstInteraction } from '@/lib/startupTiming';
 
 // Only active when EXPO_PUBLIC_SENTRY_DSN is set (no-op in local dev without it)
 if (process.env.EXPO_PUBLIC_SENTRY_DSN) {
@@ -106,11 +107,22 @@ function RootLayout() {
 
   return (
     <GestureHandlerRootView style={{ flex: 1 }}>
-      <PostHogProvider client={posthog} autocapture>
-        <ThemeProvider>
-          <Stack screenOptions={{ headerShown: false, animation: 'fade' }} />
-        </ThemeProvider>
-      </PostHogProvider>
+      {/* Observes the first touch anywhere in the app (capture phase, returns
+          false) purely to time it — never claims the responder, so it can't
+          change what actually handles the tap. See reportFirstInteraction. */}
+      <View
+        style={{ flex: 1 }}
+        onStartShouldSetResponderCapture={() => {
+          reportFirstInteraction();
+          return false;
+        }}
+      >
+        <PostHogProvider client={posthog} autocapture>
+          <ThemeProvider>
+            <Stack screenOptions={{ headerShown: false, animation: 'fade' }} />
+          </ThemeProvider>
+        </PostHogProvider>
+      </View>
     </GestureHandlerRootView>
   );
 }

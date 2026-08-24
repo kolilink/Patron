@@ -31,21 +31,41 @@ function transactionsOn(record: UserActivityRecord, day: Date): number {
 }
 
 // ─── 1. D7 Active Retention Rate ────────────────────────────────────────────
-// Classic Day-7 retention: of the cohort that signed up exactly 7 days before
-// referenceDate (the only cohort for whom "day 7" has actually arrived as of
-// referenceDate), what fraction logged a transaction on that specific day?
-// Returns null when nobody in the array signed up exactly 7 days ago — there
-// is no cohort to evaluate yet, not a 0%.
+// Day-7 retention, evaluated per-user on their OWN day-7 date (signup + 7
+// days), not a single shared calendar date. An earlier version required
+// everyone in the cohort to have signed up on the exact same calendar day —
+// mathematically the "textbook" Day-N definition, but at this app's real
+// signup volume (0-2 sign-ups on most individual days) that single-day
+// cohort is almost always empty, so the metric showed "--" on most days even
+// with a large population of users who'd genuinely crossed day 7. Rolling
+// windowDays forward instead means: take everyone whose day-7 has already
+// arrived within the last windowDays days, check each against their own
+// day-7 date. windowDays bounds the cohort to a "recent" retention read
+// rather than blending in accounts from indefinitely far back — 90 is
+// deliberately generous rather than a tight "last month" window: this app's
+// oldest real user is currently ~89 days old, so 90 days covers effectively
+// every eligible user today (verified against production: 99/99), giving
+// full accuracy while the platform is this young. It will naturally start
+// excluding old cohorts and become a genuine "recent" read on its own, with
+// no further code change, once the app has more than ~90 days of history —
+// don't shrink this preemptively, let real growth make it tighter.
+// Returns null when nobody's day-7 falls in that window — there is no
+// cohort to evaluate yet, not a 0%.
 export function calculateD7Retention(
   records: UserActivityRecord[],
   referenceDate: Date = new Date(),
+  windowDays: number = 90,
 ): number | null {
-  const day7Target = new Date(referenceDate.getTime() - 7 * MS_PER_DAY);
-  const cohort = records.filter(r => isSameCalendarDay(new Date(r.signupAt), day7Target));
-  if (cohort.length === 0) return null;
+  const eligible = records
+    .map(r => ({ record: r, day7: new Date(new Date(r.signupAt).getTime() + 7 * MS_PER_DAY) }))
+    .filter(({ day7 }) =>
+      day7.getTime() <= referenceDate.getTime() &&
+      day7.getTime() >= referenceDate.getTime() - windowDays * MS_PER_DAY,
+    );
+  if (eligible.length === 0) return null;
 
-  const retained = cohort.filter(r => transactionsOn(r, day7Target) > 0);
-  return (retained.length / cohort.length) * 100;
+  const retained = eligible.filter(({ record, day7 }) => transactionsOn(record, day7) > 0);
+  return (retained.length / eligible.length) * 100;
 }
 
 // ─── 2. Daily Active Transacting Rate ───────────────────────────────────────
@@ -146,11 +166,18 @@ export interface FounderKpi {
   status: HealthStatus | null;
 }
 
+// Rolls up to the largest unit that keeps the number readable — a raw
+// minutes/seconds pair looked broken once the average crossed roughly an
+// hour (e.g. "3985min 3s" for a ~2.8 day average), even though the math
+// behind it was correct.
 function formatTTFR(seconds: number): string {
   if (seconds < 60) return `${Math.round(seconds)}s`;
-  const minutes = Math.floor(seconds / 60);
-  const secs = Math.round(seconds % 60);
-  return `${minutes}min ${secs}s`;
+  const totalMinutes = Math.floor(seconds / 60);
+  if (totalMinutes < 60) return `${totalMinutes}min ${Math.round(seconds % 60)}s`;
+  const totalHours = Math.floor(totalMinutes / 60);
+  if (totalHours < 24) return `${totalHours}h ${totalMinutes % 60}min`;
+  const days = Math.floor(totalHours / 24);
+  return `${days}j ${totalHours % 24}h`;
 }
 
 export function buildFounderKpis(

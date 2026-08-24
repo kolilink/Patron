@@ -16,9 +16,11 @@ import { BusinessDetailsStep } from '@/src/components/BusinessDetailsStep';
 import { useTheme, spacing } from '@/src/theme';
 import type { Palette } from '@/src/theme';
 import { useAuthStore } from '@/stores/auth';
+import { trackEvent, classifyAuthError } from '@/lib/analytics';
 import { useCountdown } from '@/src/hooks/useCountdown';
 import { formatCountdown } from '@/src/utils/format';
 import { inferCurrency } from '@/src/constants/currency';
+import { openWhatsApp } from '@/src/utils/whatsapp';
 
 const OTP_VALIDITY_SECONDS = 600;
 const RESEND_COOLDOWN_SECONDS = 60;
@@ -63,6 +65,10 @@ export default function CreerScreen() {
       setStep('otp');
       otpValidity.start(OTP_VALIDITY_SECONDS);
       resendCooldown.start(RESEND_COOLDOWN_SECONDS);
+    } else {
+      trackEvent('auth_phone_submit_failed', null, null, {
+        reason: classifyAuthError(useAuthStore.getState().error),
+      });
     }
   };
 
@@ -74,6 +80,9 @@ export default function CreerScreen() {
         setStep('details');
       }
     } else {
+      trackEvent('auth_failed', null, null, {
+        reason: classifyAuthError(useAuthStore.getState().error),
+      });
       setOtpKey(k => k + 1);
     }
   };
@@ -164,6 +173,7 @@ export default function CreerScreen() {
             {step === 'otp' && (
               <View style={[styles.form, styles.formCentered]}>
                 <OtpInput key={otpKey} onComplete={handleOtpComplete} disabled={loading} autoFocus whatsappAutofill />
+                <Button label="Ouvrir WhatsApp" variant="ghost" onPress={openWhatsApp} />
                 <Button
                   label={resendCooldown.isDone ? 'Renvoyer le code' : `Renvoyer le code (${formatCountdown(resendCooldown.secondsLeft)})`}
                   variant="ghost"

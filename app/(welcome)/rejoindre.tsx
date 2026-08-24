@@ -15,6 +15,8 @@ import { JoinCodeStep } from '@/src/components/JoinCodeStep';
 import { useTheme, radius, spacing } from '@/src/theme';
 import type { Palette } from '@/src/theme';
 import { useAuthStore } from '@/stores/auth';
+import { trackEvent, classifyAuthError } from '@/lib/analytics';
+import { openWhatsApp } from '@/src/utils/whatsapp';
 
 type Step = 'phone' | 'otp' | 'code';
 
@@ -51,6 +53,10 @@ export default function RejoindreScreen() {
       verificationIdRef.current = result.verificationId;
       phoneRef.current = normalized;
       setStep('otp');
+    } else {
+      trackEvent('auth_phone_submit_failed', null, null, {
+        reason: classifyAuthError(useAuthStore.getState().error),
+      });
     }
   };
 
@@ -62,6 +68,9 @@ export default function RejoindreScreen() {
         setStep('code');
       }
     } else {
+      trackEvent('auth_failed', null, null, {
+        reason: classifyAuthError(useAuthStore.getState().error),
+      });
       setOtpKey(k => k + 1);
     }
   };
@@ -141,6 +150,7 @@ export default function RejoindreScreen() {
           {step === 'otp' && (
             <View style={[styles.form, styles.formCentered]}>
               <OtpInput key={otpKey} onComplete={handleOtpComplete} disabled={loading} autoFocus whatsappAutofill />
+              <Button label="Ouvrir WhatsApp" variant="ghost" onPress={openWhatsApp} />
               <Button label="Renvoyer le code" variant="ghost" loading={loading} onPress={handleResendRejoindre} />
               <Button
                 label="Changer de numéro"

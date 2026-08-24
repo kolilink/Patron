@@ -14,10 +14,11 @@ import { PhoneInput } from '@/src/components/ui/PhoneInput';
 import { useTheme, radius, spacing } from '@/src/theme';
 import type { Palette } from '@/src/theme';
 import { useAuthStore } from '@/stores/auth';
-import { trackEvent } from '@/lib/analytics';
+import { trackEvent, classifyAuthError } from '@/lib/analytics';
 import { useCountdown } from '@/src/hooks/useCountdown';
 import { formatCountdown } from '@/src/utils/format';
 import { getKV, setKV } from '@/lib/db';
+import { openWhatsApp } from '@/src/utils/whatsapp';
 
 const OTP_VALIDITY_SECONDS = 600;
 const RESEND_COOLDOWN_SECONDS = 60;
@@ -86,6 +87,10 @@ export default function ConnexionScreen() {
       otpValidity.start(OTP_VALIDITY_SECONDS);
       resendCooldown.start(RESEND_COOLDOWN_SECONDS);
       setKV(LAST_PHONE_KEY, normalized);
+    } else {
+      trackEvent('auth_phone_submit_failed', null, null, {
+        reason: classifyAuthError(useAuthStore.getState().error),
+      });
     }
   };
 
@@ -99,7 +104,9 @@ export default function ConnexionScreen() {
       trackEvent('auth_otp_verified', null, null);
       await restorePhoneSession(normalizedPhoneRef.current, verificationIdRef.current);
     } else {
-      trackEvent('auth_failed', null, null, { reason: 'invalid_otp' });
+      trackEvent('auth_failed', null, null, {
+        reason: classifyAuthError(useAuthStore.getState().error),
+      });
       setOtpKey(k => k + 1);
     }
   };
@@ -203,6 +210,7 @@ export default function ConnexionScreen() {
           ) : (
             <View style={[styles.form, styles.formCentered]}>
               <OtpInput key={otpKey} onComplete={handleOtpComplete} disabled={loading} autoFocus whatsappAutofill />
+              <Button label="Ouvrir WhatsApp" variant="ghost" onPress={openWhatsApp} />
               <Button
                 label={resendCooldown.isDone ? 'Renvoyer le code' : `Renvoyer le code (${formatCountdown(resendCooldown.secondsLeft)})`}
                 variant="ghost"
