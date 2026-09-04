@@ -81,7 +81,7 @@ function PostHeaderBlock({
       {/* Author row */}
       <View style={styles.authorRow}>
         <View style={[styles.postAvatar, { backgroundColor: color }]}>
-          <Text style={styles.postAvatarText}>{initial}</Text>
+          <Text allowFontScaling={false} style={styles.postAvatarText}>{initial}</Text>
         </View>
         <View style={styles.authorInfo}>
           <Text style={styles.authorName}>{authorName}</Text>
@@ -193,7 +193,7 @@ function CommentItem({
       {/* Avatar + level badge */}
       <View style={styles.commentAvatarWrap}>
         <View style={[styles.commentAvatar, { backgroundColor: color }]}>
-          <Text style={styles.commentAvatarText}>{initial}</Text>
+          <Text allowFontScaling={false} style={styles.commentAvatarText}>{initial}</Text>
         </View>
         <View style={styles.levelBadge}>
           <Text style={styles.levelBadgeText}>{level}</Text>

@@ -25,13 +25,14 @@ function MenuRow({ iconName, label, onPress }: MenuRowProps) {
   const { palette } = useTheme();
   const styles = useMemo(() => makeStyles(palette), [palette]);
   return (
-    <Card onPress={onPress} padded={false} style={styles.menuRow}>
+    <Card onPress={onPress} padded={false} elevated style={styles.menuRow}>
       <View style={styles.menuIconWrap}>
-        <Ionicons name={iconName} size={20} color={palette.textSecondary} />
+        <Ionicons name={iconName} size={18} color={palette.primary} />
       </View>
       <View style={{ flex: 1 }}>
         <Text variant="label">{label}</Text>
       </View>
+      <Ionicons name="chevron-forward" size={16} color={palette.textDisabled} />
     </Card>
   );
 }
@@ -80,7 +81,7 @@ export default function PlusScreen() {
         <Card style={styles.profileCard}>
           <View style={styles.profileRow}>
             <View style={[styles.avatar, { backgroundColor: roleColor + '20' }]}>
-              <Text variant="h4" style={{ color: roleColor }}>
+              <Text variant="h4" allowFontScaling={false} style={{ color: roleColor }}>
                 {(user?.name || generateFallbackName(user?.id ?? ''))[0]?.toUpperCase()}
               </Text>
             </View>
@@ -227,7 +228,12 @@ function makeStyles(p: Palette) {
       flexDirection: 'row', alignItems: 'center',
       paddingHorizontal: spacing[4], paddingVertical: spacing[5], gap: spacing[3],
     },
-    menuIconWrap: { width: 28, alignItems: 'center' },
+    menuIconWrap: {
+      width: 32, height: 32, borderRadius: 8,
+      alignItems: 'center', justifyContent: 'center',
+      backgroundColor: p.background,
+      borderWidth: 1, borderColor: p.border,
+    },
     switchCard: { gap: 2 },
     switchCardActive: { borderWidth: 1.5, borderColor: p.primary },
   });

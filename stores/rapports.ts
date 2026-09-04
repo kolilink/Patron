@@ -125,6 +125,18 @@ interface RapportsState {
     role: string,
     userId: string,
   ) => Promise<void>;
+  // Previous full calendar year — fetched only to power the "vs l'an dernier"
+  // delta on the profit hero. Own slot, not reused off `yearReport`, since
+  // both need to be on screen at once (current year headline + the
+  // comparison baseline it's measured against).
+  previousYearReport: PeriodReport | null;
+  previousYearReportLoading: boolean;
+  fetchPreviousYearReport: (
+    businessId: string,
+    year: number,
+    role: string,
+    userId: string,
+  ) => Promise<void>;
   fetchFilterReport: (
     businessId: string,
     periodStart: string,
@@ -219,10 +231,10 @@ function parsePeriodReport(raw: Record<string, unknown>): PeriodReport {
 async function loadPeriodReport(
   businessId: string, periodStart: string, periodEnd: string, role: string, userId: string,
   set: (partial: Partial<RapportsState>) => void,
-  slot: 'year' | 'filter',
+  slot: 'year' | 'filter' | 'previousYear',
 ): Promise<void> {
-  const loadingKey = slot === 'year' ? 'yearReportLoading' : 'filterReportLoading';
-  const dataKey    = slot === 'year' ? 'yearReport'        : 'filterReport';
+  const loadingKey = slot === 'year' ? 'yearReportLoading' : slot === 'filter' ? 'filterReportLoading' : 'previousYearReportLoading';
+  const dataKey    = slot === 'year' ? 'yearReport'        : slot === 'filter' ? 'filterReport'        : 'previousYearReport';
   set({ [loadingKey]: true } as Partial<RapportsState>);
 
   const cacheKey = `${businessId}:${role}:${userId}:${periodStart}:${periodEnd}`;
@@ -278,6 +290,8 @@ export const useRapportsStore = create<RapportsState>((set) => ({
 
   yearReport: null,
   yearReportLoading: false,
+  previousYearReport: null,
+  previousYearReportLoading: false,
   filterReport: null,
   filterReportLoading: false,
   periodOffline: false,
@@ -360,6 +374,9 @@ export const useRapportsStore = create<RapportsState>((set) => ({
     return loadPeriodReport(businessId, periodStart, periodEnd, role, userId, set, 'year');
   },
 
+  fetchPreviousYearReport: (businessId, year, role, userId) =>
+    loadPeriodReport(businessId, `${year - 1}-01-01`, `${year - 1}-12-31`, role, userId, set, 'previousYear'),
+
   fetchFilterReport: (businessId, periodStart, periodEnd, role, userId) =>
     loadPeriodReport(businessId, periodStart, periodEnd, role, userId, set, 'filter'),
 
@@ -369,6 +386,7 @@ export const useRapportsStore = create<RapportsState>((set) => ({
     snapshot: null, snapshotLoading: false, offline: false, offlineSince: null,
     stockVelocity: [], velocityLoading: false,
     yearReport: null, yearReportLoading: false,
+    previousYearReport: null, previousYearReportLoading: false,
     filterReport: null, filterReportLoading: false,
     periodOffline: false, periodOfflineSince: null,
   }),

@@ -286,9 +286,12 @@ function ExpenseCard({ expense, currency, isManager, canEdit, businessId, userId
         imageUrl={expense.proof_image_url}
         imageWidth={expense.proof_image_width}
         imageHeight={expense.proof_image_height}
+        attachedBy={expense.proof_attached_by}
+        attachedAt={expense.proof_attached_at}
         canAttach={canAttachProof}
         offline={offline}
         onAttached={onProofAttached}
+        onDeleted={onProofAttached}
       />
     </Card>
   );

@@ -6,6 +6,7 @@ import { Card } from '@/src/components/ui/Card';
 import { SkeletonKpiGrid } from '@/src/components/ui/SkeletonPlaceholder';
 import { OfflineNotice } from '@/src/components/ui/OfflineNotice';
 import { Text } from '@/src/components/ui/Text';
+import { Pill } from '@/src/components/ui/Pill';
 import { DatePickerField } from '@/src/components/ui/DatePickerField';
 import { YearHeatmap } from '@/src/components/ui/YearHeatmap';
 import { useTheme, spacing, radius } from '@/src/theme';
@@ -154,6 +155,7 @@ export default function RapportsScreen() {
 
   const {
     yearReport, yearReportLoading,
+    previousYearReport, previousYearReportLoading, fetchPreviousYearReport,
     filterReport, filterReportLoading,
     periodOffline, periodOfflineSince,
     fetchYearReport, fetchFilterReport, clearFilterReport,
@@ -167,6 +169,10 @@ export default function RapportsScreen() {
     : currentYear;
   const [year, setYear] = useState(currentYear);
   const isCurrentYear = year === currentYear;
+  // Whether a genuine, fully-past previous year exists to compare against —
+  // a business created this year has no "l'an dernier" baseline, so the
+  // profit hero shows a plain "first year" caption instead of a delta.
+  const hasPreviousYear = year - 1 >= creationYear;
 
   const [filterType, setFilterType] = useState<FilterType | null>(null);
   const [weekAnchor, setWeekAnchor] = useState(todayIso);
@@ -286,7 +292,12 @@ export default function RapportsScreen() {
     useCallback(() => {
       if (!businessId || !role) return;
       fetchYearReport(businessId, year, role, userId);
-    }, [businessId, role, userId, year]),
+      // Vendeur never sees the profit hero this baseline feeds — skip the
+      // extra round trip entirely for that role.
+      if (!isVendeur && hasPreviousYear) {
+        fetchPreviousYearReport(businessId, year, role, userId);
+      }
+    }, [businessId, role, userId, year, isVendeur, hasPreviousYear]),
   );
 
   useEffect(() => {
@@ -306,6 +317,16 @@ export default function RapportsScreen() {
 
   const myYearSalesCount  = yearReport?.my_sales_count       ?? 0;
   const myYearUnitsSold   = yearReport?.my_units_sold        ?? 0;
+
+  // "vs l'an dernier" — same full-year profit, one year back. Only ever
+  // rendered once a real previous-year figure has actually loaded, so a
+  // brand-new business (or one still fetching) never flashes a misleading
+  // "+100%"-style delta off an implicit zero baseline.
+  const previousYearProfit = previousYearReport?.net_profit ?? 0;
+  const profitDelta = yearProfit - previousYearProfit;
+  const showProfitDeltaPill = !isVendeur && hasPreviousYear
+    && previousYearReport !== null && !previousYearReportLoading
+    && profitDelta !== 0;
 
   const heatmapData = isVendeur ? (yearReport?.my_daily ?? []) : (yearReport?.daily ?? []);
 
@@ -517,7 +538,41 @@ export default function RapportsScreen() {
           </Pressable>
         </View>
 
-        {/* ── Headline: cash + profit (admin/manager/investisseur only) ──── */}
+        {/* ── Headline: profit hero (admin/manager/investisseur only) ──────
+             Bénéfice cumulé is the one number this screen is "about" — sized
+             and elevated to read as the hero, with a real vs-last-year delta
+             underneath. Argent disponible drops to a secondary full-width
+             bar right below, same visual tier as Ventes/Produits vendus. */}
+        {!isVendeur && (
+          <Card elevated style={styles.profitHero}>
+            <Text style={styles.profitHeroLabel}>Bénéfice cumulé {year}</Text>
+            {yearReportLoading ? <ValueSkeleton /> : (
+              <Text
+                style={[styles.profitHeroAmount, { color: yearProfit >= 0 ? palette.success : palette.warning }]}
+                numberOfLines={1}
+                adjustsFontSizeToFit
+              >
+                {fmt(yearProfit, currency)}
+              </Text>
+            )}
+            <View style={styles.profitHeroComparison}>
+              {showProfitDeltaPill ? (
+                <Pill
+                  variant="solid"
+                  tone={profitDelta > 0 ? 'success' : 'warning'}
+                  icon={profitDelta > 0 ? 'arrow-up' : 'arrow-down'}
+                >
+                  {profitDelta > 0
+                    ? `${fmt(Math.abs(profitDelta), currency)} de plus qu'en ${year - 1}`
+                    : `${fmt(Math.abs(profitDelta), currency)} de moins qu'en ${year - 1}`}
+                </Pill>
+              ) : !hasPreviousYear ? (
+                <Text variant="caption" color="secondary">Première année d'activité</Text>
+              ) : null}
+            </View>
+          </Card>
+        )}
+
         {!isVendeur && (
           <View style={styles.gridRow}>
             <StatCard
@@ -525,12 +580,6 @@ export default function RapportsScreen() {
               value={fmt(cashOnHand, currency)}
               accent={cashOnHand >= 0 ? palette.primary : palette.warning}
               bg={cashOnHand >= 0 ? palette.primaryLight : palette.warningLight}
-            />
-            <StatCard
-              label={`Bénéfice cumulé ${year}`} loading={yearReportLoading}
-              value={fmt(yearProfit, currency)}
-              accent={yearProfit >= 0 ? palette.success : palette.warning}
-              bg={yearProfit >= 0 ? palette.successLight : palette.warningLight}
             />
           </View>
         )}
@@ -592,8 +641,15 @@ function makeStyles(p: Palette) {
   },
   content: { padding: spacing[4], gap: spacing[4], paddingBottom: spacing[10] },
 
-  // Year selector
-  yearRow: { flexDirection: 'row', alignItems: 'center', justifyContent: 'center', gap: spacing[5] },
+  // Year selector — a bordered pill, not bare text, so it reads as a real
+  // control (the chevrons alone didn't signal "tappable" clearly enough).
+  yearRow: {
+    flexDirection: 'row', alignItems: 'center', justifyContent: 'center', gap: spacing[5],
+    alignSelf: 'center',
+    paddingVertical: spacing[2], paddingHorizontal: spacing[6],
+    borderRadius: radius.full, borderWidth: 1.5, borderColor: p.border,
+    backgroundColor: p.surface,
+  },
 
   // Period / filter chips
   periodRow:         { flexDirection: 'row', flexWrap: 'wrap', gap: spacing[2], justifyContent: 'center' },
@@ -604,11 +660,25 @@ function makeStyles(p: Palette) {
   stepperRow:        { flexDirection: 'row', alignItems: 'center', justifyContent: 'space-between', paddingHorizontal: spacing[2] },
   customRow:         { flexDirection: 'row', gap: spacing[3] },
 
-  // Hero card (investisseur ROI)
+  // Hero card (investisseur ROI) — currently unused, kept for a future pass
   hero:        { gap: spacing[2], alignItems: 'center', paddingVertical: spacing[5], backgroundColor: p.surface },
   heroCaption: { fontSize: 14, color: p.textSecondary, fontWeight: '500' as const, textAlign: 'center' as const },
   heroAmount:  { fontSize: 34, fontWeight: '800' as const, color: p.textPrimary, letterSpacing: -0.5, lineHeight: 42 },
   heroSub:     { fontSize: 13, color: p.textSecondary, textAlign: 'center' as const },
+
+  // Profit hero — mirrors the dashboard's revenue-hero convention (left-
+  // aligned caption + big amount + a bottom comparison row divided by a
+  // hairline) so the two "hero number" moments in the app read as the same
+  // pattern, not two different ones.
+  profitHero:           { gap: spacing[2] },
+  profitHeroLabel:      { fontSize: 13, color: p.textSecondary, fontWeight: '500' as const },
+  profitHeroAmount:      { fontSize: 32, fontWeight: '800' as const, letterSpacing: -0.5, lineHeight: 38 },
+  profitHeroComparison: {
+    flexDirection: 'row', alignItems: 'center',
+    paddingTop: spacing[3], marginTop: spacing[1],
+    borderTopWidth: StyleSheet.hairlineWidth, borderTopColor: p.border,
+    minHeight: 20,
+  },
 
   // 2-col grid
   gridRow:   { flexDirection: 'row', gap: spacing[4] },

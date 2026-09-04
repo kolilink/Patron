@@ -30,6 +30,24 @@ export const radius = {
   full: 9999,
 } as const;
 
+// Floating detached tab bar (see `(tabs)/_layout.tsx`) — since it's
+// `position: 'absolute'`, it no longer reserves its own space in flex
+// layout the way a normal tab bar does. Every `<Screen tab>` and any
+// absolutely-positioned bottom-anchored element on a tab screen (cart
+// checkout bars, FABs) must add `FLOATING_TAB_BAR_CLEARANCE` to their own
+// bottom offset to avoid rendering underneath the pill. Kept as one shared
+// source of truth so the bar's own position math and every consumer's
+// clearance math can never drift apart.
+// 64 — scaled back up from 52 once the underlying architecture (centering,
+// hidden-tab handling) was confirmed correct and the request became "expand
+// it" (TAB_CIRCLE_SIZE grew 36→48 in `(tabs)/_layout.tsx` alongside this) —
+// not a reversal of the earlier "too tall" complaint, which was about the
+// bar growing around a *fixed* circle rather than both growing together.
+// (64-48)/2 = 8px clearance per side, same ratio the 52/36 pairing had.
+export const FLOATING_TAB_BAR_HEIGHT = 64;
+export const FLOATING_TAB_BAR_GAP = 12; // gap between the pill's bottom edge and the safe-area inset
+export const FLOATING_TAB_BAR_CLEARANCE = FLOATING_TAB_BAR_HEIGHT + FLOATING_TAB_BAR_GAP + 12; // + a little breathing room above the pill
+
 export const shadow = {
   sm: {
     shadowColor: '#1E1B4B',  // deep indigo-dark — warmer than pure slate

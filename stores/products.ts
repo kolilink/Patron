@@ -64,6 +64,13 @@ interface ProductStore {
   archivedProducts: Product[];
   variantsByProduct: Record<string, ProductVariant[]>;
   vendeurProductScope: string[];  // product IDs; empty = unscoped (see all)
+  // Business id fetchProducts last reached a terminal result for — null
+  // until then. See app/(app)/_layout.tsx's showFork gate for why this
+  // exists: `products.length === 0` is ambiguous between "confirmed no
+  // products" and "haven't loaded yet," and that ambiguity made the
+  // activation fork flash on cold start even for a business that already
+  // has a product, before this fetch had resolved.
+  productsFetchedFor: string | null;
   loading: boolean;
   saving: boolean;
   error: string | null;
@@ -97,6 +104,7 @@ export const useProductStore = create<ProductStore>((set, get) => ({
   archivedProducts: [],
   variantsByProduct: {},
   vendeurProductScope: [],
+  productsFetchedFor: null,
   loading: false,
   saving: false,
   error: null,
@@ -132,7 +140,7 @@ export const useProductStore = create<ProductStore>((set, get) => ({
         sale_price: p.sale_price / 100,
         bulk_price: p.bulk_price != null ? p.bulk_price / 100 : null,
       }));
-      set({ products, loading: false, offline: false, offlineSince: null });
+      set({ products, loading: false, offline: false, offlineSince: null, productsFetchedFor: businessId });
       void saveProductCache(businessId, products);
 
       // Low-stock detection: notify admins/managers for each product crossing its threshold.
@@ -167,7 +175,7 @@ export const useProductStore = create<ProductStore>((set, get) => ({
         if (cached) {
           const ts = await getCacheTimestamp('product_cache', businessId);
           if (isStaleBusiness(businessId)) return;
-          set({ products: cached, loading: false, offline: true, offlineSince: ts });
+          set({ products: cached, loading: false, offline: true, offlineSince: ts, productsFetchedFor: businessId });
           return;
         }
         set({
@@ -175,11 +183,12 @@ export const useProductStore = create<ProductStore>((set, get) => ({
           loading: false,
           offline: true,
           offlineSince: null,
+          productsFetchedFor: businessId,
         });
         return;
       }
       if (isStaleBusiness(businessId)) return;
-      set({ error: translateError(err, 'Erreur de chargement'), loading: false });
+      set({ error: translateError(err, 'Erreur de chargement'), loading: false, productsFetchedFor: businessId });
     }
   },
 
@@ -519,6 +528,6 @@ export const useProductStore = create<ProductStore>((set, get) => ({
   clearError: () => set({ error: null }),
   reset: () => {
     notifiedLowStockIds.clear();
-    set({ products: [], archivedProducts: [], variantsByProduct: {}, vendeurProductScope: [], loading: false, error: null, offline: false, offlineSince: null });
+    set({ products: [], archivedProducts: [], variantsByProduct: {}, vendeurProductScope: [], productsFetchedFor: null, loading: false, error: null, offline: false, offlineSince: null });
   },
 }));

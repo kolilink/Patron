@@ -138,6 +138,11 @@ export const paletteLight = {
   textDisabled:   colors.neutral[300],
   textInverse:    colors.neutral[0],
 
+  // Reserved for CTA fills, the active/selected state of nav/segmented
+  // controls, and real brand moments (e.g. the Alpha entry point) — not a
+  // generic tint for prices/links/icons. Used that way it stops signaling
+  // anything; reach for textPrimary/textSecondary by default and only use
+  // primary where it's actually interactive or actually the brand.
   primary:        colors.primary[600],
   primaryLight:   colors.primary[50],
   primaryDark:    colors.primary[700],

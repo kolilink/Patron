@@ -1,15 +1,15 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
-import { Animated, Easing, KeyboardAvoidingView, Modal, Platform, Pressable, ScrollView, StyleSheet, TextInput, View } from 'react-native';
+import { KeyboardAvoidingView, Modal, Platform, Pressable, ScrollView, StyleSheet, TextInput, View } from 'react-native';
 import { Gesture, GestureDetector } from 'react-native-gesture-handler';
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
 import { runOnJS } from 'react-native-reanimated';
-import { LinearGradient } from 'expo-linear-gradient';
 import { Screen } from '@/src/components/ui/Screen';
 import { OfflineNotice } from '@/src/components/ui/OfflineNotice';
 import { router, useFocusEffect } from 'expo-router';
 import { Ionicons } from '@expo/vector-icons';
 import { Button } from '@/src/components/ui/Button';
 import { Card } from '@/src/components/ui/Card';
+import { Pill } from '@/src/components/ui/Pill';
 import { Text } from '@/src/components/ui/Text';
 import { useTheme, radius, spacing } from '@/src/theme';
 import type { Palette } from '@/src/theme';
@@ -79,20 +79,29 @@ function getDayPart(): DayPart {
   return 'night';
 }
 
-function KpiCard({ label, value, sub, onPress, accent }: {
-  label: string; value: string; sub?: string; onPress?: () => void; accent?: string;
+function KpiCard({ label, value, sub, onPress, tone, icon }: {
+  label: string; value: string; sub?: string; onPress?: () => void;
+  tone?: 'success' | 'warning'; icon?: React.ComponentProps<typeof Ionicons>['name'];
 }) {
+  const { palette } = useTheme();
   return (
-    <Card onPress={onPress} style={[{ gap: spacing[1] }, accent ? { borderLeftWidth: 3, borderLeftColor: accent } : null]}>
-      <Text variant="caption" color="secondary">{label}</Text>
-      <Text variant="amountLarge" style={accent ? { color: accent } : undefined}>{value}</Text>
+    <Card onPress={onPress} elevated={!!tone} style={{ gap: spacing[1] }}>
+      <View style={{ flexDirection: 'row', alignItems: 'center', gap: spacing[2] }}>
+        {tone && icon ? (
+          <View style={{ width: 26, height: 26, borderRadius: 13, backgroundColor: palette[tone], alignItems: 'center', justifyContent: 'center' }}>
+            <Ionicons name={icon} size={14} color={palette.textInverse} />
+          </View>
+        ) : null}
+        <Text variant="caption" color="secondary" style={{ flex: 1 }}>{label}</Text>
+      </View>
+      <Text variant="amountLarge" style={tone ? { color: palette[tone] } : undefined}>{value}</Text>
       {sub ? <Text variant="caption" color="secondary">{sub}</Text> : null}
     </Card>
   );
 }
 
 export default function AccueilScreen() {
-  const { palette, resolvedScheme } = useTheme();
+  const { palette } = useTheme();
   const insets = useSafeAreaInsets();
   const styles = useMemo(() => makeStyles(palette), [palette]);
   const session = useAuthStore(s => s.session);
@@ -144,49 +153,15 @@ export default function AccueilScreen() {
   const [showWithdrawSheet, setShowWithdrawSheet] = useState(false);
   const [withdrawAmountStr, setWithdrawAmountStr] = useState('');
 
-  // Alpha entry bar — the app's primary AI entry point (docked to the
-  // bottom of Accueil rather than a header icon, see CLAUDE.md). Submitting
-  // via the keyboard's own send/enter key still works, but the pill also
-  // shows a tappable send button once there's text — same mic/send swap as
-  // the in-chat composer — since relying on the keyboard alone left no way
-  // to submit for anyone not currently using it (e.g. dictation/voice-typing
-  // flows where the keyboard's own return key isn't in view).
-  const [alphaText, setAlphaText] = useState('');
-  const submitAlpha = () => {
-    const trimmed = alphaText.trim();
-    setAlphaText('');
-    if (trimmed) {
-      router.push({ pathname: '/(app)/alpha', params: { q: trimmed } });
-    } else {
-      router.push('/(app)/alpha');
-    }
-  };
-
-  // Mic on the pill — jumps straight into Alpha with recording already
-  // started there, instead of duplicating the record/transcribe/review UI
-  // on this screen. Only shown while the pill is empty, same swap rule as
-  // the in-chat composer's mic/send glyph.
-  const submitAlphaVoice = () => {
-    router.push({ pathname: '/(app)/alpha', params: { autoRecord: '1' } });
-  };
-
-  // Alpha pill glow — a slow-rotating gradient ring around the pill border,
-  // purely to draw the eye to the entry point and incentivize first use.
-  // Loops forever; cost is negligible (native-driven transform only).
-  const alphaGlowRotation = useRef(new Animated.Value(0)).current;
-  useEffect(() => {
-    const loop = Animated.loop(
-      Animated.timing(alphaGlowRotation, {
-        toValue: 1,
-        duration: 3500,
-        easing: Easing.linear,
-        useNativeDriver: true,
-      })
-    );
-    loop.start();
-    return () => loop.stop();
-  }, [alphaGlowRotation]);
-  const alphaGlowSpin = alphaGlowRotation.interpolate({ inputRange: [0, 1], outputRange: ['0deg', '360deg'] });
+  // Alpha's dashboard entry point is the plain "A" header icon only (see
+  // header below) — the floating glow-ring pill that used to sit docked to
+  // the bottom of this screen was removed 2026-09-02: it read as too loud/
+  // attention-grabbing for the home screen and ate real vertical space above
+  // the tab bar, out of step with this app's restrained-color redesign.
+  // Real product tradeoff, taken deliberately: the header icon is a quieter
+  // "jump back into the conversation" affordance, not an inviting "ask
+  // something new" prompt the way the pill was — revisit if Alpha engagement
+  // from Accueil drops noticeably.
 
   const loadedForRef = useRef<string | null>(null);
 
@@ -445,7 +420,6 @@ export default function AccueilScreen() {
 
   const salesCount = kpis?.sales_today ?? 0;
   const delta = (kpis?.revenue_today ?? 0) - (kpis?.revenue_yesterday ?? 0);
-  const deltaColor = delta > 0 ? palette.success : delta < 0 ? palette.warning : palette.textSecondary;
   const showAttentionCards = (kpis?.credit_count ?? 0) > 0 || lowStock > 0;
 
   const dayPart = getDayPart();
@@ -463,13 +437,15 @@ export default function AccueilScreen() {
     ? new Date(business.created_at).toDateString() === new Date().toDateString()
     : false;
   const deltaAmt = isPrivate ? `••••• ${currency}` : fmt(Math.abs(delta), currency);
+  // Only a genuine directional signal earns the loud solid pill — a flat day
+  // stays plain text, same restraint as everywhere else in this app's color
+  // system. "Bienvenue"/"Ce mois" aren't deltas at all, so they never pill.
   const comparisonText = isBusinessCreatedToday
     ? 'Bienvenue'
     : isEvening
     ? `Ce mois : ${amtOrMask(kpis?.revenue_month ?? 0)}`
-    : delta > 0 ? `↑ ${deltaAmt} de plus qu'hier`
-    : delta < 0 ? `↓ ${deltaAmt} de moins qu'hier`
     : "Même niveau qu'hier";
+  const showDeltaPill = !isBusinessCreatedToday && !isEvening && delta !== 0;
 
   return (
     <KeyboardAvoidingView style={{ flex: 1, backgroundColor: palette.background }} behavior={Platform.OS === 'ios' ? 'padding' : undefined}>
@@ -589,7 +565,7 @@ export default function AccueilScreen() {
 
             {/* ── 1. Gains hero ── */}
             {pendingPayout ? (
-              <Card style={[styles.heroCard, { backgroundColor: palette.warningLight }]}>
+              <Card elevated style={[styles.heroCard, { backgroundColor: palette.warningLight }]}>
                 <Text variant="caption" style={{ color: palette.warning }}>Demande en cours</Text>
                 <Text variant="amountLarge" style={{ color: palette.warning, fontSize: 44, lineHeight: 56 }}>
                   {formatAmount(pendingPayout.requested_amount, currency)}
@@ -599,7 +575,7 @@ export default function AccueilScreen() {
                 </Text>
               </Card>
             ) : (
-              <Card style={styles.heroCard}>
+              <Card elevated style={styles.heroCard}>
                 <View style={styles.investorHeroRow}>
                   <View style={{ flex: 1, gap: spacing[1] }}>
                     <Text variant="caption" color="secondary">Vos gains</Text>
@@ -685,7 +661,7 @@ export default function AccueilScreen() {
             {dayGreeting ? (
               <Text variant="caption" color="secondary">{dayGreeting}</Text>
             ) : null}
-            <Card onPress={() => router.push('/ventes')} style={styles.heroCard}>
+            <Card onPress={() => router.push('/ventes')} elevated style={styles.heroCard}>
               <Pressable
                 onPress={() => setIsPrivate(p => !p)}
                 style={styles.heroEye}
@@ -719,9 +695,17 @@ export default function AccueilScreen() {
                 </View>
               </View>
               <View style={styles.heroComparison}>
-                <Text variant="caption" style={{ color: isEvening ? palette.textSecondary : deltaColor }}>
-                  {comparisonText}
-                </Text>
+                {showDeltaPill ? (
+                  <Pill
+                    variant="solid"
+                    tone={delta > 0 ? 'success' : 'warning'}
+                    icon={delta > 0 ? 'arrow-up' : 'arrow-down'}
+                  >
+                    {delta > 0 ? `${deltaAmt} de plus qu'hier` : `${deltaAmt} de moins qu'hier`}
+                  </Pill>
+                ) : (
+                  <Text variant="caption" color="secondary">{comparisonText}</Text>
+                )}
               </View>
             </Card>
 
@@ -734,7 +718,8 @@ export default function AccueilScreen() {
                     label={`${kpis?.credit_count} client${(kpis?.credit_count ?? 0) > 1 ? 's' : ''} qui doivent`}
                     value={amtOrMask(kpis?.credit_total ?? 0)}
                     onPress={() => router.push({ pathname: '/(app)/clients', params: { filter: 'doivent' } })}
-                    accent={palette.warning}
+                    tone="warning"
+                    icon="cash-outline"
                   />
                 )}
                 {lowStock > 0 && (
@@ -743,7 +728,8 @@ export default function AccueilScreen() {
                     value={String(lowStock)}
                     sub={`produit${lowStock > 1 ? 's' : ''} à racheter`}
                     onPress={isVendeur ? undefined : () => router.push('/(app)/(tabs)/catalogue')}
-                    accent={palette.danger}
+                    tone="warning"
+                    icon="leaf-outline"
                   />
                 )}
               </View>
@@ -778,66 +764,6 @@ export default function AccueilScreen() {
           </>
         )}
       </ScrollView>
-
-      {/* ── Alpha entry bar — primary AI entry point. Google-style: a fully
-          rounded pill floating with margin on every side, detached from the
-          tab bar rather than a flush full-width strip. Mic swaps to a send
-          button the instant there's text, same rule as the in-chat composer. ── */}
-      <View style={styles.alphaBarWrap}>
-        {/* Outer wrapper carries the colored ambient shadow — it can't live
-            on `alphaGlowContainer` itself, since that view's overflow:hidden
-            (needed to clip the rotating ring below) would clip the shadow
-            too, since shadows render outside a view's own bounds. */}
-        <View
-          style={{
-            shadowColor: palette.primary,
-            // A plain black shadow (the app's default `palette.shadow`) is
-            // nearly invisible against a dark surface, so the pill needs its
-            // own colored glow to actually read as "glowing" in dark mode —
-            // boosted well past the light-mode value, which only needs a
-            // faint lift off a near-white background.
-            shadowOpacity: resolvedScheme === 'dark' ? 0.3 : 0.25,
-            shadowRadius: resolvedScheme === 'dark' ? 8 : 10,
-            shadowOffset: { width: 0, height: 0 },
-          }}
-        >
-          <View style={styles.alphaGlowContainer}>
-            <Animated.View style={[styles.alphaGlowRotator, { transform: [{ rotate: alphaGlowSpin }] }]}>
-              <LinearGradient
-                style={StyleSheet.absoluteFill}
-                colors={[palette.primary, 'transparent', 'transparent', 'transparent', palette.primary]}
-                start={{ x: 0, y: 0 }}
-                end={{ x: 1, y: 1 }}
-              />
-            </Animated.View>
-            <View style={[styles.alphaBar, { backgroundColor: palette.surface, shadowColor: palette.shadow }]}>
-              <TextInput
-                style={[styles.alphaInput, { color: palette.textPrimary }]}
-                value={alphaText}
-                onChangeText={setAlphaText}
-                placeholder="Parler avec Alpha…"
-                placeholderTextColor={palette.textSecondary}
-                onSubmitEditing={submitAlpha}
-                returnKeyType="send"
-                blurOnSubmit={false}
-              />
-              {alphaText.trim() ? (
-                <Pressable
-                  onPress={submitAlpha}
-                  hitSlop={8}
-                  style={({ pressed }) => [styles.alphaPillSendBtn, pressed && { opacity: 0.6 }]}
-                >
-                  <Ionicons name="arrow-up" size={18} color={palette.textInverse} />
-                </Pressable>
-              ) : (
-                <Pressable onPress={submitAlphaVoice} hitSlop={8}>
-                  <Ionicons name="mic" size={20} color={palette.primary} />
-                </Pressable>
-              )}
-            </View>
-          </View>
-        </View>
-      </View>
 
       {/* ── Withdrawal sheet ── */}
       <Modal
@@ -929,43 +855,6 @@ function makeStyles(p: Palette) {
       paddingHorizontal: 3,
     },
     chatBadgeText: { fontSize: 9, fontWeight: '700' as const, color: p.textInverse, lineHeight: 12 },
-
-    alphaBarWrap: {
-      paddingHorizontal: spacing[4],
-      paddingTop: spacing[2],
-      paddingBottom: spacing[3],
-    },
-    // Clips the rotating gradient to a ring: padding here is the ring's
-    // visible thickness, `alphaBar` inside covers everything but that edge.
-    alphaGlowContainer: {
-      borderRadius: radius.full,
-      padding: 2,
-      overflow: 'hidden',
-    },
-    // Sized to comfortably cover the container's diagonal at any rotation
-    // angle (2x the box in both dimensions, centered) — a plain linear
-    // gradient spun behind the pill, so as it rotates the bright end sweeps
-    // continuously around the ring like a chasing light.
-    alphaGlowRotator: {
-      position: 'absolute',
-      top: '-50%', left: '-50%',
-      width: '200%', height: '200%',
-    },
-    alphaBar: {
-      flexDirection: 'row', alignItems: 'center', gap: spacing[3],
-      paddingHorizontal: spacing[5], paddingVertical: spacing[3],
-      borderRadius: radius.full,
-      shadowOffset: { width: 0, height: 2 },
-      shadowOpacity: 0.12,
-      shadowRadius: 8,
-      elevation: 3,
-    },
-    alphaInput: { flex: 1, fontSize: 15, paddingVertical: 4 },
-    alphaPillSendBtn: {
-      width: 32, height: 32, borderRadius: 16,
-      alignItems: 'center', justifyContent: 'center',
-      backgroundColor: p.primary,
-    },
 
     heroCard: {},
     investorHeroRow: { flexDirection: 'row' as const, alignItems: 'center' as const, gap: spacing[4] },
