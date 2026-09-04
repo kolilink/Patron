@@ -53,6 +53,8 @@ export interface CommandeAchat {
   proof_image_url?: string | null;
   proof_image_width?: number | null;
   proof_image_height?: number | null;
+  proof_attached_by?: string | null;
+  proof_attached_at?: string | null;
   lines?: CommandeLigne[];
 }
 
@@ -276,53 +278,30 @@ export const useFournisseursStore = create<FournisseursStore>((set, get) => ({
 
   createCommande: async (businessId, userId, input) => {
     set({ saving: true, error: null });
-    const poId = generateId();
-    const total = input.lines.reduce((s, l) => s + l.qty * l.unit_cost, 0);
-
-    const { error: poErr } = await supabase.from('purchase_orders').insert({
-      id: poId,
-      business_id: businessId,
-      supplier_id: input.supplierId,
-      status: 'brouillon',
-      ordered_at: new Date().toISOString(),
-      total_cost: total,
-      created_by: userId,
+    // create_purchase_order() creates the PO + lines, records a
+    // supplier_debts row for any unpaid shortfall, AND records a
+    // supplier_payments row for whatever was actually paid at order time —
+    // all atomically. The old client-side sequence (PO insert → lines
+    // insert → an unchecked debt insert) never recorded the paid portion
+    // anywhere, so cash_on_hand never reflected money actually paid to a
+    // supplier at order time. See db/migration_v172.sql.
+    const { error } = await supabase.rpc('create_purchase_order', {
+      p_business_id: businessId,
+      p_supplier_id: input.supplierId,
+      p_lines: input.lines.map(l => ({
+        product_id: l.product_id,
+        variant_id: l.variant_id ?? null,
+        qty: l.qty,
+        unit_cost: l.unit_cost,
+      })),
+      p_amount_paid: input.amountPaid,
     });
-    if (poErr) { set({ error: translateError(poErr, 'Impossible de créer la commande'), saving: false }); return false; }
-
-    const lines = input.lines.map(l => ({
-      id: generateId(),
-      po_id: poId,
-      product_id: l.product_id,
-      variant_id: l.variant_id ?? null,
-      qty_ordered: l.qty,
-      qty_received: 0,
-      unit_cost: l.unit_cost,
-    }));
-    const { error: lErr } = await supabase.from('po_lines').insert(lines);
-    if (lErr) {
-      await supabase.from('purchase_orders').delete().eq('id', poId);
-      set({ error: translateError(lErr, "Impossible d'enregistrer les lignes de commande"), saving: false });
+    if (error) {
+      set({ error: translateError(error, 'Impossible de créer la commande'), saving: false });
       return false;
     }
 
-    // Auto-create a supplier debt for any unpaid balance
-    const amountPaid = input.amountPaid ?? total;
-    if (amountPaid < total - 0.01) {
-      const owed = total - amountPaid;
-      await supabase.from('supplier_debts').insert({
-        business_id: businessId,
-        supplier_id: input.supplierId,
-        amount: Math.round(owed * 100),
-        amount_paid: 0,
-        description: null,
-        date: new Date().toISOString().split('T')[0],
-        created_by: userId,
-      });
-      await get().fetchDebts(businessId);
-    }
-
-    await get().fetchCommandes(businessId);
+    await Promise.all([get().fetchCommandes(businessId), get().fetchDebts(businessId)]);
     set({ saving: false });
     return true;
   },

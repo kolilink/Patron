@@ -11,7 +11,19 @@ interface TextProps extends RNTextProps {
   color?: Color;
 }
 
-export function Text({ variant = 'body', color = 'primary', style, ...props }: TextProps) {
+export function Text({
+  variant = 'body',
+  color = 'primary',
+  style,
+  allowFontScaling = true,
+  // Respects the OS text-size setting (accessibility) without letting the most
+  // extreme settings (iOS goes up to ~3.5x) break layouts nobody designed for
+  // that much growth. Fixed-geometry text (single-glyph avatar initials, the
+  // OTP digit boxes) overrides this back to allowFontScaling={false} at the
+  // call site instead — see src/components/ui/OtpInput.tsx for the pattern.
+  maxFontSizeMultiplier = 1.3,
+  ...props
+}: TextProps) {
   const { palette } = useTheme();
   const colorMap: Record<Color, string> = {
     primary:   palette.textPrimary,
@@ -25,7 +37,8 @@ export function Text({ variant = 'body', color = 'primary', style, ...props }: T
   };
   return (
     <RNText
-      allowFontScaling={false}
+      allowFontScaling={allowFontScaling}
+      maxFontSizeMultiplier={maxFontSizeMultiplier}
       style={[typography[variant], { color: colorMap[color] }, style]}
       {...props}
     />

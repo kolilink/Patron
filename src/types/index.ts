@@ -244,6 +244,8 @@ export interface Expense {
   proof_image_url?: string | null;
   proof_image_width?: number | null;
   proof_image_height?: number | null;
+  proof_attached_by?: string | null;
+  proof_attached_at?: string | null;
 }
 
 // ─── Change Proposal ──────────────────────────────────────────────────────────

@@ -27,7 +27,7 @@ import { Text } from '@/src/components/ui/Text';
 import { PhoneInput } from '@/src/components/ui/PhoneInput';
 import { SaleReceiptView, type ReceiptData, type ReceiptItem } from '@/src/components/ui/SaleReceiptView';
 import { DatePickerField } from '@/src/components/ui/DatePickerField';
-import { useTheme, radius, spacing, CLIENT_AVATAR_PALETTE } from '@/src/theme';
+import { useTheme, radius, spacing, FLOATING_TAB_BAR_CLEARANCE, CLIENT_AVATAR_PALETTE } from '@/src/theme';
 import type { Palette } from '@/src/theme';
 import { formatAmount, formatAmountInput, parseAmountInput } from '@/src/utils/format';
 import { todayIso } from '@/src/utils/dates';
@@ -701,7 +701,7 @@ function PaymentModal({
                             style={({ pressed }) => [styles.clientResultRow, pressed && { opacity: 0.55 }]}
                           >
                             <View style={[styles.clientAvatar, { backgroundColor: avatarBg }]}>
-                              <Text style={styles.clientAvatarText}>{initial}</Text>
+                              <Text allowFontScaling={false} style={styles.clientAvatarText}>{initial}</Text>
                             </View>
                             <View style={{ flex: 1 }}>
                               <Text variant="body">{c.name}</Text>
@@ -1969,7 +1969,10 @@ function makeStyles(p: Palette) {
     },
 
     cartPanel: {
-      position: 'absolute', bottom: 0, left: 0, right: 0,
+      // `bottom: 0` used to be flush with the (non-floating) tab bar's own
+      // top edge — the floating pill no longer occupies that space, so this
+      // needs its own explicit clearance now. See FLOATING_TAB_BAR_CLEARANCE.
+      position: 'absolute', bottom: FLOATING_TAB_BAR_CLEARANCE, left: 0, right: 0,
       backgroundColor: p.surface, borderTopWidth: 1, borderTopColor: p.border,
       shadowColor: p.shadow, shadowOffset: { width: 0, height: -4 },
       shadowOpacity: 0.1, shadowRadius: 12, elevation: 10,
@@ -2036,7 +2039,10 @@ function makeStyles(p: Palette) {
 
     emptyFull: { flex: 1, alignItems: 'center', justifyContent: 'center', padding: spacing[8], gap: spacing[3] },
     emptyDesc: { textAlign: 'center', maxWidth: 260 },
-    fabContainer: { position: 'absolute', bottom: 194, right: spacing[4], zIndex: 10 },
+    // 194 was tuned against the old flush tab bar's flex space; the floating
+    // pill no longer reserves that space, so the same clearance is added
+    // here too to keep this FAB sitting exactly where it did before.
+    fabContainer: { position: 'absolute', bottom: 194 + FLOATING_TAB_BAR_CLEARANCE, right: spacing[4], zIndex: 10 },
     fab: { width: 56, height: 56, borderRadius: radius.full, backgroundColor: p.primary, alignItems: 'center', justifyContent: 'center', shadowColor: p.textPrimary, shadowOffset: { width: 0, height: 4 }, shadowOpacity: 0.18, shadowRadius: 8, elevation: 8 },
     fabIcon: { fontSize: 28, lineHeight: 32, fontWeight: '300' as const, color: p.textInverse, marginTop: -2 },
     emptySearch: { alignItems: 'center', paddingVertical: spacing[10] },

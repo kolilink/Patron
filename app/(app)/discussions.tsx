@@ -209,7 +209,7 @@ function MessageBubble({
             <View style={styles.avatarCol}>
               {showAvatar ? (
                 <View style={[styles.avatar, { backgroundColor: color }]}>
-                  <Text style={styles.avatarText}>{initial}</Text>
+                  <Text allowFontScaling={false} style={styles.avatarText}>{initial}</Text>
                 </View>
               ) : (
                 <View style={styles.avatarSpacer} />
@@ -332,7 +332,7 @@ function PostCard({ post, isNew, isLiked, isOwnPost, onPress, onLike }: {
       {/* Top row: avatar + author name · time · category (all inline left) */}
       <View style={styles.pcTopRow}>
         <View style={[styles.pcAvatar, { backgroundColor: avatarColor }]}>
-          <Text style={styles.pcAvatarText}>{initial}</Text>
+          <Text allowFontScaling={false} style={styles.pcAvatarText}>{initial}</Text>
         </View>
         <View style={styles.pcAuthorInfo}>
           <Text style={styles.pcAuthorName} numberOfLines={1}>{authorName}</Text>
@@ -1309,7 +1309,7 @@ export default function DiscussionsScreen() {
                     {partnerPending.map(req => (
                       <View key={req.id} style={styles.amisRequestRow}>
                         <View style={[styles.amisAvatar, { backgroundColor: `${palette.primary}22` }]}>
-                          <Text style={[styles.amisAvatarText, { color: palette.primary }]}>
+                          <Text allowFontScaling={false} style={[styles.amisAvatarText, { color: palette.primary }]}>
                             {req.requester_business_name.charAt(0).toUpperCase()}
                           </Text>
                         </View>
@@ -1356,7 +1356,7 @@ export default function DiscussionsScreen() {
                         }}
                       >
                         <View style={[styles.amisAvatar, { backgroundColor: `${palette.primary}22` }]}>
-                          <Text style={[styles.amisAvatarText, { color: palette.primary }]}>
+                          <Text allowFontScaling={false} style={[styles.amisAvatarText, { color: palette.primary }]}>
                             {p.display_name.charAt(0).toUpperCase()}
                           </Text>
                         </View>

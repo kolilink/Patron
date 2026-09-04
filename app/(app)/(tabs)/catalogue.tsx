@@ -10,6 +10,7 @@ import {
   Modal,
   Platform,
   Pressable,
+  RefreshControl,
   ScrollView,
   StyleSheet,
   Switch,
@@ -22,10 +23,11 @@ import { FormSheet } from '@/src/components/ui/FormSheet';
 import { Button } from '@/src/components/ui/Button';
 import { Card } from '@/src/components/ui/Card';
 import { Input } from '@/src/components/ui/Input';
+import { Pill } from '@/src/components/ui/Pill';
 import { Text } from '@/src/components/ui/Text';
 import { PhoneInput } from '@/src/components/ui/PhoneInput';
 import { Ionicons } from '@expo/vector-icons';
-import { useTheme, radius, spacing, shadow, fontFamily as FF, PRODUCT_BADGE_PALETTE } from '@/src/theme';
+import { useTheme, radius, spacing, shadow, fontFamily as FF, FLOATING_TAB_BAR_CLEARANCE, PRODUCT_BADGE_PALETTE } from '@/src/theme';
 import type { Palette } from '@/src/theme';
 import type { Product, ProductVariant } from '@/src/types';
 import { useAuthStore } from '@/stores/auth';
@@ -658,7 +660,7 @@ function ProductFormModal({ visible, editing, onClose, onSave, saving, currency,
               )}
               {showProfitHint && (
                 <View style={styles.liveCalcBlock}>
-                  <Text style={[styles.liveCalcText, { color: sp > computedCost ? palette.success : palette.danger }]}>
+                  <Text style={[styles.liveCalcText, { color: sp > computedCost ? palette.success : palette.warning }]}>
                     Bénéfice : {(sp - computedCost).toLocaleString('fr-FR')} {currency} par pièce
                   </Text>
                 </View>
@@ -841,7 +843,7 @@ function ProductStatsModal({ visible, product, onClose, businessId, currency, fe
 
   if (!product) return null;
 
-  const profitColor = stats && stats.profit >= 0 ? palette.success : palette.danger;
+  const profitColor = stats && stats.profit >= 0 ? palette.success : palette.warning;
 
   return (
     <FormSheet
@@ -936,31 +938,20 @@ function StockStatus({ product, variants }: { product: Product; variants?: Produ
     if (!variants || variants.length === 0) return null;
     const isOut = variants.every(v => v.stock_qty <= 0);
     if (!isOut) return null;
-    return (
-      <View style={styles.stockOutRow}>
-        <Text style={styles.stockOutText}>Épuisé</Text>
-      </View>
-    );
+    return <Pill tone="warning">Épuisé</Pill>;
   }
 
   const isOut = product.stock_qty === 0;
   const isLow = !isOut && product.reorder_level > 0 && product.stock_qty <= product.reorder_level;
 
   if (isOut) {
-    return (
-      <View style={styles.stockOutRow}>
-        <Text style={styles.stockOutText}>Épuisé</Text>
-      </View>
-    );
+    return <Pill tone="warning">Épuisé</Pill>;
   }
   if (isLow) {
     return (
-      <View style={styles.stockLowRow}>
-        <Ionicons name="leaf-outline" size={11} color={palette.warning} />
-        <Text style={styles.stockLowText}>
-          Bientôt fini · Il reste {product.stock_qty} {product.unit}
-        </Text>
-      </View>
+      <Pill tone="warning" icon="leaf-outline">
+        Bientôt fini · Il reste {product.stock_qty} {product.unit}
+      </Pill>
     );
   }
   return (
@@ -998,7 +989,7 @@ function ProductRow({ product, currency, onPress, onLongPress, archived, variant
         style={({ pressed }) => [styles.productRow, pressed && { opacity: 0.65 }]}
       >
         <View style={[styles.productBadge, { backgroundColor: badgeBg, opacity: 0.5 }]}>
-          <Text style={[styles.productBadgeText, { color: badgeTextColor }]}>{initial}</Text>
+          <Text allowFontScaling={false} style={[styles.productBadgeText, { color: badgeTextColor }]}>{initial}</Text>
         </View>
         <View style={styles.productCenter}>
           <Text style={[styles.productName, { color: palette.textDisabled }]} numberOfLines={1}>{product.name}</Text>
@@ -1258,6 +1249,7 @@ export default function CatalogueScreen() {
   const [actionSheetProduct, setActionSheetProduct] = useState<Product | null>(null);
   const [showRestoreSheet, setShowRestoreSheet] = useState(false);
   const [restoreSheetProduct, setRestoreSheetProduct] = useState<Product | null>(null);
+  const [refreshing, setRefreshing] = useState(false);
 
   useEffect(() => {
     if (editingProduct?.has_variants && businessId) {
@@ -1321,6 +1313,13 @@ export default function CatalogueScreen() {
       fetchArchivedProducts(businessId);
     }
   }, [tab, businessId]);
+
+  const onRefresh = useCallback(async () => {
+    if (!businessId) return;
+    setRefreshing(true);
+    await (tab === 'archives' ? fetchArchivedProducts(businessId) : fetchProducts(businessId, userId));
+    setRefreshing(false);
+  }, [businessId, userId, tab]);
 
   useEffect(() => {
     if (!businessId || products.length === 0) return;
@@ -1597,6 +1596,9 @@ export default function CatalogueScreen() {
           contentContainerStyle={styles.list}
           showsVerticalScrollIndicator={false}
           keyboardShouldPersistTaps="handled"
+          refreshControl={
+            <RefreshControl refreshing={refreshing} onRefresh={onRefresh} tintColor={palette.primary} colors={[palette.primary]} />
+          }
           ListEmptyComponent={
             search.trim() ? (
               <View style={[styles.emptyState, { paddingTop: spacing[10] }]}>
@@ -1792,22 +1794,6 @@ function makeStyles(p: Palette) {
     productCenter: { flex: 1, paddingLeft: 12, gap: 3 },
     productName: { fontFamily: FF.semibold, fontSize: 16, color: p.textPrimary },
     productStockText: { fontFamily: FF.regular, fontSize: 13, color: p.textSecondary },
-    stockLowRow: {
-      flexDirection: 'row', alignItems: 'center', gap: 4,
-      alignSelf: 'flex-start',
-      backgroundColor: p.warningLight,
-      borderRadius: radius.full,
-      paddingHorizontal: 8, paddingVertical: 3,
-    },
-    stockLowText: { fontFamily: FF.medium, fontSize: 12, color: p.warning },
-    stockOutRow: {
-      flexDirection: 'row', alignItems: 'center', gap: 4,
-      alignSelf: 'flex-start',
-      backgroundColor: p.warningLight,
-      borderRadius: radius.full,
-      paddingHorizontal: 8, paddingVertical: 3,
-    },
-    stockOutText: { fontFamily: FF.semibold, fontSize: 12, color: p.warning },
     productMeta: { flexDirection: 'row', gap: spacing[2], alignItems: 'center' },
     categoryBadge: {
       backgroundColor: p.primaryLight, borderRadius: radius.sm,
@@ -1821,7 +1807,10 @@ function makeStyles(p: Palette) {
     priceText: { fontFamily: FF.semibold, fontSize: 15, color: p.primary },
     emptyState: { flex: 1, alignItems: 'center', justifyContent: 'center', padding: spacing[8], gap: spacing[3] },
     emptyDesc: { textAlign: 'center', maxWidth: 260 },
-    fabContainer: { position: 'absolute', bottom: 194, right: spacing[4], zIndex: 10 },
+    // 194 was tuned against the old flush tab bar's flex space; the floating
+    // pill no longer reserves that space, so the same clearance is added
+    // here too to keep this FAB sitting exactly where it did before.
+    fabContainer: { position: 'absolute', bottom: 194 + FLOATING_TAB_BAR_CLEARANCE, right: spacing[4], zIndex: 10 },
     fab: {
       width: 56, height: 56, borderRadius: radius.full,
       backgroundColor: p.primary, alignItems: 'center', justifyContent: 'center',

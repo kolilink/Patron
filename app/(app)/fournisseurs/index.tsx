@@ -1,7 +1,7 @@
 import { useEffect, useMemo, useRef, useState } from 'react';
 import { Alert, Animated, Easing, FlatList, LayoutAnimation, Modal, Platform, Pressable, ScrollView, StyleSheet, TextInput, UIManager, View } from 'react-native';
 import { Ionicons } from '@expo/vector-icons';
-import { SafeAreaView } from 'react-native-safe-area-context';
+import { SafeAreaView, useSafeAreaInsets } from 'react-native-safe-area-context';
 import { Screen } from '@/src/components/ui/Screen';
 import { FormSheet } from '@/src/components/ui/FormSheet';
 import { OfflineNotice } from '@/src/components/ui/OfflineNotice';
@@ -10,16 +10,18 @@ import { router } from 'expo-router';
 import { Button } from '@/src/components/ui/Button';
 import { Card } from '@/src/components/ui/Card';
 import { Input } from '@/src/components/ui/Input';
+import { Pill } from '@/src/components/ui/Pill';
 import { Text } from '@/src/components/ui/Text';
 import { PhoneInput } from '@/src/components/ui/PhoneInput';
 import { DatePickerField } from '@/src/components/ui/DatePickerField';
 import { BouncingSmileyEmpty } from '@/src/components/ui/BouncingSmileyEmpty';
-import { useTheme, spacing, radius, SUPPLIER_AVATAR_PALETTE } from '@/src/theme';
+import { useTheme, spacing, radius, shadow, SUPPLIER_AVATAR_PALETTE } from '@/src/theme';
 import type { Palette } from '@/src/theme';
 import type { Product, ProductVariant } from '@/src/types';
 import { useAuthStore } from '@/stores/auth';
 import { useProductStore } from '@/stores/products';
 import { useFournisseursStore, type CommandeAchat, type Fournisseur } from '@/stores/fournisseurs';
+import { useRapportsStore } from '@/stores/rapports';
 import { haptics } from '@/lib/haptics';
 import { translateError } from '@/lib/errors';
 import { generateId } from '@/lib/id';
@@ -43,6 +45,40 @@ function getStatusColor(status: string, p: Palette): string {
     recu_partiel: p.warning, recu: p.success, annule: p.textSecondary,
   };
   return map[status] ?? p.textSecondary;
+}
+
+// Debt age since it was recorded (there's no due_date on supplier_debts to
+// count down to, unlike client credit) — 14 days is a deliberately simple,
+// disclosed threshold for "this has been sitting a while," not a real term.
+const DEBT_AGE_WARNING_DAYS = 14;
+function debtAgeDays(iso: string): number {
+  return Math.max(0, Math.round((Date.now() - new Date(iso + 'T00:00:00').getTime()) / 86400000));
+}
+function fmtDebtAge(iso: string): string {
+  const days = debtAgeDays(iso);
+  if (days === 0) return "Depuis aujourd'hui";
+  if (days === 1) return 'Depuis 1 jour';
+  return `Depuis ${days} jours`;
+}
+
+// `recu`/`recu_partiel` are real signals (a done/attention-needed judgment),
+// so they route through the shared solid-color-adjacent Pill for the same
+// glanceability this session already gave the dashboard delta and stock
+// badges. `brouillon`/`envoye`/`annule` are just neutral workflow stage
+// labels, not a signal to react to — forcing those through Pill's
+// restricted success/warning tone type would either misrepresent them or
+// widen Pill's type just to fit a case it wasn't designed for, so they keep
+// their own plain tinted-label treatment instead.
+function OrderStatusPill({ status }: { status: string }) {
+  const { palette } = useTheme();
+  const styles = useMemo(() => makeStyles(palette), [palette]);
+  if (status === 'recu') return <Pill tone="success">{STATUS_LABEL[status]}</Pill>;
+  if (status === 'recu_partiel') return <Pill tone="warning">{STATUS_LABEL[status]}</Pill>;
+  return (
+    <View style={[styles.statusPill, { backgroundColor: getStatusColor(status, palette) + '20' }]}>
+      <Text variant="caption" style={{ color: getStatusColor(status, palette) }}>{STATUS_LABEL[status]}</Text>
+    </View>
+  );
 }
 
 interface FournisseurFormData {
@@ -350,19 +386,23 @@ type CommandeLine = { product_id: string; product_name: string; variant_id: stri
 function CommandeForm({ visible, fournisseur, currency, onClose, onSave, saving }: {
   visible: boolean; fournisseur: Fournisseur | null; currency: string;
   onClose: () => void;
-  onSave: (lines: { product_id: string; product_name: string; variant_id: string | null; qty: number; unit_cost: number }[]) => Promise<void>;
+  onSave: (lines: { product_id: string; product_name: string; variant_id: string | null; qty: number; unit_cost: number }[], amountPaid: number) => Promise<void>;
   saving: boolean;
 }) {
   const { palette } = useTheme();
   const styles = useMemo(() => makeStyles(palette), [palette]);
+  const insets = useSafeAreaInsets();
   const { products, variantsByProduct, fetchVariants } = useProductStore();
+  const cashOnHand = useRapportsStore(s => s.yearReport?.cash_on_hand ?? null);
   const [lines, setLines] = useState<CommandeLine[]>([]);
   const [showPicker, setShowPicker] = useState(false);
+  const [paymentInput, setPaymentInput] = useState('');
   const seededForRef = useRef<string | null>(null);
 
   useEffect(() => {
     if (!visible) {
       seededForRef.current = null;
+      setPaymentInput('');
       return;
     }
     const fId = fournisseur?.id ?? null;
@@ -377,6 +417,22 @@ function CommandeForm({ visible, fournisseur, currency, onClose, onSave, saving 
     linked.filter(p => p.has_variants && !variantsByProduct[p.id]).forEach(p => fetchVariants(p.id, fId ?? ''));
   }, [visible, products, fournisseur?.id]);
 
+  // Best-effort background refresh so the overspend warning below has a
+  // real number to compare against — cash_on_hand is only ever populated
+  // once the Rapports screen has loaded it this session, so a merchant who
+  // opens "Nouvelle commande" without ever visiting Rapports would
+  // otherwise silently never see the warning. Fire-and-forget: this is a
+  // soft nice-to-have, not worth blocking or delaying order creation for.
+  const session = useAuthStore(s => s.session);
+  useEffect(() => {
+    if (!visible) return;
+    const bId = session?.activeBusiness?.id;
+    const role = session?.activeMembership?.role;
+    const uid = session?.user?.id;
+    if (!bId || !role || !uid) return;
+    useRapportsStore.getState().fetchYearReport(bId, new Date().getFullYear(), role, uid);
+  }, [visible, session?.activeBusiness?.id, session?.activeMembership?.role, session?.user?.id]);
+
   const addLine = (p: Product) => {
     setLines(prev => [...prev, { product_id: p.id, product_name: p.name, variant_id: null, variant_name: null, qty: '1', total_cost: p.cost_price > 0 && !p.has_variants ? formatAmountInput(String(Math.round(p.cost_price)), currency) : '' }]);
     if (p.has_variants && !variantsByProduct[p.id]) {
@@ -385,6 +441,8 @@ function CommandeForm({ visible, fournisseur, currency, onClose, onSave, saving 
   };
 
   const total = lines.reduce((s, l) => s + parseAmountInput(l.total_cost, currency), 0);
+  const parsedPaid = paymentInput.trim() === '' ? total : parseAmountInput(paymentInput, currency);
+  const owed = Math.max(0, total - parsedPaid);
 
   // Picker only shows products not already in lines, supplier-linked ones first
   const lineIds = new Set(lines.map(l => l.product_id));
@@ -399,7 +457,7 @@ function CommandeForm({ visible, fournisseur, currency, onClose, onSave, saving 
       title="Nouvelle commande"
       contentContainerStyle={styles.mpad}
       footer={
-        <View style={styles.mfooter}>
+        <View style={[styles.mfooter, { paddingBottom: Math.max(insets.bottom, spacing[5]) }]}>
           <Button label={saving ? '…' : 'Créer la commande'} loading={saving} fullWidth size="lg"
             disabled={lines.length === 0}
             onPress={() => {
@@ -410,7 +468,21 @@ function CommandeForm({ visible, fournisseur, currency, onClose, onSave, saving 
               });
               const invalid = parsed.find(l => l.qty <= 0 || l.unit_cost <= 0);
               if (invalid) { Alert.alert(`Un petit contrôle sur la quantité et le coût :)`, `"${invalid.product_name}"`); return; }
-              onSave(parsed);
+              const effectivePaid = paymentInput.trim() === '' ? total : parsedPaid;
+              // Soft, non-blocking warning only — never prevents ordering on
+              // credit/against savings not tracked as "cash on hand".
+              if (cashOnHand !== null && effectivePaid > cashOnHand) {
+                Alert.alert(
+                  'Montant supérieur à l\'argent disponible',
+                  `Vous payez ${fmt(effectivePaid, currency)} alors que l'argent disponible est de ${fmt(cashOnHand, currency)}. Continuer quand même ?`,
+                  [
+                    { text: 'Annuler', style: 'cancel' },
+                    { text: 'Continuer', onPress: () => onSave(parsed, effectivePaid) },
+                  ],
+                );
+                return;
+              }
+              onSave(parsed, effectivePaid);
             }} />
         </View>
       }
@@ -509,9 +581,43 @@ function CommandeForm({ visible, fournisseur, currency, onClose, onSave, saving 
 
           {lines.length > 0 && (
             <Card style={styles.totalRow}>
-              <Text variant="label">Total estimé</Text>
-              <Text variant="amountLarge" style={{ color: palette.primary }}>{fmt(total, currency)}</Text>
+              <Text variant="label" color="secondary">Total estimé</Text>
+              <Text
+                variant="amountLarge"
+                numberOfLines={1}
+                adjustsFontSizeToFit
+                style={{ color: palette.primary }}
+              >
+                {fmt(total, currency)}
+              </Text>
             </Card>
+          )}
+
+          {lines.length > 0 && (
+            <>
+              <Input
+                label={`Montant payé (${currency})`}
+                value={paymentInput}
+                onChangeText={v => setPaymentInput(formatAmountInput(v, currency))}
+                keyboardType="decimal-pad"
+                placeholder={total > 0 ? String(Math.round(total)) : '0'}
+              />
+
+              {owed > 0 && (
+                <Card style={styles.owedBanner}>
+                  <Ionicons name="time-outline" size={16} color={palette.warning} />
+                  <Text style={styles.owedText}>
+                    Ce solde de {fmt(owed, currency)} sera enregistré comme crédit auprès de ce fournisseur
+                  </Text>
+                </Card>
+              )}
+              {paymentInput.trim() !== '' && owed === 0 && parsedPaid >= total && total > 0 && (
+                <Card style={styles.paidBanner}>
+                  <Ionicons name="checkmark-circle-outline" size={16} color={palette.success} />
+                  <Text style={styles.paidText}>Commande entièrement payée</Text>
+                </Card>
+              )}
+            </>
           )}
     </FormSheet>
   );
@@ -754,6 +860,20 @@ export default function FournisseursScreen() {
     for (const d of debts) {
       const remaining = d.amount - d.amount_paid;
       if (remaining > 0) map[d.supplier_id] = (map[d.supplier_id] ?? 0) + remaining;
+    }
+    return map;
+  }, [debts]);
+
+  // Supplier debts have no due_date column (unlike sale_orders' client-credit
+  // due_date) — there's nothing to schedule against. This tracks the oldest
+  // still-unpaid debt's recorded date instead, as a same-spirit "how long has
+  // this been sitting" urgency signal for the list row below, mirroring
+  // Clients' nearestDueDate coloring without needing a schema change.
+  const oldestDebtDateMap = useMemo(() => {
+    const map: Record<string, string> = {};
+    for (const d of debts) {
+      if (d.amount - d.amount_paid <= 0) continue;
+      if (!map[d.supplier_id] || d.date < map[d.supplier_id]) map[d.supplier_id] = d.date;
     }
     return map;
   }, [debts]);
@@ -1027,7 +1147,7 @@ export default function FournisseursScreen() {
                   {/* Avatar + reorder badge */}
                   <View>
                     <View style={[styles.fAvatar, { backgroundColor: ac.bg }]}>
-                      <Text style={[styles.fInitials, { color: ac.text }]}>{initials}</Text>
+                      <Text allowFontScaling={false} style={[styles.fInitials, { color: ac.text }]}>{initials}</Text>
                     </View>
                     {reorderCount > 0 && (
                       <View style={styles.reorderBadge}>
@@ -1041,6 +1161,14 @@ export default function FournisseursScreen() {
                     {item.phone
                       ? <Text variant="caption" color="secondary" numberOfLines={1}>{item.phone}</Text>
                       : null}
+                    {owedAmount > 0 && oldestDebtDateMap[item.id] ? (
+                      <Text
+                        variant="caption"
+                        style={{ color: debtAgeDays(oldestDebtDateMap[item.id]) >= DEBT_AGE_WARNING_DAYS ? palette.warning : palette.textSecondary }}
+                      >
+                        {fmtDebtAge(oldestDebtDateMap[item.id])}
+                      </Text>
+                    ) : null}
                   </View>
 
                   <View style={{ alignItems: 'flex-end', gap: 4 }}>
@@ -1098,9 +1226,7 @@ export default function FournisseursScreen() {
                         <Text variant="label">{item.supplier_name}</Text>
                         <Text variant="caption" color="secondary">{fmt(item.total_cost, currency)}</Text>
                       </View>
-                      <View style={[styles.statusPill, { backgroundColor: getStatusColor(item.status, palette) + '20' }]}>
-                        <Text variant="caption" style={{ color: getStatusColor(item.status, palette) }}>{STATUS_LABEL[item.status]}</Text>
-                      </View>
+                      <OrderStatusPill status={item.status} />
                     </Pressable>
                   ))}
                 </View>
@@ -1132,9 +1258,7 @@ export default function FournisseursScreen() {
                             <Text variant="label">{item.supplier_name}</Text>
                             <Text variant="caption" color="secondary">{fmt(item.total_cost, currency)}</Text>
                           </View>
-                          <View style={[styles.statusPill, { backgroundColor: getStatusColor(item.status, palette) + '20' }]}>
-                            <Text variant="caption" style={{ color: getStatusColor(item.status, palette) }}>{STATUS_LABEL[item.status]}</Text>
-                          </View>
+                          <OrderStatusPill status={item.status} />
                         </Pressable>
                       ))}
                     </View>
@@ -1172,9 +1296,9 @@ export default function FournisseursScreen() {
       <CommandeForm
         visible={showCommande} fournisseur={commandeTarget} currency={currency}
         onClose={() => setShowCommande(false)} saving={saving}
-        onSave={async (lines) => {
+        onSave={async (lines, amountPaid) => {
           if (!commandeTarget) return;
-          const ok = await createCommande(businessId, userId, { supplierId: commandeTarget.id, lines });
+          const ok = await createCommande(businessId, userId, { supplierId: commandeTarget.id, lines, amountPaid });
           if (ok) { haptics.success(); setShowCommande(false); setTab('commandes'); }
         }}
       />
@@ -1277,7 +1401,10 @@ function makeStyles(p: Palette) {
     modalSafe: { flex: 1, backgroundColor: p.background },
     mhdr: { flexDirection: 'row', alignItems: 'center', justifyContent: 'space-between', padding: spacing[5], borderBottomWidth: 1, borderBottomColor: p.border },
     mpad: { padding: spacing[5], gap: spacing[4], paddingBottom: spacing[10] },
-    mfooter: { padding: spacing[5], borderTopWidth: 1, borderTopColor: p.border },
+    // Soft upward shadow instead of a hard top border — matches
+    // catalogue.tsx's product-form footer (see CLAUDE.md); a flat border
+    // read as a stray rectangle sitting behind the button.
+    mfooter: { padding: spacing[5], backgroundColor: p.background, ...shadow.md, shadowOffset: { width: 0, height: -2 } },
 
     // Form — product selector
     dropdownTrigger: {
@@ -1338,7 +1465,13 @@ function makeStyles(p: Palette) {
     lineCard: { gap: spacing[2] },
     lineTop: { flexDirection: 'row', alignItems: 'center', justifyContent: 'space-between' },
     lineInputs: { flexDirection: 'row', gap: spacing[3] },
-    totalRow: { flexDirection: 'row', justifyContent: 'space-between', alignItems: 'center' },
+    // Stacked, not a row — label and a potentially long amount no longer
+    // fight for horizontal space on a big order.
+    totalRow: { gap: spacing[1] },
+    owedBanner: { flexDirection: 'row', alignItems: 'center', gap: 8, backgroundColor: p.warningLight, borderColor: p.warning, borderWidth: 1 },
+    owedText:   { flex: 1, fontSize: 13, color: p.warning },
+    paidBanner: { flexDirection: 'row', alignItems: 'center', gap: 8, backgroundColor: p.successLight, borderColor: p.success, borderWidth: 1 },
+    paidText:   { flex: 1, fontSize: 13, color: p.success },
     dr: { flexDirection: 'row', justifyContent: 'space-between', alignItems: 'center' },
 
     // Receipt selection

@@ -4,7 +4,7 @@ import {
   Platform, Pressable, ScrollView, StyleSheet, View,
 } from 'react-native';
 import { Ionicons } from '@expo/vector-icons';
-import { SafeAreaView } from 'react-native-safe-area-context';
+import { SafeAreaView, useSafeAreaInsets } from 'react-native-safe-area-context';
 import { Screen } from '@/src/components/ui/Screen';
 import { FormSheet } from '@/src/components/ui/FormSheet';
 import { router, useLocalSearchParams } from 'expo-router';
@@ -13,9 +13,10 @@ import { Card } from '@/src/components/ui/Card';
 import { Input } from '@/src/components/ui/Input';
 import { Text } from '@/src/components/ui/Text';
 import { ProofControl } from '@/src/components/ui/ProofControl';
-import { useTheme, spacing, radius } from '@/src/theme';
+import { useTheme, spacing, radius, shadow } from '@/src/theme';
 import type { Palette } from '@/src/theme';
 import { useAuthStore } from '@/stores/auth';
+import { useRapportsStore } from '@/stores/rapports';
 import { useProductStore } from '@/stores/products';
 import { supabase } from '@/lib/supabase';
 import {
@@ -62,7 +63,10 @@ function CommandeForm({
 }) {
   const { palette } = useTheme();
   const styles = useMemo(() => makeStyles(palette), [palette]);
+  const insets = useSafeAreaInsets();
   const { fetchVariants, variantsByProduct } = useProductStore();
+  const session = useAuthStore(s => s.session);
+  const cashOnHand = useRapportsStore(s => s.yearReport?.cash_on_hand ?? null);
   const [lines, setLines] = useState<POLine[]>([]);
   const [showPicker, setShowPicker] = useState(false);
   const [paymentInput, setPaymentInput] = useState('');
@@ -142,6 +146,17 @@ function CommandeForm({
     })();
   }, [visible, fournisseur.id]);
 
+  // Best-effort background refresh so the overspend warning below has a
+  // real number to compare against — see the identical comment in
+  // fournisseurs/index.tsx's CommandeForm.
+  useEffect(() => {
+    if (!visible) return;
+    const role = session?.activeMembership?.role;
+    const uid = session?.user?.id;
+    if (!businessId || !role || !uid) return;
+    useRapportsStore.getState().fetchYearReport(businessId, new Date().getFullYear(), role, uid);
+  }, [visible, businessId, session?.activeMembership?.role, session?.user?.id]);
+
   const total = lines.reduce((s, l) => s + parseAmountInput(l.total_cost, currency), 0);
   const parsedPaid = paymentInput.trim() === ''
     ? total
@@ -160,7 +175,7 @@ function CommandeForm({
       title="Nouvelle commande"
       contentContainerStyle={styles.mpad}
       footer={
-        <View style={styles.mfooter}>
+        <View style={[styles.mfooter, { paddingBottom: Math.max(insets.bottom, spacing[5]) }]}>
           <Button
             label={saving ? '…' : 'Passer la commande'} loading={saving} fullWidth size="lg"
             disabled={lines.length === 0 || seeding}
@@ -177,6 +192,19 @@ function CommandeForm({
               const invalid = parsed.find(l => l.qty <= 0 || l.unit_cost <= 0);
               if (invalid) { Alert.alert(`Un petit contrôle sur la quantité et le coût :)`, `"${invalid.product_name}"`); return; }
               const effectivePaid = paymentInput.trim() === '' ? total : parsedPaid;
+              // Soft, non-blocking warning only — never prevents ordering on
+              // credit/against savings not tracked as "cash on hand".
+              if (cashOnHand !== null && effectivePaid > cashOnHand) {
+                Alert.alert(
+                  'Montant supérieur à l\'argent disponible',
+                  `Vous payez ${fmt(effectivePaid, currency)} alors que l'argent disponible est de ${fmt(cashOnHand, currency)}. Continuer quand même ?`,
+                  [
+                    { text: 'Annuler', style: 'cancel' },
+                    { text: 'Continuer', onPress: () => onSave(parsed, effectivePaid) },
+                  ],
+                );
+                return;
+              }
               onSave(parsed, effectivePaid);
             }}
           />
@@ -253,8 +281,15 @@ function CommandeForm({
           {lines.length > 0 && (
             <>
               <Card style={styles.totalRow}>
-                <Text variant="label">Total de la commande</Text>
-                <Text variant="amountLarge" style={{ color: palette.primary }}>{fmt(total, currency)}</Text>
+                <Text variant="label" color="secondary">Total</Text>
+                <Text
+                  variant="amountLarge"
+                  numberOfLines={1}
+                  adjustsFontSizeToFit
+                  style={{ color: palette.primary }}
+                >
+                  {fmt(total, currency)}
+                </Text>
               </Card>
 
               <Input
@@ -287,11 +322,12 @@ function CommandeForm({
 
 // ── Order detail modal ─────────────────────────────────────────────────────────
 
-function OrderDetail({ order, currency, businessId, canAttach, offline, onClose, onProofAttached }: {
+function OrderDetail({ order, currency, businessId, canAttach, offline, onClose, onProofAttached, onProofDeleted }: {
   order: CommandeAchat; currency: string; businessId: string;
   canAttach: boolean; offline: boolean;
   onClose: () => void;
   onProofAttached: (proof: { url: string; width: number; height: number }) => void;
+  onProofDeleted: () => void;
 }) {
   const { palette } = useTheme();
   const styles = useMemo(() => makeStyles(palette), [palette]);
@@ -323,7 +359,7 @@ function OrderDetail({ order, currency, businessId, canAttach, offline, onClose,
           ))}
 
           <View style={{ gap: spacing[2], marginTop: spacing[2] }}>
-            <Text variant="label" color="secondary">Image (facture, bon de livraison)</Text>
+            <Text variant="label" color="secondary">Image</Text>
             <ProofControl
               variant="row"
               kind="purchase_order"
@@ -332,9 +368,12 @@ function OrderDetail({ order, currency, businessId, canAttach, offline, onClose,
               imageUrl={order.proof_image_url}
               imageWidth={order.proof_image_width}
               imageHeight={order.proof_image_height}
+              attachedBy={order.proof_attached_by}
+              attachedAt={order.proof_attached_at}
               canAttach={canAttach}
               offline={offline}
               onAttached={onProofAttached}
+              onDeleted={onProofDeleted}
             />
           </View>
         </ScrollView>
@@ -498,7 +537,7 @@ export default function FournisseurProfile() {
         {/* ── Hero ── */}
         <View style={styles.hero}>
           <View style={styles.avatar}>
-            <Text style={styles.initials}>{initials}</Text>
+            <Text allowFontScaling={false} style={styles.initials}>{initials}</Text>
           </View>
           <Text style={styles.heroName}>{fournisseur.name}</Text>
           {fournisseur.phone ? (
@@ -688,6 +727,17 @@ export default function FournisseurProfile() {
             } : prev);
             void fetchCommandes(businessId);
           }}
+          onProofDeleted={() => {
+            setDetailOrder(prev => prev ? {
+              ...prev,
+              proof_image_url: null,
+              proof_image_width: null,
+              proof_image_height: null,
+              proof_attached_by: null,
+              proof_attached_at: null,
+            } : prev);
+            void fetchCommandes(businessId);
+          }}
         />
       )}
     </Screen>
@@ -738,7 +788,11 @@ function makeStyles(p: Palette) {
     modalSafe: { flex: 1, backgroundColor: p.background },
     mhdr:      { flexDirection: 'row', alignItems: 'center', justifyContent: 'space-between', padding: spacing[5], borderBottomWidth: 1, borderBottomColor: p.border },
     mpad:      { padding: spacing[5], gap: spacing[4], paddingBottom: spacing[10] },
-    mfooter:   { padding: spacing[5], borderTopWidth: 1, borderTopColor: p.border },
+    // Soft upward shadow instead of a hard top border — matches catalogue.tsx's
+    // product-form footer (see CLAUDE.md), which replaced the same harder-edged
+    // bordered-panel look for the identical reason: it read as a stray
+    // rectangle sitting behind the button rather than part of the sheet.
+    mfooter:   { padding: spacing[5], backgroundColor: p.background, ...shadow.md, shadowOffset: { width: 0, height: -2 } },
 
     // CommandeForm
     prodChip:       { paddingHorizontal: spacing[3], paddingVertical: spacing[2], marginRight: spacing[2], borderRadius: radius.md, borderWidth: 1, borderColor: p.border, backgroundColor: p.surface, maxWidth: 140 },
@@ -746,7 +800,10 @@ function makeStyles(p: Palette) {
     lineCard:       { gap: spacing[2] },
     lineTop:        { flexDirection: 'row', alignItems: 'center', justifyContent: 'space-between' },
     lineInputs:     { flexDirection: 'row', gap: spacing[3] },
-    totalRow:       { flexDirection: 'row', justifyContent: 'space-between', alignItems: 'center' },
+    // Stacked, not a row with the label and amount fighting for horizontal
+    // space — "Total" no longer needs to share a line with a number that can
+    // run long on a big order (see mfooter comment above for the sibling fix).
+    totalRow:       { gap: spacing[1] },
     addMoreBtn:     { flexDirection: 'row', alignItems: 'center', paddingVertical: spacing[3] },
     owedBanner:     { flexDirection: 'row', alignItems: 'center', gap: 8, backgroundColor: p.warningLight, borderColor: p.warning, borderWidth: 1 },
     owedText:       { flex: 1, fontSize: 13, color: p.warning },

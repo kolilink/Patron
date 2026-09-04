@@ -153,6 +153,26 @@ async function setupAndRegister(): Promise<void> {
   }
 }
 
+// Every push's data payload carries business_id (dispatch-notification always
+// stamps it — supabase/functions/dispatch-notification/index.ts) — the
+// business the notification is ABOUT, which isn't necessarily the caller's
+// currently active one for a multi-business user. Without this, tapping a
+// notification lands on the right screen while every store on it still
+// serves whichever business happened to be active before the tap. Same
+// selectBusiness() BusinessDrawer's manual switcher already uses
+// (stores/auth.ts) — just applied here too, once, ahead of every branch
+// below rather than duplicated per-branch. Silently no-ops if businessId
+// isn't one of the caller's own memberships (not a member, or a
+// founder-only event like support_message where there's nothing to switch
+// into — support-inbox isn't business-scoped anyway) — selectBusiness()
+// already guards that.
+function ensureActiveBusiness(businessId: string | undefined): void {
+  if (!businessId) return;
+  const { session, selectBusiness } = useAuthStore.getState();
+  if (!session || session.activeBusiness?.id === businessId) return;
+  selectBusiness(businessId);
+}
+
 // ─── Notification action handler ─────────────────────────────────────────────
 async function handleResponse(response: Notifications.NotificationResponse): Promise<void> {
   const N = getNotifications();
@@ -160,6 +180,7 @@ async function handleResponse(response: Notifications.NotificationResponse): Pro
 
   const { actionIdentifier, notification } = response;
   const data = notification.request.content.data as Record<string, unknown>;
+  ensureActiveBusiness(data?.business_id as string | undefined);
 
   // Default tap — navigate to the right screen
   if (actionIdentifier === N.DEFAULT_ACTION_IDENTIFIER) {

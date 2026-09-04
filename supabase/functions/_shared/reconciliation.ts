@@ -62,9 +62,9 @@ export function escapeHtml(str: string): string {
     .replace(/"/g, '&quot;');
 }
 
-// Runs the 68 structural checks + 12 display checks + 2 variant-price
-// checks (82 total), refreshes totals, and fetches the run/findings/
-// financial snapshot. Requires a service-role client.
+// Runs the 68 structural checks + 12 display checks + 3 variant-price/PO
+// checks + 1 supplier-payment check (84 total), refreshes totals, and
+// fetches the run/findings/financial snapshot. Requires a service-role client.
 export async function runReconciliation(serviceClient: SupabaseClient): Promise<{
   run: ReconciliationRun;
   findings: ReconciliationFinding[];
@@ -80,7 +80,10 @@ export async function runReconciliation(serviceClient: SupabaseClient): Promise<
   const { error: variantErr } = await serviceClient.rpc('run_variant_price_checks', { p_run_id: runId });
   if (variantErr) console.error('run_variant_price_checks failed:', variantErr.message);
 
-  if (!displayErr || !variantErr) {
+  const { error: supplierErr } = await serviceClient.rpc('run_supplier_payment_checks', { p_run_id: runId });
+  if (supplierErr) console.error('run_supplier_payment_checks failed:', supplierErr.message);
+
+  if (!displayErr || !variantErr || !supplierErr) {
     const { error: refreshErr } = await serviceClient.rpc('refresh_reconciliation_run', { p_run_id: runId });
     if (refreshErr) console.error('refresh_reconciliation_run failed:', refreshErr.message);
   }

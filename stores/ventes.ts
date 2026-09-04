@@ -92,12 +92,22 @@ export interface Vente {
 
 interface VentesStore {
   sales: Vente[];
+  // Business id fetchSales last reached a terminal result for — null until
+  // then. See stores/products.ts's productsFetchedFor for why this exists:
+  // `sales.length === 0` can't tell "confirmed no sales" apart from "haven't
+  // loaded yet," and app/(app)/_layout.tsx's activation fork needs that
+  // distinction to avoid flashing for a business that already has a sale.
+  salesFetchedFor: string | null;
   loading: boolean;
   saving: boolean;
   error: string | null;
   offline: boolean;
   offlineSince: number | null;
-  fetchSales: (businessId: string, sellerId?: string, since?: string) => Promise<void>;
+  // limit/status are additive, optional, and used only by the Ventes history
+  // screen's infinite-scroll + status-tab filtering (ventes/index.tsx) —
+  // every other caller (dashboard, clients screens) omits them and keeps
+  // getting the exact same full, unfiltered fetch as before.
+  fetchSales: (businessId: string, sellerId?: string, since?: string, limit?: number, status?: 'paye' | 'credit' | 'annule') => Promise<void>;
   loadDetail: (saleId: string) => Promise<void>;
   recordPayment: (saleId: string, amount: number, method: string, date: string) => Promise<{ ok: boolean; fullyPaid: boolean }>;
   recordClientPayment: (customerName: string, businessId: string, amount: number, method: string, date: string) => Promise<{ ok: boolean; fullySettled: boolean }>;
@@ -127,14 +137,24 @@ export interface EditSaleParams {
 
 export const useVentesStore = create<VentesStore>((set, get) => ({
   sales: [],
+  salesFetchedFor: null,
   loading: false,
   saving: false,
   error: null,
   offline: false,
   offlineSince: null,
 
-  fetchSales: async (businessId, sellerId, since) => {
-    const cacheKey = `${businessId}:${sellerId ?? 'all'}`;
+  fetchSales: async (businessId, sellerId, since, limit, status) => {
+    // status branches the cache key off into its own slot so a filtered
+    // ("Payés"/"À payer"/"Annulés") fetch can never overwrite the shared,
+    // unfiltered cache dashboard/clients screens rely on — omitted (the
+    // "Tout" tab, and every non-Ventes caller) resolves to the exact same
+    // key as before. limit deliberately does NOT affect the key: it only
+    // ever grows (30, 60, 90… as the user scrolls), so the cache simply
+    // holds whatever the largest loaded window was — a fine offline
+    // snapshot, not a claim of completeness, same posture as every other
+    // read cache in this codebase.
+    const cacheKey = `${businessId}:${sellerId ?? 'all'}${status ? `:${status}` : ''}`;
 
     // Seed from cache on first load so the list is visible while the network fetch runs
     if (get().sales.length === 0) {
@@ -157,6 +177,8 @@ export const useVentesStore = create<VentesStore>((set, get) => ({
 
     if (sellerId) query = query.eq('seller_id', sellerId);
     if (since) query = query.gte('sale_date', since);
+    if (status) query = query.eq('status', status);
+    if (limit) query = query.limit(limit);
 
     const { data, error: fetchErr } = await withNetworkRetry(() => query).catch(err => ({ data: null, error: err }));
     if (isStaleBusiness(businessId)) return;
@@ -168,20 +190,21 @@ export const useVentesStore = create<VentesStore>((set, get) => ({
         if (cached) {
           const ts = await getCacheTimestamp('ventes_cache', cacheKey);
           if (isStaleBusiness(businessId)) return;
-          set({ sales: cached, loading: false, offline: true, offlineSince: ts, error: null });
+          set({ sales: cached, loading: false, offline: true, offlineSince: ts, error: null, salesFetchedFor: businessId });
           return;
         }
         set({
           error: 'Pas de connexion. Ouvrez l\'application en ligne une première fois pour activer le mode hors ligne.',
           loading: false,
           offline: true,
+          salesFetchedFor: businessId,
         });
         return;
       }
-      set({ loading: false, error: translateError(fetchErr, 'Erreur de chargement') });
+      set({ loading: false, error: translateError(fetchErr, 'Erreur de chargement'), salesFetchedFor: businessId });
       return;
     }
-    if (!data) { set({ loading: false }); return; }
+    if (!data) { set({ loading: false, salesFetchedFor: businessId }); return; }
 
     const orderIds = data.map((s: Record<string, unknown>) => s.id as string);
     const sellerIds = [...new Set(data.map((s: Record<string, unknown>) => s.seller_id as string))];
@@ -283,7 +306,7 @@ export const useVentesStore = create<VentesStore>((set, get) => ({
     });
     void saveVentesCache(cacheKey, sales as unknown[]);
     if (isStaleBusiness(businessId)) return;
-    set({ sales, loading: false, offline: false, offlineSince: null });
+    set({ sales, loading: false, offline: false, offlineSince: null, salesFetchedFor: businessId });
   },
 
   loadDetail: async (saleId) => {
@@ -754,5 +777,5 @@ export const useVentesStore = create<VentesStore>((set, get) => ({
   },
 
   clearError: () => set({ error: null }),
-  reset: () => set({ sales: [], loading: false, saving: false, error: null, offline: false, offlineSince: null }),
+  reset: () => set({ sales: [], salesFetchedFor: null, loading: false, saving: false, error: null, offline: false, offlineSince: null }),
 }));

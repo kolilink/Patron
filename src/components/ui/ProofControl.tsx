@@ -1,5 +1,5 @@
 import { useState } from 'react';
-import { ActivityIndicator, Modal, Platform, Pressable, StyleSheet, View } from 'react-native';
+import { ActivityIndicator, Alert, Modal, Platform, Pressable, StyleSheet, View } from 'react-native';
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
 import { Image } from 'expo-image';
 import * as ImagePicker from 'expo-image-picker';
@@ -7,10 +7,13 @@ import { Ionicons } from '@expo/vector-icons';
 import { Text } from '@/src/components/ui/Text';
 import { useTheme, spacing, radius, colors } from '@/src/theme';
 import type { Palette } from '@/src/theme';
-import { attachTransactionProof, type ProofKind } from '@/lib/proofs';
+import { attachTransactionProof, deleteTransactionProof, type ProofKind } from '@/lib/proofs';
 import { translateError } from '@/lib/errors';
 import { toast } from '@/stores/toast';
 import { haptics } from '@/lib/haptics';
+import { useAuthStore } from '@/stores/auth';
+
+const DELETE_WINDOW_MS = 24 * 60 * 60 * 1000;
 
 // Shared "preuve" (photo proof) affordance for apports, expenses and
 // purchase orders — see db/migration_v155.sql and lib/proofs.ts.
@@ -29,19 +32,28 @@ interface ProofControlProps {
   imageUrl?: string | null;
   imageWidth?: number | null;
   imageHeight?: number | null;
+  // Who attached the current proof, and when — drives the delete button in
+  // the full-screen viewer. Both must be present and match the current user
+  // (within DELETE_WINDOW_MS) for it to show at all; see db/migration_v168.sql
+  // for the same rule enforced server-side, which is the real gate.
+  attachedBy?: string | null;
+  attachedAt?: string | null;
   canAttach: boolean;
   offline?: boolean;
   onAttached?: (proof: { url: string; width: number; height: number }) => void;
+  onDeleted?: () => void;
   variant?: 'inline' | 'row';
 }
 
 export function ProofControl({
   kind, id, businessId, imageUrl, imageWidth, imageHeight,
-  canAttach, offline, onAttached, variant = 'row',
+  attachedBy, attachedAt, canAttach, offline, onAttached, onDeleted, variant = 'row',
 }: ProofControlProps) {
   const { palette } = useTheme();
   const styles = makeStyles(palette);
+  const currentUserId = useAuthStore(s => s.session?.user.id);
   const [uploading, setUploading] = useState(false);
+  const [deleting, setDeleting] = useState(false);
   const [viewerOpen, setViewerOpen] = useState(false);
   const insets = useSafeAreaInsets();
   // statusBarTranslucent (below) draws the viewer Modal behind the status
@@ -50,6 +62,39 @@ export function ProofControl({
   const closeTop = Platform.OS === 'android' ? styles.closeBtn.top + insets.top : styles.closeBtn.top;
 
   const hasProof = !!imageUrl;
+  const canDelete = hasProof
+    && !!attachedBy && attachedBy === currentUserId
+    && !!attachedAt && (Date.now() - new Date(attachedAt).getTime()) < DELETE_WINDOW_MS;
+
+  const handleDelete = () => {
+    Alert.alert(
+      'Supprimer cette image ?',
+      'Cette action est définitive.',
+      [
+        { text: 'Annuler', style: 'cancel' },
+        {
+          text: 'Supprimer',
+          style: 'destructive',
+          onPress: () => {
+            void (async () => {
+              setDeleting(true);
+              try {
+                await deleteTransactionProof({ kind, id });
+                haptics.success();
+                toast.success('Image supprimée');
+                setViewerOpen(false);
+                onDeleted?.();
+              } catch (err) {
+                toast.warning(translateError(err, 'Impossible de supprimer l\'image'));
+              } finally {
+                setDeleting(false);
+              }
+            })();
+          },
+        },
+      ],
+    );
+  };
 
   const handleAttach = async () => {
     if (uploading) return;
@@ -90,6 +135,20 @@ export function ProofControl({
         <Pressable style={[styles.closeBtn, { top: closeTop }]} onPress={() => setViewerOpen(false)} hitSlop={12}>
           <Ionicons name="close" size={26} color={colors.neutral[0]} />
         </Pressable>
+        {canDelete && (
+          <Pressable
+            style={[styles.deleteBtn, { bottom: Math.max(insets.bottom, spacing[5]) + spacing[4] }]}
+            onPress={(e) => { e.stopPropagation(); if (!deleting) handleDelete(); }}
+            disabled={deleting}
+          >
+            {deleting
+              ? <ActivityIndicator size="small" color={colors.neutral[0]} />
+              : <Ionicons name="trash-outline" size={18} color={colors.danger[500]} />}
+            <Text variant="label" style={{ color: colors.danger[500] }}>
+              {deleting ? 'Suppression…' : 'Supprimer'}
+            </Text>
+          </Pressable>
+        )}
       </Pressable>
     </Modal>
   ) : null;
@@ -181,6 +240,14 @@ function makeStyles(p: Palette) {
       width: 40, height: 40, borderRadius: 20,
       backgroundColor: 'rgba(255,255,255,0.15)',
       alignItems: 'center', justifyContent: 'center',
+    },
+    deleteBtn: {
+      position: 'absolute', alignSelf: 'center',
+      flexDirection: 'row', alignItems: 'center', gap: spacing[2],
+      paddingHorizontal: spacing[5], paddingVertical: spacing[3],
+      borderRadius: radius.full,
+      backgroundColor: 'rgba(255,255,255,0.12)',
+      borderWidth: 1, borderColor: 'rgba(248,113,113,0.4)',
     },
   });
 }

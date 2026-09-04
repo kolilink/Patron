@@ -1,5 +1,5 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
-import { Alert, Animated, Easing, FlatList, Modal, Platform, Pressable, ScrollView, StyleSheet, TextInput, View } from 'react-native';
+import { ActivityIndicator, Alert, Animated, Easing, FlatList, Modal, Platform, Pressable, RefreshControl, ScrollView, StyleSheet, TextInput, View } from 'react-native';
 import { captureRef } from 'react-native-view-shot';
 import * as Sharing from 'expo-sharing';
 import { SafeAreaView } from 'react-native-safe-area-context';
@@ -1091,7 +1091,19 @@ export default function VentesScreen() {
   const { sales, loading, saving, error, offline, offlineSince, fetchSales, loadDetail, recordPayment, cancelSale, updateSaleClient, editSale } = useVentesStore();
   const [selected, setSelected] = useState<Vente | null>(null);
   const [filter, setFilter] = useState<'all' | 'paye' | 'credit' | 'annule'>('all');
-  const [showAll, setShowAll] = useState(false);
+  const [refreshing, setRefreshing] = useState(false);
+
+  // Infinite scroll, replacing the old 90-day-default + "Voir tout
+  // l'historique" toggle: always shows everything, just loaded in growing
+  // batches instead of one unbounded query. fetchSales REPLACES `sales`
+  // wholesale on every call (never appends), so "load more" just re-asks
+  // for a bigger limit — simpler than keyset pagination, and correct here
+  // because a single business's sale history is nowhere near large enough
+  // for re-scanning from the start on every page to matter.
+  const PAGE_SIZE = 30;
+  const [limit, setLimit] = useState(PAGE_SIZE);
+  const [loadingMore, setLoadingMore] = useState(false);
+  const statusParam = filter === 'all' ? undefined : filter;
 
   // Advanced filter state
   const [showFilterSheet, setShowFilterSheet] = useState(false);
@@ -1171,30 +1183,42 @@ export default function VentesScreen() {
     return next;
   });
 
-  const since90 = useMemo(() => {
-    const d = new Date();
-    d.setDate(d.getDate() - 90);
-    return d.toISOString().split('T')[0];
-  }, []);
-
   useFocusEffect(
     useCallback(() => {
-      if (businessId) fetchSales(businessId, isVendeur ? userId : undefined, showAll ? undefined : since90);
-    }, [businessId, isVendeur, userId, showAll]),
+      if (businessId) fetchSales(businessId, isVendeur ? userId : undefined, undefined, limit, statusParam);
+    }, [businessId, isVendeur, userId, limit, statusParam]),
   );
 
+  // Switching status tab always restarts pagination from the first page —
+  // keeping whatever limit a previous tab had scrolled to wouldn't mean
+  // anything for a differently-filtered set.
   useEffect(() => {
-    if (businessId) fetchSales(businessId, isVendeur ? userId : undefined, showAll ? undefined : since90);
-  }, [showAll]);
+    setLimit(PAGE_SIZE);
+  }, [filter]);
+
+  const handleLoadMore = useCallback(() => {
+    if (!businessId || loading || loadingMore) return;
+    if (sales.length < limit) return; // last fetch returned fewer than asked — the real end
+    setLoadingMore(true);
+    const nextLimit = limit + PAGE_SIZE;
+    setLimit(nextLimit);
+    fetchSales(businessId, isVendeur ? userId : undefined, undefined, nextLimit, statusParam)
+      .finally(() => setLoadingMore(false));
+  }, [businessId, isVendeur, userId, statusParam, limit, loading, loadingMore, sales.length]);
+
+  const onRefresh = useCallback(async () => {
+    if (!businessId) return;
+    setRefreshing(true);
+    setLimit(PAGE_SIZE);
+    await fetchSales(businessId, isVendeur ? userId : undefined, undefined, PAGE_SIZE, statusParam);
+    setRefreshing(false);
+  }, [businessId, isVendeur, userId, statusParam]);
 
   const filtered = useMemo(() => {
+    // Status is already filtered server-side by fetchSales's own `status`
+    // param (see statusParam above) — sales here already only contains rows
+    // matching the active tab, so no client-side re-filter needed.
     let result = sales;
-
-    if (filter !== 'all') {
-      result = filter === 'credit'
-        ? result.filter(s => s.status === 'credit')
-        : result.filter(s => s.status === filter);
-    }
 
     if (productMatchIds !== null) {
       result = result.filter(s => productMatchIds.has(s.id));
@@ -1301,7 +1325,7 @@ export default function VentesScreen() {
       {offline && (
         <OfflineNotice
           offlineSince={offlineSince}
-          onRetry={() => fetchSales(businessId, isVendeur ? userId : undefined, showAll ? undefined : since90)}
+          onRetry={() => fetchSales(businessId, isVendeur ? userId : undefined, undefined, limit, statusParam)}
         />
       )}
 
@@ -1316,16 +1340,9 @@ export default function VentesScreen() {
           {sales.length === 0 ? (
             <BouncingSmileyEmpty />
           ) : (
-            <>
-              <Text variant="body" color="secondary" style={{ textAlign: 'center' }}>
-                Pas de vente sur cette période.
-              </Text>
-              <Pressable onPress={() => setShowAll(v => !v)} style={{ marginTop: spacing[4] }}>
-                <Text variant="caption" style={{ color: palette.primary }}>
-                  {showAll ? 'Voir les 90 derniers jours' : "Voir tout l'historique"}
-                </Text>
-              </Pressable>
-            </>
+            <Text variant="body" color="secondary" style={{ textAlign: 'center' }}>
+              Aucune vente ne correspond à ce filtre.
+            </Text>
           )}
         </View>
       ) : (
@@ -1333,12 +1350,15 @@ export default function VentesScreen() {
           data={visibleItems}
           keyExtractor={item => item.type === 'header' ? `hdr-${item.key}` : item.sale.id}
           contentContainerStyle={styles.list}
+          refreshControl={
+            <RefreshControl refreshing={refreshing} onRefresh={onRefresh} tintColor={palette.primary} colors={[palette.primary]} />
+          }
+          onEndReached={handleLoadMore}
+          onEndReachedThreshold={0.5}
           ListFooterComponent={() => (
-            <Pressable onPress={() => setShowAll(v => !v)} style={styles.showAllBtn}>
-              <Text variant="caption" style={{ color: palette.primary }}>
-                {showAll ? 'Voir les 90 derniers jours' : "Voir tout l'historique"}
-              </Text>
-            </Pressable>
+            loadingMore ? (
+              <ActivityIndicator style={{ marginVertical: spacing[5] }} color={palette.primary} />
+            ) : null
           )}
           renderItem={({ item }) => {
             if (item.type === 'header') {
@@ -1478,7 +1498,6 @@ function makeStyles(p: Palette) {
   offlineBanner: { alignItems: 'center', justifyContent: 'center', paddingVertical: spacing[1], borderBottomWidth: StyleSheet.hairlineWidth, borderBottomColor: p.border },
   emptyState: { flex: 1, alignItems: 'center', justifyContent: 'center' },
   center: { textAlign: 'center', marginTop: spacing[10] },
-  showAllBtn: { alignItems: 'center', paddingVertical: spacing[5] },
   fabContainer: { position: 'absolute', bottom: 194, right: spacing[4], zIndex: 10 },
   fab: {
     width: 56, height: 56, borderRadius: radius.full,

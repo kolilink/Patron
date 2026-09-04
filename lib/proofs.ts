@@ -42,3 +42,18 @@ export async function attachTransactionProof(params: {
 
   return { url, width, height };
 }
+
+// Only the person who attached the proof can remove it, and only within 24h
+// of attaching (both enforced server-side against auth.uid()/now() — see
+// db/migration_v168.sql). Does not remove the file from Storage, only the
+// DB reference to it — see that migration's comment for why.
+export async function deleteTransactionProof(params: {
+  kind: ProofKind;
+  id: string;
+}): Promise<void> {
+  const { error } = await supabase.rpc('delete_transaction_proof', {
+    p_kind: params.kind,
+    p_id: params.id,
+  });
+  if (error) throw error;
+}

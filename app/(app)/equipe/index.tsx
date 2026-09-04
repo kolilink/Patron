@@ -318,7 +318,7 @@ function MemberDetailSheet({
           {/* Identity */}
           <View style={styles.identityRow}>
             <View style={[styles.avatar, { backgroundColor: avatarColor(displayedName) + '20' }]}>
-              <Text variant="h4" style={{ color: avatarColor(displayedName) }}>
+              <Text variant="h4" allowFontScaling={false} style={{ color: avatarColor(displayedName) }}>
                 {displayedName[0]?.toUpperCase()}
               </Text>
             </View>
@@ -1020,7 +1020,7 @@ export default function EquipeScreen() {
                   style={({ pressed }) => [styles.memberRow, pressed && { opacity: 0.75 }]}
                 >
                   <View style={[styles.avatar, { backgroundColor: avatarColor(shownName) + '20' }]}>
-                    <Text variant="label" style={{ color: avatarColor(shownName) }}>
+                    <Text variant="label" allowFontScaling={false} style={{ color: avatarColor(shownName) }}>
                       {shownName[0]?.toUpperCase()}
                     </Text>
                   </View>

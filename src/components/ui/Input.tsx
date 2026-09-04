@@ -43,7 +43,8 @@ export const Input = forwardRef<TextInput, InputProps>(function Input({
         {leftIcon && <View style={styles.leftIcon}>{leftIcon}</View>}
         <TextInput
           ref={ref}
-          allowFontScaling={false}
+          allowFontScaling
+          maxFontSizeMultiplier={1.3}
           style={[styles.input, leftIcon ? styles.inputWithLeft : null, rightIcon ? styles.inputWithRight : null, style]}
           placeholderTextColor={palette.textDisabled}
           onFocus={(e) => { setFocused(true); props.onFocus?.(e); }}

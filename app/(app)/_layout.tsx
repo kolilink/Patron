@@ -126,7 +126,18 @@ export default function AppLayout() {
   const forkAgeMs = session?.activeBusiness?.created_at
     ? Date.now() - new Date(session.activeBusiness.created_at).getTime()
     : Infinity;
-  const showFork = forkIsOwner && !forkStep2Done && !forkStep3Done && forkAgeMs < 24 * 60 * 60 * 1000;
+  // `products.length === 0` / `sales`-has-no-match can't tell "confirmed
+  // empty" apart from "haven't loaded yet for this business" — on a cold
+  // start (or right after switching business), both stores start out empty
+  // in memory until their fetch resolves, so a business that already has a
+  // product and a sale would still briefly read as "neither done," flashing
+  // the fork before the real data arrived and corrected it. Fail closed
+  // (don't show) until both stores confirm they've actually fetched *this*
+  // business's data — same defensive shape as notifPrimerBlocking below.
+  const productsFetchedFor = useProductStore(s => s.productsFetchedFor);
+  const salesFetchedFor = useVentesStore(s => s.salesFetchedFor);
+  const forkDataReady = productsFetchedFor === forkBusinessId && salesFetchedFor === forkBusinessId;
+  const showFork = forkIsOwner && forkDataReady && !forkStep2Done && !forkStep3Done && forkAgeMs < 24 * 60 * 60 * 1000;
 
   // forkAgeMs is a snapshot taken at render time, not a live clock — if
   // nothing else re-renders this component, it never re-evaluates on its

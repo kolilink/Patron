@@ -1,5 +1,5 @@
 import { useCallback, useMemo, useState } from 'react';
-import { FlatList, Linking, Pressable, StyleSheet, View } from 'react-native';
+import { FlatList, Linking, Pressable, RefreshControl, StyleSheet, View } from 'react-native';
 import { Screen } from '@/src/components/ui/Screen';
 import { router, useFocusEffect, useLocalSearchParams } from 'expo-router';
 import { Ionicons } from '@expo/vector-icons';
@@ -68,12 +68,20 @@ export default function ClientsScreen() {
   const { sales, loading, error, offline, offlineSince, fetchSales } = useVentesStore();
   const [filter, setFilter] = useState<FilterType>(filterParam === 'doivent' || filterParam === 'actifs' ? filterParam : 'tous');
   const [search, setSearch] = useState('');
+  const [refreshing, setRefreshing] = useState(false);
 
   useFocusEffect(
     useCallback(() => {
       if (businessId) fetchSales(businessId, isVendeur ? userId : undefined);
     }, [businessId]),
   );
+
+  const onRefresh = useCallback(async () => {
+    if (!businessId) return;
+    setRefreshing(true);
+    await fetchSales(businessId, isVendeur ? userId : undefined);
+    setRefreshing(false);
+  }, [businessId, isVendeur, userId]);
 
   const sendWhatsAppReminder = (client: Client) => {
     const msg = [
@@ -224,12 +232,15 @@ export default function ClientsScreen() {
           data={displayedClients}
           keyExtractor={c => c.clientId ?? c.name}
           contentContainerStyle={styles.list}
+          refreshControl={
+            <RefreshControl refreshing={refreshing} onRefresh={onRefresh} tintColor={palette.primary} colors={[palette.primary]} />
+          }
           renderItem={({ item }) => (
             <Pressable
               onPress={() => router.push(`/clients/${encodeURIComponent(item.clientId ?? item.name)}`)}
               style={({ pressed }) => [styles.clientRow, pressed && { opacity: 0.75 }]}>
               <View style={[styles.avatar, { backgroundColor: avatarColor(item.name) + '20' }]}>
-                <Text variant="label" style={{ color: avatarColor(item.name) }}>
+                <Text variant="label" allowFontScaling={false} style={{ color: avatarColor(item.name) }}>
                   {item.name[0]?.toUpperCase()}
                 </Text>
               </View>

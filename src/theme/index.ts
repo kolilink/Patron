@@ -3,4 +3,4 @@ export type { Palette } from './colors';
 export { ThemeProvider, useTheme } from './ThemeContext';
 export type { ColorScheme } from './ThemeContext';
 export { typography, fontFamily } from './typography';
-export { spacing, radius, shadow } from './spacing';
+export { spacing, radius, shadow, FLOATING_TAB_BAR_HEIGHT, FLOATING_TAB_BAR_GAP, FLOATING_TAB_BAR_CLEARANCE } from './spacing';

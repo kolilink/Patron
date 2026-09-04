@@ -8,6 +8,7 @@ import { translateError } from '@/lib/errors';
 import { generateId } from '@/lib/id';
 import { syncKnownBusinesses } from '@/lib/knownBusinesses';
 import { getKV, setKV } from '@/lib/db';
+import { toast } from './toast';
 import { isLocked, setLocked } from '@/lib/lock';
 import { withTimeout, withNetworkRetry, reportOfflineFallback } from '@/lib/sync';
 import { isFounderPhone } from '@/src/utils/founder';
@@ -260,6 +261,18 @@ async function loadSession(userId: string, authPhone?: string | null, skipCache 
 
   const p = profileRes.data;
   const memberships = membershipsRes.data as Membership[];
+
+  // A pending account-deletion request (delete_my_account — migration_v170)
+  // is cancelled the instant its owner establishes a real session again —
+  // this is that single choke point, run by every session-establishing path
+  // (cold start, phone OTP login, biometric restore, email recovery). Best-
+  // effort: a failure here must never block loading the session itself.
+  if (p.pending_deletion_at) {
+    (async () => {
+      const { error } = await supabase.from('profiles').update({ pending_deletion_at: null }).eq('id', userId);
+      if (!error) toast.success('Bon retour ! La suppression de votre compte a été annulée.');
+    })().catch(() => {});
+  }
 
   const user: User = {
     id: userId,

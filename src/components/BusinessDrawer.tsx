@@ -252,7 +252,7 @@ export function BusinessDrawer() {
                   ]}
                 >
                   <View style={[styles.avatar, { backgroundColor: color }]}>
-                    <Text style={styles.avatarText}>{initial}</Text>
+                    <Text allowFontScaling={false} style={styles.avatarText}>{initial}</Text>
                   </View>
                   <View style={{ flex: 1 }}>
                     <Text style={styles.bizName} numberOfLines={1}>{name}</Text>
