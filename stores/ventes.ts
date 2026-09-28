@@ -246,8 +246,32 @@ export const useVentesStore = create<VentesStore>((set, get) => ({
     // read cache in this codebase.
     const cacheKey = `${businessId}:${sellerId ?? 'all'}${status ? `:${status}` : ''}`;
 
-    // Seed from cache on first load so the list is visible while the network fetch runs
-    if (get().sales.length === 0) {
+    // Local-first (§6): seed from cache + the current pending-outbox
+    // overlay UNCONDITIONALLY, every call — not just "if sales is still
+    // empty" the way this used to be gated. That old condition meant a
+    // refetch (screen refocus, pull-to-refresh) on an already-populated
+    // list skipped straight to the live query, so the UI's only source of
+    // truth during that round trip was whatever was already rendered —
+    // fine when nothing changed underneath it, but not the guarantee
+    // acceptance test #3 (cold start after a kill) actually needs: cache
+    // and the outbox are re-read and re-rendered BEFORE any network call
+    // starts, every time, per the approved hydration order (cache ->
+    // overlay -> render -> background refresh).
+    //
+    // The overlay merge only applies to the plain, unfiltered, role-scoped
+    // view (no status filter, sellerId matching what refreshPendingOverlay
+    // itself would resolve from the session) — a status-filtered tab
+    // ("Payés"/"À payer"/"Annulés") or an explicit cross-seller admin
+    // query falls back to a cache-only seed, same as before. Phase 1's
+    // approved scope is the default carnet/dashboard/ventes-list view;
+    // extending the overlay to every filtered permutation is real,
+    // separate scope, not silently attempted here.
+    const isDefaultScope = !status && (sellerId === undefined || sellerId === useAuthStore.getState().session?.user.id);
+    if (isDefaultScope) {
+      await get().refreshPendingOverlay();
+      if (isStaleBusiness(businessId)) return;
+      set({ loading: false, error: null });
+    } else {
       const cached = await getVentesCache(cacheKey) as Vente[] | null;
       if (isStaleBusiness(businessId)) return;
       if (cached) {
@@ -255,8 +279,6 @@ export const useVentesStore = create<VentesStore>((set, get) => ({
       } else {
         set({ loading: true, error: null });
       }
-    } else {
-      set({ error: null });
     }
 
     let query = supabase
@@ -396,7 +418,19 @@ export const useVentesStore = create<VentesStore>((set, get) => ({
     });
     void saveVentesCache(cacheKey, sales as unknown[]);
     if (isStaleBusiness(businessId)) return;
-    set({ sales, loading: false, offline: false, offlineSince: null, salesFetchedFor: businessId });
+    if (isDefaultScope) {
+      // A live fetch landing must never silently drop a still-unsynced
+      // item from view, even transiently — without this, a plain
+      // `set({ sales })` here would overwrite the pending-overlay merge
+      // with the server's own list, which by definition doesn't yet
+      // contain anything still sitting in the local outbox. Re-running
+      // the same rebuild (now against the freshly-cached, just-saved
+      // server data as its baseline) restores it in the same tick.
+      set({ loading: false, offline: false, offlineSince: null, salesFetchedFor: businessId });
+      await get().refreshPendingOverlay();
+    } else {
+      set({ sales, loading: false, offline: false, offlineSince: null, salesFetchedFor: businessId });
+    }
   },
 
   loadDetail: async (saleId) => {

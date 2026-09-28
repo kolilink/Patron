@@ -383,56 +383,75 @@ export default function AccueilScreen() {
     useAuthStore.setState({ requestQuickCapture: null });
   }, [requestQuickCapture]);
 
-  const loadKpis = async () => {
-    const localDate = new Date().toLocaleDateString('en-CA'); // YYYY-MM-DD device local date
-    const { data, error } = await withTimeout(
-      supabase.rpc('get_dashboard_kpis', {
-        p_business_id: businessId,
-        p_today:       localDate,
-      }),
-    );
-
-    if (error) {
-      if (isNetworkError(error)) {
-        // Offline fallback: serve last cached snapshot + derive today from local store
-        const cached = await getDashboardKpiCache(businessId) as KPIs | null;
-        const now = new Date();
-        const today = `${now.getFullYear()}-${String(now.getMonth() + 1).padStart(2, '0')}-${String(now.getDate()).padStart(2, '0')}`;
-        const sales = useVentesStore.getState().sales;
-        const todaySales = sales.filter(s => (s.sale_date ?? s.created_at.split('T')[0]) === today && s.status !== 'annule');
-        const creditSales = sales.filter(s => s.status === 'credit');
-        const { products: pOffline, variantsByProduct: vOffline } = useProductStore.getState();
-        setKpis({
-          revenue_today: todaySales.filter(s => !s.is_credit).reduce((sum, s) => sum + s.total_amount - (s.discount_amount ?? 0), 0),
-          revenue_yesterday: cached?.revenue_yesterday ?? 0,
-          revenue_month:     cached?.revenue_month     ?? 0,
-          sales_today:       todaySales.length,
-          credit_total:      creditSales.reduce((sum, s) => sum + (s.total_amount - (s.discount_amount ?? 0) - (s.amount_paid ?? 0)), 0),
-          credit_count:      new Set(creditSales.map(s => s.customer_name).filter(Boolean)).size + creditSales.filter(s => !s.customer_name).length,
-          low_stock:         pOffline.filter(p => !p.has_variants && p.reorder_level > 0 && p.stock_qty <= p.reorder_level).length
-                             + Object.values(vOffline).flat().filter(v => v.reorder_level > 0 && v.stock_qty <= v.reorder_level).length,
-          expenses_month:    cached?.expenses_month    ?? 0,
-          first_sale_at:     cached?.first_sale_at     ?? null,
-        });
-        return;
-      }
-      throw error;
-    }
-
-    const d = data as Record<string, number | string | null>;
-    const freshKpis: KPIs = {
-      revenue_today:     Number(d.revenue_today)     / 100,
-      revenue_yesterday: Number(d.revenue_yesterday) / 100,
-      revenue_month:     Number(d.revenue_month)     / 100,
-      sales_today:       Number(d.sales_today),
-      credit_total:      Number(d.credit_total)      / 100,
-      credit_count:      Number(d.credit_count),
-      low_stock:         Number(d.low_stock),
-      expenses_month:    Number(d.expenses_month)    / 100,
-      first_sale_at:     (d.first_sale_at as string | null) ?? null,
+  // Local-first (§6 of the offline-first rewrite): computes KPIs purely
+  // from local state (the last-cached snapshot + useVentesStore.sales,
+  // which now always reflects the current pending-overlay merge — see
+  // stores/ventes.ts's refreshPendingOverlay). This used to be the
+  // offline FALLBACK, only ever reached after a live RPC call had already
+  // lost its race against withTimeout's 12s. It's now the PRIMARY path,
+  // shown immediately, every time, before any network call is even
+  // attempted — the network is strictly a background refresh from here on.
+  const computeLocalKpis = async (): Promise<KPIs> => {
+    const cached = await getDashboardKpiCache(businessId) as KPIs | null;
+    const now = new Date();
+    const today = `${now.getFullYear()}-${String(now.getMonth() + 1).padStart(2, '0')}-${String(now.getDate()).padStart(2, '0')}`;
+    const sales = useVentesStore.getState().sales;
+    const todaySales = sales.filter(s => (s.sale_date ?? s.created_at.split('T')[0]) === today && s.status !== 'annule');
+    const creditSales = sales.filter(s => s.status === 'credit');
+    const { products: pOffline, variantsByProduct: vOffline } = useProductStore.getState();
+    return {
+      revenue_today: todaySales.filter(s => !s.is_credit).reduce((sum, s) => sum + s.total_amount - (s.discount_amount ?? 0), 0),
+      revenue_yesterday: cached?.revenue_yesterday ?? 0,
+      revenue_month:     cached?.revenue_month     ?? 0,
+      sales_today:       todaySales.length,
+      credit_total:      creditSales.reduce((sum, s) => sum + (s.total_amount - (s.discount_amount ?? 0) - (s.amount_paid ?? 0)), 0),
+      credit_count:      new Set(creditSales.map(s => s.customer_name).filter(Boolean)).size + creditSales.filter(s => !s.customer_name).length,
+      low_stock:         pOffline.filter(p => !p.has_variants && p.reorder_level > 0 && p.stock_qty <= p.reorder_level).length
+                         + Object.values(vOffline).flat().filter(v => v.reorder_level > 0 && v.stock_qty <= v.reorder_level).length,
+      expenses_month:    cached?.expenses_month    ?? 0,
+      first_sale_at:     cached?.first_sale_at     ?? null,
     };
-    setKpis(freshKpis);
-    void saveDashboardKpiCache(businessId, freshKpis);
+  };
+
+  const loadKpis = async () => {
+    // Local-first: render immediately from cache + the current sales
+    // overlay, before ever touching the network. Hydration order per the
+    // approved plan: cache -> overlay -> render -> background refresh.
+    setKpis(await computeLocalKpis());
+
+    // Background refresh — only ever upgrades what's already showing; a
+    // network failure here is a no-op, not a fallback trigger (the local
+    // estimate is already on screen).
+    try {
+      const localDate = new Date().toLocaleDateString('en-CA'); // YYYY-MM-DD device local date
+      const { data, error } = await withTimeout(
+        supabase.rpc('get_dashboard_kpis', {
+          p_business_id: businessId,
+          p_today:       localDate,
+        }),
+      );
+      if (error) {
+        if (isNetworkError(error)) return;
+        throw error;
+      }
+      const d = data as Record<string, number | string | null>;
+      const freshKpis: KPIs = {
+        revenue_today:     Number(d.revenue_today)     / 100,
+        revenue_yesterday: Number(d.revenue_yesterday) / 100,
+        revenue_month:     Number(d.revenue_month)     / 100,
+        sales_today:       Number(d.sales_today),
+        credit_total:      Number(d.credit_total)      / 100,
+        credit_count:      Number(d.credit_count),
+        low_stock:         Number(d.low_stock),
+        expenses_month:    Number(d.expenses_month)    / 100,
+        first_sale_at:     (d.first_sale_at as string | null) ?? null,
+      };
+      setKpis(freshKpis);
+      void saveDashboardKpiCache(businessId, freshKpis);
+    } catch (err) {
+      if (!isNetworkError(err)) throw err;
+      // network error — the local estimate set above is already on screen
+    }
   };
 
   const loadBestSellers = async () => {

@@ -369,8 +369,13 @@ export default function ClientLedgerScreen() {
     const paymentsCacheKey = `${businessId}:payments:${clientKey}`;
 
     // Seed from cache immediately so the ledger (and the real totalOwed it
-    // drives) is correct while the network call runs, not just once it resolves.
-    if (ledgerPayments.length === 0) {
+    // drives) is correct while the network call runs, not just once it
+    // resolves. §6 of the offline-first rewrite: unconditional now, not
+    // just "if nothing's loaded yet" — a refocus/refetch on an
+    // already-populated screen must still re-show the latest local truth
+    // before the network round trip starts, matching fetchSales's own
+    // hydration-order fix (stores/ventes.ts).
+    {
       const cached = await getClientLedgerCache(paymentsCacheKey) as LedgerPayment[] | null;
       if (cached) setLedgerPayments(cached);
     }
@@ -433,7 +438,8 @@ export default function ClientLedgerScreen() {
 
     const linesCacheKey = `${businessId}:lines:${clientKey}`;
 
-    if (Object.keys(ledgerLines).length === 0) {
+    // Unconditional for the same reason as loadLedgerPayments above (§6).
+    {
       const cached = await getClientLedgerCache(linesCacheKey) as Record<string, string> | null;
       if (cached) setLedgerLines(cached);
     }
@@ -498,6 +504,19 @@ export default function ClientLedgerScreen() {
   }, [creditSales]);
 
   const totalSold = clientSales.reduce((s, v) => s + v.total_amount - (v.discount_amount ?? 0), 0);
+  // Known, disclosed Phase-1 limitation (offline-first rewrite, §6): unlike
+  // totalSold (derived from `sales`, which stores/ventes.ts's
+  // refreshPendingOverlay keeps correct for a still-pending credit debt),
+  // ledgerPayments is a separate read from the `payments` table with no
+  // equivalent pending-overlay mechanism yet — a payment recorded while
+  // offline does not reduce this total until it actually syncs. The error
+  // direction is the safe one (this screen temporarily OVERSTATES what's
+  // owed, never understates it — no risk of a merchant under-collecting),
+  // and it self-corrects automatically the moment the queued payment
+  // drains. Building a payments-specific pending overlay to close this
+  // display lag is real, separate scope, not attempted here — deliberately
+  // not risked as a quick patch to this money-display calculation without
+  // the ability to verify it on a real device in this environment.
   const totalPaid = ledgerPayments.reduce((s, p) => s + p.amount, 0);
   const totalOwed = Math.max(0, totalSold - totalPaid);
 
