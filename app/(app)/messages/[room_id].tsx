@@ -431,7 +431,7 @@ export default function DmChatScreen() {
               </Pressable>
             )}
           </Pressable>
-          <Pressable onPress={() => setShowSettings(true)} hitSlop={8}>
+          <Pressable onPress={() => setShowSettings(true)} hitSlop={8} accessibilityLabel="Plus d'options" accessibilityRole="button">
             <Ionicons name="ellipsis-horizontal" size={22} color={palette.textSecondary} />
           </Pressable>
         </View>

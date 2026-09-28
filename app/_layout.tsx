@@ -111,6 +111,10 @@ function RootLayout() {
     ]).finally(() => {
       clearTimeout(timeout);
       SplashScreen.hideAsync();
+      // A real cold start — one half of PaymentReminderAsker's "fresh
+      // session" trigger condition (the other half is a 10+min-backgrounded
+      // return, bumped from app/(app)/_layout.tsx's own AppState handler).
+      useAuthStore.setState(s => ({ freshSessionToken: s.freshSessionToken + 1 }));
     });
   }, [fontsLoaded]);
 

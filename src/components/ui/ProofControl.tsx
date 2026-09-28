@@ -132,7 +132,7 @@ export function ProofControl({
     <Modal visible={viewerOpen} transparent animationType="fade" onRequestClose={() => setViewerOpen(false)} statusBarTranslucent navigationBarTranslucent>
       <Pressable style={styles.backdrop} onPress={() => setViewerOpen(false)}>
         <Image source={{ uri: imageUrl! }} style={styles.fullImage} contentFit="contain" />
-        <Pressable style={[styles.closeBtn, { top: closeTop }]} onPress={() => setViewerOpen(false)} hitSlop={12}>
+        <Pressable style={[styles.closeBtn, { top: closeTop }]} onPress={() => setViewerOpen(false)} hitSlop={12} accessibilityLabel="Fermer" accessibilityRole="button">
           <Ionicons name="close" size={26} color={colors.neutral[0]} />
         </Pressable>
         {canDelete && (
@@ -158,7 +158,7 @@ export function ProofControl({
     if (hasProof) {
       return (
         <>
-          <Pressable onPress={() => setViewerOpen(true)} hitSlop={10} style={styles.iconBtn}>
+          <Pressable onPress={() => setViewerOpen(true)} hitSlop={10} style={styles.iconBtn} accessibilityLabel="Voir la preuve" accessibilityRole="button">
             <Ionicons name="image" size={20} color={palette.primary} />
           </Pressable>
           {viewer}
@@ -174,7 +174,7 @@ export function ProofControl({
       );
     }
     return (
-      <Pressable onPress={handleAttach} hitSlop={10} style={styles.iconBtn} disabled={uploading}>
+      <Pressable onPress={handleAttach} hitSlop={10} style={styles.iconBtn} disabled={uploading} accessibilityLabel="Ajouter une preuve" accessibilityRole="button">
         {uploading
           ? <ActivityIndicator size="small" color={palette.textSecondary} />
           : <Ionicons name="camera-outline" size={20} color={palette.textSecondary} />}

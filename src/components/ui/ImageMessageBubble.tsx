@@ -54,7 +54,7 @@ export function ImageMessageBubble({ msg, imageStyle }: { msg: ImageMessageLike;
       <Modal visible={viewerOpen} transparent animationType="fade" onRequestClose={() => setViewerOpen(false)} statusBarTranslucent navigationBarTranslucent>
         <Pressable style={styles.backdrop} onPress={() => setViewerOpen(false)}>
           <Image source={{ uri: msg.image_url }} style={styles.fullImage} contentFit="contain" />
-          <Pressable style={[styles.closeBtn, { top: closeTop }]} onPress={() => setViewerOpen(false)} hitSlop={12}>
+          <Pressable style={[styles.closeBtn, { top: closeTop }]} onPress={() => setViewerOpen(false)} hitSlop={12} accessibilityLabel="Fermer" accessibilityRole="button">
             <Ionicons name="close" size={26} color={colors.neutral[0]} />
           </Pressable>
         </Pressable>

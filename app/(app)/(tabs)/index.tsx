@@ -7,6 +7,8 @@ import { Screen } from '@/src/components/ui/Screen';
 import { OfflineNotice } from '@/src/components/ui/OfflineNotice';
 import { QuickCaptureSheet } from '@/src/components/QuickCaptureSheet';
 import { FirstRunHeroOverlay } from '@/src/components/FirstRunHeroOverlay';
+import { PaymentReminderAsker } from '@/src/components/PaymentReminderAsker';
+import { DebtReminderDeniedCard } from '@/src/components/DebtReminderDeniedCard';
 import { router, useFocusEffect } from 'expo-router';
 import { Ionicons } from '@expo/vector-icons';
 import { Button } from '@/src/components/ui/Button';
@@ -211,6 +213,9 @@ export default function AccueilScreen() {
   // the once-per-business gate's own eligibility); this is a plain,
   // repeatable manual trigger, safe to open any time credit_count reads 0.
   const [showDebtCapture, setShowDebtCapture] = useState(false);
+  // Bumped by PaymentReminderAsker's onDenied — see DebtReminderDeniedCard's
+  // own comment for why this signal has to exist at all.
+  const [debtDeniedRefresh, setDebtDeniedRefresh] = useState(0);
 
   // Helpers: when privacy mode is on, replace money amounts with bullets
   const amtOrMask = (n: number) => isPrivate ? `••••• ${currency}` : fmt(n, currency);
@@ -629,7 +634,13 @@ export default function AccueilScreen() {
         {/* Header */}
         <View style={styles.header}>
           <View style={{ flexDirection: 'row', alignItems: 'center' }}>
-            <Pressable onPress={openBusinessPicker} hitSlop={10} style={({ pressed }) => [{ opacity: pressed ? 0.5 : 1 }]}>
+            <Pressable
+              onPress={openBusinessPicker}
+              hitSlop={10}
+              style={({ pressed }) => [{ opacity: pressed ? 0.5 : 1 }]}
+              accessibilityLabel="Changer de commerce"
+              accessibilityRole="button"
+            >
               <Ionicons name="menu" size={24} color={palette.textPrimary} />
             </Pressable>
             <Text variant="h4" style={{ marginLeft: 12 }} numberOfLines={1}>
@@ -647,6 +658,8 @@ export default function AccueilScreen() {
             <Pressable
               onPress={() => router.push('/(app)/alpha')}
               style={({ pressed }) => [styles.chatBtn, { opacity: pressed ? 0.7 : 1 }]}
+              accessibilityLabel="Alpha, votre assistant"
+              accessibilityRole="button"
             >
               <View style={styles.chatIconBox}>
                 <Text style={{ color: palette.textSecondary, fontWeight: '800', fontSize: 20, lineHeight: 24 }}>A</Text>
@@ -655,6 +668,8 @@ export default function AccueilScreen() {
             <Pressable
               onPress={() => router.push('/(app)/discussions')}
               style={({ pressed }) => [styles.chatBtn, { opacity: pressed ? 0.7 : 1 }]}
+              accessibilityLabel="Discussions"
+              accessibilityRole="button"
             >
               <View style={styles.chatIconBox}>
                 <Ionicons name="chatbubbles-outline" size={24} color={palette.textSecondary} />
@@ -787,6 +802,8 @@ export default function AccueilScreen() {
                 onPress={() => setIsPrivate(p => !p)}
                 style={styles.heroEye}
                 hitSlop={12}
+                accessibilityLabel={isPrivate ? 'Afficher le montant' : 'Masquer le montant'}
+                accessibilityRole="button"
               >
                 <Ionicons
                   name={isPrivate ? 'eye-off-outline' : 'eye-outline'}
@@ -809,14 +826,13 @@ export default function AccueilScreen() {
                   </View>
                 ) : (
                   // Never a giant "0" — a quiet fact plus an invitation to act
-                  // on it, instead of a number that reads as a verdict. A real
-                  // button, not a text link — this is the single most likely
-                  // next action on the screen a busy shop owner opens most.
+                  // on it, instead of a number that reads as a verdict. Kept
+                  // deliberately compact (title + button, no subtitle) — this
+                  // sits inside the hero card, not a full-screen empty state.
+                  // A real button, not a text link — this is the single most
+                  // likely next action on the screen a busy shop owner opens most.
                   <View style={styles.heroEmptyState}>
                     <Text variant="body" color="secondary">Aucune vente aujourd'hui.</Text>
-                    <Text variant="caption" color="secondary">
-                      Votre première vente du jour apparaîtra ici.
-                    </Text>
                     <Button
                       label="Enregistrer une vente"
                       onPress={() => { setQuickCaptureMode('vente'); setShowQuickCapture(true); }}
@@ -849,6 +865,7 @@ export default function AccueilScreen() {
                 anything wrong" signal with no equivalent always-useful
                 zero-state. The two resolve independently of each other. ── */}
             <View style={styles.attentionZone}>
+              {isOwner && <DebtReminderDeniedCard userId={userId} refreshSignal={debtDeniedRefresh} />}
               {(kpis?.credit_count ?? 0) > 0 ? (
                 // Bespoke, not <KpiCard> — this is about PEOPLE who owe
                 // her, not a warning/cash state, so it deliberately skips
@@ -1024,9 +1041,12 @@ export default function AccueilScreen() {
             trackEvent('quick_capture_opened', businessId, userId, { source: 'accueil_fab' });
             setShowQuickCapture(true);
           }}
-          style={styles.quickCaptureFab}
+          style={({ pressed }) => [styles.quickCaptureFab, pressed && { opacity: 0.82 }]}
+          accessibilityLabel="Ajouter une vente ou une dette"
+          accessibilityRole="button"
         >
-          <Text style={styles.quickCaptureFabIcon}>+</Text>
+          <Ionicons name="add" size={20} color={palette.textInverse} />
+          <Text style={styles.quickCaptureFabLabel}>Ajouter</Text>
         </Pressable>
       )}
 
@@ -1050,6 +1070,16 @@ export default function AccueilScreen() {
         initialMode={quickCaptureMode}
       />
 
+      {businessId && userId && (
+        <PaymentReminderAsker
+          businessId={businessId}
+          userId={userId}
+          active={isOwner && !session?.isDemoMode}
+          blocked={showQuickCapture || showDebtCapture}
+          onDenied={() => setDebtDeniedRefresh(n => n + 1)}
+        />
+      )}
+
     </Screen>
     </KeyboardAvoidingView>
   );
@@ -1070,12 +1100,13 @@ function makeStyles(p: Palette) {
     content: { padding: spacing[5], gap: spacing[4], paddingBottom: spacing[10] },
     quickCaptureFab: {
       position: 'absolute', bottom: FLOATING_TAB_BAR_CLEARANCE + spacing[4], right: spacing[4], zIndex: 10,
-      width: 56, height: 56, borderRadius: radius.full,
-      backgroundColor: p.primary, alignItems: 'center', justifyContent: 'center',
+      flexDirection: 'row', alignItems: 'center', gap: spacing[2],
+      height: 56, paddingHorizontal: spacing[5], borderRadius: radius.full,
+      backgroundColor: p.primary,
       shadowColor: p.textPrimary, shadowOffset: { width: 0, height: 4 },
       shadowOpacity: 0.18, shadowRadius: 8, elevation: 8,
     },
-    quickCaptureFabIcon: { fontSize: 28, lineHeight: 32, fontWeight: '300' as const, color: p.textInverse, marginTop: -2 },
+    quickCaptureFabLabel: { fontSize: 15, fontWeight: '600' as const, color: p.textInverse },
     header: { paddingBottom: spacing[2], flexDirection: 'row', alignItems: 'center', justifyContent: 'space-between' },
     chatBtn: { padding: spacing[1] },
     chatIconBox: { width: 24, height: 24, alignItems: 'center', justifyContent: 'center' },

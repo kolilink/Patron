@@ -378,7 +378,7 @@ function MemberDetailSheet({
               <Pressable onPress={handleSaveName} style={[styles.nameEditBtn, { backgroundColor: palette.primary }]}>
                 <Text variant="label" style={{ color: palette.textInverse }}>OK</Text>
               </Pressable>
-              <Pressable onPress={() => setEditingName(false)}>
+              <Pressable onPress={() => setEditingName(false)} accessibilityLabel="Fermer" accessibilityRole="button">
                 <Ionicons name="close" size={20} color={palette.textSecondary} />
               </Pressable>
             </View>
@@ -535,8 +535,13 @@ function MemberDetailSheet({
                     <View key={s.product_id} style={[styles.scopeRow, isInvestisseur && { flexDirection: 'column', alignItems: 'stretch', gap: spacing[3] }]}>
                       <View style={styles.scopeRowTop}>
                         <Text variant="body" style={{ flex: 1 }} numberOfLines={2}>{s.product_name}</Text>
-                        <Pressable onPress={() => handleRemoveProduct(s.product_id, s.product_name)} hitSlop={8}>
+                        <Pressable
+                          onPress={() => handleRemoveProduct(s.product_id, s.product_name)}
+                          hitSlop={8}
+                          style={{ flexDirection: 'row', alignItems: 'center', gap: spacing[1] }}
+                        >
                           <Ionicons name="trash-outline" size={16} color={palette.textSecondary} />
+                          <Text variant="caption" color="secondary">Retirer</Text>
                         </Pressable>
                       </View>
 

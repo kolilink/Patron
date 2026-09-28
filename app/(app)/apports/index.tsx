@@ -525,7 +525,8 @@ export default function AportsScreen() {
         </Pressable>
         {canWrite && (
           <Pressable onPress={() => setShowAddChooser(true)} hitSlop={8} style={styles.addBtn}>
-            <Ionicons name="add" size={24} color={palette.apportsPurple} />
+            <Ionicons name="add" size={20} color={palette.apportsPurple} />
+            <Text variant="label" style={{ color: palette.apportsPurple }}>Ajouter</Text>
           </Pressable>
         )}
       </View>
@@ -616,14 +617,18 @@ export default function AportsScreen() {
                 <View style={[styles.emptyIconWrap, { backgroundColor: 'transparent', borderWidth: 1.5, borderColor: palette.border }]}>
                   <Ionicons name="wallet-outline" size={32} color={palette.textSecondary} />
                 </View>
-                <Text variant="h4" style={styles.emptyTitle}>Suivez votre capital investi</Text>
+                <Text variant="h4" style={styles.emptyTitle}>Aucun capital noté pour le moment.</Text>
+                <Text variant="body" color="secondary" style={{ textAlign: 'center', maxWidth: 300 }}>
+                  Notez l'argent que vous avez investi pour suivre votre commerce.
+                </Text>
                 {canWrite && (
                   <Button
                     label="+ Ajouter un capital"
                     onPress={() => setShowAddChooser(true)}
                     fullWidth
                     size="lg"
-                    style={{ marginTop: spacing[5], alignSelf: 'stretch' }}
+                    labelStyle={{ fontSize: 17 }}
+                    style={{ marginTop: spacing[6], alignSelf: 'stretch' }}
                   />
                 )}
               </View>
@@ -729,7 +734,7 @@ function makeStyles(p: Palette) {
       flexDirection: 'row', alignItems: 'center', justifyContent: 'space-between',
       paddingHorizontal: spacing[5], paddingTop: spacing[3], paddingBottom: spacing[1],
     },
-    addBtn: { padding: spacing[1] },
+    addBtn: { flexDirection: 'row', alignItems: 'center', gap: spacing[1], padding: spacing[1] },
     headerMeta: {
       paddingHorizontal: spacing[5], paddingTop: spacing[1], paddingBottom: 0,
       gap: spacing[1],

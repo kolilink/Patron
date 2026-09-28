@@ -1,10 +1,10 @@
-import { useEffect, useMemo, useRef, useState } from 'react';
+import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { Alert, Animated, KeyboardAvoidingView, Linking, Platform, Pressable, ScrollView, Share, StyleSheet, Switch, TextInput, View } from 'react-native';
 import * as Clipboard from 'expo-clipboard';
 import * as Application from 'expo-application';
 import * as Updates from 'expo-updates';
 import { Screen } from '@/src/components/ui/Screen';
-import { router } from 'expo-router';
+import { router, useFocusEffect } from 'expo-router';
 import { Ionicons } from '@expo/vector-icons';
 import { Card } from '@/src/components/ui/Card';
 import { Input } from '@/src/components/ui/Input';
@@ -19,6 +19,7 @@ import { supabase } from '@/lib/supabase';
 import { translateError } from '@/lib/errors';
 import { haptics } from '@/lib/haptics';
 import { toast } from '@/stores/toast';
+import { checkNotificationPermission, requestNotificationPermission } from '@/src/components/NotificationSetup';
 import { toUnicodeBold } from '@/src/utils/format';
 import type { Business } from '@/src/types';
 
@@ -118,6 +119,33 @@ export default function ParametresScreen() {
     useAuthStore.setState(state =>
       state.session ? { session: { ...state.session, user: { ...state.session.user, notify_on_every_sale: value } } } : {},
     );
+  };
+
+  // "Rappels de paiement" — unlike the boolean above, this toggle is a
+  // live reflection of the OS notification-permission state, not its own
+  // stored preference: there's no app-level "on/off" for a permission the
+  // OS itself owns. Not-determined → the toggle fires the real system
+  // prompt; denied → deep-links to OS settings (the only way back once
+  // denied); granted → reflects on, and tapping it again is a no-op (you
+  // can't programmatically revoke what the OS granted). Re-checked on every
+  // focus so coming back from a Settings visit updates it immediately.
+  const [paymentRemindersGranted, setPaymentRemindersGranted] = useState(false);
+  const [paymentRemindersCanAsk, setPaymentRemindersCanAsk] = useState(true);
+  const refreshPaymentReminderPerm = useCallback(async () => {
+    const perm = await checkNotificationPermission();
+    setPaymentRemindersGranted(!!perm?.granted);
+    setPaymentRemindersCanAsk(perm?.canAskAgain !== false);
+  }, []);
+  useFocusEffect(useCallback(() => { void refreshPaymentReminderPerm(); }, [refreshPaymentReminderPerm]));
+  const handleTogglePaymentReminders = async (value: boolean) => {
+    if (!value || paymentRemindersGranted) return; // no real "off" action to take
+    if (!paymentRemindersCanAsk) {
+      Linking.openSettings().catch(() => {});
+      return;
+    }
+    const granted = await requestNotificationPermission();
+    setPaymentRemindersGranted(granted);
+    if (granted) toast.success('Rappels activés ✓');
   };
 
   // Email recovery linking
@@ -771,6 +799,20 @@ export default function ParametresScreen() {
               <Switch
                 value={notifyEverySale}
                 onValueChange={handleToggleNotifyEverySale}
+                trackColor={{ false: palette.border, true: palette.primary }}
+                thumbColor={palette.surface}
+              />
+            </View>
+            <View style={[styles.linkRow, { marginTop: spacing[3] }]}>
+              <View style={{ flex: 1, marginRight: spacing[3] }}>
+                <Text variant="body">Rappels de paiement</Text>
+                <Text variant="caption" color="secondary">
+                  Un rappel quand un client vous doit de l'argent depuis 7 jours
+                </Text>
+              </View>
+              <Switch
+                value={paymentRemindersGranted}
+                onValueChange={handleTogglePaymentReminders}
                 trackColor={{ false: palette.border, true: palette.primary }}
                 thumbColor={palette.surface}
               />

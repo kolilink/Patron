@@ -285,6 +285,18 @@ interface AuthStore {
   // to null.
   requestQuickCapture: 'credit' | 'vente' | null;
 
+  // Bumped exactly twice: once on a real cold start (app/_layout.tsx, right
+  // after initialize() resolves) and once when the app returns to the
+  // foreground after being backgrounded 10+ minutes (app/(app)/_layout.tsx's
+  // existing AppState handler). PaymentReminderAsker (mounted in Accueil)
+  // watches this — it's the "fresh session" half of that sheet's trigger
+  // conditions, same setState-directly/no-dedicated-action pattern as
+  // homeRefreshToken above. A plain foreground return under 10 minutes
+  // (switching tabs in the OS app switcher, a quick glance at another app)
+  // deliberately does NOT bump this — the asker must never interrupt
+  // someone who was just actively using the app a moment ago.
+  freshSessionToken: number;
+
   sendEmailOtp: (email: string) => Promise<{ verificationId: string } | null>;
   recoverByEmail: (email: string, code: string, verificationId: string) => Promise<void>;
   linkRecoveryEmail: (email: string, code: string, verificationId: string) => Promise<boolean>;
@@ -375,6 +387,7 @@ export const useAuthStore = create<AuthStore>((set, get) => ({
   homeRefreshToken: 0,
   heroDraft: null,
   requestQuickCapture: null,
+  freshSessionToken: 0,
 
   initialize: async () => {
     // Register BEFORE getSession() so we never miss a TOKEN_REFRESHED event.

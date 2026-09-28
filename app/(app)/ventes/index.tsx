@@ -1323,7 +1323,12 @@ export default function VentesScreen() {
       <View style={styles.header}>
         <Pressable onPress={() => router.back()}><Text variant="body" color="secondary">‹ Retour</Text></Pressable>
         <Text variant="h4">Ventes</Text>
-        <Pressable onPress={openFilterSheet} style={styles.filterIconBtn}>
+        <Pressable
+          onPress={openFilterSheet}
+          style={styles.filterIconBtn}
+          accessibilityLabel="Filtrer les ventes"
+          accessibilityRole="button"
+        >
           <Ionicons name="funnel-outline" size={20} color={hasActiveFilter ? palette.primary : palette.textSecondary} />
           {hasActiveFilter && <View style={styles.filterDot} />}
         </Pressable>
@@ -1497,11 +1502,12 @@ export default function VentesScreen() {
         <Animated.View style={[styles.fabContainer, { transform: [{ scale: fabScale }], opacity: fabOpacity }]}>
           <Pressable
             onPress={() => router.push('/(app)/(tabs)/vendre')}
-            style={({ pressed }) => [styles.fab, pressed && { opacity: 0.82 }]}
+            style={({ pressed }) => [styles.fabExtended, pressed && { opacity: 0.82 }]}
             accessibilityLabel="Nouvelle vente"
             accessibilityRole="button"
           >
-            <Text style={styles.fabIcon}>+</Text>
+            <Ionicons name="add" size={20} color={palette.textInverse} />
+            <Text style={styles.fabExtendedLabel}>Vente</Text>
           </Pressable>
         </Animated.View>
       )}
@@ -1537,15 +1543,15 @@ function makeStyles(p: Palette) {
   emptyState: { flex: 1, alignItems: 'center', justifyContent: 'center' },
   center: { textAlign: 'center', marginTop: spacing[10] },
   fabContainer: { position: 'absolute', bottom: 194, right: spacing[4], zIndex: 10 },
-  fab: {
-    width: 56, height: 56, borderRadius: radius.full,
+  fabExtended: {
+    flexDirection: 'row', alignItems: 'center', gap: spacing[2],
+    height: 56, paddingHorizontal: spacing[5], borderRadius: radius.full,
     backgroundColor: p.primary,
-    alignItems: 'center', justifyContent: 'center',
     shadowColor: p.textPrimary,
     shadowOffset: { width: 0, height: 4 }, shadowOpacity: 0.18, shadowRadius: 8,
     elevation: 8,
   },
-  fabIcon: { fontSize: 28, lineHeight: 32, fontWeight: '300', color: p.textInverse, marginTop: -2 },
+  fabExtendedLabel: { fontSize: 15, fontWeight: '600' as const, color: p.textInverse },
 
   // Detail modal
   modalSafe: { flex: 1, backgroundColor: p.background },
