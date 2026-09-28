@@ -3,7 +3,7 @@
 // in this one SQL function and are easy to silently break with an unrelated
 // edit (see migration_v46/v53 fix history in CLAUDE.md).
 import {
-  createTestUser, createTestBusiness, addMember, createInviteCode,
+  createTestUser, createTestBusiness, addMember, createInviteCode, adminClient,
 } from './helpers';
 
 describe('join_business (real RPC)', () => {
@@ -17,6 +17,26 @@ describe('join_business (real RPC)', () => {
 
     expect(error).toBeNull();
     expect(data).toMatchObject({ business_id: businessId, role: 'vendeur' });
+  });
+
+  // Checklist 1.7 "inviter can see redeemed-by/when" (migration_v186) — the
+  // audit trail is the whole point of the feature, so it needs its own
+  // direct proof, not just an inference from the membership existing.
+  it('stamps redeemed_by/redeemed_at on the code when it is joined (1.7 audit trail, migration_v186)', async () => {
+    const { client: adminC, userId: adminId } = await createTestUser('admin');
+    const businessId = await createTestBusiness(adminC, 'Boutique Test');
+    const code = await createInviteCode(businessId, adminId, { role: 'vendeur' });
+
+    const { client: joinerC, userId: joinerId } = await createTestUser('joiner');
+    const before = new Date();
+    const { error } = await joinerC.rpc('join_business', { p_code: code });
+    expect(error).toBeNull();
+
+    const admin = adminClient();
+    const { data: row } = await admin.from('invite_codes').select('redeemed_by, redeemed_at').eq('code', code).single();
+    expect(row!.redeemed_by).toBe(joinerId);
+    expect(new Date(row!.redeemed_at)).toBeInstanceOf(Date);
+    expect(new Date(row!.redeemed_at).getTime()).toBeGreaterThanOrEqual(before.getTime());
   });
 
   it('rejects an expired code with the specific French expiry message (regression: v46)', async () => {

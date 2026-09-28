@@ -4,11 +4,18 @@ import { generateId, generateFallbackName } from '@/lib/id';
 import { translateError } from '@/lib/errors';
 import { trackEvent } from '@/lib/analytics';
 import { saveVentesCache, getVentesCache, getCacheTimestamp, enqueue, getQueueCount } from '@/lib/db';
-import { isNetworkError } from '@/lib/sync';
+import { isNetworkError, withTimeout, withNetworkRetry, reportOfflineFallback } from '@/lib/sync';
 import { useSyncStore } from '@/stores/sync';
 import { notifyEvent } from '@/src/utils/notifications';
 import { useAuthStore } from '@/stores/auth';
 import { formatAmount } from '@/src/utils/format';
+
+// See stores/products.ts for the full explanation — a fetch already in
+// flight when the user switches businesses must not overwrite the new
+// business's state once it finally resolves.
+function isStaleBusiness(businessId: string): boolean {
+  return useAuthStore.getState().session?.activeBusiness?.id !== businessId;
+}
 
 export interface VenteLigne {
   id: string;
@@ -27,6 +34,30 @@ export interface VentePayment {
   method: string;
   amount: number;
   date: string;
+}
+
+// One entry per edit_sale() call — before/after are the whole-shape snapshots
+// the RPC stores, in display units (already /100), so the detail screen can
+// diff them directly without knowing which fields changed ahead of time.
+export interface SaleEditSnapshot {
+  customer_name: string | null;
+  client_id: string | null;
+  due_date: string | null;
+  total_amount: number;
+  discount_amount: number;
+  lines: { line_id: string; product_name: string; unit_price: number }[];
+  payments: { payment_id: string; method: string; amount: number; ref_external: string | null }[];
+}
+
+export interface SaleEdit {
+  id: string;
+  edit_number: number;
+  edited_by: string;
+  edited_by_name: string;
+  edited_at: string;
+  reason: string | null;
+  before: SaleEditSnapshot;
+  after: SaleEditSnapshot;
 }
 
 export interface Vente {
@@ -48,43 +79,87 @@ export interface Vente {
   cancellation_reason: string | null;
   cancelled_by_id?: string | null;
   cancelled_by_name?: string;
+  edit_count: number;
+  last_edited_at: string | null;
+  last_edited_by?: string | null;
+  last_edited_by_name?: string;
   profit: number | null;
   amount_paid?: number;
   lines?: VenteLigne[];
   payments?: VentePayment[];
+  edits?: SaleEdit[];
 }
 
 interface VentesStore {
   sales: Vente[];
+  // Business id fetchSales last reached a terminal result for — null until
+  // then. See stores/products.ts's productsFetchedFor for why this exists:
+  // `sales.length === 0` can't tell "confirmed no sales" apart from "haven't
+  // loaded yet," and app/(app)/_layout.tsx's activation fork needs that
+  // distinction to avoid flashing for a business that already has a sale.
+  salesFetchedFor: string | null;
   loading: boolean;
   saving: boolean;
   error: string | null;
   offline: boolean;
   offlineSince: number | null;
-  fetchSales: (businessId: string, sellerId?: string, since?: string) => Promise<void>;
+  // limit/status are additive, optional, and used only by the Ventes history
+  // screen's infinite-scroll + status-tab filtering (ventes/index.tsx) —
+  // every other caller (dashboard, clients screens) omits them and keeps
+  // getting the exact same full, unfiltered fetch as before.
+  fetchSales: (businessId: string, sellerId?: string, since?: string, limit?: number, status?: 'paye' | 'credit' | 'annule') => Promise<void>;
   loadDetail: (saleId: string) => Promise<void>;
   recordPayment: (saleId: string, amount: number, method: string, date: string) => Promise<{ ok: boolean; fullyPaid: boolean }>;
   recordClientPayment: (customerName: string, businessId: string, amount: number, method: string, date: string) => Promise<{ ok: boolean; fullySettled: boolean }>;
   cancelSale: (saleId: string, businessId: string, userId: string, reason: string) => Promise<boolean>;
   updateSaleClient: (saleId: string, customerName: string) => Promise<boolean>;
+  editSale: (params: EditSaleParams) => Promise<{ ok: boolean; error?: string }>;
   clearError: () => void;
   reset: () => void;
 }
 
+// Amounts are display-unit (GNF etc, not cents) — converted to bigint cents
+// right before the RPC call, same as every other amount in this store.
+// lineEdits/paymentEdits only need the entries actually being corrected —
+// edit_sale() recomputes total_amount from ALL of so_lines regardless of
+// which lines are listed here.
+export interface EditSaleParams {
+  saleId: string;
+  businessId: string;
+  customerName: string | null;
+  clientId: string | null;
+  dueDate: string | null;
+  discountAmount: number;
+  lineEdits: { lineId: string; unitPrice: number }[];
+  paymentEdits: { paymentId: string; method: string; amount: number; refExternal: string | null }[];
+  reason: string | null;
+}
+
 export const useVentesStore = create<VentesStore>((set, get) => ({
   sales: [],
+  salesFetchedFor: null,
   loading: false,
   saving: false,
   error: null,
   offline: false,
   offlineSince: null,
 
-  fetchSales: async (businessId, sellerId, since) => {
-    const cacheKey = `${businessId}:${sellerId ?? 'all'}`;
+  fetchSales: async (businessId, sellerId, since, limit, status) => {
+    // status branches the cache key off into its own slot so a filtered
+    // ("Payés"/"À payer"/"Annulés") fetch can never overwrite the shared,
+    // unfiltered cache dashboard/clients screens rely on — omitted (the
+    // "Tout" tab, and every non-Ventes caller) resolves to the exact same
+    // key as before. limit deliberately does NOT affect the key: it only
+    // ever grows (30, 60, 90… as the user scrolls), so the cache simply
+    // holds whatever the largest loaded window was — a fine offline
+    // snapshot, not a claim of completeness, same posture as every other
+    // read cache in this codebase.
+    const cacheKey = `${businessId}:${sellerId ?? 'all'}${status ? `:${status}` : ''}`;
 
     // Seed from cache on first load so the list is visible while the network fetch runs
     if (get().sales.length === 0) {
       const cached = await getVentesCache(cacheKey) as Vente[] | null;
+      if (isStaleBusiness(businessId)) return;
       if (cached) {
         set({ sales: cached, loading: false, error: null });
       } else {
@@ -102,27 +177,34 @@ export const useVentesStore = create<VentesStore>((set, get) => ({
 
     if (sellerId) query = query.eq('seller_id', sellerId);
     if (since) query = query.gte('sale_date', since);
+    if (status) query = query.eq('status', status);
+    if (limit) query = query.limit(limit);
 
-    const { data, error: fetchErr } = await query;
+    const { data, error: fetchErr } = await withNetworkRetry(() => query).catch(err => ({ data: null, error: err }));
+    if (isStaleBusiness(businessId)) return;
     if (fetchErr) {
       if (isNetworkError(fetchErr)) {
+        reportOfflineFallback('ventes.fetchSales', fetchErr);
         const cached = await getVentesCache(cacheKey) as Vente[] | null;
+        if (isStaleBusiness(businessId)) return;
         if (cached) {
           const ts = await getCacheTimestamp('ventes_cache', cacheKey);
-          set({ sales: cached, loading: false, offline: true, offlineSince: ts, error: null });
+          if (isStaleBusiness(businessId)) return;
+          set({ sales: cached, loading: false, offline: true, offlineSince: ts, error: null, salesFetchedFor: businessId });
           return;
         }
         set({
           error: 'Pas de connexion. Ouvrez l\'application en ligne une première fois pour activer le mode hors ligne.',
           loading: false,
           offline: true,
+          salesFetchedFor: businessId,
         });
         return;
       }
-      set({ loading: false, error: translateError(fetchErr, 'Erreur de chargement') });
+      set({ loading: false, error: translateError(fetchErr, 'Erreur de chargement'), salesFetchedFor: businessId });
       return;
     }
-    if (!data) { set({ loading: false }); return; }
+    if (!data) { set({ loading: false, salesFetchedFor: businessId }); return; }
 
     const orderIds = data.map((s: Record<string, unknown>) => s.id as string);
     const sellerIds = [...new Set(data.map((s: Record<string, unknown>) => s.seller_id as string))];
@@ -131,9 +213,14 @@ export const useVentesStore = create<VentesStore>((set, get) => ({
         .map((s: Record<string, unknown>) => s.cancelled_by_id as string | null)
         .filter((id): id is string => !!id)
     )];
-    const allProfileIds = [...new Set([...sellerIds, ...cancellerIds])];
+    const editorIds = [...new Set(
+      data
+        .map((s: Record<string, unknown>) => s.last_edited_by as string | null)
+        .filter((id): id is string => !!id)
+    )];
+    const allProfileIds = [...new Set([...sellerIds, ...cancellerIds, ...editorIds])];
 
-    const allMemberIds = [...new Set([...sellerIds, ...cancellerIds])];
+    const allMemberIds = [...new Set([...sellerIds, ...cancellerIds, ...editorIds])];
     const [profilesRes, linesRes, paysRes, membershipsRes] = await Promise.all([
       supabase.from('profiles').select('id, name').in('id', allProfileIds),
       supabase
@@ -207,22 +294,35 @@ export const useVentesStore = create<VentesStore>((set, get) => ({
         cancelled_by_name: s.cancelled_by_id
           ? (dm[s.cancelled_by_id as string] || pm[s.cancelled_by_id as string] || generateFallbackName(s.cancelled_by_id as string))
           : undefined,
+        edit_count: (s.edit_count as number) ?? 0,
+        last_edited_at: (s.last_edited_at as string | null) ?? null,
+        last_edited_by: (s.last_edited_by as string | null) ?? null,
+        last_edited_by_name: s.last_edited_by
+          ? (dm[s.last_edited_by as string] || pm[s.last_edited_by as string] || generateFallbackName(s.last_edited_by as string))
+          : undefined,
         profit,
         amount_paid: (isCreditStatus || hasDiscount) ? (paidByOrder[s.id as string] ?? 0) : undefined,
       } as Vente;
     });
     void saveVentesCache(cacheKey, sales as unknown[]);
-    set({ sales, loading: false, offline: false, offlineSince: null });
+    if (isStaleBusiness(businessId)) return;
+    set({ sales, loading: false, offline: false, offlineSince: null, salesFetchedFor: businessId });
   },
 
   loadDetail: async (saleId) => {
-    const [linesRes, paysRes] = await Promise.all([
+    const businessId = get().sales.find(s => s.id === saleId)?.business_id;
+    const [linesRes, paysRes, editsRes] = await Promise.all([
       supabase.from('so_lines').select('*, product:products(name, cost_price), variant:product_variants(cost_price)').eq('order_id', saleId),
       supabase
         .from('payments')
         .select('id, method, amount, date')
         .eq('order_id', saleId)
         .order('date', { ascending: true }),
+      supabase
+        .from('sale_order_edits')
+        .select('id, edit_number, edited_by, edited_at, reason, before, after')
+        .eq('order_id', saleId)
+        .order('edit_number', { ascending: false }),
     ]);
 
     if (linesRes.error || paysRes.error) return;
@@ -252,9 +352,61 @@ export const useVentesStore = create<VentesStore>((set, get) => ({
 
     const amount_paid = payments.reduce((s, p) => s + p.amount, 0);
 
+    // Convert a raw before/after snapshot (cents, as stored by edit_sale())
+    // into display units, matching how lines/payments above are converted.
+    const toDisplaySnapshot = (snap: Record<string, unknown>): SaleEditSnapshot => ({
+      customer_name: (snap.customer_name as string | null) ?? null,
+      client_id: (snap.client_id as string | null) ?? null,
+      due_date: (snap.due_date as string | null) ?? null,
+      total_amount: (snap.total_amount as number) / 100,
+      discount_amount: (snap.discount_amount as number) / 100,
+      lines: ((snap.lines as Record<string, unknown>[] | null) ?? []).map(l => ({
+        line_id: l.line_id as string,
+        product_name: l.product_name as string,
+        unit_price: (l.unit_price as number) / 100,
+      })),
+      payments: ((snap.payments as Record<string, unknown>[] | null) ?? []).map(p => ({
+        payment_id: p.payment_id as string,
+        method: p.method as string,
+        amount: (p.amount as number) / 100,
+        ref_external: (p.ref_external as string | null) ?? null,
+      })),
+    });
+
+    let edits: SaleEdit[] | undefined;
+    if (!editsRes.error && editsRes.data) {
+      const editorIds = [...new Set(editsRes.data.map(e => e.edited_by as string))];
+      let nameMap: Record<string, string> = {};
+      if (editorIds.length > 0) {
+        const [{ data: profs }, { data: mems }] = await Promise.all([
+          supabase.from('profiles').select('id, name').in('id', editorIds),
+          businessId
+            ? supabase.from('memberships').select('user_id, display_name').eq('business_id', businessId).in('user_id', editorIds)
+            : Promise.resolve({ data: [] as { user_id: string; display_name: string | null }[] }),
+        ]);
+        const pm: Record<string, string> = {};
+        for (const p of (profs ?? []) as { id: string; name: string }[]) pm[p.id] = p.name;
+        const dm: Record<string, string> = {};
+        for (const m of (mems ?? []) as { user_id: string; display_name: string | null }[]) {
+          if (m.display_name) dm[m.user_id] = m.display_name;
+        }
+        nameMap = { ...pm, ...dm };
+      }
+      edits = editsRes.data.map(e => ({
+        id: e.id as string,
+        edit_number: e.edit_number as number,
+        edited_by: e.edited_by as string,
+        edited_by_name: nameMap[e.edited_by as string] || generateFallbackName(e.edited_by as string),
+        edited_at: e.edited_at as string,
+        reason: (e.reason as string | null) ?? null,
+        before: toDisplaySnapshot(e.before as Record<string, unknown>),
+        after: toDisplaySnapshot(e.after as Record<string, unknown>),
+      }));
+    }
+
     set(state => ({
       sales: state.sales.map(s =>
-        s.id === saleId ? { ...s, lines, payments, amount_paid } : s,
+        s.id === saleId ? { ...s, lines, payments, amount_paid, edits } : s,
       ),
     }));
   },
@@ -266,11 +418,29 @@ export const useVentesStore = create<VentesStore>((set, get) => ({
 
     const alreadyPaid = sale.amount_paid ?? 0;
     const owed = sale.total_amount - (sale.discount_amount ?? 0);
+    const remainingBefore = owed - alreadyPaid;
     const newAmountPaid = alreadyPaid + amount;
     const fullyPaid = newAmountPaid >= owed - 0.01;
     const now = new Date().toISOString();
     const paymentId = generateId();
     const amountCents = Math.round(amount * 100);
+
+    // credit_paid notification — mirrors recordClientPayment below. "total"
+    // states the debt that just got cleared (remainingBefore, not the
+    // original sale total, since prior installments may have already
+    // shrunk it); "partiel" states only the amount just paid. Falls back to
+    // a nameless phrasing when the sale has no customer_name.
+    const notifyCreditPayment = () => {
+      const currency = useAuthStore.getState().session?.activeBusiness?.currency ?? 'GNF';
+      notifyEvent({
+        businessId: sale.business_id,
+        eventType: 'credit_paid',
+        payload: fullyPaid
+          ? { customer: sale.customer_name ?? '', amount: formatAmount(remainingBefore, currency), status: 'total' }
+          : { customer: sale.customer_name ?? '', amount: formatAmount(amount, currency), status: 'partiel' },
+        targetRoles: ['administrateur', 'manager'],
+      });
+    };
 
     const applyOptimistic = () => {
       const newPaymentEntry: VentePayment = { id: paymentId, method, amount, date };
@@ -307,6 +477,7 @@ export const useVentesStore = create<VentesStore>((set, get) => ({
       const { data, error: rpcErr } = await supabase.rpc('record_payment', rpcPayload);
       if (rpcErr) throw rpcErr;
       applyOptimistic();
+      notifyCreditPayment();
       return { ok: true, fullyPaid: data as boolean };
     } catch (err) {
       if (isNetworkError(err)) {
@@ -314,6 +485,7 @@ export const useVentesStore = create<VentesStore>((set, get) => ({
         const count = await getQueueCount();
         useSyncStore.setState({ pendingCount: count });
         applyOptimistic();
+        notifyCreditPayment();
         return { ok: true, fullyPaid };
       }
       set({ saving: false, error: translateError(err, 'Paiement impossible') });
@@ -338,6 +510,15 @@ export const useVentesStore = create<VentesStore>((set, get) => ({
       set({ saving: false, error: 'Aucun crédit trouvé pour ce client' });
       return { ok: false, fullySettled: false };
     }
+
+    // Sum of what this client owed across all their credit sales right
+    // before this payment — used for the "total" credit_paid notification
+    // ("a totalement payé sa dette de X"), since that's the actual debt that
+    // just got cleared, not just the amount of this one payment.
+    const totalOwedBefore = creditSales.reduce(
+      (sum, s) => sum + (s.total_amount - (s.discount_amount ?? 0) - (s.amount_paid ?? 0)),
+      0,
+    );
 
     let toAllocate = amount;
     const storeUpdates: { id: string; newAmountPaid: number; fullyPaid: boolean; paidAt: string }[] = [];
@@ -406,12 +587,16 @@ export const useVentesStore = create<VentesStore>((set, get) => ({
     }
 
     trackEvent('debt_payment_recorded', businessId, null, { fully_settled: fullySettled });
-    if (fullySettled) {
+    // Always notify — not just on full settlement — so a partial installment
+    // ("a payé X de son crédit") is visible too, not just the final one.
+    {
       const currency = useAuthStore.getState().session?.activeBusiness?.currency ?? 'GNF';
       notifyEvent({
         businessId,
         eventType: 'credit_paid',
-        payload: { customer: customerName, amount: formatAmount(amount, currency) },
+        payload: fullySettled
+          ? { customer: customerName, amount: formatAmount(totalOwedBefore, currency), status: 'total' }
+          : { customer: customerName, amount: formatAmount(amount, currency), status: 'partiel' },
         targetRoles: ['administrateur', 'manager'],
       });
     }
@@ -422,8 +607,17 @@ export const useVentesStore = create<VentesStore>((set, get) => ({
     set({ saving: true, error: null });
     const _cancelledSale = get().sales.find(s => s.id === saleId);
     const now = new Date().toISOString();
-    const { data: profileData } = await supabase.from('profiles').select('name').eq('id', userId).single();
-    const cancellerName = profileData?.name || generateFallbackName(userId);
+    // Best-effort — a hang/failure here must never leave `saving` stuck
+    // (the actual cancel RPC below is what matters; this only decorates the
+    // audit-trail name), so it falls back the same way an empty `name`
+    // already does.
+    let cancellerName = generateFallbackName(userId);
+    try {
+      const { data: profileData } = await supabase.from('profiles').select('name').eq('id', userId).single();
+      cancellerName = profileData?.name || cancellerName;
+    } catch {
+      // keep the fallback name
+    }
     const cancelPatch = {
       status: 'annule' as const,
       cancelled_at: now,
@@ -452,7 +646,12 @@ export const useVentesStore = create<VentesStore>((set, get) => ({
         notifyEvent({
           businessId,
           eventType: 'sale_cancelled',
-          payload: { amount: formatAmount(_cancelledSale.total_amount, currency), reason },
+          // Net of discount, matching what the sale_completed notification
+          // showed for this same sale — total_amount alone is the catalog
+          // gross, so a discounted sale sold for e.g. 45 000 was reading back
+          // as "annulée · 50 000" here. Same convention as the owed/net figure
+          // used everywhere else (total_amount − discount_amount).
+          payload: { amount: formatAmount(_cancelledSale.total_amount - (_cancelledSale.discount_amount ?? 0), currency), reason },
           targetUserIds: targetUserIds.length > 0 ? targetUserIds : undefined,
           targetRoles: ['administrateur'],
         });
@@ -482,21 +681,115 @@ export const useVentesStore = create<VentesStore>((set, get) => ({
   updateSaleClient: async (saleId, customerName) => {
     set({ saving: true, error: null });
     const businessId = get().sales.find(s => s.id === saleId)?.business_id;
-    const { error } = await supabase
-      .from('sale_orders')
-      .update({ customer_name: customerName.trim() || null })
-      .eq('id', saleId)
-      .eq('business_id', businessId ?? '');
-    if (error) { set({ saving: false, error: translateError(error, 'Impossible de modifier') }); return false; }
-    set(state => ({
-      sales: state.sales.map(s =>
-        s.id === saleId ? { ...s, customer_name: customerName.trim() || null } : s,
-      ),
-      saving: false,
-    }));
-    return true;
+    try {
+      const { error } = await supabase
+        .from('sale_orders')
+        .update({ customer_name: customerName.trim() || null })
+        .eq('id', saleId)
+        .eq('business_id', businessId ?? '');
+      if (error) { set({ saving: false, error: translateError(error, 'Impossible de modifier') }); return false; }
+      set(state => ({
+        sales: state.sales.map(s =>
+          s.id === saleId ? { ...s, customer_name: customerName.trim() || null } : s,
+        ),
+        saving: false,
+      }));
+      return true;
+    } catch (err) {
+      set({ saving: false, error: isNetworkError(err) ? 'Vérifiez votre connexion' : translateError(err, 'Impossible de modifier') });
+      return false;
+    }
+  },
+
+  // Admin/manager only (enforced server-side) — corrects a mistaken sale in
+  // place instead of cancelling it, with a full before/after audit trail.
+  // Deliberately online-only: not queued through the offline sync_queue,
+  // since the 48h edit window is checked against a live server clock and a
+  // queued replay after a connectivity gap could silently fail that check
+  // with no clear signal to the admin. A network error here is a real,
+  // immediate failure the caller should retry once back online, not
+  // something to defer.
+  editSale: async (params) => {
+    set({ saving: true, error: null });
+    const {
+      saleId, businessId, customerName, clientId, dueDate,
+      discountAmount, lineEdits, paymentEdits, reason,
+    } = params;
+
+    const rpcPayload = {
+      p_sale_id: saleId,
+      p_business_id: businessId,
+      p_customer_name: customerName,
+      p_client_id: clientId,
+      p_due_date: dueDate,
+      p_discount_amount: Math.round(discountAmount * 100),
+      p_line_edits: lineEdits.map(l => ({ line_id: l.lineId, unit_price: Math.round(l.unitPrice * 100) })),
+      p_payment_edits: paymentEdits.map(p => ({
+        payment_id: p.paymentId, method: p.method,
+        amount: Math.round(p.amount * 100), ref_external: p.refExternal,
+      })),
+      p_reason: reason,
+    };
+
+    try {
+      const { data, error } = await supabase.rpc('edit_sale', rpcPayload);
+      if (error) throw error;
+      const updated = data as {
+        total_amount: number; discount_amount: number; edit_count: number;
+        last_edited_at: string; last_edited_by: string;
+        customer_name: string | null; client_id: string | null; due_date: string | null;
+      };
+
+      const editorName = useAuthStore.getState().session?.user?.name
+        || generateFallbackName(updated.last_edited_by);
+
+      const newSales = get().sales.map(s =>
+        s.id === saleId
+          ? {
+              ...s,
+              total_amount: updated.total_amount / 100,
+              discount_amount: updated.discount_amount / 100,
+              edit_count: updated.edit_count,
+              last_edited_at: updated.last_edited_at,
+              last_edited_by: updated.last_edited_by,
+              last_edited_by_name: editorName,
+              customer_name: updated.customer_name,
+              client_id: updated.client_id,
+              due_date: updated.due_date,
+            }
+          : s,
+      );
+      set({ sales: newSales, saving: false });
+      void saveVentesCache(`${businessId}:all`, newSales as unknown[]);
+
+      // Refreshes lines/payments/edits — the RPC touched all three and the
+      // headline patch above only covers the sale_orders row itself.
+      await get().loadDetail(saleId);
+
+      const currency = useAuthStore.getState().session?.activeBusiness?.currency ?? 'GNF';
+      notifyEvent({
+        businessId,
+        eventType: 'sale_edited',
+        // Net of discount (RPC returns both in cents), matching the net figure
+        // sale_completed showed — not the recomputed catalog gross.
+        payload: { editor: editorName, amount: formatAmount((updated.total_amount - updated.discount_amount) / 100, currency) },
+        targetRoles: ['administrateur', 'manager'],
+        excludeUserId: useAuthStore.getState().session?.user?.id,
+      });
+
+      return { ok: true };
+    } catch (err) {
+      // edit_sale() raises plain French messages (limite atteinte, délai dépassé,
+      // paiement désynchronisé, etc.) — pass the raw message through as the
+      // fallback so it survives instead of being swallowed by a generic one,
+      // same idiom useAuthStore's joinBusiness already uses for join_business().
+      const raw = err instanceof Error ? err.message : (err as Record<string, unknown>)?.message as string | undefined;
+      const message = translateError(err, raw ?? 'Modification impossible');
+      set({ saving: false, error: message });
+      return { ok: false, error: message };
+    }
   },
 
   clearError: () => set({ error: null }),
-  reset: () => set({ sales: [], loading: false, saving: false, error: null, offline: false, offlineSince: null }),
+  reset: () => set({ sales: [], salesFetchedFor: null, loading: false, saving: false, error: null, offline: false, offlineSince: null }),
 }));

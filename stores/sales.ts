@@ -2,7 +2,7 @@ import { create } from 'zustand';
 import { supabase } from '@/lib/supabase';
 import { translateError } from '@/lib/errors';
 import { enqueue, getQueueCount, saveProductCache, getProductCache, saveVentesCache, getVentesCache } from '@/lib/db';
-import { isNetworkError } from '@/lib/sync';
+import { isNetworkError, withTimeout } from '@/lib/sync';
 import { generateId } from '@/lib/id';
 import { useSyncStore } from '@/stores/sync';
 import { useVentesStore } from '@/stores/ventes';
@@ -11,7 +11,7 @@ import { useProductStore } from '@/stores/products';
 import { trackEvent } from '@/lib/analytics';
 import { haptics } from '@/lib/haptics';
 import { useToastStore } from '@/stores/toast';
-import { notifyEvent } from '@/src/utils/notifications';
+import { notifyEvent, resolveSellerDisplayName } from '@/src/utils/notifications';
 import { formatAmount } from '@/src/utils/format';
 import type { PaymentMethod, Product, ProductVariant } from '@/src/types';
 
@@ -37,6 +37,18 @@ interface SalesStore {
   submitting: boolean;
   error: string | null;
   lastSubmitQueued: boolean;
+  // Separate from lastSubmitQueued (submitSale's own flag) so the two flows
+  // can't clobber each other's queued-state signal in the same session.
+  lastCarnetDebtQueued: boolean;
+  // Same reasoning, third flow: the "Vente rapide" amount-only quick sale
+  // (submit_quick_sale, migration_v190) has its own queued-state signal too.
+  lastQuickSaleQueued: boolean;
+  // The just-created sale_orders id, for the Vendre quick-checkout undo
+  // window — submit_sale returns a plain uuid (RETURNS uuid, not a row), but
+  // the RPC call previously only ever destructured `error`, discarding it.
+  // Only set when the sale actually synced (a queued/offline sale has no
+  // server row yet, so there's nothing a cancel_sale call could target).
+  lastSaleId: string | null;
 
   addToCart: (product: Product, bulk?: boolean) => void;
   addToCartVariant: (product: Product, variant: ProductVariant, qty?: number) => void;
@@ -44,7 +56,8 @@ interface SalesStore {
   setQty: (productId: string, qty: number, isBulk?: boolean, variantId?: string) => void;
   toggleBulk: (productId: string, isBulk?: boolean) => void;
   clearCart: () => void;
-  submitCarnetDebt: (businessId: string, userId: string, customerName: string, amountCents: number) => Promise<boolean>;
+  submitCarnetDebt: (businessId: string, userId: string, customerName: string, amountCents: number, clientId: string | null) => Promise<boolean>;
+  submitQuickSale: (businessId: string, userId: string, unitPriceCents: number, qty: number, label?: string) => Promise<boolean>;
   submitSale: (
     businessId: string,
     userId: string,
@@ -90,6 +103,9 @@ export const useSalesStore = create<SalesStore>((set, get) => ({
   submitting: false,
   error: null,
   lastSubmitQueued: false,
+  lastCarnetDebtQueued: false,
+  lastQuickSaleQueued: false,
+  lastSaleId: null,
 
   addToCart: (product, bulk = false) => {
     const { cart } = get();
@@ -199,21 +215,97 @@ export const useSalesStore = create<SalesStore>((set, get) => ({
 
   clearCart: () => set({ cart: [] }),
 
-  submitCarnetDebt: async (businessId, userId, customerName, amountCents) => {
-    const { error } = await supabase.rpc('submit_carnet_debt', {
-      p_business_id:   businessId,
-      p_seller_id:     userId,
-      p_customer_name: customerName.trim(),
-      p_amount:        amountCents,
-    });
-    if (error) {
-      console.error('[submitCarnetDebt]', error.code, error.message, error.details);
-      useToastStore.getState().show(error.message ?? translateError(error, 'Erreur inconnue'), 'warning');
+  submitCarnetDebt: async (businessId, userId, customerName, amountCents, clientId) => {
+    // Idempotency key generated once and reused across both the live RPC
+    // call and (on a network failure) the offline-queue replay — same
+    // pattern as submitSale, backed by migration_v178.sql's real dedup
+    // guard on submit_carnet_debt. Without this, a bad-connection moment
+    // could either lose the entry entirely (old behavior: hang, fail,
+    // nothing recorded, nothing queued) or — once queued — risk double-
+    // recording a debt that actually succeeded server-side before the
+    // client heard back.
+    const idempotencyKey = generateId();
+    const payload = {
+      p_business_id:      businessId,
+      p_seller_id:        userId,
+      p_customer_name:    customerName.trim(),
+      p_amount:           amountCents,
+      p_client_id:        clientId,
+      p_idempotency_key:  idempotencyKey,
+    };
+    try {
+      const { error } = await withTimeout(supabase.rpc('submit_carnet_debt', payload));
+      if (error) {
+        console.error('[submitCarnetDebt]', error.code, error.message, error.details);
+        useToastStore.getState().show(error.message ?? translateError(error, 'Erreur inconnue'), 'warning');
+        haptics.error();
+        set({ lastCarnetDebtQueued: false });
+        return false;
+      }
+      haptics.heavy();
+      set({ lastCarnetDebtQueued: false });
+      return true;
+    } catch (err) {
+      if (isNetworkError(err)) {
+        await enqueue('submit_carnet_debt', payload);
+        const count = await getQueueCount();
+        useSyncStore.setState({ pendingCount: count });
+        set({ lastCarnetDebtQueued: true });
+        haptics.success();
+        trackEvent('credit_debt_queued', businessId, userId);
+        return true;
+      }
+      console.error('[submitCarnetDebt]', err);
+      useToastStore.getState().show('Vérifiez votre connexion et réessayez.', 'warning');
       haptics.error();
+      set({ lastCarnetDebtQueued: false });
       return false;
     }
-    haptics.heavy();
-    return true;
+  },
+
+  submitQuickSale: async (businessId, userId, unitPriceCents, qty, label) => {
+    // Same idempotency-key + offline-queue shape as submitCarnetDebt above —
+    // submit_quick_sale (migration_v190) has the identical dedup guard.
+    // p_label is optional free text ("Riz, sac de 5kg") — trimmed to null
+    // when blank so the RPC's own COALESCE(..., 'Vente rapide') fallback
+    // applies, rather than storing an empty string as the line's name.
+    const idempotencyKey = generateId();
+    const payload = {
+      p_business_id:      businessId,
+      p_seller_id:        userId,
+      p_unit_price:       unitPriceCents,
+      p_qty:              qty,
+      p_label:            label?.trim() || null,
+      p_idempotency_key:  idempotencyKey,
+    };
+    try {
+      const { error } = await withTimeout(supabase.rpc('submit_quick_sale', payload));
+      if (error) {
+        console.error('[submitQuickSale]', error.code, error.message, error.details);
+        useToastStore.getState().show(error.message ?? translateError(error, 'Erreur inconnue'), 'warning');
+        haptics.error();
+        set({ lastQuickSaleQueued: false });
+        return false;
+      }
+      haptics.heavy();
+      set({ lastQuickSaleQueued: false });
+      return true;
+    } catch (err) {
+      if (isNetworkError(err)) {
+        await enqueue('submit_quick_sale', payload);
+        const count = await getQueueCount();
+        useSyncStore.setState({ pendingCount: count });
+        set({ lastQuickSaleQueued: true });
+        haptics.success();
+        trackEvent('quick_sale_queued', businessId, userId);
+        return true;
+      }
+      console.error('[submitQuickSale]', err);
+      useToastStore.getState().show('Vérifiez votre connexion et réessayez.', 'warning');
+      haptics.error();
+      set({ lastQuickSaleQueued: false });
+      return false;
+    }
   },
 
   submitSale: async (businessId, userId, payment, customerName, saleDate, discountAmount, clientId, overrideTotalAmount, dueDate) => {
@@ -267,28 +359,41 @@ export const useSalesStore = create<SalesStore>((set, get) => ({
         ...(dueDate ? { p_due_date: dueDate } : {}),
       };
 
-      const { error: rpcErr } = await supabase.rpc('submit_sale', rpcPayload);
+      const { data: newSaleId, error: rpcErr } = await withTimeout(supabase.rpc('submit_sale', rpcPayload));
       if (rpcErr) throw rpcErr;
 
-      // Notify managers/admins of the completed sale (online path only)
+      // Notify managers/admins of the completed sale (online path only).
+      // Seller name is resolved the same way as ventes.ts's history list
+      // (membership display_name override, then profile.name) — not read off
+      // the session's user.name directly — so a manager-set local/nickname
+      // shows up here too, not just a literal "Vendeur" fallback.
       const _notifSession = useAuthStore.getState().session;
       if (_notifSession?.activeBusiness && !_notifSession.isDemoMode) {
-        notifyEvent({
-          businessId,
-          eventType: 'sale_completed',
-          payload: {
-            seller: _notifSession.user.name || 'Vendeur',
-            desc: describeSaleForNotification(cartSnapshot),
-            // Net of discount — totalAmount alone is the catalog total (see
-            // "discount_amount convention" in CLAUDE.md), which read as the
-            // product's list price instead of what the customer was actually charged.
-            amount: formatAmount(totalAmount - discount, _notifSession.activeBusiness.currency),
-          },
-          targetRoles: ['administrateur', 'manager'],
+        const _saleDesc = describeSaleForNotification(cartSnapshot);
+        const _saleQty = cartSnapshot.reduce((s, l) => s + l.qty, 0);
+        // Net of discount — totalAmount alone is the catalog total (see
+        // "discount_amount convention" in CLAUDE.md), which read as the
+        // product's list price instead of what the customer was actually charged.
+        const _saleAmount = formatAmount(totalAmount - discount, _notifSession.activeBusiness.currency);
+        resolveSellerDisplayName(businessId, userId).then(seller => {
+          notifyEvent({
+            businessId,
+            eventType: 'sale_completed',
+            // qty drives singular/plural agreement in the no-seller-name body.
+            payload: { seller, desc: _saleDesc, amount: _saleAmount, qty: _saleQty },
+            // Investisseurs are looped in on every sale too — keeps them
+            // passively in the know without the admin having to report out.
+            targetRoles: ['administrateur', 'manager', 'investisseur'],
+            // A solo owner (the majority of real administrateurs — no team
+            // yet) making their own sale should never get pushed "you sold
+            // X" for something they just tapped through themselves — only
+            // relevant when someone ELSE on the team did it.
+            excludeUserId: userId,
+          });
         });
       }
 
-      set({ cart: [], submitting: false, lastSubmitQueued: false });
+      set({ cart: [], submitting: false, lastSubmitQueued: false, lastSaleId: (newSaleId as string) ?? null });
       haptics.heavy();
       trackEvent('sale_submitted', businessId, userId, {
         is_credit:      isCredit,
@@ -341,7 +446,11 @@ export const useSalesStore = create<SalesStore>((set, get) => ({
         const count = await getQueueCount();
         useSyncStore.setState({ pendingCount: count });
 
-        set({ cart: [], submitting: false, lastSubmitQueued: true });
+        // No server row exists yet for a queued sale — nothing a cancel_sale
+        // call could target — so lastSaleId stays null and the undo window
+        // in vendre.tsx is skipped for this outcome (a known, accepted gap;
+        // see CLAUDE.md's Vendre quick-checkout entry).
+        set({ cart: [], submitting: false, lastSubmitQueued: true, lastSaleId: null });
         haptics.success();
         trackEvent('sale_offline_queued', businessId, userId, {
           items_count: cartSnapshot.length,
@@ -386,6 +495,8 @@ export const useSalesStore = create<SalesStore>((set, get) => ({
             created_at: now,
             cancelled_at: null,
             cancellation_reason: null,
+            edit_count: 0,
+            last_edited_at: null,
             profit: null,
             lines: cartSnapshot.map(l => ({
               id: generateId(),
@@ -433,11 +544,11 @@ export const useSalesStore = create<SalesStore>((set, get) => ({
       // so a genuine technical error never reaches the merchant untranslated.
       const friendly = translateError(err, raw);
       haptics.error();
-      set({ error: friendly, submitting: false, lastSubmitQueued: false });
+      set({ error: friendly, submitting: false, lastSubmitQueued: false, lastSaleId: null });
       return false;
     }
   },
 
   clearError: () => set({ error: null }),
-  reset: () => set({ cart: [], submitting: false, error: null, lastSubmitQueued: false }),
+  reset: () => set({ cart: [], submitting: false, error: null, lastSubmitQueued: false, lastSaleId: null }),
 }));

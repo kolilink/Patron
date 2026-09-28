@@ -1,5 +1,6 @@
 import { useEffect, useMemo, useState } from 'react';
 import {
+  Alert,
   Dimensions,
   Modal,
   Pressable,
@@ -22,7 +23,7 @@ import { useSafeAreaInsets } from 'react-native-safe-area-context';
 import { router } from 'expo-router';
 import { Ionicons } from '@expo/vector-icons';
 import { Text } from '@/src/components/ui/Text';
-import { colors, useTheme, spacing, radius, BUSINESS_AVATAR_PALETTE } from '@/src/theme';
+import { useTheme, spacing, radius, fontFamily, BUSINESS_AVATAR_PALETTE } from '@/src/theme';
 import type { Palette } from '@/src/theme';
 import { useAuthStore } from '@/stores/auth';
 import { useSupportChatStore } from '@/stores/supportChat';
@@ -42,11 +43,18 @@ const DRAWER_CLOSE_DURATION = 300;
 
 const DRAWER_AVATAR_PALETTE = BUSINESS_AVATAR_PALETTE;
 
+// Below this many businesses, the search bar is hidden — most users belong
+// to only one or two, so it's just clutter above a short, glance-able list.
+const SEARCH_MIN_BUSINESSES = 6;
+
+// Matches Équipe's own ROLE_LABELS exactly — this used to say "Manager" and
+// "Investisseur" here while Équipe said "Gérant" and "Observateur" for the
+// same two roles, a real cross-screen inconsistency, not a style choice.
 const ROLE_LABEL: Record<Role, string> = {
   administrateur: 'Gérant',
-  manager: 'Manager',
+  manager: 'Gérant',
   vendeur: 'Vendeur',
-  investisseur: 'Investisseur',
+  investisseur: 'Observateur',
 };
 
 function avatarColor(id: string) {
@@ -60,6 +68,7 @@ export function BusinessDrawer() {
   const session = useAuthStore(s => s.session);
   const businessDrawerOpen = useAuthStore(s => s.businessDrawerOpen);
   const closeBusinessDrawer = useAuthStore(s => s.closeBusinessDrawer);
+  const markBusinessDrawerFullyClosed = useAuthStore(s => s.markBusinessDrawerFullyClosed);
   const selectBusiness = useAuthStore(s => s.selectBusiness);
   const insets = useSafeAreaInsets();
   const isFounder = isFounderPhone(session?.user.phone);
@@ -77,7 +86,14 @@ export function BusinessDrawer() {
       translateX.value = withTiming(0, { duration: DRAWER_OPEN_DURATION, easing: DRAWER_EASE });
     } else {
       translateX.value = withTiming(-DRAWER_WIDTH, { duration: DRAWER_CLOSE_DURATION, easing: DRAWER_EASE }, (finished) => {
-        if (finished) runOnJS(setModalVisible)(false);
+        if (finished) {
+          runOnJS(setModalVisible)(false);
+          // Signals ActivationForkOverlay (and anything else waiting) that
+          // this Modal is genuinely gone now, not just that close was
+          // requested — see businessDrawerFullyClosed's doc comment in
+          // stores/auth.ts for why the distinction matters.
+          runOnJS(markBusinessDrawerFullyClosed)();
+        }
       });
     }
   }, [businessDrawerOpen]);
@@ -154,12 +170,27 @@ export function BusinessDrawer() {
     router.push('/(app)/onboarding/creer');
   };
 
+  const handleFounderKpi = () => {
+    closeBusinessDrawer();
+    router.push('/(app)/founder-kpi');
+  };
+
   return (
     <Modal
       visible={modalVisible}
       transparent
       animationType="none"
       onRequestClose={closeBusinessDrawer}
+      // This drawer has its own bespoke gesture-driven presentation — it
+      // doesn't fit <FormSheet>'s full-screen slide-up-sheet shape, so it
+      // keeps a raw Modal. But it still contains a keyboard field (the
+      // business search box below), so it needs the same two props
+      // FormSheet sets centrally — see FormSheet.tsx's docstring and
+      // scripts/lib/consistency-checks.js for why: without them, this
+      // Modal's separate Android window isn't edge-to-edge aware while the
+      // rest of the app is, which is what caused the keyboard-flicker bug.
+      statusBarTranslucent
+      navigationBarTranslucent
     >
       {/* Backdrop */}
       <Animated.View style={[StyleSheet.absoluteFillObject, styles.backdrop, backdropAnimStyle]}>
@@ -180,23 +211,25 @@ export function BusinessDrawer() {
           {/* Header */}
           <View style={styles.header}>
             <Text style={styles.headerTitle}>Mes commerces</Text>
-            <Pressable onPress={closeBusinessDrawer} hitSlop={12}>
+            <Pressable onPress={closeBusinessDrawer} hitSlop={12} accessibilityLabel="Fermer" accessibilityRole="button">
               <Ionicons name="close-outline" size={22} color={palette.textSecondary} />
             </Pressable>
           </View>
 
-          {/* Search bar */}
-          <View style={styles.searchRow}>
-            <TextInput
-              value={search}
-              onChangeText={setSearch}
-              placeholder="Rechercher…"
-              placeholderTextColor={palette.textDisabled}
-              style={styles.searchInput}
-              returnKeyType="search"
-              clearButtonMode="while-editing"
-            />
-          </View>
+          {/* Search bar — hidden below SEARCH_MIN_BUSINESSES */}
+          {memberships.length > SEARCH_MIN_BUSINESSES && (
+            <View style={styles.searchRow}>
+              <TextInput
+                value={search}
+                onChangeText={setSearch}
+                placeholder="Rechercher…"
+                placeholderTextColor={palette.textDisabled}
+                style={styles.searchInput}
+                returnKeyType="search"
+                clearButtonMode="while-editing"
+              />
+            </View>
+          )}
 
           {/* Business list */}
           <ScrollView
@@ -209,7 +242,7 @@ export function BusinessDrawer() {
               const name = biz?.name ?? m.business_id;
               const initial = name.charAt(0).toUpperCase();
               const isActive = m.business_id === activeBusiness?.id;
-              const color = avatarColor(m.business_id);
+              const { bg, text: avatarTextColor } = avatarColor(m.business_id);
 
               return (
                 <Pressable
@@ -221,8 +254,8 @@ export function BusinessDrawer() {
                     pressed && { opacity: 0.7 },
                   ]}
                 >
-                  <View style={[styles.avatar, { backgroundColor: color }]}>
-                    <Text style={styles.avatarText}>{initial}</Text>
+                  <View style={[styles.avatar, { backgroundColor: bg }]}>
+                    <Text allowFontScaling={false} style={[styles.avatarText, { color: avatarTextColor }]}>{initial}</Text>
                   </View>
                   <View style={{ flex: 1 }}>
                     <Text style={styles.bizName} numberOfLines={1}>{name}</Text>
@@ -245,36 +278,48 @@ export function BusinessDrawer() {
           {/* Footer */}
           <View style={styles.footer}>
             {isFounder ? (
-              <Pressable onPress={handleSupportInbox} style={({ pressed }) => [styles.footerRow, pressed && { opacity: 0.6 }]}>
-                <View style={styles.footerIcon}>
-                  <Ionicons name="headset-outline" size={18} color={palette.primary} />
-                </View>
-                <Text style={[styles.footerLabel, { flex: 1 }]}>Service client</Text>
-                {founderUnreadTotal > 0 && <View style={styles.footerUnreadDot} />}
-              </Pressable>
+              <>
+                <Pressable onPress={handleSupportInbox} style={({ pressed }) => [styles.footerRow, pressed && { opacity: 0.6 }]}>
+                  <View style={styles.footerIcon}>
+                    <Ionicons name="headset-outline" size={18} color={palette.textSecondary} />
+                  </View>
+                  <Text style={[styles.footerLabel, { flex: 1 }]}>Service client</Text>
+                  {founderUnreadTotal > 0 && <View style={styles.footerUnreadDot} />}
+                </Pressable>
+                {/* Founder-only growth dashboard — moved off the drawer body
+                    itself (it made "Mes commerces" feel cramped) and into its
+                    own real-time screen, one tap away, same pattern as
+                    "Service client" above. */}
+                <Pressable onPress={handleFounderKpi} style={({ pressed }) => [styles.footerRow, pressed && { opacity: 0.6 }]}>
+                  <View style={styles.footerIcon}>
+                    <Ionicons name="stats-chart-outline" size={18} color={palette.textSecondary} />
+                  </View>
+                  <Text style={[styles.footerLabel, { flex: 1 }]}>KPI</Text>
+                </Pressable>
+              </>
             ) : (
               // Relocated from the Accueil header's headphone icon — same
               // destination (the member's one ongoing thread with the
               // founder), just moved into this lateral drawer.
               <Pressable onPress={handleSupport} style={({ pressed }) => [styles.footerRow, pressed && { opacity: 0.6 }]}>
                 <View style={styles.footerIcon}>
-                  <Ionicons name="headset-outline" size={18} color={palette.primary} />
+                  <Ionicons name="headset-outline" size={18} color={palette.textSecondary} />
                 </View>
                 <Text style={[styles.footerLabel, { flex: 1 }]}>Support</Text>
               </Pressable>
             )}
             <Pressable onPress={handleJoin} style={({ pressed }) => [styles.footerRow, pressed && { opacity: 0.6 }]}>
               <View style={styles.footerIcon}>
-                <Ionicons name="key-outline" size={18} color={palette.primary} />
+                <Ionicons name="key-outline" size={18} color={palette.textSecondary} />
               </View>
               <Text style={styles.footerLabel}>Rejoindre un commerce</Text>
             </Pressable>
-            {!isAlreadyAdmin && (
+            {(!isAlreadyAdmin || isFounder) && (
               <Pressable onPress={handleCreate} style={({ pressed }) => [styles.footerRow, pressed && { opacity: 0.6 }]}>
                 <View style={styles.footerIcon}>
                   <Ionicons name="add-circle-outline" size={18} color={palette.textSecondary} />
                 </View>
-                <Text style={[styles.footerLabel, { color: palette.textSecondary }]}>Créer un commerce</Text>
+                <Text style={styles.footerLabel}>Créer un commerce</Text>
               </Pressable>
             )}
           </View>
@@ -315,8 +360,8 @@ function makeStyles(p: Palette) {
       borderBottomColor: p.border,
     },
     headerTitle: {
+      fontFamily: fontFamily.bold,
       fontSize: 16,
-      fontWeight: '700',
       color: p.textPrimary,
     },
     searchRow: {
@@ -344,11 +389,10 @@ function makeStyles(p: Palette) {
       paddingHorizontal: spacing[4],
       paddingVertical: spacing[3],
     },
+    // Tint + checkmark alone say "selected" — the extra purple left-edge
+    // bar this used to have was a second, redundant selection signal.
     rowActive: {
       backgroundColor: p.primaryLight,
-      borderLeftWidth: 3,
-      borderLeftColor: p.primary,
-      paddingLeft: spacing[4] - 3,
     },
     avatar: {
       width: 40,
@@ -357,14 +401,15 @@ function makeStyles(p: Palette) {
       alignItems: 'center',
       justifyContent: 'center',
     },
+    // Color comes from the per-business pair at the call site now (a light
+    // bg needs a dark letter, not the white text a solid fill used to need).
     avatarText: {
+      fontFamily: fontFamily.bold,
       fontSize: 16,
-      fontWeight: '700',
-      color: colors.neutral[0],
     },
     bizName: {
+      fontFamily: fontFamily.semibold,
       fontSize: 14,
-      fontWeight: '600',
       color: p.textPrimary,
       marginBottom: 2,
     },
@@ -402,10 +447,13 @@ function makeStyles(p: Palette) {
       borderWidth: 1,
       borderColor: p.border,
     },
+    // Ink, not brand purple — these four rows are plain navigation, not a
+    // state or a selection; purple stays reserved for the checkmark above
+    // and the unread dot below, which are real signals.
     footerLabel: {
+      fontFamily: fontFamily.medium,
       fontSize: 14,
-      fontWeight: '500',
-      color: p.primary,
+      color: p.textPrimary,
     },
     footerUnreadDot: {
       width: 8,

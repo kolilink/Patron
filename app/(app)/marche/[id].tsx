@@ -2,7 +2,6 @@ import { useCallback, useEffect, useRef, useState, useMemo } from 'react';
 import {
   FlatList,
   KeyboardAvoidingView,
-  Modal,
   Platform,
   Pressable,
   ScrollView,
@@ -10,8 +9,8 @@ import {
   TextInput,
   View,
 } from 'react-native';
-import { SafeAreaView } from 'react-native-safe-area-context';
 import { Screen } from '@/src/components/ui/Screen';
+import { FormSheet } from '@/src/components/ui/FormSheet';
 import { router, useLocalSearchParams, useFocusEffect } from 'expo-router';
 import { Ionicons } from '@expo/vector-icons';
 import { Text } from '@/src/components/ui/Text';
@@ -82,7 +81,7 @@ function PostHeaderBlock({
       {/* Author row */}
       <View style={styles.authorRow}>
         <View style={[styles.postAvatar, { backgroundColor: color }]}>
-          <Text style={styles.postAvatarText}>{initial}</Text>
+          <Text allowFontScaling={false} style={styles.postAvatarText}>{initial}</Text>
         </View>
         <View style={styles.authorInfo}>
           <Text style={styles.authorName}>{authorName}</Text>
@@ -92,7 +91,7 @@ function PostHeaderBlock({
           </Text>
         </View>
         {isOwnPost && (
-          <Pressable onPress={onEdit} hitSlop={8} style={styles.editPostBtn}>
+          <Pressable onPress={onEdit} hitSlop={8} style={styles.editPostBtn} accessibilityLabel="Plus d'options" accessibilityRole="button">
             <Ionicons name="ellipsis-horizontal" size={20} color={palette.textSecondary} />
           </Pressable>
         )}
@@ -194,7 +193,7 @@ function CommentItem({
       {/* Avatar + level badge */}
       <View style={styles.commentAvatarWrap}>
         <View style={[styles.commentAvatar, { backgroundColor: color }]}>
-          <Text style={styles.commentAvatarText}>{initial}</Text>
+          <Text allowFontScaling={false} style={styles.commentAvatarText}>{initial}</Text>
         </View>
         <View style={styles.levelBadge}>
           <Text style={styles.levelBadgeText}>{level}</Text>
@@ -253,6 +252,7 @@ function CommentItem({
           {!isReply && canReply && onReply && (
             <Pressable onPress={onReply} hitSlop={8} style={styles.commentActionBtn}>
               <Ionicons name="arrow-undo-outline" size={14} color={palette.textSecondary} />
+              <Text style={styles.commentActionText}>Répondre</Text>
             </Pressable>
           )}
         </View>
@@ -390,7 +390,7 @@ export default function PostDetailScreen() {
         <View style={{ width: 60 }} />
       </View>
 
-      <KeyboardAvoidingView style={{ flex: 1 }} behavior={Platform.OS === 'ios' ? 'padding' : 'height'}>
+      <KeyboardAvoidingView style={{ flex: 1, backgroundColor: palette.background }} behavior={Platform.OS === 'ios' ? 'padding' : undefined}>
         {loadingDetail ? (
           <View style={styles.centered}>
             <Text variant="body" color="secondary">Chargement…</Text>
@@ -484,40 +484,31 @@ export default function PostDetailScreen() {
       </KeyboardAvoidingView>
 
       {/* ── Edit post modal ── */}
-      <Modal visible={showEdit} animationType="slide" presentationStyle="pageSheet" onRequestClose={() => setShowEdit(false)}>
-        <SafeAreaView style={styles.modalSafe} edges={['top', 'bottom']}>
-          <KeyboardAvoidingView
-            style={{ flex: 1 }}
-            behavior={Platform.OS === 'ios' ? 'padding' : 'height'}
-            keyboardVerticalOffset={Platform.OS === 'ios' ? 0 : 20}
+      <FormSheet
+        ref={editScrollRef}
+        visible={showEdit}
+        onClose={() => setShowEdit(false)}
+        title="Modifier le post"
+        headerRight={
+          <Pressable
+            onPress={handleSaveEdit}
+            disabled={editSaving || !editTitle.trim() || !editContent.trim()}
+            hitSlop={8}
           >
-            <View style={styles.modalHeader}>
-              <Pressable onPress={() => setShowEdit(false)} hitSlop={8}>
-                <Text variant="body" color="secondary">Annuler</Text>
-              </Pressable>
-              <Text variant="h4">Modifier le post</Text>
-              <Pressable
-                onPress={handleSaveEdit}
-                disabled={editSaving || !editTitle.trim() || !editContent.trim()}
-                hitSlop={8}
-              >
-                <Text variant="body" style={{
-                  color: (editSaving || !editTitle.trim() || !editContent.trim())
-                    ? palette.textDisabled
-                    : palette.primary,
-                  fontWeight: '600',
-                }}>
-                  {editSaving ? '…' : 'Enregistrer'}
-                </Text>
-              </Pressable>
-            </View>
-            <ScrollView
-              ref={editScrollRef}
-              style={{ flex: 1 }}
-              contentContainerStyle={styles.modalContent}
-              keyboardShouldPersistTaps="handled"
-              keyboardDismissMode="interactive"
-            >
+            <Text variant="body" style={{
+              color: (editSaving || !editTitle.trim() || !editContent.trim())
+                ? palette.textDisabled
+                : palette.primary,
+              fontWeight: '600',
+            }}>
+              {editSaving ? '…' : 'Enregistrer'}
+            </Text>
+          </Pressable>
+        }
+        contentContainerStyle={styles.modalContent}
+        keyboardShouldPersistTaps="handled"
+        keyboardDismissMode="interactive"
+      >
               <View style={styles.editCard}>
                 <TextInput
                   style={styles.editTitleInput}
@@ -546,10 +537,7 @@ export default function PostDetailScreen() {
               {editError ? (
                 <Text variant="caption" style={{ color: palette.warning, marginTop: 8 }}>{editError}</Text>
               ) : null}
-            </ScrollView>
-          </KeyboardAvoidingView>
-        </SafeAreaView>
-      </Modal>
+      </FormSheet>
 
     </Screen>
   );

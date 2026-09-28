@@ -1,10 +1,22 @@
 import { serve } from 'https://deno.land/std@0.177.0/http/server.ts';
 import { createClient } from 'https://esm.sh/@supabase/supabase-js@2';
+import { safeErrorResponse } from '../_shared/errors.ts';
 
 const corsHeaders = {
   'Access-Control-Allow-Origin': '*',
   'Access-Control-Allow-Headers': 'authorization, x-client-info, apikey, content-type',
 };
+
+// signInAnonymously() is free and unthrottled, so the only thing standing
+// between a scripted loop and unlimited fake businesses (~50 rows each) was
+// "has a session" — no real barrier. Reuses the shared ip_verification_attempts
+// table (migration_v113.sql, endpoint free-text) the same way djomi-checkout
+// already rate-limits its own unauthenticated-adjacent POST.
+function getClientIp(req: Request): string {
+  const fwd = req.headers.get('x-forwarded-for');
+  return fwd ? fwd.split(',')[0].trim() : 'unknown';
+}
+const RATE_LIMIT_PER_HOUR = 3;
 
 // Scale factors relative to GNF-cent base amounts (all prices stored as value × 100).
 // Chosen so that retail prices look natural in each currency group — not exact FX.
@@ -58,6 +70,24 @@ serve(async (req) => {
       Deno.env.get('SUPABASE_URL')!,
       Deno.env.get('SUPABASE_SERVICE_ROLE_KEY')!,
     );
+
+    // Per-IP rate limit, checked before the idempotency lookup below — a
+    // scripted attacker signs in anonymously fresh each time, so a per-user
+    // check would never trip (every call looks like a brand-new user with
+    // no existing business).
+    const clientIp = getClientIp(req);
+    const { count: ipCount } = await svc
+      .from('ip_verification_attempts')
+      .select('*', { count: 'exact', head: true })
+      .eq('ip', clientIp)
+      .eq('endpoint', 'seed_demo_business')
+      .gt('attempted_at', new Date(Date.now() - 60 * 60 * 1000).toISOString());
+    if ((ipCount ?? 0) >= RATE_LIMIT_PER_HOUR) {
+      return new Response(JSON.stringify({ error: 'Trop de tentatives. Réessayez plus tard.' }), {
+        status: 429, headers: { ...corsHeaders, 'Content-Type': 'application/json' },
+      });
+    }
+    await svc.from('ip_verification_attempts').insert({ ip: clientIp, endpoint: 'seed_demo_business' });
 
     // Idempotency: if this user already has a demo business, return it
     const { data: existing } = await svc
@@ -275,10 +305,6 @@ serve(async (req) => {
       { headers: { ...corsHeaders, 'Content-Type': 'application/json' } },
     );
   } catch (err) {
-    const msg = err instanceof Error ? err.message : 'Erreur inconnue';
-    console.error('seed-demo-business crash:', msg);
-    return new Response(JSON.stringify({ error: msg }), {
-      status: 500, headers: { ...corsHeaders, 'Content-Type': 'application/json' },
-    });
+    return safeErrorResponse(err, corsHeaders, 'seed-demo-business');
   }
 });

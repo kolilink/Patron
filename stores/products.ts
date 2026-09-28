@@ -1,13 +1,29 @@
 import { create } from 'zustand';
 import { supabase } from '@/lib/supabase';
 import { translateError } from '@/lib/errors';
-import { generateId } from '@/lib/id';
+import { generateId, generateFallbackName } from '@/lib/id';
 import { saveProductCache, getProductCache, enqueue, getQueueCount, getCacheTimestamp } from '@/lib/db';
-import { isNetworkError } from '@/lib/sync';
+import { isNetworkError, withNetworkRetry, reportOfflineFallback } from '@/lib/sync';
 import { useSyncStore } from '@/stores/sync';
+import { useAuthStore } from '@/stores/auth';
 import { trackEvent } from '@/lib/analytics';
 import { notifyEvent } from '@/src/utils/notifications';
+import { formatAmount } from '@/src/utils/format';
 import type { Product, ProductVariant } from '@/src/types';
+
+// Every fetch* function below is called with a specific businessId, but by
+// the time its network/cache round trip resolves, the user may have already
+// switched to a different business — selectBusiness() (stores/auth.ts)
+// resets every store's in-memory state synchronously on switch, but a
+// fetch already in flight from the *previous* business doesn't know that
+// happened and, without this check, would go on to overwrite the new
+// business's freshly-loaded state with stale cross-business data once it
+// finally resolves. Longer round trips (offline, the 12s network timeout
+// added earlier) make this race far more likely to actually land, not just
+// theoretical. Call right before every set() that writes fetched data.
+function isStaleBusiness(businessId: string): boolean {
+  return useAuthStore.getState().session?.activeBusiness?.id !== businessId;
+}
 
 // Per-session deduplication: avoid notifying the same low-stock product twice per session.
 // Reset happens when the store resets (logout / business switch).
@@ -48,6 +64,13 @@ interface ProductStore {
   archivedProducts: Product[];
   variantsByProduct: Record<string, ProductVariant[]>;
   vendeurProductScope: string[];  // product IDs; empty = unscoped (see all)
+  // Business id fetchProducts last reached a terminal result for — null
+  // until then. See app/(app)/_layout.tsx's showFork gate for why this
+  // exists: `products.length === 0` is ambiguous between "confirmed no
+  // products" and "haven't loaded yet," and that ambiguity made the
+  // activation fork flash on cold start even for a business that already
+  // has a product, before this fetch had resolved.
+  productsFetchedFor: string | null;
   loading: boolean;
   saving: boolean;
   error: string | null;
@@ -81,6 +104,7 @@ export const useProductStore = create<ProductStore>((set, get) => ({
   archivedProducts: [],
   variantsByProduct: {},
   vendeurProductScope: [],
+  productsFetchedFor: null,
   loading: false,
   saving: false,
   error: null,
@@ -91,29 +115,40 @@ export const useProductStore = create<ProductStore>((set, get) => ({
     if (get().products.length === 0) {
       set({ loading: true, error: null });
       const cached = await getProductCache(businessId);
-      if (cached) {
+      if (cached && !isStaleBusiness(businessId)) {
         set({ products: cached, loading: false });
       }
     } else {
       set({ error: null });
     }
     try {
-      const { data, error } = await supabase
-        .from('products')
-        .select('*')
-        .eq('business_id', businessId)
-        .eq('archived', false)
-        .eq('is_system', false)
-        .order('name');
+      // Security audit 2026-09-27 (1.14, real enforcement): vendeur's own
+      // cost_price is never in this response at all — the base products
+      // table's SELECT RLS now excludes vendeur outright (migration_v185.sql),
+      // so get_products_for_vendeur() is their only actual read path, not
+      // just the one this call happens to prefer. Every caller of
+      // fetchProducts must pass role for this to actually take effect.
+      const { data, error } = await withNetworkRetry(() =>
+        role === 'vendeur'
+          ? supabase.rpc('get_products_for_vendeur', { p_business_id: businessId })
+          : supabase
+              .from('products')
+              .select('*')
+              .eq('business_id', businessId)
+              .eq('archived', false)
+              .eq('is_system', false)
+              .order('name'),
+      );
 
       if (error) throw error;
+      if (isStaleBusiness(businessId)) return; // switched away while this was in flight
       const products = (data as Product[]).map(p => ({
         ...p,
         cost_price: p.cost_price / 100,
         sale_price: p.sale_price / 100,
         bulk_price: p.bulk_price != null ? p.bulk_price / 100 : null,
       }));
-      set({ products, loading: false, offline: false, offlineSince: null });
+      set({ products, loading: false, offline: false, offlineSince: null, productsFetchedFor: businessId });
       void saveProductCache(businessId, products);
 
       // Low-stock detection: notify admins/managers for each product crossing its threshold.
@@ -137,14 +172,18 @@ export const useProductStore = create<ProductStore>((set, get) => ({
           .from('membership_product_scope')
           .select('product_id')
           .eq('membership_id', membershipId);
+        if (isStaleBusiness(businessId)) return;
         set({ vendeurProductScope: (scopeRows ?? []).map((r: any) => r.product_id as string) });
       }
     } catch (err) {
       if (isNetworkError(err)) {
+        reportOfflineFallback('products.fetchProducts', err);
         const cached = await getProductCache(businessId);
+        if (isStaleBusiness(businessId)) return;
         if (cached) {
           const ts = await getCacheTimestamp('product_cache', businessId);
-          set({ products: cached, loading: false, offline: true, offlineSince: ts });
+          if (isStaleBusiness(businessId)) return;
+          set({ products: cached, loading: false, offline: true, offlineSince: ts, productsFetchedFor: businessId });
           return;
         }
         set({
@@ -152,10 +191,12 @@ export const useProductStore = create<ProductStore>((set, get) => ({
           loading: false,
           offline: true,
           offlineSince: null,
+          productsFetchedFor: businessId,
         });
         return;
       }
-      set({ error: translateError(err, 'Erreur de chargement'), loading: false });
+      if (isStaleBusiness(businessId)) return;
+      set({ error: translateError(err, 'Erreur de chargement'), loading: false, productsFetchedFor: businessId });
     }
   },
 
@@ -170,6 +211,7 @@ export const useProductStore = create<ProductStore>((set, get) => ({
         .order('name');
 
       if (error) throw error;
+      if (isStaleBusiness(businessId)) return;
       const archivedProducts = (data as Product[]).map(p => ({
         ...p,
         cost_price: p.cost_price / 100,
@@ -178,6 +220,7 @@ export const useProductStore = create<ProductStore>((set, get) => ({
       }));
       set({ archivedProducts });
     } catch (err) {
+      if (isStaleBusiness(businessId)) return;
       set({ error: translateError(err, 'Erreur de chargement') });
     }
   },
@@ -257,6 +300,7 @@ export const useProductStore = create<ProductStore>((set, get) => ({
 
   updateProduct: async (businessId, userId, id, data) => {
     set({ saving: true, error: null });
+    const oldProduct = get().products.find(p => p.id === id);
     const patch: Record<string, unknown> = {};
     if (data.name !== undefined) patch.name = data.name.trim();
     if (data.sku !== undefined) patch.sku = data.sku?.trim() || null;
@@ -275,6 +319,34 @@ export const useProductStore = create<ProductStore>((set, get) => ({
       if (error) throw error;
       await get().fetchProducts(businessId, userId);
       set({ saving: false });
+
+      // Catalogue price edits are admin/manager-only, but a manager quietly
+      // lowering a price (or a genuine typo) has had no visibility to anyone
+      // else until now — notify the rest of admin/manager the same way a sale
+      // correction already does (stores/ventes.ts's sale_edited), so this
+      // isn't a silent edit anymore. Only the live-success path notifies —
+      // an offline-queued edit has no reliable "later" moment to fire from.
+      if (
+        patch.sale_price !== undefined &&
+        oldProduct &&
+        Math.round(oldProduct.sale_price * 100) !== patch.sale_price
+      ) {
+        const currency = useAuthStore.getState().session?.activeBusiness?.currency ?? 'GNF';
+        const editorName = useAuthStore.getState().session?.user?.name || generateFallbackName(userId);
+        notifyEvent({
+          businessId,
+          eventType: 'price_changed',
+          payload: {
+            editor: editorName,
+            product: oldProduct.name,
+            old_price: formatAmount(oldProduct.sale_price, currency),
+            new_price: formatAmount((patch.sale_price as number) / 100, currency),
+          },
+          targetRoles: ['administrateur', 'manager'],
+          excludeUserId: userId,
+        });
+      }
+
       return true;
     } catch (err) {
       if (isNetworkError(err)) {
@@ -370,13 +442,22 @@ export const useProductStore = create<ProductStore>((set, get) => ({
   },
 
   fetchVariants: async (productId, businessId) => {
-    const { data, error } = await supabase
-      .from('product_variants')
-      .select('*')
-      .eq('product_id', productId)
-      .eq('business_id', businessId)
-      .eq('archived', false)
-      .order('name');
+    // Security audit 2026-09-27 (1.14, real enforcement): a vendeur's own
+    // cost_price is never in the response at all for this role — the base
+    // table's SELECT RLS now excludes vendeur outright, so this is their
+    // only actual read path, not just the one the app happens to prefer.
+    // Role read from the session directly rather than added as a param —
+    // this function has 6 call sites and none of them need to change.
+    const role = useAuthStore.getState().session?.activeMembership?.role;
+    const { data, error } = role === 'vendeur'
+      ? await supabase.rpc('get_variants_for_vendeur', { p_product_id: productId, p_business_id: businessId })
+      : await supabase
+          .from('product_variants')
+          .select('*')
+          .eq('product_id', productId)
+          .eq('business_id', businessId)
+          .eq('archived', false)
+          .order('name');
     if (error || !data) return [];
     const variants: ProductVariant[] = (data as ProductVariant[]).map(v => ({
       ...v,
@@ -389,6 +470,13 @@ export const useProductStore = create<ProductStore>((set, get) => ({
 
   upsertVariants: async (businessId, productId, userId, variants) => {
     set({ saving: true, error: null });
+    // upsert_product_variants deletes every existing row and reinserts fresh
+    // ones (see migration_v65.sql) — variant ids never survive a save, so a
+    // before/after diff for the price-change notification below has to match
+    // on name, the only identifier that does survive.
+    const oldByName = new Map(
+      (get().variantsByProduct[productId] ?? []).map(v => [v.name, v]),
+    );
     try {
       const payload = variants.map(v => ({
         name: v.name.trim(),
@@ -406,6 +494,31 @@ export const useProductStore = create<ProductStore>((set, get) => ({
       await get().fetchProducts(businessId, userId);
       await get().fetchVariants(productId, businessId);
       set({ saving: false });
+
+      const product = get().products.find(p => p.id === productId);
+      if (product) {
+        const currency = useAuthStore.getState().session?.activeBusiness?.currency ?? 'GNF';
+        const editorName = useAuthStore.getState().session?.user?.name || generateFallbackName(userId);
+        for (const row of payload) {
+          const old = oldByName.get(row.name);
+          if (old && Math.round(old.sale_price * 100) !== row.sale_price) {
+            notifyEvent({
+              businessId,
+              eventType: 'price_changed',
+              payload: {
+                editor: editorName,
+                product: product.name,
+                variant: row.name,
+                old_price: formatAmount(old.sale_price, currency),
+                new_price: formatAmount(row.sale_price / 100, currency),
+              },
+              targetRoles: ['administrateur', 'manager'],
+              excludeUserId: userId,
+            });
+          }
+        }
+      }
+
       return true;
     } catch (err) {
       set({ error: translateError(err, 'Erreur de mise à jour'), saving: false });
@@ -432,6 +545,6 @@ export const useProductStore = create<ProductStore>((set, get) => ({
   clearError: () => set({ error: null }),
   reset: () => {
     notifiedLowStockIds.clear();
-    set({ products: [], archivedProducts: [], variantsByProduct: {}, vendeurProductScope: [], loading: false, error: null, offline: false, offlineSince: null });
+    set({ products: [], archivedProducts: [], variantsByProduct: {}, vendeurProductScope: [], productsFetchedFor: null, loading: false, error: null, offline: false, offlineSince: null });
   },
 }));

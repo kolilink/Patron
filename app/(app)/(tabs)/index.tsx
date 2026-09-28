@@ -1,16 +1,23 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
-import { Animated, Easing, KeyboardAvoidingView, Modal, Platform, Pressable, ScrollView, StyleSheet, TextInput, View } from 'react-native';
+import { InputAccessoryView, KeyboardAvoidingView, Modal, Platform, Pressable, ScrollView, StyleSheet, TextInput, View } from 'react-native';
 import { Gesture, GestureDetector } from 'react-native-gesture-handler';
+import { useSafeAreaInsets } from 'react-native-safe-area-context';
 import { runOnJS } from 'react-native-reanimated';
-import { LinearGradient } from 'expo-linear-gradient';
 import { Screen } from '@/src/components/ui/Screen';
+import { OfflineNotice } from '@/src/components/ui/OfflineNotice';
+import { QuickCaptureSheet } from '@/src/components/QuickCaptureSheet';
+import { FirstRunHeroOverlay } from '@/src/components/FirstRunHeroOverlay';
+import { PaymentReminderAsker } from '@/src/components/PaymentReminderAsker';
+import { DebtReminderDeniedCard } from '@/src/components/DebtReminderDeniedCard';
 import { router, useFocusEffect } from 'expo-router';
 import { Ionicons } from '@expo/vector-icons';
 import { Button } from '@/src/components/ui/Button';
 import { Card } from '@/src/components/ui/Card';
+import { Pill } from '@/src/components/ui/Pill';
 import { Text } from '@/src/components/ui/Text';
-import { useTheme, radius, spacing } from '@/src/theme';
+import { useTheme, radius, spacing, FLOATING_TAB_BAR_CLEARANCE } from '@/src/theme';
 import type { Palette } from '@/src/theme';
+import { trackEvent } from '@/lib/analytics';
 import { useAuthStore } from '@/stores/auth';
 import { useProductStore } from '@/stores/products';
 import { useVentesStore } from '@/stores/ventes';
@@ -22,8 +29,9 @@ import { useEquipeStore } from '@/stores/equipe';
 import { useInvestorStore } from '@/stores/investor';
 import type { MemberProductStake } from '@/src/types';
 import { formatAmount, formatAmountInput, parseAmountInput } from '@/src/utils/format';
+import { debtAgeTier } from '@/src/utils/clientReminder';
 import { supabase } from '@/lib/supabase';
-import { isNetworkError } from '@/lib/sync';
+import { isNetworkError, withTimeout } from '@/lib/sync';
 import { saveDashboardKpiCache, getDashboardKpiCache, getKV, setKV } from '@/lib/db';
 import { SkeletonKpiGrid } from '@/src/components/ui/SkeletonPlaceholder';
 import { haptics } from '@/lib/haptics';
@@ -39,6 +47,10 @@ interface KPIs {
   credit_count: number;
   low_stock: number;
   expenses_month: number;
+  // Lifetime — the business's very first real (status='paye') sale ever,
+  // null if none yet. Drives the one-time "Première vente notée ✓"
+  // acknowledgment; never scoped to today/this month like the rest of KPIs.
+  first_sale_at: string | null;
 }
 
 interface BestSeller {
@@ -52,6 +64,25 @@ function fmt(n: number, cur: string) {
   return `${Math.round(n).toLocaleString('fr-FR')} ${cur}`;
 }
 
+// Same clamped-to-zero "days ago" logic as clients/index.tsx's getDaysAgo —
+// duplicated rather than shared, matching that file's own precedent (its
+// sibling clients/[name].tsx also computes this locally rather than
+// exporting a shared helper with no theme/store context of its own).
+function getDaysAgo(dateStr: string): number {
+  const d = dateStr.includes('T') ? new Date(dateStr) : new Date(dateStr + 'T00:00:00');
+  return Math.max(0, Math.floor((Date.now() - d.getTime()) / (1000 * 60 * 60 * 24)));
+}
+
+// Maps the shared age tier to this screen's palette tokens — age escalates
+// the color, never the amount itself (see clients/index.tsx's own
+// debtAgeColor for the same reasoning).
+function debtAgeColor(days: number, palette: Palette): string {
+  const tier = debtAgeTier(days);
+  if (tier === 'urgent') return palette.recouvrementOwed;
+  if (tier === 'attention') return palette.recouvrementPending;
+  return palette.textSecondary;
+}
+
 // Invisible strip along the left edge that catches the swipe-to-open-drawer
 // gesture — matches the touch-target width iOS itself uses for its own
 // edge-swipe-back gesture. activeOffsetX(15)/failOffsetY(20) mirror the
@@ -59,8 +90,18 @@ function fmt(n: number, cur: string) {
 // before claiming the gesture, generous vertical tolerance so it doesn't
 // fight the KPI ScrollView underneath.
 const EDGE_SWIPE_WIDTH = 24;
+// Approximate height of the header row (menu icon + business name) below
+// the safe area — the catcher starts after insets.top + this, not a flat
+// guess, so it can't creep into the header's own tap targets on devices
+// with a taller inset.
+const HEADER_ROW_HEIGHT = 56;
 const EDGE_SWIPE_OPEN_DISTANCE = 40;
 const EDGE_SWIPE_OPEN_VELOCITY = 600;
+
+// iOS-only: suppresses the OS's auto-injected floating "Done" pill above
+// the numeric keyboard — the withdraw sheet's "Envoyer la demande" button
+// sits immediately below the field, always visible with no scrolling.
+const WITHDRAW_SHEET_SILENT_ACCESSORY_ID = 'dashboard-withdraw-sheet-silent-accessory';
 
 type DayPart = 'morning' | 'active' | 'evening' | 'night';
 
@@ -72,47 +113,30 @@ function getDayPart(): DayPart {
   return 'night';
 }
 
-function KpiCard({ label, value, sub, onPress, accent }: {
-  label: string; value: string; sub?: string; onPress?: () => void; accent?: string;
+function KpiCard({ label, value, sub, onPress, tone, icon }: {
+  label: string; value: string; sub?: string; onPress?: () => void;
+  tone?: 'success' | 'warning'; icon?: React.ComponentProps<typeof Ionicons>['name'];
 }) {
+  const { palette } = useTheme();
   return (
-    <Card onPress={onPress} style={[{ gap: spacing[1] }, accent ? { borderLeftWidth: 3, borderLeftColor: accent } : null]}>
-      <Text variant="caption" color="secondary">{label}</Text>
-      <Text variant="amountLarge" style={accent ? { color: accent } : undefined}>{value}</Text>
+    <Card onPress={onPress} elevated={!!tone} style={{ gap: spacing[1] }}>
+      <View style={{ flexDirection: 'row', alignItems: 'center', gap: spacing[2] }}>
+        {tone && icon ? (
+          <View style={{ width: 26, height: 26, borderRadius: 13, backgroundColor: palette[tone], alignItems: 'center', justifyContent: 'center' }}>
+            <Ionicons name={icon} size={14} color={palette.textInverse} />
+          </View>
+        ) : null}
+        <Text variant="caption" color="secondary" style={{ flex: 1 }}>{label}</Text>
+      </View>
+      <Text variant="amountLarge" style={tone ? { color: palette[tone] } : undefined}>{value}</Text>
       {sub ? <Text variant="caption" color="secondary">{sub}</Text> : null}
     </Card>
   );
 }
 
-function OnboardingStep({ number, label, done, active }: {
-  number: number; label: string; done: boolean; active: boolean;
-}) {
-  const { palette } = useTheme();
-  const styles = useMemo(() => makeStyles(palette), [palette]);
-  return (
-    <View style={styles.onboardingStep}>
-      <View style={[
-        styles.onboardingBubble,
-        done   && styles.onboardingBubbleDone,
-        active && styles.onboardingBubbleActive,
-      ]}>
-        <Text variant="label" style={{ color: done || active ? palette.textInverse : palette.textDisabled }}>
-          {done ? '✓' : String(number)}
-        </Text>
-      </View>
-      <Text variant="body" style={{
-        flex: 1,
-        color: done ? palette.textSecondary : active ? palette.textPrimary : palette.textDisabled,
-        textDecorationLine: done ? 'line-through' : 'none',
-      }}>
-        {label}
-      </Text>
-    </View>
-  );
-}
-
 export default function AccueilScreen() {
-  const { palette, resolvedScheme } = useTheme();
+  const { palette } = useTheme();
+  const insets = useSafeAreaInsets();
   const styles = useMemo(() => makeStyles(palette), [palette]);
   const session = useAuthStore(s => s.session);
   const openBusinessPicker = useAuthStore(s => s.openBusinessDrawer);
@@ -149,6 +173,7 @@ export default function AccueilScreen() {
   }, [isFounder]);
 
   const { products, fetchProducts } = useProductStore();
+  const ventesSales = useVentesStore(s => s.sales);
   const { snapshot: rapportsSnapshot, fetchReportsSnapshot } = useRapportsStore();
   const { fetchMemberScope } = useEquipeStore();
   const { balance, payouts, saving: investorSaving, fetchBalance, fetchPayouts, requestPayout } = useInvestorStore();
@@ -162,41 +187,16 @@ export default function AccueilScreen() {
   const [showWithdrawSheet, setShowWithdrawSheet] = useState(false);
   const [withdrawAmountStr, setWithdrawAmountStr] = useState('');
 
-  // Alpha entry bar — the app's primary AI entry point (docked to the
-  // bottom of Accueil rather than a header icon, see CLAUDE.md). Submitting
-  // via the keyboard's own send/enter key launches it — no separate arrow
-  // button, matching a plain search-bar affordance.
-  const [alphaText, setAlphaText] = useState('');
-  const submitAlpha = () => {
-    const trimmed = alphaText.trim();
-    setAlphaText('');
-    if (trimmed) {
-      router.push({ pathname: '/(app)/alpha', params: { q: trimmed } });
-    } else {
-      router.push('/(app)/alpha');
-    }
-  };
+  // Alpha's dashboard entry point is the plain "A" header icon only (see
+  // header below) — the floating glow-ring pill that used to sit docked to
+  // the bottom of this screen was removed 2026-09-02: it read as too loud/
+  // attention-grabbing for the home screen and ate real vertical space above
+  // the tab bar, out of step with this app's restrained-color redesign.
+  // Real product tradeoff, taken deliberately: the header icon is a quieter
+  // "jump back into the conversation" affordance, not an inviting "ask
+  // something new" prompt the way the pill was — revisit if Alpha engagement
+  // from Accueil drops noticeably.
 
-  // Alpha pill glow — a slow-rotating gradient ring around the pill border,
-  // purely to draw the eye to the entry point and incentivize first use.
-  // Loops forever; cost is negligible (native-driven transform only).
-  const alphaGlowRotation = useRef(new Animated.Value(0)).current;
-  useEffect(() => {
-    const loop = Animated.loop(
-      Animated.timing(alphaGlowRotation, {
-        toValue: 1,
-        duration: 3500,
-        easing: Easing.linear,
-        useNativeDriver: true,
-      })
-    );
-    loop.start();
-    return () => loop.stop();
-  }, [alphaGlowRotation]);
-  const alphaGlowSpin = alphaGlowRotation.interpolate({ inputRange: [0, 1], outputRange: ['0deg', '360deg'] });
-
-  const welcomeBtnScale = useRef(new Animated.Value(1)).current;
-  const welcomeBtnOpacity = useRef(new Animated.Value(1)).current;
   const loadedForRef = useRef<string | null>(null);
 
   const isOwner = !isInvestisseur && !isVendeur;
@@ -204,7 +204,18 @@ export default function AccueilScreen() {
   // null = not yet checked, true = dismissed, false = active
   const [onboardingDismissed, setOnboardingDismissed] = useState<boolean | null>(null);
   const [showCarnetSheet, setShowCarnetSheet] = useState(false);
+  const [showQuickCapture, setShowQuickCapture] = useState(false);
+  const [quickCaptureMode, setQuickCaptureMode] = useState<'credit' | 'vente'>('credit');
   const [isPrivate, setIsPrivate] = useState(false);
+  // Debt card's zero-debts CTA opens the exact same single-purpose form the
+  // first-run gate uses — "the deferred hero action," not a separate flow.
+  // Independent of _layout.tsx's heroBusinessId latch (that one only governs
+  // the once-per-business gate's own eligibility); this is a plain,
+  // repeatable manual trigger, safe to open any time credit_count reads 0.
+  const [showDebtCapture, setShowDebtCapture] = useState(false);
+  // Bumped by PaymentReminderAsker's onDenied — see DebtReminderDeniedCard's
+  // own comment for why this signal has to exist at all.
+  const [debtDeniedRefresh, setDebtDeniedRefresh] = useState(0);
 
   // Helpers: when privacy mode is on, replace money amounts with bullets
   const amtOrMask = (n: number) => isPrivate ? `••••• ${currency}` : fmt(n, currency);
@@ -212,6 +223,15 @@ export default function AccueilScreen() {
 
   useEffect(() => {
     if (!userId || !businessId || !isOwner) { setOnboardingDismissed(true); return; }
+    // Reset to "unknown" the instant businessId changes, before the async
+    // KV read below resolves. Switching business in-session (as opposed to
+    // a cold start) doesn't remount this screen, so without this line
+    // onboardingDismissed keeps holding whatever it last resolved to for
+    // the PREVIOUS business until the new lookup finishes — showOnboarding
+    // (and the mark-done/carnet-sheet effects that key off it) would
+    // briefly judge the newly-active business using a different business's
+    // state otherwise.
+    setOnboardingDismissed(null);
     const key = `onboarding_done_${userId}_${businessId}`;
     getKV(key).then(val => {
       if (val !== null) { setOnboardingDismissed(true); return; }
@@ -226,12 +246,16 @@ export default function AccueilScreen() {
     }).catch(() => setOnboardingDismissed(true));
   }, [userId, businessId, isOwner, business?.created_at]);
 
-  // Show carnet import sheet once — but only AFTER the onboarding steps card is gone.
-  // Showing both simultaneously creates visual clutter and confuses new users.
+  // Show carnet import sheet once — but only once onboarding is genuinely
+  // dismissed (both steps done, or the 7-day grandfather). Showing this
+  // alongside the activation fork would be exactly the double-nudge
+  // confusion both were designed to avoid; in practice the two never
+  // overlap by construction — the fork requires the business to still be
+  // empty, this requires it not to be.
   useEffect(() => {
     if (!userId || !businessId || !isOwner) return;
     if (session?.isDemoMode) return;
-    if (onboardingDismissed !== true) return; // wait until step card is fully done
+    if (onboardingDismissed !== true) return; // wait until fully dismissed
     const ageMs = business?.created_at ? Date.now() - new Date(business.created_at).getTime() : Infinity;
     if (ageMs > 7 * 24 * 60 * 60 * 1000) return;
     const key = `carnet_prompt_seen_${userId}_${businessId}`;
@@ -243,38 +267,41 @@ export default function AccueilScreen() {
   }, [userId, businessId, isOwner, business?.created_at, onboardingDismissed]);
 
   const step2Done = products.length > 0;
-  const step3Done = (kpis?.revenue_month ?? 0) > 0;
+  // Any real sale ever (paye OR credit) counts as "done" — using kpis.revenue_month here
+  // used to miss credit sales entirely (that RPC only sums status='paye') and reset every
+  // calendar month, so a merchant whose first sale was on credit, or made near month-end,
+  // kept seeing "Faire une vente" as an unfinished step despite already having made one.
+  const step3Done = ventesSales.some(s => s.business_id === businessId && s.status !== 'annule');
   const showOnboarding = isOwner && onboardingDismissed === false;
 
-  // Permanently write flag once all steps complete
+  // The activation fork itself ("On enregistre quoi aujourd'hui ?") now
+  // lives in app/(app)/_layout.tsx, not here — it needs to show on top of
+  // ANY screen (Catalogue, Vendre, ...) while a business is still empty and
+  // under 24h old, not just Accueil, so it's evaluated at the root layout
+  // that wraps every screen instead of one tab. step2Done/step3Done stay
+  // here only because the mark-done effect below (a different, narrower
+  // concern — the 7-day grandfather + carnet-sheet gating) still needs them.
+
+  // Permanently write flag once all steps complete. This write is
+  // effectively irreversible (no in-app way to clear it) — so it re-verifies
+  // against LIVE store state right before writing, not the step2Done/
+  // step3Done captured by this render. Effects always run a tick or more
+  // after the render that scheduled them; if a business switch happened in
+  // that gap, the closed-over values here could still belong to whichever
+  // business was active when this render happened, not the one actually
+  // named in the businessId captured alongside them. Re-reading
+  // .getState() fresh, for the same businessId this effect is about to
+  // write against, is the only way to be sure the two actually match.
   useEffect(() => {
     if (!showOnboarding || loading || !step2Done || !step3Done) return;
+    const liveProducts = useProductStore.getState().products;
+    const liveSales = useVentesStore.getState().sales;
+    const liveStep2 = liveProducts.length > 0;
+    const liveStep3 = liveSales.some(s => s.business_id === businessId && s.status !== 'annule');
+    if (!liveStep2 || !liveStep3) return;
     setKV(`onboarding_done_${userId}_${businessId}`, '1').catch(() => {});
     setOnboardingDismissed(true);
   }, [showOnboarding, loading, step2Done, step3Done, userId, businessId]);
-
-  useEffect(() => {
-    if (showOnboarding && !loading) {
-      const easing = Easing.inOut(Easing.sin);
-      const loop = Animated.loop(
-        Animated.sequence([
-          Animated.parallel([
-            Animated.timing(welcomeBtnScale,   { toValue: 1.06, duration: 2000, easing, useNativeDriver: true }),
-            Animated.timing(welcomeBtnOpacity, { toValue: 0.85, duration: 2000, easing, useNativeDriver: true }),
-          ]),
-          Animated.parallel([
-            Animated.timing(welcomeBtnScale,   { toValue: 1,    duration: 2000, easing, useNativeDriver: true }),
-            Animated.timing(welcomeBtnOpacity, { toValue: 1,    duration: 2000, easing, useNativeDriver: true }),
-          ]),
-        ])
-      );
-      loop.start();
-      return () => loop.stop();
-    } else {
-      welcomeBtnScale.setValue(1);
-      welcomeBtnOpacity.setValue(1);
-    }
-  }, [showOnboarding, loading]);
 
   const loadAll = useCallback(async () => {
     if (!businessId) return;
@@ -329,12 +356,41 @@ export default function AccueilScreen() {
     }, [loadAll]),
   );
 
+  // FirstRunHeroOverlay (app/(app)/_layout.tsx) bumps this the moment it
+  // closes. It's a plain RN Modal outside the tab navigator, so closing it
+  // never actually unfocuses/refocuses Accueil — useFocusEffect above never
+  // fires for it, which is why a debt saved there used to only ever show up
+  // after a real business switch. Skips the very first render (ref, not
+  // state) so this doesn't fire a redundant second loadAll() alongside the
+  // one useFocusEffect already runs on initial mount.
+  const homeRefreshToken = useAuthStore(s => s.homeRefreshToken);
+  const homeRefreshMounted = useRef(false);
+  useEffect(() => {
+    if (!homeRefreshMounted.current) { homeRefreshMounted.current = true; return; }
+    loadAll();
+  }, [homeRefreshToken, loadAll]);
+
+  // ActivationForkOverlay's "Une vente" button (app/(app)/_layout.tsx) sets
+  // this cross-cutting signal and navigates here, since the fork itself is
+  // evaluated at the root layout with no direct reference to this screen's
+  // own showQuickCapture state. Open the sheet in that mode, then clear the
+  // signal so it doesn't re-fire on some unrelated future re-render.
+  const requestQuickCapture = useAuthStore(s => s.requestQuickCapture);
+  useEffect(() => {
+    if (!requestQuickCapture) return;
+    setQuickCaptureMode(requestQuickCapture);
+    setShowQuickCapture(true);
+    useAuthStore.setState({ requestQuickCapture: null });
+  }, [requestQuickCapture]);
+
   const loadKpis = async () => {
     const localDate = new Date().toLocaleDateString('en-CA'); // YYYY-MM-DD device local date
-    const { data, error } = await supabase.rpc('get_dashboard_kpis', {
-      p_business_id: businessId,
-      p_today:       localDate,
-    });
+    const { data, error } = await withTimeout(
+      supabase.rpc('get_dashboard_kpis', {
+        p_business_id: businessId,
+        p_today:       localDate,
+      }),
+    );
 
     if (error) {
       if (isNetworkError(error)) {
@@ -356,22 +412,24 @@ export default function AccueilScreen() {
           low_stock:         pOffline.filter(p => !p.has_variants && p.reorder_level > 0 && p.stock_qty <= p.reorder_level).length
                              + Object.values(vOffline).flat().filter(v => v.reorder_level > 0 && v.stock_qty <= v.reorder_level).length,
           expenses_month:    cached?.expenses_month    ?? 0,
+          first_sale_at:     cached?.first_sale_at     ?? null,
         });
         return;
       }
       throw error;
     }
 
-    const d = data as Record<string, number>;
+    const d = data as Record<string, number | string | null>;
     const freshKpis: KPIs = {
-      revenue_today:     d.revenue_today     / 100,
-      revenue_yesterday: d.revenue_yesterday / 100,
-      revenue_month:     d.revenue_month     / 100,
-      sales_today:       d.sales_today,
-      credit_total:      d.credit_total      / 100,
-      credit_count:      d.credit_count,
-      low_stock:         d.low_stock,
-      expenses_month:    d.expenses_month    / 100,
+      revenue_today:     Number(d.revenue_today)     / 100,
+      revenue_yesterday: Number(d.revenue_yesterday) / 100,
+      revenue_month:     Number(d.revenue_month)     / 100,
+      sales_today:       Number(d.sales_today),
+      credit_total:      Number(d.credit_total)      / 100,
+      credit_count:      Number(d.credit_count),
+      low_stock:         Number(d.low_stock),
+      expenses_month:    Number(d.expenses_month)    / 100,
+      first_sale_at:     (d.first_sale_at as string | null) ?? null,
     };
     setKpis(freshKpis);
     void saveDashboardKpiCache(businessId, freshKpis);
@@ -381,11 +439,13 @@ export default function AccueilScreen() {
     const now = new Date();
     const monthStart = `${now.getFullYear()}-${String(now.getMonth() + 1).padStart(2, '0')}-01`;
 
-    const { data, error: bsErr } = await supabase.rpc('get_best_sellers', {
-      p_business_id: businessId,
-      p_month_start: monthStart,
-      p_limit:       5,
-    });
+    const { data, error: bsErr } = await withTimeout(
+      supabase.rpc('get_best_sellers', {
+        p_business_id: businessId,
+        p_month_start: monthStart,
+        p_limit:       5,
+      }),
+    );
     if (bsErr) throw bsErr;
 
     setBestSellers(
@@ -401,6 +461,34 @@ export default function AccueilScreen() {
   };
 
   const lowStock = kpis?.low_stock ?? 0;
+
+  // Oldest-debt aging for the "clients qui doivent" card — computed
+  // client-side from the already-fetched sales list (same per-client
+  // grouping clients/index.tsx uses) rather than adding a new RPC field,
+  // since this is purely a "is anything genuinely old" signal, not a new
+  // source of truth for the total owed (kpis.credit_total already covers that).
+  const creditAging = useMemo(() => {
+    const oldestByClient = new Map<string, string>();
+    for (const s of ventesSales) {
+      if (s.status !== 'credit') continue;
+      const remaining = s.total_amount - (s.discount_amount ?? 0) - (s.amount_paid ?? 0);
+      if (remaining <= 0.01) continue;
+      const name = s.customer_name?.trim();
+      const key = s.client_id ?? name;
+      if (!key) continue;
+      const saleDate = s.sale_date ?? s.created_at.split('T')[0];
+      const existing = oldestByClient.get(key);
+      if (!existing || saleDate < existing) oldestByClient.set(key, saleDate);
+    }
+    let agingCount = 0;
+    let oldestDays = 0;
+    for (const dateStr of oldestByClient.values()) {
+      const days = getDaysAgo(dateStr);
+      if (days >= 7) agingCount++;
+      if (days > oldestDays) oldestDays = days;
+    }
+    return { agingCount, oldestDays };
+  }, [ventesSales]);
 
   const visibleBestSellers = useMemo(() => {
     const archivedIds = new Set(products.filter(p => p.archived).map(p => p.id));
@@ -433,39 +521,84 @@ export default function AccueilScreen() {
   const monthOrderCount = rapportsSnapshot?.period_order_count ?? 0;
 
   const salesCount = kpis?.sales_today ?? 0;
+  const hasSoldToday = salesCount > 0;
   const delta = (kpis?.revenue_today ?? 0) - (kpis?.revenue_yesterday ?? 0);
-  const deltaColor = delta > 0 ? palette.success : delta < 0 ? palette.warning : palette.textSecondary;
-  const showAttentionCards = (kpis?.credit_count ?? 0) > 0 || lowStock > 0;
 
   const dayPart = getDayPart();
   const dayGreeting = dayPart === 'morning' ? 'Bonne journée'
     : dayPart === 'evening' ? 'Voici votre journée'
     : null;
+  // Never prints "0 ventes" — a zero-sales day drops the count entirely
+  // rather than stating it, same reasoning as the debt card's zero-state
+  // below: a quiet fact stated as a number reads as a verdict, a CTA reads
+  // as an invitation.
   const heroCaption = dayPart === 'morning'
-    ? `Bonjour · ${salesCount} vente${salesCount !== 1 ? 's' : ''}`
+    ? (hasSoldToday ? `Bonjour · ${salesCount} vente${salesCount !== 1 ? 's' : ''}` : 'Bonjour')
     : dayPart === 'evening'
-    ? `Ce soir · ${salesCount} vente${salesCount !== 1 ? 's' : ''}`
-    : `Aujourd'hui · ${salesCount} vente${salesCount !== 1 ? 's' : ''}`;
+    ? (hasSoldToday ? `Ce soir · ${salesCount} vente${salesCount !== 1 ? 's' : ''}` : 'Ce soir')
+    : (hasSoldToday ? `${salesCount} vente${salesCount !== 1 ? 's' : ''} aujourd'hui` : "Aujourd'hui");
 
   const isEvening = dayPart === 'evening' || dayPart === 'night';
+  // "Bienvenue" used to be keyed on the business's creation date — wrong,
+  // since a business created today but already mid-testing (or genuinely
+  // busy from hour one) would show "Bienvenue" right alongside real sales
+  // already on the board. The real signal is whether she has ever recorded
+  // a real (status='paye') sale at all — get_dashboard_kpis' first_sale_at
+  // is business-wide and RLS-bypassing (SECURITY DEFINER), so a vendeur
+  // sees the business's true first sale, not just their own. A credit debt
+  // deliberately does NOT count — submit_carnet_debt writes status='credit',
+  // which the RPC's MIN(paid_at) WHERE status='paye' never touches, so a
+  // business whose only activity so far is a debt still reads "Bienvenue."
+  const firstSaleAt = kpis?.first_sale_at ? new Date(kpis.first_sale_at) : null;
+  const hasEverSold = firstSaleAt !== null;
+  // "Local midnight" per the spec — toDateString() compares in device local
+  // time, same technique the old isBusinessCreatedToday check already used.
+  const isFirstSaleToday = hasEverSold && firstSaleAt.toDateString() === new Date().toDateString();
   const deltaAmt = isPrivate ? `••••• ${currency}` : fmt(Math.abs(delta), currency);
-  const comparisonText = isEvening
+  // The ONLY conditional line here, deliberately — no time-of-day greeting
+  // variants, no tips, no streaks. Once the first-sale day has passed, this
+  // never says "Première vente" again for this business (falls through to
+  // the ordinary Ce mois/Même niveau qu'hier comparison instead) — a
+  // one-time acknowledgment, not a recurring one.
+  const comparisonText = !hasEverSold
+    ? 'Bienvenue'
+    : isFirstSaleToday
+    ? 'Première vente notée ✓'
+    : isEvening
     ? `Ce mois : ${amtOrMask(kpis?.revenue_month ?? 0)}`
-    : delta > 0 ? `↑ ${deltaAmt} de plus qu'hier`
-    : delta < 0 ? `↓ ${deltaAmt} de moins qu'hier`
     : "Même niveau qu'hier";
+  // Only a genuine directional signal earns the loud solid pill — a flat day
+  // stays plain text, same restraint as everywhere else in this app's color
+  // system. "Bienvenue"/"Première vente"/"Ce mois" aren't deltas at all, so
+  // they never pill.
+  const showDeltaPill = hasEverSold && !isFirstSaleToday && !isEvening && delta !== 0;
 
   return (
-    <KeyboardAvoidingView style={{ flex: 1 }} behavior={Platform.OS === 'ios' ? 'padding' : undefined}>
+    <KeyboardAvoidingView style={{ flex: 1, backgroundColor: palette.background }} behavior={Platform.OS === 'ios' ? 'padding' : undefined}>
     <Screen tab>
       {/* Swipe right from the left edge to open the business drawer —
           complements the header menu icon's tap-to-open. */}
       <GestureDetector gesture={edgeSwipeOpenDrawer}>
-        <View style={styles.edgeSwipeCatcher} pointerEvents="box-only" />
+        {/* top was a flat 64 — didn't account for the device's real safe-area
+            inset, so on a phone with a taller inset (Dynamic Island models
+            especially) this could still reach up into the header row and
+            steal the hamburger icon's taps before the underlying Pressable
+            ever saw them — reported as the icon having zero press feedback,
+            not just "opens nothing", which pointed at a touch being
+            intercepted rather than a broken onPress. insets.top is measured
+            fresh per device now, not guessed. */}
+        <View style={[styles.edgeSwipeCatcher, { top: insets.top + HEADER_ROW_HEIGHT }]} pointerEvents="box-only" />
       </GestureDetector>
 
       {/* One-time carnet import sheet shown after business creation */}
-      <Modal visible={showCarnetSheet} transparent animationType="slide" onRequestClose={() => setShowCarnetSheet(false)}>
+      <Modal
+        visible={showCarnetSheet}
+        transparent
+        animationType="slide"
+        onRequestClose={() => setShowCarnetSheet(false)}
+        statusBarTranslucent
+        navigationBarTranslucent
+      >
         <View style={styles.sheetBackdrop}>
           <Pressable style={StyleSheet.absoluteFill} onPress={() => setShowCarnetSheet(false)} />
           <View style={[styles.sheetPanel, { backgroundColor: palette.surface }]}>
@@ -494,18 +627,20 @@ export default function AccueilScreen() {
         </View>
       </Modal>
 
-      {isOffline && (
-        <View style={styles.offlineBanner}>
-          <Text variant="caption" color="secondary">Pas de réseau · Informations non actualisées</Text>
-        </View>
-      )}
+      {isOffline && <OfflineNotice offlineSince={null} onRetry={() => loadAll()} />}
 
       <ScrollView style={{ flex: 1 }} contentContainerStyle={styles.content} showsVerticalScrollIndicator={false}>
 
         {/* Header */}
         <View style={styles.header}>
           <View style={{ flexDirection: 'row', alignItems: 'center' }}>
-            <Pressable onPress={openBusinessPicker} hitSlop={10} style={({ pressed }) => [{ opacity: pressed ? 0.5 : 1 }]}>
+            <Pressable
+              onPress={openBusinessPicker}
+              hitSlop={10}
+              style={({ pressed }) => [{ opacity: pressed ? 0.5 : 1 }]}
+              accessibilityLabel="Changer de commerce"
+              accessibilityRole="button"
+            >
               <Ionicons name="menu" size={24} color={palette.textPrimary} />
             </Pressable>
             <Text variant="h4" style={{ marginLeft: 12 }} numberOfLines={1}>
@@ -523,6 +658,8 @@ export default function AccueilScreen() {
             <Pressable
               onPress={() => router.push('/(app)/alpha')}
               style={({ pressed }) => [styles.chatBtn, { opacity: pressed ? 0.7 : 1 }]}
+              accessibilityLabel="Alpha, votre assistant"
+              accessibilityRole="button"
             >
               <View style={styles.chatIconBox}>
                 <Text style={{ color: palette.textSecondary, fontWeight: '800', fontSize: 20, lineHeight: 24 }}>A</Text>
@@ -531,6 +668,8 @@ export default function AccueilScreen() {
             <Pressable
               onPress={() => router.push('/(app)/discussions')}
               style={({ pressed }) => [styles.chatBtn, { opacity: pressed ? 0.7 : 1 }]}
+              accessibilityLabel="Discussions"
+              accessibilityRole="button"
             >
               <View style={styles.chatIconBox}>
                 <Ionicons name="chatbubbles-outline" size={24} color={palette.textSecondary} />
@@ -546,36 +685,6 @@ export default function AccueilScreen() {
 
         {loading ? (
           <SkeletonKpiGrid />
-        ) : showOnboarding ? (
-          /* ── Onboarding tracker: persisted flag, never re-shows once dismissed ── */
-          <Card style={styles.onboarding}>
-            <View style={{ flexDirection: 'row', alignItems: 'center', justifyContent: 'space-between', marginBottom: spacing[2] }}>
-              <Text variant="label" color="secondary">Pour commencer</Text>
-              <Pressable
-                hitSlop={12}
-                onPress={() => {
-                  setKV(`onboarding_done_${userId}_${businessId}`, '1').catch(() => {});
-                  setOnboardingDismissed(true);
-                }}
-              >
-                <Text variant="caption" color="secondary">Passer</Text>
-              </Pressable>
-            </View>
-            <OnboardingStep number={1} label="Votre commerce a été créé" done                      active={false} />
-            <OnboardingStep number={2} label="Ajouter un produit"        done={step2Done}            active={!step2Done} />
-            <OnboardingStep number={3} label="Faire une vente"           done={step3Done}            active={step2Done && !step3Done} />
-            <Animated.View style={{ width: '100%', marginTop: spacing[4], opacity: welcomeBtnOpacity, transform: [{ scale: welcomeBtnScale }] }}>
-              <Button
-                label={!step2Done ? 'Ajouter un produit' : 'Faire une vente'}
-                onPress={() => !step2Done
-                  ? router.push({ pathname: '/(app)/(tabs)/catalogue', params: { openForm: '1' } })
-                  : router.push('/(app)/(tabs)/vendre')
-                }
-                fullWidth
-                size="lg"
-              />
-            </Animated.View>
-          </Card>
         ) : isVendeur && products.length === 0 ? (
           /* ── Empty state for vendeur: no products configured yet ── */
           <Card style={styles.welcome}>
@@ -592,7 +701,7 @@ export default function AccueilScreen() {
 
             {/* ── 1. Gains hero ── */}
             {pendingPayout ? (
-              <Card style={[styles.heroCard, { backgroundColor: palette.warningLight }]}>
+              <Card elevated style={[styles.heroCard, { backgroundColor: palette.warningLight }]}>
                 <Text variant="caption" style={{ color: palette.warning }}>Demande en cours</Text>
                 <Text variant="amountLarge" style={{ color: palette.warning, fontSize: 44, lineHeight: 56 }}>
                   {formatAmount(pendingPayout.requested_amount, currency)}
@@ -602,7 +711,7 @@ export default function AccueilScreen() {
                 </Text>
               </Card>
             ) : (
-              <Card style={styles.heroCard}>
+              <Card elevated style={styles.heroCard}>
                 <View style={styles.investorHeroRow}>
                   <View style={{ flex: 1, gap: spacing[1] }}>
                     <Text variant="caption" color="secondary">Vos gains</Text>
@@ -616,7 +725,7 @@ export default function AccueilScreen() {
                   {(balance ?? 0) > 0 && (
                     <Pressable
                       onPress={() => {
-                        setWithdrawAmountStr(formatAmountInput(String(balance ?? 0), currency));
+                        setWithdrawAmountStr(formatAmountInput(String(Math.round(balance ?? 0)), currency));
                         setShowWithdrawSheet(true);
                       }}
                       style={[styles.withdrawBtn, { borderColor: palette.primary }]}
@@ -688,11 +797,13 @@ export default function AccueilScreen() {
             {dayGreeting ? (
               <Text variant="caption" color="secondary">{dayGreeting}</Text>
             ) : null}
-            <Card onPress={() => router.push('/ventes')} style={styles.heroCard}>
+            <Card onPress={() => router.push('/ventes')} elevated style={styles.heroCard}>
               <Pressable
                 onPress={() => setIsPrivate(p => !p)}
                 style={styles.heroEye}
                 hitSlop={12}
+                accessibilityLabel={isPrivate ? 'Afficher le montant' : 'Masquer le montant'}
+                accessibilityRole="button"
               >
                 <Ionicons
                   name={isPrivate ? 'eye-off-outline' : 'eye-outline'}
@@ -704,55 +815,118 @@ export default function AccueilScreen() {
                 <Text variant="caption" color="secondary">
                   {heroCaption}
                 </Text>
-                <View style={styles.heroAmountRow}>
-                  <Text
-                    variant="amountLarge"
-                    color={salesCount > 0 ? 'success' : undefined}
-                    style={styles.heroAmount}
-                  >
-                    {rawOrMask(kpis?.revenue_today ?? 0)}
-                  </Text>
-                  <Text
-                    variant="amountLarge"
-                    color={salesCount > 0 ? 'success' : undefined}
-                    style={styles.heroCurrency}
-                  >
-                    {currency}
-                  </Text>
-                </View>
+                {hasSoldToday ? (
+                  <View style={styles.heroAmountRow}>
+                    <Text variant="amountLarge" color="success" style={styles.heroAmount}>
+                      {rawOrMask(kpis?.revenue_today ?? 0)}
+                    </Text>
+                    <Text variant="amountLarge" color="success" style={styles.heroCurrency}>
+                      {currency}
+                    </Text>
+                  </View>
+                ) : (
+                  // Never a giant "0" — a quiet fact plus an invitation to act
+                  // on it, instead of a number that reads as a verdict. Kept
+                  // deliberately compact (title + button, no subtitle) — this
+                  // sits inside the hero card, not a full-screen empty state.
+                  // A real button, not a text link — this is the single most
+                  // likely next action on the screen a busy shop owner opens most.
+                  <View style={styles.heroEmptyState}>
+                    <Text variant="body" color="secondary">Aucune vente aujourd'hui.</Text>
+                    <Button
+                      label="Enregistrer une vente"
+                      onPress={() => { setQuickCaptureMode('vente'); setShowQuickCapture(true); }}
+                      size="sm"
+                      style={styles.heroEmptyAction}
+                    />
+                  </View>
+                )}
               </View>
               <View style={styles.heroComparison}>
-                <Text variant="caption" style={{ color: isEvening ? palette.textSecondary : deltaColor }}>
-                  {comparisonText}
-                </Text>
+                {showDeltaPill ? (
+                  <Pill
+                    variant="solid"
+                    tone={delta > 0 ? 'success' : 'warning'}
+                    icon={delta > 0 ? 'arrow-up' : 'arrow-down'}
+                  >
+                    {delta > 0 ? `${deltaAmt} de plus qu'hier` : `${deltaAmt} de moins qu'hier`}
+                  </Pill>
+                ) : (
+                  <Text variant="caption" color="secondary">{comparisonText}</Text>
+                )}
               </View>
             </Card>
 
-            {/* ── Zone 2: Attention — conditional ── */}
-            {showAttentionCards ? (
-              <View style={styles.attentionZone}>
-                {(kpis?.credit_count ?? 0) > 0 && (
-                  <KpiCard
-                    label={`${kpis?.credit_count} client${(kpis?.credit_count ?? 0) > 1 ? 's' : ''} qui doivent`}
-                    value={amtOrMask(kpis?.credit_total ?? 0)}
-                    onPress={() => router.push('/credits')}
-                    accent={palette.warning}
+            {/* ── Zone 2: Attention. The debt card always renders — data
+                variant when someone owes money, or the zero-debts CTA (the
+                deferred hero action) when nobody currently does — so this
+                zone is never entirely empty for the default role branch. The
+                low-stock card stays purely conditional: it's a genuine "is
+                anything wrong" signal with no equivalent always-useful
+                zero-state. The two resolve independently of each other. ── */}
+            <View style={styles.attentionZone}>
+              {isOwner && <DebtReminderDeniedCard userId={userId} refreshSignal={debtDeniedRefresh} />}
+              {(kpis?.credit_count ?? 0) > 0 ? (
+                // Bespoke, not <KpiCard> — this is about PEOPLE who owe
+                // her, not a warning/cash state, so it deliberately skips
+                // KpiCard's colored icon-circle + tone-tinted amount
+                // treatment (still used, unchanged, by "À racheter" below).
+                // The amount is plain foreground; color appears only on
+                // the aging line, and only when a debt is genuinely old.
+                <Card
+                  onPress={() => router.push({ pathname: '/(app)/clients', params: { filter: 'doivent' } })}
+                  style={{ gap: spacing[1] }}
+                >
+                  <View style={{ flexDirection: 'row', alignItems: 'center', gap: spacing[2] }}>
+                    <Text variant="caption" color="secondary" style={{ flex: 1 }}>
+                      {kpis?.credit_count} client{(kpis?.credit_count ?? 0) > 1 ? 's' : ''} vous {(kpis?.credit_count ?? 0) > 1 ? 'doivent' : 'doit'}
+                    </Text>
+                    <Ionicons name="chevron-forward" size={16} color={palette.textSecondary} />
+                  </View>
+                  <Text variant="amountLarge">{amtOrMask(kpis?.credit_total ?? 0)}</Text>
+                  {creditAging.agingCount > 0 && (
+                    <Text variant="caption" style={{ color: debtAgeColor(creditAging.oldestDays, palette) }}>
+                      dont {creditAging.agingCount} depuis {creditAging.oldestDays} jour{creditAging.oldestDays > 1 ? 's' : ''}
+                    </Text>
+                  )}
+                </Card>
+              ) : (
+                // The deferred hero action — same single-purpose form the
+                // first-run gate itself uses (see FirstRunHeroOverlay,
+                // opened below via showDebtCapture), reachable again any
+                // time there are currently zero outstanding debts, not just
+                // once at first run.
+                <Card style={{ gap: spacing[2] }}>
+                  <Text variant="h4">Qui vous doit de l&apos;argent ?</Text>
+                  <Text variant="body" color="secondary">Écrivez son nom et le montant.</Text>
+                  <Button
+                    label="Enregistrer une dette"
+                    onPress={() => setShowDebtCapture(true)}
+                    fullWidth
+                    size="md"
+                    style={{ marginTop: spacing[1] }}
                   />
-                )}
-                {lowStock > 0 && (
-                  <KpiCard
-                    label="À racheter"
-                    value={String(lowStock)}
-                    sub={`produit${lowStock > 1 ? 's' : ''} à racheter`}
-                    onPress={isVendeur ? undefined : () => router.push('/(app)/(tabs)/catalogue')}
-                    accent={palette.danger}
-                  />
-                )}
-              </View>
-            ) : (
-              <Text variant="caption" color="secondary" style={styles.allGood}>
-                Tout est en ordre ✓
-              </Text>
+                </Card>
+              )}
+              {lowStock > 0 && (
+                <KpiCard
+                  label="À racheter"
+                  value={String(lowStock)}
+                  sub={`produit${lowStock > 1 ? 's' : ''} à racheter`}
+                  onPress={isVendeur ? undefined : () => router.push('/(app)/(tabs)/catalogue')}
+                  tone="warning"
+                  icon="leaf-outline"
+                />
+              )}
+            </View>
+
+            {showDebtCapture && (
+              <FirstRunHeroOverlay
+                businessId={businessId}
+                userId={userId}
+                currency={currency}
+                onDone={() => { setShowDebtCapture(false); loadAll(); }}
+              />
             )}
 
             {/* ── Best sellers ── */}
@@ -785,55 +959,15 @@ export default function AccueilScreen() {
         )}
       </ScrollView>
 
-      {/* ── Alpha entry bar — primary AI entry point. Google-style: a fully
-          rounded pill floating with margin on every side, detached from the
-          tab bar rather than a flush full-width strip. No separate send
-          button — the keyboard's own "send"/enter key launches it. ── */}
-      <View style={styles.alphaBarWrap}>
-        {/* Outer wrapper carries the colored ambient shadow — it can't live
-            on `alphaGlowContainer` itself, since that view's overflow:hidden
-            (needed to clip the rotating ring below) would clip the shadow
-            too, since shadows render outside a view's own bounds. */}
-        <View
-          style={{
-            shadowColor: palette.primary,
-            // A plain black shadow (the app's default `palette.shadow`) is
-            // nearly invisible against a dark surface, so the pill needs its
-            // own colored glow to actually read as "glowing" in dark mode —
-            // boosted well past the light-mode value, which only needs a
-            // faint lift off a near-white background.
-            shadowOpacity: resolvedScheme === 'dark' ? 0.3 : 0.25,
-            shadowRadius: resolvedScheme === 'dark' ? 8 : 10,
-            shadowOffset: { width: 0, height: 0 },
-          }}
-        >
-          <View style={styles.alphaGlowContainer}>
-            <Animated.View style={[styles.alphaGlowRotator, { transform: [{ rotate: alphaGlowSpin }] }]}>
-              <LinearGradient
-                style={StyleSheet.absoluteFill}
-                colors={[palette.primary, 'transparent', 'transparent', 'transparent', palette.primary]}
-                start={{ x: 0, y: 0 }}
-                end={{ x: 1, y: 1 }}
-              />
-            </Animated.View>
-            <View style={[styles.alphaBar, { backgroundColor: palette.surface, shadowColor: palette.shadow }]}>
-              <TextInput
-                style={[styles.alphaInput, { color: palette.textPrimary }]}
-                value={alphaText}
-                onChangeText={setAlphaText}
-                placeholder="Parler avec Alpha…"
-                placeholderTextColor={palette.textSecondary}
-                onSubmitEditing={submitAlpha}
-                returnKeyType="send"
-                blurOnSubmit={false}
-              />
-            </View>
-          </View>
-        </View>
-      </View>
-
       {/* ── Withdrawal sheet ── */}
-      <Modal visible={showWithdrawSheet} transparent animationType="slide" onRequestClose={() => setShowWithdrawSheet(false)}>
+      <Modal
+        visible={showWithdrawSheet}
+        transparent
+        animationType="slide"
+        onRequestClose={() => setShowWithdrawSheet(false)}
+        statusBarTranslucent
+        navigationBarTranslucent
+      >
         <Pressable style={styles.sheetBackdrop} onPress={() => setShowWithdrawSheet(false)}>
           <Pressable style={[styles.sheetPanel, { backgroundColor: palette.surface }]} onPress={() => {}}>
             <View style={[styles.sheetHandle, { backgroundColor: palette.border }]} />
@@ -854,6 +988,7 @@ export default function AccueilScreen() {
                   placeholder="0"
                   placeholderTextColor={palette.textDisabled}
                   selectTextOnFocus
+                  inputAccessoryViewID={Platform.OS === 'ios' ? WITHDRAW_SHEET_SILENT_ACCESSORY_ID : undefined}
                 />
                 <Text variant="label" color="secondary">{currency}</Text>
               </View>
@@ -884,7 +1019,66 @@ export default function AccueilScreen() {
             </Pressable>
           </Pressable>
         </Pressable>
+        {Platform.OS === 'ios' && (
+          <InputAccessoryView nativeID={WITHDRAW_SHEET_SILENT_ACCESSORY_ID}>
+            <View style={{ height: 0 }} />
+          </InputAccessoryView>
+        )}
       </Modal>
+
+      {/* One-tap capture — the "radical simplicity" entry point. Investisseur
+          is read-only (no write access to sale_orders/clients), so it's the
+          one role that never sees this. Positioned above the floating tab
+          bar the same way catalogue.tsx's/vendre.tsx's own FABs are, plus a
+          small extra `spacing[4]` lift on top of `FLOATING_TAB_BAR_CLEARANCE`
+          — the bare clearance value read as sitting too close to the bar on
+          a real device. A pure shortcut alongside Vendre — nothing about
+          the underlying credit/sale flow changes, only how fast it's
+          reached from the screen the app actually opens to. */}
+      {!isInvestisseur && (
+        <Pressable
+          onPress={() => {
+            trackEvent('quick_capture_opened', businessId, userId, { source: 'accueil_fab' });
+            setShowQuickCapture(true);
+          }}
+          style={({ pressed }) => [styles.quickCaptureFab, pressed && { opacity: 0.82 }]}
+          accessibilityLabel="Ajouter une vente ou une dette"
+          accessibilityRole="button"
+        >
+          <Ionicons name="add" size={20} color={palette.textInverse} />
+          <Text style={styles.quickCaptureFabLabel}>Ajouter</Text>
+        </Pressable>
+      )}
+
+      <QuickCaptureSheet
+        visible={showQuickCapture}
+        onClose={() => {
+          // This sheet is a plain RN Modal rendered by Accueil itself — but
+          // per FirstRunHeroOverlay's own fix above, a native Modal opening/
+          // closing never triggers a real react-navigation focus transition
+          // regardless of where in the tree it's mounted, so useFocusEffect
+          // alone would leave the day-card/debt-card stale after a credit
+          // debt or quick sale recorded here, exactly like that bug. loadAll
+          // is cheap and idempotent — a no-op close (nothing was ever
+          // recorded this session) just refetches the same numbers.
+          setShowQuickCapture(false);
+          loadAll();
+        }}
+        businessId={businessId}
+        userId={userId}
+        currency={currency}
+        initialMode={quickCaptureMode}
+      />
+
+      {businessId && userId && (
+        <PaymentReminderAsker
+          businessId={businessId}
+          userId={userId}
+          active={isOwner && !session?.isDemoMode}
+          blocked={showQuickCapture || showDebtCapture}
+          onDenied={() => setDebtDeniedRefresh(n => n + 1)}
+        />
+      )}
 
     </Screen>
     </KeyboardAvoidingView>
@@ -895,16 +1089,24 @@ function makeStyles(p: Palette) {
   return StyleSheet.create({
     safe: { flex: 1, backgroundColor: p.background },
     edgeSwipeCatcher: {
+      // top is set inline (insets.top + HEADER_ROW_HEIGHT) at the call site
+      // — device-aware, not a flat guess. See the comment there.
       position: 'absolute',
       left: 0,
-      // Starts below the header row so it never shadows the hamburger menu
-      // icon's own tap-to-open target (that icon sits at roughly this x/y).
-      top: 64,
       bottom: 0,
       width: EDGE_SWIPE_WIDTH,
       zIndex: 20,
     },
     content: { padding: spacing[5], gap: spacing[4], paddingBottom: spacing[10] },
+    quickCaptureFab: {
+      position: 'absolute', bottom: FLOATING_TAB_BAR_CLEARANCE + spacing[4], right: spacing[4], zIndex: 10,
+      flexDirection: 'row', alignItems: 'center', gap: spacing[2],
+      height: 56, paddingHorizontal: spacing[5], borderRadius: radius.full,
+      backgroundColor: p.primary,
+      shadowColor: p.textPrimary, shadowOffset: { width: 0, height: 4 },
+      shadowOpacity: 0.18, shadowRadius: 8, elevation: 8,
+    },
+    quickCaptureFabLabel: { fontSize: 15, fontWeight: '600' as const, color: p.textInverse },
     header: { paddingBottom: spacing[2], flexDirection: 'row', alignItems: 'center', justifyContent: 'space-between' },
     chatBtn: { padding: spacing[1] },
     chatIconBox: { width: 24, height: 24, alignItems: 'center', justifyContent: 'center' },
@@ -916,38 +1118,6 @@ function makeStyles(p: Palette) {
       paddingHorizontal: 3,
     },
     chatBadgeText: { fontSize: 9, fontWeight: '700' as const, color: p.textInverse, lineHeight: 12 },
-
-    alphaBarWrap: {
-      paddingHorizontal: spacing[4],
-      paddingTop: spacing[2],
-      paddingBottom: spacing[3],
-    },
-    // Clips the rotating gradient to a ring: padding here is the ring's
-    // visible thickness, `alphaBar` inside covers everything but that edge.
-    alphaGlowContainer: {
-      borderRadius: radius.full,
-      padding: 2,
-      overflow: 'hidden',
-    },
-    // Sized to comfortably cover the container's diagonal at any rotation
-    // angle (2x the box in both dimensions, centered) — a plain linear
-    // gradient spun behind the pill, so as it rotates the bright end sweeps
-    // continuously around the ring like a chasing light.
-    alphaGlowRotator: {
-      position: 'absolute',
-      top: '-50%', left: '-50%',
-      width: '200%', height: '200%',
-    },
-    alphaBar: {
-      flexDirection: 'row', alignItems: 'center', gap: spacing[3],
-      paddingHorizontal: spacing[5], paddingVertical: spacing[3],
-      borderRadius: radius.full,
-      shadowOffset: { width: 0, height: 2 },
-      shadowOpacity: 0.12,
-      shadowRadius: 8,
-      elevation: 3,
-    },
-    alphaInput: { flex: 1, fontSize: 15, paddingVertical: 4 },
 
     heroCard: {},
     investorHeroRow: { flexDirection: 'row' as const, alignItems: 'center' as const, gap: spacing[4] },
@@ -962,6 +1132,8 @@ function makeStyles(p: Palette) {
     heroAmountRow: { position: 'relative' },
     heroAmount: { fontSize: 52, lineHeight: 64 },
     heroCurrency: { fontSize: 18, lineHeight: 24, position: 'absolute', top: 4, right: 0 },
+    heroEmptyState: { gap: spacing[1], paddingVertical: spacing[2] },
+    heroEmptyAction: { alignSelf: 'flex-start', marginTop: spacing[2] },
     heroComparison: {
       flexDirection: 'row',
       alignItems: 'center',
@@ -971,15 +1143,8 @@ function makeStyles(p: Palette) {
     },
 
     attentionZone: { gap: spacing[3] },
-    allGood: { textAlign: 'center', paddingVertical: spacing[3] },
     monthLine: { textAlign: 'center', paddingVertical: spacing[2] },
 
-    offlineBanner: {
-      alignItems: 'center', justifyContent: 'center',
-      paddingVertical: spacing[1],
-      borderBottomWidth: StyleSheet.hairlineWidth,
-      borderBottomColor: p.border,
-    },
     sheetBackdrop: {
       flex: 1, justifyContent: 'flex-end',
       backgroundColor: 'rgba(0,0,0,0.5)',
@@ -1001,11 +1166,6 @@ function makeStyles(p: Palette) {
 
     welcome: { alignItems: 'center', gap: spacing[4], paddingVertical: spacing[8], paddingHorizontal: spacing[6] },
     welcomeEmoji: { fontSize: 52, lineHeight: 72 },
-    onboarding: { gap: spacing[2], paddingVertical: spacing[6], paddingHorizontal: spacing[5] },
-    onboardingStep: { flexDirection: 'row', alignItems: 'center', gap: spacing[3], paddingVertical: spacing[2] },
-    onboardingBubble: { width: 32, height: 32, borderRadius: radius.full, borderWidth: 1.5, borderColor: p.border, alignItems: 'center', justifyContent: 'center' },
-    onboardingBubbleDone: { backgroundColor: p.success, borderColor: p.success },
-    onboardingBubbleActive: { backgroundColor: p.primary, borderColor: p.primary },
 
     section: {
       backgroundColor: p.surface,

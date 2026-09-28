@@ -6,6 +6,7 @@ jest.mock('@/lib/supabase', () => ({
   supabase: {
     rpc: jest.fn(),
     from: jest.fn(),
+    functions: { invoke: jest.fn().mockResolvedValue({ data: null, error: null }) },
     auth: {
       onAuthStateChange: jest.fn(() => ({
         data: { subscription: { unsubscribe: jest.fn() } },
@@ -46,6 +47,8 @@ const creditSale: Vente = {
   created_at: '2026-06-20T00:00:00Z',
   cancelled_at: null,
   cancellation_reason: null,
+  edit_count: 0,
+  last_edited_at: null,
   profit: null,
   amount_paid: 0,
 };

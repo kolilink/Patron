@@ -7,6 +7,7 @@ import {
   type ReconciliationFinding,
   type CurrencySnapshot,
 } from '../_shared/reconciliation.ts';
+import { safeErrorResponse } from '../_shared/errors.ts';
 
 // Standalone nightly reconciliation email. As of the daily combined report
 // (send-report-email with include_reconciliation:true), the pg_cron trigger
@@ -24,7 +25,7 @@ function buildEmail(run: ReconciliationRun, findings: ReconciliationFinding[], s
   const isClean = run.status === 'clean';
   const headerBg = isClean ? '#059669' : run.critical_count > 0 ? '#dc2626' : '#d97706';
   const headerText = isClean
-    ? '✅ Tout est propre — 78 vérifications OK'
+    ? '✅ Tout est propre — 84 vérifications OK'
     : run.critical_count > 0
       ? `🚨 ${run.critical_count} critique(s) · ${run.warning_count} alerte(s)`
       : `⚠️ ${run.warning_count} alerte(s) — aucun critique`;
@@ -139,11 +140,6 @@ serve(async (req) => {
     );
 
   } catch (err) {
-    const msg = err instanceof Error ? err.message : 'Erreur inconnue';
-    console.error('send-reconciliation-report crash:', msg);
-    return new Response(JSON.stringify({ error: msg }), {
-      status: 500,
-      headers: { 'Content-Type': 'application/json' },
-    });
+    return safeErrorResponse(err, { 'Access-Control-Allow-Origin': '*' }, 'send-reconciliation-report');
   }
 });

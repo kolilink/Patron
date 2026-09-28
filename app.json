@@ -3,7 +3,7 @@
     "name": "Patron",
     "slug": "patron",
     "scheme": "patron",
-    "version": "1.0.4",
+    "version": "1.0.7",
     "orientation": "portrait",
     "icon": "./assets/icon.png",
     "userInterfaceStyle": "automatic",
@@ -21,13 +21,17 @@
     "ios": {
       "supportsTablet": false,
       "bundleIdentifier": "com.awall.patron",
-      "buildNumber": "1",
       "infoPlist": {
         "NSFaceIDUsageDescription": "Utilisé pour déverrouiller votre session en toute sécurité.",
         "NSMicrophoneUsageDescription": "Utilisé pour envoyer des messages vocaux à votre équipe.",
         "ITSAppUsesNonExemptEncryption": false,
-        "UIBackgroundModes": ["remote-notification"],
-        "LSApplicationQueriesSchemes": ["googlegmail", "message"]
+        "UIBackgroundModes": [
+          "remote-notification"
+        ],
+        "LSApplicationQueriesSchemes": [
+          "googlegmail",
+          "message"
+        ]
       },
       "privacyManifests": {
         "NSPrivacyAccessedAPITypes": [
@@ -54,7 +58,7 @@
     },
     "android": {
       "package": "com.awall.patron",
-      "versionCode": 4,
+      "allowBackup": false,
       "adaptiveIcon": {
         "foregroundImage": "./assets/adaptive-icon.png",
         "backgroundColor": "#ffffff"
@@ -72,7 +76,13 @@
       "edgeToEdgeEnabled": true,
       "predictiveBackGestureEnabled": false,
       "softwareKeyboardLayoutMode": "pan",
-      "permissions": ["android.permission.RECORD_AUDIO"]
+      "permissions": [
+        "android.permission.RECORD_AUDIO"
+      ],
+      "blockedPermissions": [
+        "android.permission.READ_EXTERNAL_STORAGE",
+        "android.permission.WRITE_EXTERNAL_STORAGE"
+      ]
     },
     "web": {
       "favicon": "./assets/favicon.png"
@@ -95,14 +105,26 @@
       "expo-updates",
       "@sentry/react-native",
       "expo-localization",
-      ["expo-notifications", {
-        "icon": "./assets/notification-icon.png",
-        "color": "#6366F1",
-        "sounds": [
-          "./assets/sounds/patron_default.wav",
-          "./assets/sounds/patron_urgent.wav"
-        ]
-      }]
+      [
+        "expo-notifications",
+        {
+          "icon": "./assets/notification-icon.png",
+          "color": "#6366F1",
+          "sounds": [
+            "./assets/sounds/patron_default.wav",
+            "./assets/sounds/patron_urgent.wav"
+          ]
+        }
+      ],
+      [
+        "expo-build-properties",
+        {
+          "android": {
+            "enableMinifyInReleaseBuilds": true,
+            "enableShrinkResourcesInReleaseBuilds": true
+          }
+        }
+      ]
     ],
     "extra": {
       "router": {},

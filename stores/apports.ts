@@ -3,7 +3,13 @@ import { supabase } from '@/lib/supabase';
 import { translateError } from '@/lib/errors';
 import { generateFallbackName } from '@/lib/id';
 import { saveApportsCache, getApportsCache, getCacheTimestamp } from '@/lib/db';
-import { isNetworkError } from '@/lib/sync';
+import { isNetworkError, withNetworkRetry, reportOfflineFallback } from '@/lib/sync';
+import { useAuthStore } from '@/stores/auth';
+
+// See stores/products.ts for the full explanation.
+function isStaleBusiness(businessId: string): boolean {
+  return useAuthStore.getState().session?.activeBusiness?.id !== businessId;
+}
 
 export interface Apport {
   id: string;
@@ -18,6 +24,9 @@ export interface Apport {
   created_by_name: string | null;
   edited_at: string | null;
   edited_by_name: string | null;
+  proof_image_url: string | null;
+  proof_image_width: number | null;
+  proof_image_height: number | null;
 }
 
 interface AportsStore {
@@ -35,7 +44,7 @@ interface AportsStore {
     sourceName?: string | null;
     note?: string | null;
     injectedAt: string;
-  }) => Promise<boolean>;
+  }) => Promise<string | null>;   // new row id, or null on failure — lets the caller attach a proof photo
   editApport: (params: {
     id: string;
     businessId: string;
@@ -52,7 +61,7 @@ interface AportsStore {
     sourceName?: string | null;
     note?: string | null;
     withdrawnAt: string;
-  }) => Promise<boolean>;
+  }) => Promise<string | null>;   // new row id, or null on failure
   reset: () => void;
 }
 
@@ -67,6 +76,7 @@ export const useAportsStore = create<AportsStore>((set, get) => ({
   fetchApports: async (businessId) => {
     if (get().apports.length === 0) {
       const cached = await getApportsCache(businessId) as Apport[] | null;
+      if (isStaleBusiness(businessId)) return;
       if (cached) {
         set({ apports: cached, loading: false, error: null });
       } else {
@@ -76,17 +86,23 @@ export const useAportsStore = create<AportsStore>((set, get) => ({
       set({ error: null });
     }
 
-    const { data, error } = await supabase
-      .from('capital_injections')
-      .select('*, injected_by:profiles!injected_by_id(name), creator:profiles!created_by(name), editor:profiles!edited_by(name)')
-      .eq('business_id', businessId)
-      .order('injected_at', { ascending: false });
+    const { data, error } = await withNetworkRetry(() =>
+      supabase
+        .from('capital_injections')
+        .select('*, injected_by:profiles!injected_by_id(name), creator:profiles!created_by(name), editor:profiles!edited_by(name)')
+        .eq('business_id', businessId)
+        .order('injected_at', { ascending: false }),
+    ).catch(err => ({ data: null, error: err }));
 
+    if (isStaleBusiness(businessId)) return;
     if (error) {
       if (isNetworkError(error)) {
+        reportOfflineFallback('apports.fetchApports', error);
         const cached = await getApportsCache(businessId) as Apport[] | null;
+        if (isStaleBusiness(businessId)) return;
         if (cached) {
           const ts = await getCacheTimestamp('apports_cache', businessId);
+          if (isStaleBusiness(businessId)) return;
           set({ apports: cached, loading: false, offline: true, offlineSince: ts, error: null });
           return;
         }
@@ -111,76 +127,95 @@ export const useAportsStore = create<AportsStore>((set, get) => ({
       created_by_name: (r.creator as { name: string | null } | null)?.name ?? null,
       edited_at: (r.edited_at as string | null) ?? null,
       edited_by_name: (r.editor as { name: string | null } | null)?.name ?? null,
+      proof_image_url: (r.proof_image_url as string | null) ?? null,
+      proof_image_width: (r.proof_image_width as number | null) ?? null,
+      proof_image_height: (r.proof_image_height as number | null) ?? null,
     }));
 
     void saveApportsCache(businessId, apports as unknown[]);
+    if (isStaleBusiness(businessId)) return;
     set({ apports, loading: false, offline: false, offlineSince: null });
   },
 
   addApport: async ({ businessId, amount, injectedById, sourceName, note, injectedAt }) => {
     set({ saving: true, error: null });
 
-    const { error } = await supabase.rpc('record_injection', {
-      p_business_id:    businessId,
-      p_amount:         Math.round(amount * 100),
-      p_injected_by_id: injectedById ?? null,
-      p_source_name:    sourceName ?? null,
-      p_note:           note ?? null,
-      p_injected_at:    injectedAt,
-    });
+    try {
+      const { data, error } = await supabase.rpc('record_injection', {
+        p_business_id:    businessId,
+        p_amount:         Math.round(amount * 100),
+        p_injected_by_id: injectedById ?? null,
+        p_source_name:    sourceName ?? null,
+        p_note:           note ?? null,
+        p_injected_at:    injectedAt,
+      });
 
-    if (error) {
-      set({ saving: false, error: translateError(error, 'Impossible d\'enregistrer') });
-      return false;
+      if (error) {
+        set({ saving: false, error: translateError(error, 'Impossible d\'enregistrer') });
+        return null;
+      }
+
+      set({ saving: false });
+      await get().fetchApports(businessId);
+      return (data as string) ?? null;
+    } catch (err) {
+      set({ saving: false, error: isNetworkError(err) ? 'Vérifiez votre connexion' : translateError(err, 'Impossible d\'enregistrer') });
+      return null;
     }
-
-    set({ saving: false });
-    await get().fetchApports(businessId);
-    return true;
   },
 
   editApport: async ({ id, businessId, amount, injectedById, sourceName, note, injectedAt }) => {
     set({ saving: true, error: null });
 
-    const { error } = await supabase.rpc('edit_injection', {
-      p_id:             id,
-      p_amount:         Math.round(amount * 100),
-      p_injected_by_id: injectedById ?? null,
-      p_source_name:    sourceName ?? null,
-      p_note:           note ?? null,
-      p_injected_at:    injectedAt,
-    });
+    try {
+      const { error } = await supabase.rpc('edit_injection', {
+        p_id:             id,
+        p_amount:         Math.round(amount * 100),
+        p_injected_by_id: injectedById ?? null,
+        p_source_name:    sourceName ?? null,
+        p_note:           note ?? null,
+        p_injected_at:    injectedAt,
+      });
 
-    if (error) {
-      set({ saving: false, error: translateError(error, 'Impossible de modifier') });
+      if (error) {
+        set({ saving: false, error: translateError(error, 'Impossible de modifier') });
+        return false;
+      }
+
+      set({ saving: false });
+      await get().fetchApports(businessId);
+      return true;
+    } catch (err) {
+      set({ saving: false, error: isNetworkError(err) ? 'Vérifiez votre connexion' : translateError(err, 'Impossible de modifier') });
       return false;
     }
-
-    set({ saving: false });
-    await get().fetchApports(businessId);
-    return true;
   },
 
   recordWithdrawal: async ({ businessId, amount, injectedById, sourceName, note, withdrawnAt }) => {
     set({ saving: true, error: null });
 
-    const { error } = await supabase.rpc('record_withdrawal', {
-      p_business_id:    businessId,
-      p_amount:         Math.round(amount * 100),
-      p_injected_by_id: injectedById ?? null,
-      p_source_name:    sourceName ?? null,
-      p_note:           note ?? null,
-      p_withdrawn_at:   withdrawnAt,
-    });
+    try {
+      const { data, error } = await supabase.rpc('record_withdrawal', {
+        p_business_id:    businessId,
+        p_amount:         Math.round(amount * 100),
+        p_injected_by_id: injectedById ?? null,
+        p_source_name:    sourceName ?? null,
+        p_note:           note ?? null,
+        p_withdrawn_at:   withdrawnAt,
+      });
 
-    if (error) {
-      set({ saving: false, error: translateError(error, 'Impossible d\'enregistrer le retrait') });
-      return false;
+      if (error) {
+        set({ saving: false, error: translateError(error, 'Impossible d\'enregistrer le retrait') });
+        return null;
+      }
+
+      set({ saving: false });
+      await get().fetchApports(businessId);
+      return (data as string) ?? null;
+    } catch (err) {
+      set({ saving: false, error: isNetworkError(err) ? 'Vérifiez votre connexion' : translateError(err, 'Impossible d\'enregistrer le retrait') });
+      return null;
     }
-
-    set({ saving: false });
-    await get().fetchApports(businessId);
-    return true;
   },
 
   reset: () => set({ apports: [], loading: false, saving: false, error: null, offline: false, offlineSince: null }),

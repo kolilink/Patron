@@ -1,5 +1,6 @@
 import { serve } from 'https://deno.land/std@0.177.0/http/server.ts';
 import { createClient } from 'https://esm.sh/@supabase/supabase-js@2';
+import { SafeError, safeErrorResponse } from '../_shared/errors.ts';
 
 const corsHeaders = {
   'Access-Control-Allow-Origin': '*',
@@ -25,6 +26,17 @@ function generateOtpCode(): string {
     r = buf[0];
   } while (r >= limit);
   return (100000 + (r % range)).toString();
+}
+
+// SHA-256 hex digest — stored in place of the raw code so a DB read (backup,
+// leaked service-role key, a future RLS mistake) can't hand out a directly
+// usable, still-valid 10-minute code. Deno's edge runtime has full Web
+// Crypto (unlike Hermes on the mobile client, which is why invite codes
+// historically avoided it) so this needs no extra dependency.
+async function hashToken(token: string): Promise<string> {
+  const bytes = new TextEncoder().encode(token);
+  const digest = await crypto.subtle.digest('SHA-256', bytes);
+  return Array.from(new Uint8Array(digest)).map((b) => b.toString(16).padStart(2, '0')).join('');
 }
 
 serve(async (req) => {
@@ -156,12 +168,16 @@ serve(async (req) => {
     }
 
     // ── Insert verification row ───────────────────────────────────────────────
+    // token column holds the SHA-256 hex digest of the real code, never the
+    // code itself — verify-phone-code hashes the caller's guess the same way
+    // and compares digests. The plaintext `token` only ever leaves this
+    // function via WhatsApp/Twilio to the user's own phone, never stored.
     const { data, error: insertErr } = await serviceClient
       .from('phone_verifications')
       .insert({
         user_id:    user.id,
         phone:      phone.trim(),
-        token,
+        token:      await hashToken(token),
         status:     'en_attente',
         expires_at: new Date(Date.now() + 10 * 60 * 1000).toISOString(),
       })
@@ -174,11 +190,7 @@ serve(async (req) => {
       headers: { ...corsHeaders, 'Content-Type': 'application/json' },
     });
   } catch (err) {
-    const msg = err instanceof Error ? err.message : 'Erreur inconnue';
-    return new Response(JSON.stringify({ error: msg }), {
-      status: 500,
-      headers: { ...corsHeaders, 'Content-Type': 'application/json' },
-    });
+    return safeErrorResponse(err, corsHeaders, 'create-phone-verification');
   }
 });
 
@@ -252,8 +264,8 @@ async function sendViaTwilioVerify(phone: string, code: string): Promise<void> {
     const errJson = await res.json().catch(() => ({})) as { code?: number; message?: string };
     console.error('Twilio Verify send failed:', res.status, errJson);
     if (errJson.code === 60200 || errJson.code === 21211) {
-      throw new Error('Numéro de téléphone invalide. Vérifiez votre numéro et réessayez.');
+      throw new SafeError('Numéro de téléphone invalide. Vérifiez votre numéro et réessayez.');
     }
-    throw new Error('Impossible d\'envoyer le code. Réessayez dans quelques instants.');
+    throw new SafeError('Impossible d\'envoyer le code. Réessayez dans quelques instants.');
   }
 }

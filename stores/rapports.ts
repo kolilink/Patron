@@ -1,7 +1,13 @@
 import { create } from 'zustand';
 import { supabase } from '@/lib/supabase';
 import { saveRapportsCache, getRapportsCache, getCacheTimestamp } from '@/lib/db';
-import { isNetworkError } from '@/lib/sync';
+import { isNetworkError, withTimeout, withNetworkRetry, reportOfflineFallback } from '@/lib/sync';
+import { useAuthStore } from '@/stores/auth';
+
+// See stores/products.ts for the full explanation.
+function isStaleBusiness(businessId: string): boolean {
+  return useAuthStore.getState().session?.activeBusiness?.id !== businessId;
+}
 
 export interface StockVelocityItem {
   item_id: string;
@@ -19,6 +25,39 @@ export interface TopSeller {
   name: string;
   revenue: number; // display units (÷100)
   count: number;
+}
+
+export interface DailyPoint {
+  date: string;        // ISO date "YYYY-MM-DD"
+  amount: number;      // display units (already ÷100)
+  sales_count: number;
+  units_sold: number;
+}
+
+// Backs the year heatmap + period-filter drill-down in app/(app)/rapports.
+// Calendar-anchored (period_start/period_end), unlike ReportsSnapshot's
+// rolling period_days — see db/migration_v154.sql's header note.
+export interface PeriodReport {
+  role: string;
+  period_start: string;
+  period_end: string;
+  // Admin / manager / investisseur
+  cash_on_hand: number;
+  net_profit: number;
+  sales_count: number;
+  units_sold: number;
+  credit_outstanding: number;
+  credit_count: number;
+  daily: DailyPoint[];
+  // Vendeur
+  my_sales_count: number;
+  my_units_sold: number;
+  my_credit_pending: number;
+  my_credit_count: number;
+  my_daily: DailyPoint[];
+  // Investisseur
+  investor_balance: number;
+  my_total_invested: number;
 }
 
 export interface ReportsSnapshot {
@@ -69,6 +108,44 @@ interface RapportsState {
     today?: string,
   ) => Promise<void>;
   fetchStockVelocity: (businessId: string) => Promise<void>;
+
+  // Year heatmap (Jan 1 → today/Dec 31 of the selected year) — always
+  // fetched, drives the headline cards + heatmap coloring.
+  yearReport: PeriodReport | null;
+  yearReportLoading: boolean;
+  // Drill-down for a selected sub-period (jour/semaine/trimestre/semestre/
+  // personnalisé). null when no filter narrower than the full year is active.
+  filterReport: PeriodReport | null;
+  filterReportLoading: boolean;
+  periodOffline: boolean;
+  periodOfflineSince: number | null;
+  fetchYearReport: (
+    businessId: string,
+    year: number,
+    role: string,
+    userId: string,
+  ) => Promise<void>;
+  // Previous full calendar year — fetched only to power the "vs l'an dernier"
+  // delta on the profit hero. Own slot, not reused off `yearReport`, since
+  // both need to be on screen at once (current year headline + the
+  // comparison baseline it's measured against).
+  previousYearReport: PeriodReport | null;
+  previousYearReportLoading: boolean;
+  fetchPreviousYearReport: (
+    businessId: string,
+    year: number,
+    role: string,
+    userId: string,
+  ) => Promise<void>;
+  fetchFilterReport: (
+    businessId: string,
+    periodStart: string,
+    periodEnd: string,
+    role: string,
+    userId: string,
+  ) => Promise<void>;
+  clearFilterReport: () => void;
+
   reset: () => void;
 }
 
@@ -117,6 +194,92 @@ function parseSnapshot(raw: Record<string, unknown>): ReportsSnapshot {
   };
 }
 
+function parsePeriodReport(raw: Record<string, unknown>): PeriodReport {
+  const cents = (k: string) => ((raw[k] as number) ?? 0) / 100;
+  const parseDaily = (key: string): DailyPoint[] =>
+    ((raw[key] as Array<{ date: string; amount: number; sales_count: number; units_sold: number }>) ?? []).map(pt => ({
+      date:        pt.date,
+      amount:      pt.amount / 100,
+      sales_count: pt.sales_count,
+      units_sold:  pt.units_sold,
+    }));
+
+  return {
+    role:                (raw['role'] as string) ?? '',
+    period_start:        (raw['period_start'] as string) ?? '',
+    period_end:          (raw['period_end'] as string) ?? '',
+    cash_on_hand:        cents('cash_on_hand'),
+    net_profit:          cents('net_profit'),
+    sales_count:         (raw['sales_count'] as number) ?? 0,
+    units_sold:          (raw['units_sold'] as number) ?? 0,
+    credit_outstanding:  cents('credit_outstanding'),
+    credit_count:        (raw['credit_count'] as number) ?? 0,
+    daily:               parseDaily('daily'),
+    my_sales_count:      (raw['my_sales_count'] as number) ?? 0,
+    my_units_sold:       (raw['my_units_sold'] as number) ?? 0,
+    my_credit_pending:   cents('my_credit_pending'),
+    my_credit_count:     (raw['my_credit_count'] as number) ?? 0,
+    my_daily:            parseDaily('my_daily'),
+    investor_balance:    cents('investor_balance'),
+    my_total_invested:   cents('my_total_invested'),
+  };
+}
+
+// Shared by fetchYearReport/fetchFilterReport — same cache/offline-timeout
+// pattern as fetchReportsSnapshot, parameterized by which state slot
+// (year vs. filter) to write into.
+async function loadPeriodReport(
+  businessId: string, periodStart: string, periodEnd: string, role: string, userId: string,
+  set: (partial: Partial<RapportsState>) => void,
+  slot: 'year' | 'filter' | 'previousYear',
+): Promise<void> {
+  const loadingKey = slot === 'year' ? 'yearReportLoading' : slot === 'filter' ? 'filterReportLoading' : 'previousYearReportLoading';
+  const dataKey    = slot === 'year' ? 'yearReport'        : slot === 'filter' ? 'filterReport'        : 'previousYearReport';
+  set({ [loadingKey]: true } as Partial<RapportsState>);
+
+  const cacheKey = `${businessId}:${role}:${userId}:${periodStart}:${periodEnd}`;
+  const { data, error } = await withNetworkRetry(() =>
+    supabase.rpc('get_period_report', {
+      p_business_id:  businessId,
+      p_period_start: periodStart,
+      p_period_end:   periodEnd,
+      p_role:         role,
+      p_user_id:      userId,
+    }),
+  ).catch(err => ({ data: null, error: err }));
+  if (isStaleBusiness(businessId)) return;
+
+  if (error || !data) {
+    if (isNetworkError(error)) {
+      reportOfflineFallback('rapports.loadPeriodReport', error);
+      const cached = await getRapportsCache(cacheKey);
+      if (isStaleBusiness(businessId)) return;
+      if (cached) {
+        const ts = await getCacheTimestamp('rapports_cache', cacheKey);
+        if (isStaleBusiness(businessId)) return;
+        set({
+          [dataKey]: parsePeriodReport(cached as Record<string, unknown>),
+          [loadingKey]: false,
+          periodOffline: true,
+          periodOfflineSince: ts,
+        } as Partial<RapportsState>);
+        return;
+      }
+      set({ [loadingKey]: false, periodOffline: true, periodOfflineSince: null } as Partial<RapportsState>);
+      return;
+    }
+    set({ [loadingKey]: false } as Partial<RapportsState>);
+    return;
+  }
+  void saveRapportsCache(cacheKey, data);
+  set({
+    [dataKey]: parsePeriodReport(data as Record<string, unknown>),
+    [loadingKey]: false,
+    periodOffline: false,
+    periodOfflineSince: null,
+  } as Partial<RapportsState>);
+}
+
 export const useRapportsStore = create<RapportsState>((set) => ({
   snapshot: null,
   snapshotLoading: false,
@@ -125,20 +288,44 @@ export const useRapportsStore = create<RapportsState>((set) => ({
   stockVelocity: [],
   velocityLoading: false,
 
+  yearReport: null,
+  yearReportLoading: false,
+  previousYearReport: null,
+  previousYearReportLoading: false,
+  filterReport: null,
+  filterReportLoading: false,
+  periodOffline: false,
+  periodOfflineSince: null,
+
   fetchReportsSnapshot: async (businessId, periodDays, role, userId, today) => {
     set({ snapshotLoading: true });
-    const { data, error } = await supabase.rpc('get_reports_snapshot', {
-      p_business_id: businessId,
-      p_period_days: periodDays,
-      p_role:        role,
-      p_user_id:     userId,
-      p_today:       today ?? new Date().toISOString().split('T')[0],
-    });
+    // rapports_cache's `business_id` column is a plain TEXT PRIMARY KEY (no FK),
+    // so it doubles as a generic cache key here — packing in periodDays/role/userId
+    // is a value-only change, no migration needed. Without this, Semaine/Mois/
+    // Trimestre all overwrote the same single slot, so offline always showed
+    // whichever period tab happened to be fetched last, regardless of which
+    // tab was actually open; role/userId are included too since a vendeur's
+    // personal figures and an admin's full-business figures must never be
+    // served from each other's cache slot on a shared device.
+    const cacheKey = `${businessId}:${role}:${userId}:${periodDays}`;
+    const { data, error } = await withNetworkRetry(() =>
+      supabase.rpc('get_reports_snapshot', {
+        p_business_id: businessId,
+        p_period_days: periodDays,
+        p_role:        role,
+        p_user_id:     userId,
+        p_today:       today ?? new Date().toISOString().split('T')[0],
+      }),
+    ).catch(err => ({ data: null, error: err }));
+    if (isStaleBusiness(businessId)) return;
     if (error || !data) {
       if (isNetworkError(error)) {
-        const cached = await getRapportsCache(businessId);
+        reportOfflineFallback('rapports.fetchReportsSnapshot', error);
+        const cached = await getRapportsCache(cacheKey);
+        if (isStaleBusiness(businessId)) return;
         if (cached) {
-          const ts = await getCacheTimestamp('rapports_cache', businessId);
+          const ts = await getCacheTimestamp('rapports_cache', cacheKey);
+          if (isStaleBusiness(businessId)) return;
           set({
             snapshot: parseSnapshot(cached as Record<string, unknown>),
             snapshotLoading: false,
@@ -153,15 +340,18 @@ export const useRapportsStore = create<RapportsState>((set) => ({
       set({ snapshotLoading: false });
       return;
     }
-    void saveRapportsCache(businessId, data);
+    void saveRapportsCache(cacheKey, data);
     set({ snapshot: parseSnapshot(data as Record<string, unknown>), snapshotLoading: false, offline: false, offlineSince: null });
   },
 
   fetchStockVelocity: async (businessId) => {
     set({ velocityLoading: true });
-    const { data, error } = await supabase.rpc('get_stock_velocity', {
-      p_business_id: businessId,
-    });
+    const { data, error } = await withTimeout(
+      supabase.rpc('get_stock_velocity', {
+        p_business_id: businessId,
+      }),
+    ).catch(err => ({ data: null, error: err }));
+    if (isStaleBusiness(businessId)) return;
     if (error || !data) { set({ velocityLoading: false }); return; }
     set({
       stockVelocity: (data as Record<string, unknown>[]).map(r => ({
@@ -174,5 +364,30 @@ export const useRapportsStore = create<RapportsState>((set) => ({
     });
   },
 
-  reset: () => set({ snapshot: null, snapshotLoading: false, offline: false, offlineSince: null, stockVelocity: [], velocityLoading: false }),
+  fetchYearReport: (businessId, year, role, userId) => {
+    const today = new Date();
+    const isCurrentYear = year === today.getFullYear();
+    const periodStart = `${year}-01-01`;
+    const periodEnd = isCurrentYear
+      ? today.toISOString().split('T')[0]
+      : `${year}-12-31`;
+    return loadPeriodReport(businessId, periodStart, periodEnd, role, userId, set, 'year');
+  },
+
+  fetchPreviousYearReport: (businessId, year, role, userId) =>
+    loadPeriodReport(businessId, `${year - 1}-01-01`, `${year - 1}-12-31`, role, userId, set, 'previousYear'),
+
+  fetchFilterReport: (businessId, periodStart, periodEnd, role, userId) =>
+    loadPeriodReport(businessId, periodStart, periodEnd, role, userId, set, 'filter'),
+
+  clearFilterReport: () => set({ filterReport: null, filterReportLoading: false }),
+
+  reset: () => set({
+    snapshot: null, snapshotLoading: false, offline: false, offlineSince: null,
+    stockVelocity: [], velocityLoading: false,
+    yearReport: null, yearReportLoading: false,
+    previousYearReport: null, previousYearReportLoading: false,
+    filterReport: null, filterReportLoading: false,
+    periodOffline: false, periodOfflineSince: null,
+  }),
 }));

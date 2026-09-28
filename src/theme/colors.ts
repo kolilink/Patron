@@ -41,6 +41,45 @@ export const colors = {
     700: '#B91C1C',
   },
 
+  // Founder-only KPI health traffic light (FounderDashboard). Kept separate
+  // from success/warning/danger above rather than reusing their [600]
+  // shades — this is a deliberate, scoped exception to the "no red in
+  // Patron UI" rule (that rule is about merchant-facing screens; this
+  // traffic light is founder-only and the whole point is a real red for a
+  // real critical reading), so it must never bleed into a shared token a
+  // merchant-facing screen might reach for by habit.
+  health: {
+    green:  '#22C55E',
+    yellow: '#EAB308',
+    red:    '#EF4444',
+  },
+
+  // Apports ("Capital investi" + its "Détails" screen) design-spec palette —
+  // exact WCAG-verified pairs from that spec, kept separate from the shared
+  // success/warning/primary/text tokens above rather than overwriting them,
+  // the same reasoning as `health` above: this is a scoped, deliberate look
+  // for two specific screens, not a rebrand of the app's default palette,
+  // and must never bleed into any other screen that reaches for
+  // palette.primary/success/warning by habit.
+  apports: {
+    inkLight: '#1C1C1E', secondaryLight: '#8E8E93', purpleLight: '#6E56CF',
+    greenLight: '#1F7A2E', amberLight: '#96690A', destructiveLight: '#FF3B30', screenLight: '#FFFFFF',
+    inkDark: '#F2F2F7', secondaryDark: '#9A9AA0', purpleDark: '#8E7CFF',
+    greenDark: '#30D158', amberDark: '#F5C044', destructiveDark: '#FF4530', screenDark: '#000000',
+  },
+
+  // Recouvrement (Clients list/detail, repayment sheet) — a deliberate,
+  // scoped exception to the "no red in Patron UI" rule, the same shape as
+  // `health` above: requested explicitly, with exact hex for both modes, for
+  // one specific meaning — money a client still owes the merchant. Kept
+  // separate from the shared danger/success/warning tokens so this doesn't
+  // bleed into any other screen's "error" or "destructive" red by habit.
+  recouvrement: {
+    owedLight: '#B3261E', owedDark: '#FF8A80',
+    paidLight: '#1B7A3D', paidDark: '#7BD88F',
+    pendingLight: '#B26A00', pendingDark: '#FFB74D',
+  },
+
   // Neutrals
   neutral: {
     0: '#FFFFFF',
@@ -125,6 +164,11 @@ export const paletteLight = {
   textDisabled:   colors.neutral[300],
   textInverse:    colors.neutral[0],
 
+  // Reserved for CTA fills, the active/selected state of nav/segmented
+  // controls, and real brand moments (e.g. the Alpha entry point) — not a
+  // generic tint for prices/links/icons. Used that way it stops signaling
+  // anything; reach for textPrimary/textSecondary by default and only use
+  // primary where it's actually interactive or actually the brand.
   primary:        colors.primary[600],
   primaryLight:   colors.primary[50],
   primaryDark:    colors.primary[700],
@@ -135,6 +179,24 @@ export const paletteLight = {
   warningLight:   colors.warning[50],
   danger:         colors.danger[600],
   dangerLight:    colors.danger[50],
+
+  healthGreen:    colors.health.green,
+  healthYellow:   colors.health.yellow,
+  healthRed:      colors.health.red,
+
+  // "Capital investi" + "Détails" only — see colors.apports above.
+  apportsInk:         colors.apports.inkLight,
+  apportsSecondary:   colors.apports.secondaryLight,
+  apportsPurple:      colors.apports.purpleLight,
+  apportsGreen:       colors.apports.greenLight,
+  apportsAmber:       colors.apports.amberLight,
+  apportsDestructive: colors.apports.destructiveLight,
+  apportsScreen:      colors.apports.screenLight,
+
+  // Clients/Recouvrement only — see colors.recouvrement above.
+  recouvrementOwed:    colors.recouvrement.owedLight,
+  recouvrementPaid:    colors.recouvrement.paidLight,
+  recouvrementPending: colors.recouvrement.pendingLight,
 
   tabBar:         colors.neutral[0],
   tabBarBorder:   colors.neutral[200],
@@ -166,6 +228,26 @@ export const paletteDark = {
   danger:         '#F87171',
   dangerLight:    'rgba(248,113,113,0.14)',
 
+  // Same literal hex as light mode, deliberately — a traffic-light color
+  // has to mean the same thing regardless of theme, unlike the softer
+  // success/warning/danger tones above that get dark-mode-adjusted for
+  // surface contrast.
+  healthGreen:    colors.health.green,
+  healthYellow:   colors.health.yellow,
+  healthRed:      colors.health.red,
+
+  apportsInk:         colors.apports.inkDark,
+  apportsSecondary:   colors.apports.secondaryDark,
+  apportsPurple:      colors.apports.purpleDark,
+  apportsGreen:       colors.apports.greenDark,
+  apportsAmber:       colors.apports.amberDark,
+  apportsDestructive: colors.apports.destructiveDark,
+  apportsScreen:      colors.apports.screenDark,
+
+  recouvrementOwed:    colors.recouvrement.owedDark,
+  recouvrementPaid:    colors.recouvrement.paidDark,
+  recouvrementPending: colors.recouvrement.pendingDark,
+
   tabBar:         '#1A1D27',
   tabBarBorder:   'rgba(255,255,255,0.08)',
   tabBarActive:   '#818CF8',
@@ -177,16 +259,21 @@ export type Palette = { readonly [K in keyof typeof paletteLight]: string };
 // Keep static export for legacy imports — always resolves to light; screens use useTheme() for dynamic palette
 export const palette = paletteLight;
 
-// Business drawer avatar palette (8 colors for business-picker circles)
+// Business drawer avatar palette — calm bg/letter pairs (a light tint +
+// a darker letter from the same hue), not a full-saturation fill with white
+// text. Each business keeps one pair everywhere it appears, same
+// deterministic-by-id assignment as before, just quieter. Deliberately 7
+// hues, not 8: red is excluded (this app's standing no-red-in-merchant-UI
+// rule — see CLAUDE.md), and teal was dropped rather than given its own
+// pair because it reads too close to cyan to stay distinct at this size.
 export const BUSINESS_AVATAR_PALETTE = [
-  colors.primary[500],  // indigo
-  colors.violet[500],   // violet
-  colors.pink[400],     // pink
-  colors.warning[500],  // amber
-  colors.emerald[500],  // emerald
-  colors.blue[500],     // blue
-  colors.danger[500],   // red
-  colors.teal[500],     // teal
+  { bg: colors.primary[50],  text: colors.primary[700] },   // indigo
+  { bg: colors.violet[50],   text: colors.violet[700] },    // violet
+  { bg: colors.fuchsia[50],  text: colors.fuchsia[700] },   // fuchsia
+  { bg: colors.warning[50],  text: colors.warning[700] },   // amber
+  { bg: colors.emerald[50],  text: colors.emerald[900] },   // emerald
+  { bg: colors.blue[50],     text: colors.blue[700] },      // blue
+  { bg: colors.cyan[50],     text: colors.cyan[700] },      // cyan
 ] as const;
 
 // Client list avatar palette (pastel bg tints)

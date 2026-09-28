@@ -200,7 +200,7 @@ export default function RecuperationScreen() {
   return (
     <Screen>
       <KeyboardAvoidingView
-        behavior={Platform.OS === 'ios' ? 'padding' : 'height'}
+        behavior={Platform.OS === 'ios' ? 'padding' : undefined}
         style={styles.kav}
       >
         <View style={styles.content}>
@@ -278,7 +278,7 @@ export default function RecuperationScreen() {
 function makeStyles(p: Palette) {
   return StyleSheet.create({
     safe: { flex: 1, backgroundColor: p.background },
-    kav: { flex: 1 },
+    kav: { flex: 1, backgroundColor: p.background },
     content: { flex: 1, padding: spacing[6], gap: spacing[8], justifyContent: 'center' },
     header: { gap: spacing[3] },
     back: { alignSelf: 'flex-start', marginBottom: spacing[1] },

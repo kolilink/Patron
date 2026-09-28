@@ -1,45 +1,65 @@
 import React, { useCallback, useEffect, useMemo, useRef, useState } from 'react';
-import { router, useFocusEffect } from 'expo-router';
+import { router, useFocusEffect, useLocalSearchParams } from 'expo-router';
 import {
   Alert,
   Animated,
   Easing,
   FlatList,
+  InputAccessoryView,
   Keyboard,
   KeyboardAvoidingView,
   Modal,
   Platform,
   Pressable,
   ScrollView,
+  StyleProp,
   StyleSheet,
   TextInput,
   View,
+  ViewStyle,
 } from 'react-native';
 import { captureRef } from 'react-native-view-shot';
 import * as Sharing from 'expo-sharing';
-import { SafeAreaView } from 'react-native-safe-area-context';
+import { useSafeAreaInsets } from 'react-native-safe-area-context';
 import { Screen } from '@/src/components/ui/Screen';
+import { FormSheet } from '@/src/components/ui/FormSheet';
 import { Ionicons } from '@expo/vector-icons';
 import { Button } from '@/src/components/ui/Button';
+import { NoResultsState } from '@/src/components/ui/NoResultsState';
 import { Card } from '@/src/components/ui/Card';
 import { Input } from '@/src/components/ui/Input';
 import { Text } from '@/src/components/ui/Text';
 import { PhoneInput } from '@/src/components/ui/PhoneInput';
 import { SaleReceiptView, type ReceiptData, type ReceiptItem } from '@/src/components/ui/SaleReceiptView';
-import { DatePickerField } from '@/src/components/ui/DatePickerField';
-import { useTheme, radius, spacing, CLIENT_AVATAR_PALETTE } from '@/src/theme';
+import { useTheme, radius, spacing, shadow, fontFamily, FLOATING_TAB_BAR_CLEARANCE, CLIENT_AVATAR_PALETTE, SEARCH_VISIBILITY_THRESHOLD } from '@/src/theme';
+import { useAnimateLayoutChange } from '@/src/hooks/useAnimateLayoutChange';
+import { useQuickClients } from '@/src/hooks/useQuickClients';
+import { CreditRapideCapture } from '@/src/components/CreditRapideCapture';
+import { QuickCaptureSheet } from '@/src/components/QuickCaptureSheet';
 import type { Palette } from '@/src/theme';
 import { formatAmount, formatAmountInput, parseAmountInput } from '@/src/utils/format';
 import { todayIso } from '@/src/utils/dates';
 import type { Product, ProductVariant } from '@/src/types';
 import { useAuthStore } from '@/stores/auth';
 import { useProductStore } from '@/stores/products';
+import { OfflineNotice } from '@/src/components/ui/OfflineNotice';
 import type { CartLine, SalePayment } from '@/stores/sales';
 import { useSalesStore } from '@/stores/sales';
+import { useVentesStore } from '@/stores/ventes';
 import { supabase } from '@/lib/supabase';
+import { getKV, setKV } from '@/lib/db';
 import { haptics } from '@/lib/haptics';
+import { toast } from '@/stores/toast';
 import { SkeletonList } from '@/src/components/ui/SkeletonPlaceholder';
 import { trackEvent } from '@/lib/analytics';
+
+// Product tiles show the bare number — the currency is declared once above
+// the grid instead of repeated on every card. Reuses formatAmount's own
+// locale-correct number formatting (it always ends in " " + currency)
+// rather than duplicating its whole-unit-vs-decimal currency branching here.
+function formatPriceValue(amount: number, currency: string) {
+  return formatAmount(amount, currency).slice(0, -(currency.length + 1));
+}
 
 function useCountUp(target: number, duration = 150): number {
   const [display, setDisplay] = useState(target);
@@ -65,18 +85,6 @@ function useCountUp(target: number, duration = 150): number {
   return display;
 }
 
-function toISO(d: Date): string {
-  return `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, '0')}-${String(d.getDate()).padStart(2, '0')}`;
-}
-
-function fmtDue(iso: string): string {
-  const d = new Date(iso + 'T00:00:00');
-  const diff = Math.round((d.getTime() - Date.now()) / 86400000);
-  if (diff < 0) return `En retard de ${Math.abs(diff)} j`;
-  if (diff === 0) return "Prévu aujourd'hui";
-  return `Prévu le ${d.toLocaleDateString('fr-FR', { day: 'numeric', month: 'long' })}`;
-}
-
 // Final payment methods: Wave removed.
 // 'mtn' is labeled "Mobile Money" in the UI (consolidates old mtn/moov).
 const PAY_NOW_METHODS = [
@@ -85,6 +93,67 @@ const PAY_NOW_METHODS = [
   { key: 'mtn' as const, label: 'Mobile Money' },
   { key: 'digital' as const, label: 'Autre' },
 ];
+
+// The cart panel's own quick-checkout chips — deliberately a narrower list
+// than PAY_NOW_METHODS (no "Autre"): this row exists so the merchant can see
+// and correct the assumed payment method before a one-tap "Encaisser"
+// submits directly, and "Autre" has no natural pre-selected meaning to
+// default to. A sale actually paid by some other means still reaches
+// PaymentModal via "ou enregistrer à crédit" → the Vente step there, which
+// keeps every PAY_NOW_METHODS option including Autre.
+const QUICK_PAY_METHODS = PAY_NOW_METHODS.filter(m => m.key !== 'digital');
+
+// On-device rolling history of the last N quick-checkout payment methods,
+// per business — used purely to pick which chip is pre-selected. Local and
+// per-device on purpose: no new RPC/migration needed, and it's cheap to get
+// this slightly wrong (worst case, the merchant taps a different chip once).
+// A single business with multiple staff phones could see each device settle
+// on a different default — acceptable for now; making it consistent across
+// devices would mean reading real `payments` history server-side instead,
+// a real but separate upgrade if this ever needs it.
+const QUICK_PAY_HISTORY_LEN = 20;
+function quickPayHistoryKey(businessId: string) {
+  return `quick_pay_history_${businessId}`;
+}
+async function loadDefaultQuickPayMethod(businessId: string): Promise<'especes' | 'orange' | 'mtn'> {
+  try {
+    const raw = await getKV(quickPayHistoryKey(businessId));
+    const history: string[] = raw ? JSON.parse(raw) : [];
+    if (history.length === 0) return 'especes';
+    const counts = new Map<string, number>();
+    for (const m of history) counts.set(m, (counts.get(m) ?? 0) + 1);
+    let best: string = 'especes';
+    let bestCount = 0;
+    for (const [m, c] of counts) if (c > bestCount) { best = m; bestCount = c; }
+    return (best === 'orange' || best === 'mtn') ? best : 'especes';
+  } catch {
+    return 'especes';
+  }
+}
+async function recordQuickPayMethodUsed(businessId: string, method: string) {
+  try {
+    const raw = await getKV(quickPayHistoryKey(businessId));
+    const history: string[] = raw ? JSON.parse(raw) : [];
+    history.push(method);
+    await setKV(quickPayHistoryKey(businessId), JSON.stringify(history.slice(-QUICK_PAY_HISTORY_LEN)));
+  } catch {
+    // Best-effort — a failed write just means the default doesn't adapt this
+    // time, never something the merchant needs to see or retry.
+  }
+}
+
+// iOS-only: number-pad/decimal-pad keyboards have no built-in return key, so
+// the OS auto-injects its own floating "Done" pill unless something else
+// claims that accessory slot. Every numeric field below already sits next to
+// a persistent, always-visible action button (the cart's "Encaisser", the
+// credit form's "Ajouter", the variant sheet's "Confirmer", the payment
+// modal's confirm button) — a keyboard "Done" would just repeat it, so these
+// are blank/linked accessories that suppress the OS pill without showing
+// anything. Each Modal/screen needs its own, since InputAccessoryView must
+// live in the same native window as the field referencing it.
+const VENDRE_SILENT_ACCESSORY_ID = 'vendre-screen-silent-accessory';
+const VARIANT_SHEET_SILENT_ACCESSORY_ID = 'vendre-variant-sheet-silent-accessory';
+const PAYMENT_SILENT_ACCESSORY_ID = 'vendre-payment-modal-silent-accessory';
 
 // ─── Cart line row ────────────────────────────────────────────────────────────
 
@@ -131,7 +200,7 @@ function CartRow({ line, currency, onInc, onDec, onRemove, onToggleBulk, onSetQt
           </Text>
           {hasBulk && (
             <Pressable onPress={onToggleBulk} style={[styles.bulkToggle, line.is_bulk && styles.bulkToggleActive]}>
-              <Text variant="caption" style={{ color: line.is_bulk ? palette.textInverse : palette.textSecondary, fontWeight: '700' }}>
+              <Text variant="caption" style={{ color: line.is_bulk ? palette.textInverse : palette.textSecondary, fontFamily: fontFamily.bold }}>
                 {line.is_bulk ? 'GROS' : 'DÉTAIL'}
               </Text>
             </Pressable>
@@ -153,6 +222,7 @@ function CartRow({ line, currency, onInc, onDec, onRemove, onToggleBulk, onSetQt
             keyboardType="number-pad"
             selectTextOnFocus
             returnKeyType="done"
+            inputAccessoryViewID={Platform.OS === 'ios' ? VENDRE_SILENT_ACCESSORY_ID : undefined}
           />
         ) : (
           <Pressable onPress={startEdit} style={styles.qtyNumPress}>
@@ -218,8 +288,6 @@ function PaymentModal({
   const [showNewClientForm, setShowNewClientForm] = useState(false);
   const [newClientName, setNewClientName] = useState('');
   const [newClientPhone, setNewClientPhone] = useState('');
-  const [dueDatePill, setDueDatePill] = useState<'1w' | '1m' | 'custom' | null>(null);
-  const [customDueDateInput, setCustomDueDateInput] = useState('');
   const clientSearchRef = useRef<TextInput>(null);
   const modalScrollRef = useRef<ScrollView>(null);
   // Clients are only needed once the user opens the client section (credit
@@ -227,6 +295,27 @@ function PaymentModal({
   // so fetching them unconditionally on every modal open wastes two Supabase
   // round trips on the hottest screen in the app.
   const clientsLoadedRef = useRef(false);
+
+  // ── "Ou enregistrer à crédit" flow — Qui first, terms second ──────────
+  // Deliberately its own state, not sharing showClientSection/clients above
+  // (that older shared section is only ever reached today via step==='pay''s
+  // short-payment "Un crédit" disambiguation — no call site opens this modal
+  // with initialStep 'pay' any more since handleQuickEncaisser bypasses it
+  // entirely, but it's left untouched rather than assumed dead). "client" is
+  // always the first phase on a fresh open, matching the design brief's
+  // three-tap target: pick a client, read the agreement, confirm.
+  type CreditPhase = 'client' | 'newClient' | 'terms';
+  const [creditPhase, setCreditPhase] = useState<CreditPhase>('client');
+  const [creditSearch, setCreditSearch] = useState('');
+  const [creditNewName, setCreditNewName] = useState('');
+  const [creditNewPhone, setCreditNewPhone] = useState('');
+  // Collapsed by default — "the values exist in the model but do not occupy
+  // the screen until changed." A plain boolean per row, not a shared
+  // "which row is open" enum, since both can legitimately be open together
+  // (a discounted item paid partially up front).
+  const [showUpfrontRow, setShowUpfrontRow] = useState(false);
+  const [showDiscountRow, setShowDiscountRow] = useState(false);
+  const { clients: quickClients } = useQuickClients(businessId, visible);
 
   useEffect(() => {
     if (visible) {
@@ -245,8 +334,12 @@ function PaymentModal({
       setShowNewClientForm(false);
       setNewClientName('');
       setNewClientPhone('');
-      setDueDatePill(null);
-      setCustomDueDateInput('');
+      setCreditPhase('client');
+      setCreditSearch('');
+      setCreditNewName('');
+      setCreditNewPhone('');
+      setShowUpfrontRow(false);
+      setShowDiscountRow(false);
       clientsLoadedRef.current = false;
     }
   }, [visible, initialStep, total]);
@@ -293,10 +386,10 @@ function PaymentModal({
     }
   }, [showClientSection]);
 
-  useEffect(() => {
-    if (step === 'credit' && visible && !clientName) setShowClientSection(true);
-  }, [step]);
-
+  // step === 'credit' no longer auto-opens this shared section — the
+  // dedicated creditPhase machinery above owns client selection for that
+  // step now. This section is only ever driven by step==='pay''s own
+  // short-payment "Un crédit" disambiguation below.
   useEffect(() => {
     if (disambig === 'credit' && !clientName) setShowClientSection(true);
   }, [disambig]);
@@ -325,6 +418,94 @@ function PaymentModal({
     handleSelectClient(name, phone, data?.id ?? undefined);
   };
 
+  // "Qui" phase — recognition before recall (useQuickClients ranks by
+  // recency), search-first, creation as the fallback.
+  const filteredQuickClients = useMemo(() => {
+    const q = creditSearch.toLowerCase().trim();
+    if (!q) return quickClients;
+    return quickClients.filter(c => c.name.toLowerCase().includes(q) || (c.phone ?? '').includes(q));
+  }, [quickClients, creditSearch]);
+
+  // Per-client outstanding credit, so the picker's row subtitle can say
+  // "doit X USD" instead of showing a raw phone number — a debt status is
+  // what a vendor mid-conversation actually needs to recognize a client by,
+  // not a number they'd have to cross-reference. Batched once per picker
+  // open (one query for every open credit order + one for their payments),
+  // not per-row, to avoid an N+1 fetch across the recents list. There is no
+  // "avance" (client credit-in-their-favor) concept anywhere in this app's
+  // data model yet — that subtitle case has nothing to compute from today.
+  const [clientDebtMap, setClientDebtMap] = useState<Record<string, number>>({});
+  useEffect(() => {
+    if (!(step === 'credit' && creditPhase === 'client')) return;
+    let cancelled = false;
+    (async () => {
+      const { data: orders } = await supabase
+        .from('sale_orders')
+        .select('id, client_id, total_amount, discount_amount')
+        .eq('business_id', businessId)
+        .eq('status', 'credit')
+        .not('client_id', 'is', null);
+      if (!orders?.length) { if (!cancelled) setClientDebtMap({}); return; }
+      const orderIds = orders.map((o: { id: string }) => o.id);
+      const { data: pays } = await supabase
+        .from('payments')
+        .select('order_id, amount')
+        .in('order_id', orderIds);
+      if (cancelled) return;
+      const paidByOrder: Record<string, number> = {};
+      for (const p of (pays ?? []) as { order_id: string; amount: number }[]) {
+        paidByOrder[p.order_id] = (paidByOrder[p.order_id] ?? 0) + p.amount;
+      }
+      const debtByClient: Record<string, number> = {};
+      for (const o of orders as { id: string; client_id: string; total_amount: number; discount_amount: number | null }[]) {
+        const remaining = o.total_amount - (o.discount_amount ?? 0) - (paidByOrder[o.id] ?? 0);
+        if (remaining > 0.5) debtByClient[o.client_id] = (debtByClient[o.client_id] ?? 0) + remaining;
+      }
+      setClientDebtMap(debtByClient);
+    })();
+    return () => { cancelled = true; };
+  }, [step, creditPhase, businessId]);
+
+  const creditClientSubtitle = (clientId?: string): { text: string; color: string } => {
+    const debtCents = clientId ? clientDebtMap[clientId] : undefined;
+    if (debtCents && debtCents > 0.5) {
+      return { text: `doit ${formatAmount(debtCents / 100, currency)}`, color: palette.warning };
+    }
+    return { text: 'rien en cours', color: palette.textSecondary };
+  };
+
+  const handleCreditSelectClient = (name: string, phone?: string | null, id?: string) => {
+    setClientName(name);
+    setClientPhone(phone ?? '');
+    setClientId(id);
+    setCreditPhase('terms');
+    setCreditSearch('');
+    Keyboard.dismiss();
+  };
+
+  const handleCreditAddNewClient = async () => {
+    if (!creditNewName.trim()) return;
+    const name = creditNewName.trim();
+    const phone = creditNewPhone || null;
+    const { data } = await supabase.from('clients').upsert(
+      { business_id: businessId, name, phone },
+      { onConflict: 'business_id,name' },
+    ).select('id').single();
+    handleCreditSelectClient(name, phone, data?.id ?? undefined);
+  };
+
+  // Back button is phase-aware — "Retour" from a fresh "Choisir le client"
+  // closes the whole flow, but from "Changer de client" (reached mid-flow,
+  // a client already exists) it should return to the agreement instead of
+  // discarding it. Distinguishing the two by whether a client is already
+  // set avoids needing a third piece of state just to remember how we got
+  // to the client list.
+  const handleCreditBack = () => {
+    if (creditPhase === 'newClient') { setCreditPhase('client'); return; }
+    if (creditPhase === 'client' && clientName.trim().length > 0) { setCreditPhase('terms'); return; }
+    onClose();
+  };
+
   const parsedAmount = parseAmountInput(amountInput, currency);
   const shortfall = total - parsedAmount;
   const isShort = shortfall > 0.5;
@@ -333,12 +514,19 @@ function PaymentModal({
   const creditUpfront  = parseAmountInput(creditUpfrontInput, currency);
   const creditEffectiveTotal = total - creditDiscount;
   const creditUpfrontCoversAll = creditUpfront >= creditEffectiveTotal - 0.01 && creditUpfront > 0;
+  const creditRemaining = Math.max(0, creditEffectiveTotal - creditUpfront);
 
-  const computedDueDate: string | null = (() => {
-    if (dueDatePill === '1w') { const d = new Date(); d.setDate(d.getDate() + 7); return toISO(d); }
-    if (dueDatePill === '1m') { const d = new Date(); d.setMonth(d.getMonth() + 1); return toISO(d); }
-    if (dueDatePill === 'custom') return customDueDateInput || null;
-    return null;
+  // "The interface repeats the real-world agreement: person, amount." No
+  // due date in the sentence — this flow doesn't collect a repayment term.
+  const creditSentence = (() => {
+    const name = clientName.trim() || 'Le client';
+    if (creditUpfront > 0 && !creditUpfrontCoversAll) {
+      return `${name} paie ${formatAmount(creditUpfront, currency)} maintenant et te devra ${formatAmount(creditRemaining, currency)}.`;
+    }
+    if (creditUpfrontCoversAll) {
+      return `${name} paie ${formatAmount(creditUpfront, currency)} maintenant.`;
+    }
+    return `${name} te devra ${formatAmount(creditRemaining, currency)}.`;
   })();
 
   const handleAmountChange = (val: string) => {
@@ -358,95 +546,237 @@ function PaymentModal({
 
   const handleConfirmCredit = () => {
     const disc = creditDiscount > 0 ? creditDiscount : undefined;
-    const dueDate = creditUpfrontCoversAll ? null : computedDueDate;
     if (creditUpfront > 0) {
       const payment: SalePayment = { method: creditPayMethod, amount: creditUpfront };
-      onConfirm(payment, clientName.trim() || undefined, disc, clientId, dueDate);
+      onConfirm(payment, clientName.trim() || undefined, disc, clientId, null);
     } else {
-      onConfirm(null, clientName.trim() || undefined, disc, clientId, dueDate);
+      onConfirm(null, clientName.trim() || undefined, disc, clientId, null);
     }
   };
 
   return (
-    <Modal visible={visible} animationType="slide" presentationStyle="formSheet" onRequestClose={onClose}>
-      <SafeAreaView style={styles.modalSafe} edges={['bottom']}>
-
-        {/* Header */}
-        <View style={styles.modalHeader}>
-          <Pressable onPress={onClose} style={styles.modalCancel}>
-            <Text variant="body" color="secondary">Retour</Text>
-          </Pressable>
-          <Text variant="h4">{step === 'credit' ? 'Vente à crédit' : 'Paiement'}</Text>
-          <View style={{ width: 64 }} />
+    <FormSheet
+      ref={modalScrollRef}
+      visible={visible}
+      onClose={step === 'credit' ? handleCreditBack : onClose}
+      title={step === 'credit'
+        ? (creditPhase === 'client' ? 'Choisir le client' : creditPhase === 'newClient' ? 'Nouveau client' : 'Vente à crédit')
+        : 'Paiement'}
+      cancelLabel="Retour"
+      presentationStyle="formSheet"
+      // flexGrow lets the zero-clients empty state below center itself
+      // vertically in the available space — a no-op for every other phase,
+      // whose content already exceeds the viewport.
+      contentContainerStyle={{ paddingBottom: spacing[6], flexGrow: 1 }}
+      footer={
+        step === 'credit' && creditPhase === 'client' ? undefined : (
+        <View style={styles.modalFooter}>
+          {step === 'credit' && creditPhase === 'newClient' ? (
+            <Button
+              label="Ajouter et continuer"
+              onPress={handleCreditAddNewClient}
+              fullWidth
+              size="lg"
+              disabled={!creditNewName.trim()}
+            />
+          ) : showNewClientForm ? (
+            <Button
+              label="Ajouter ce client"
+              onPress={handleAddNewClient}
+              fullWidth
+              size="lg"
+              disabled={!newClientName.trim()}
+            />
+          ) : (
+            <Button
+              label={submitting ? 'Enregistrement…' : (step === 'credit' ? (creditUpfrontCoversAll ? 'Enregistrer la vente' : 'Enregistrer le crédit') : 'Confirmer la vente')}
+              onPress={step === 'credit' ? handleConfirmCredit : handleConfirmPay}
+              loading={submitting}
+              fullWidth
+              size="lg"
+              disabled={step === 'credit' ? !canConfirmCredit : !canConfirmPay}
+            />
+          )}
         </View>
-
-        <KeyboardAvoidingView
-          behavior={Platform.OS === 'ios' ? 'padding' : 'height'}
-          style={{ flex: 1 }}
-          keyboardVerticalOffset={Platform.OS === 'ios' ? 44 : 0}
-        >
-          {/* Single scroll for all content — keyboard pushes footer up, scroll handles the rest */}
-          <ScrollView
-            ref={modalScrollRef}
-            style={{ flex: 1 }}
-            contentContainerStyle={{ paddingBottom: spacing[6] }}
-            keyboardShouldPersistTaps="handled"
-            showsVerticalScrollIndicator={false}
-          >
-          <View style={styles.totalSection}>
-            <Text variant="caption" color="secondary" style={{ textAlign: 'center' }}>
-              {step === 'credit' && (creditDiscount > 0 || creditUpfront > 0) ? 'Reste à payer' : 'Total'}
-            </Text>
-            <Text
-              style={[styles.totalBig, { color: step === 'credit' ? palette.warning : palette.primary, textAlign: 'center' }]}
-              adjustsFontSizeToFit
-              numberOfLines={1}
-            >
-              {formatAmount(step === 'credit' ? Math.max(0, creditEffectiveTotal - creditUpfront) : total, currency)}
-            </Text>
-            {step === 'credit' && creditDiscount > 0 && (
-              <Text variant="caption" color="secondary" style={{ textAlign: 'center' }}>
-                Réduction de {formatAmount(creditDiscount, currency)} appliquée
+        )
+      }
+      accessory={
+        Platform.OS === 'ios' ? (
+          <InputAccessoryView nativeID={PAYMENT_SILENT_ACCESSORY_ID}>
+            <View style={{ height: 0 }} />
+          </InputAccessoryView>
+        ) : undefined
+      }
+    >
+          {step === 'credit' && creditPhase === 'terms' && (
+            <View style={styles.totalSection}>
+              <Text variant="caption" color="secondary" style={{ textAlign: 'center' }}>Il devra</Text>
+              <Text
+                style={[styles.totalBig, { color: palette.warning, textAlign: 'center' }]}
+                adjustsFontSizeToFit
+                numberOfLines={1}
+              >
+                {formatAmount(creditRemaining, currency)}
               </Text>
-            )}
-          </View>
+            </View>
+          )}
+          {step === 'pay' && (
+            <View style={styles.totalSection}>
+              <Text variant="caption" color="secondary" style={{ textAlign: 'center' }}>Total</Text>
+              <Text
+                style={[styles.totalBig, { color: palette.primary, textAlign: 'center' }]}
+                adjustsFontSizeToFit
+                numberOfLines={1}
+              >
+                {formatAmount(total, currency)}
+              </Text>
+            </View>
+          )}
 
-          {step === 'credit' && !showClientSection && (
+          {/* ── Credit, phase "client": one search field, rendered once,
+              never auto-focused (the common case is tapping a recent client
+              — opening the keyboard on load would hide that list and cost
+              an extra dismiss). Search empty → recents + one "Nouveau
+              client" row at the bottom. Typing with matches → just the
+              matches. Typing with no match → one "Créer « … »" row, search
+              and create collapsed into a single gesture. ── */}
+          {/* Two distinct states, not variations of one: hasNoClientsAtAll
+              (no search field, no "Clients récents" header — both are false
+              affordances when there's nothing to search or list) vs.
+              searchHasNoMatch (handled further below, inside the populated
+              branch). */}
+          {step === 'credit' && creditPhase === 'client' && quickClients.length === 0 && (
+            <View style={styles.creditEmptyClients}>
+              <View style={styles.creditEmptyIconWrap}>
+                <Ionicons name="person-add-outline" size={28} color={palette.textSecondary} />
+              </View>
+              <Text variant="h4" style={{ textAlign: 'center' }}>Aucun client pour le moment.</Text>
+              <Text variant="body" color="secondary" style={{ textAlign: 'center' }}>
+                Ici, vous verrez qui vous doit de l'argent.
+              </Text>
+              <Button
+                label="+ Nouveau client"
+                onPress={() => setCreditPhase('newClient')}
+                fullWidth
+                size="lg"
+                style={{ marginTop: spacing[3], alignSelf: 'stretch' }}
+              />
+            </View>
+          )}
+
+          {step === 'credit' && creditPhase === 'client' && quickClients.length > 0 && (
             <View style={styles.payContent}>
-              {/* Discount */}
-              <View style={{ gap: spacing[2] }}>
-                <Text variant="label" style={styles.sectionLabel}>Réduction</Text>
+              <View style={styles.clientSearchRow}>
                 <TextInput
-                  style={styles.amountBigInput}
-                  value={creditDiscountInput}
-                  onChangeText={v => setCreditDiscountInput(formatAmountInput(v, currency))}
-                  keyboardType="decimal-pad"
+                  value={creditSearch}
+                  onChangeText={setCreditSearch}
+                  placeholder="Rechercher un client…"
                   placeholderTextColor={palette.textDisabled}
-                  selectTextOnFocus
+                  style={styles.clientSearchInput}
+                  returnKeyType="search"
+                  clearButtonMode="while-editing"
                 />
               </View>
 
-              {/* Upfront payment */}
-              <View style={{ gap: spacing[2] }}>
-                <Text variant="label" style={styles.sectionLabel}>Payé maintenant</Text>
-                <TextInput
-                  style={styles.amountBigInput}
-                  value={creditUpfrontInput}
-                  onChangeText={v => setCreditUpfrontInput(formatAmountInput(v, currency))}
-                  keyboardType="decimal-pad"
-                  placeholderTextColor={palette.textDisabled}
-                  selectTextOnFocus
-                />
-              </View>
-
-              {/* Show remaining only when upfront > 0 */}
-              {creditUpfront > 0 && !creditUpfrontCoversAll && (
-                <View style={[styles.disambigBox, { backgroundColor: palette.warningLight, borderColor: palette.warning }]}>
-                  <Text variant="label" style={{ color: palette.warning }}>
-                    Reste à payer : {formatAmount(Math.max(0, creditEffectiveTotal - creditUpfront), currency)}
+              {creditSearch.trim().length === 0 ? (
+                <>
+                  <Text variant="caption" color="secondary" style={{ paddingHorizontal: spacing[2], paddingTop: spacing[2] }}>
+                    Clients récents
                   </Text>
-                </View>
+                  {quickClients.map(c => {
+                    const sum = c.name ? c.name.split('').reduce((acc, ch) => acc + ch.charCodeAt(0), 0) : 0;
+                    const avatarBg = CLIENT_AVATAR_PALETTE[sum % CLIENT_AVATAR_PALETTE.length];
+                    const initial = c.name ? c.name.charAt(0).toUpperCase() : '?';
+                    const subtitle = creditClientSubtitle(c.id);
+                    return (
+                      <Pressable
+                        key={c.id ?? c.name}
+                        onPress={() => handleCreditSelectClient(c.name, c.phone, c.id)}
+                        style={({ pressed }) => [styles.clientResultRow, pressed && { opacity: 0.55 }]}
+                      >
+                        <View style={[styles.clientAvatar, { backgroundColor: avatarBg }]}>
+                          <Text allowFontScaling={false} style={styles.clientAvatarText}>{initial}</Text>
+                        </View>
+                        <View style={{ flex: 1 }}>
+                          <Text variant="body">{c.name}</Text>
+                          <Text variant="caption" style={{ color: subtitle.color }}>{subtitle.text}</Text>
+                        </View>
+                        <Ionicons name="chevron-forward" size={16} color={palette.textDisabled} />
+                      </Pressable>
+                    );
+                  })}
+                  <Pressable
+                    onPress={() => setCreditPhase('newClient')}
+                    style={({ pressed }) => [styles.clientResultRow, styles.clientResultRowNew, pressed && { opacity: 0.55 }]}
+                  >
+                    <Ionicons name="add-circle-outline" size={16} color={palette.primary} />
+                    <Text variant="body" style={{ color: palette.primary, fontFamily: fontFamily.semibold }}>Nouveau client</Text>
+                  </Pressable>
+                </>
+              ) : filteredQuickClients.length > 0 ? (
+                filteredQuickClients.map(c => {
+                  const sum = c.name ? c.name.split('').reduce((acc, ch) => acc + ch.charCodeAt(0), 0) : 0;
+                  const avatarBg = CLIENT_AVATAR_PALETTE[sum % CLIENT_AVATAR_PALETTE.length];
+                  const initial = c.name ? c.name.charAt(0).toUpperCase() : '?';
+                  const subtitle = creditClientSubtitle(c.id);
+                  return (
+                    <Pressable
+                      key={c.id ?? c.name}
+                      onPress={() => handleCreditSelectClient(c.name, c.phone, c.id)}
+                      style={({ pressed }) => [styles.clientResultRow, pressed && { opacity: 0.55 }]}
+                    >
+                      <View style={[styles.clientAvatar, { backgroundColor: avatarBg }]}>
+                        <Text allowFontScaling={false} style={styles.clientAvatarText}>{initial}</Text>
+                      </View>
+                      <View style={{ flex: 1 }}>
+                        <Text variant="body">{c.name}</Text>
+                        <Text variant="caption" style={{ color: subtitle.color }}>{subtitle.text}</Text>
+                      </View>
+                      <Ionicons name="chevron-forward" size={16} color={palette.textDisabled} />
+                    </Pressable>
+                  );
+                })
+              ) : (
+                <Pressable
+                  onPress={() => { setCreditNewName(creditSearch.trim()); setCreditPhase('newClient'); }}
+                  style={({ pressed }) => [styles.clientResultRow, styles.clientResultRowNew, pressed && { opacity: 0.55 }]}
+                >
+                  <Ionicons name="add-circle-outline" size={16} color={palette.primary} />
+                  <Text variant="body" style={{ color: palette.primary, fontFamily: fontFamily.semibold }}>
+                    Créer « {creditSearch.trim()} » comme nouveau client
+                  </Text>
+                </Pressable>
               )}
+            </View>
+          )}
+
+          {/* ── Credit, phase "newClient": name only required, phone
+              optional, +224 Guinea default (PhoneInput's own fallback). ── */}
+          {step === 'credit' && creditPhase === 'newClient' && (
+            <View style={[styles.payContent, { gap: spacing[5] }]}>
+              <Input
+                label="Nom"
+                value={creditNewName}
+                onChangeText={setCreditNewName}
+                placeholder="Mamadou Diallo"
+                autoFocus
+              />
+              <PhoneInput
+                label="Téléphone (optionnel)"
+                onChange={setCreditNewPhone}
+                strict={false}
+              />
+            </View>
+          )}
+
+          {/* ── Credit, phase "terms": the agreement, not a form. Discount
+              and partial payment are collapsed rows — "the values exist in
+              the model but do not occupy the screen until changed." ── */}
+          {step === 'credit' && creditPhase === 'terms' && (
+            <View style={styles.payContent}>
+              <View style={styles.creditSentenceBox}>
+                <Text variant="label" style={{ lineHeight: 20 }}>{creditSentence}</Text>
+              </View>
 
               {creditUpfrontCoversAll && (
                 <View style={styles.warnRow}>
@@ -456,88 +786,102 @@ function PaymentModal({
                 </View>
               )}
 
-              {/* Payment method — only when upfront entered */}
-              {creditUpfront > 0 && (
-                <View style={styles.methodSection}>
-                  <Text variant="label" style={[styles.sectionLabel, { marginBottom: spacing[2] }]}>Payé en</Text>
-                  <View style={styles.methodGrid}>
-                    {PAY_NOW_METHODS.map(m => (
-                      <Pressable key={m.key} onPress={() => setCreditPayMethod(m.key)}
-                        style={[styles.methodChip, creditPayMethod === m.key && styles.methodChipActive]}>
-                        <Text variant="label" style={{
-                          color: creditPayMethod === m.key ? palette.textInverse : palette.textSecondary,
-                          textAlign: 'center', fontSize: 13,
-                          opacity: creditPayMethod === m.key ? 1 : 0.45,
-                        }}>
-                          {m.label}
-                        </Text>
-                      </Pressable>
-                    ))}
-                  </View>
-                </View>
-              )}
-
-              {/* Due date — optional, only when it's an actual credit */}
-              {!creditUpfrontCoversAll && (
-                <View style={{ gap: spacing[2] }}>
-                  <View style={{ flexDirection: 'row', alignItems: 'center', gap: spacing[2] }}>
-                    <Text variant="label" style={styles.sectionLabel}>Remboursement prévu ?</Text>
-                    <Text variant="caption" style={{ color: palette.textSecondary }}>(optionnel)</Text>
-                  </View>
-                  <View style={styles.methodGrid}>
-                    {(['1w', '1m', 'custom'] as const).map(pill => (
-                      <Pressable
-                        key={pill}
-                        onPress={() => {
-                          haptics.tap();
-                          const next = dueDatePill === pill ? null : pill;
-                          setDueDatePill(next);
-                          if (pill === 'custom' && next === 'custom' && !customDueDateInput) {
-                            const d = new Date(); d.setMonth(d.getMonth() + 1);
-                            setCustomDueDateInput(toISO(d));
-                          }
-                        }}
-                        style={[styles.methodChip, dueDatePill === pill && styles.methodChipActive]}
-                      >
-                        <Text variant="label" style={{
-                          color: dueDatePill === pill ? palette.textInverse : palette.textSecondary,
-                          textAlign: 'center', fontSize: 13,
-                          opacity: dueDatePill === pill ? 1 : 0.45,
-                        }}>
-                          {pill === '1w' ? '1 semaine' : pill === '1m' ? '1 mois' : 'Choisir'}
-                        </Text>
-                      </Pressable>
-                    ))}
-                  </View>
-                  {dueDatePill === 'custom' && (
-                    <DatePickerField
-                      value={customDueDateInput}
-                      onChange={setCustomDueDateInput}
-                      minDate={toISO(new Date())}
-                    />
+              <Pressable onPress={() => setShowUpfrontRow(v => !v)} style={styles.creditCollapsedRow}>
+                <Text variant="body">Encaisser une partie</Text>
+                <View style={{ flexDirection: 'row', alignItems: 'center', gap: spacing[2] }}>
+                  {creditUpfront > 0 && (
+                    <Text variant="body" color="secondary">{formatAmount(creditUpfront, currency)}</Text>
                   )}
-                  {computedDueDate !== null && (
-                    <View style={{ flexDirection: 'row', alignItems: 'center', gap: spacing[2] }}>
-                      <Text variant="caption" style={{ color: palette.success }}>
-                        ✓ {fmtDue(computedDueDate)}
-                      </Text>
-                      <Pressable
-                        onPress={() => { setDueDatePill(null); setCustomDueDateInput(''); }}
-                        hitSlop={8}
-                      >
-                        <Text variant="caption" style={{ color: palette.textSecondary }}>✕</Text>
-                      </Pressable>
+                  <Ionicons
+                    name={creditUpfront > 0 ? 'chevron-forward' : 'add'}
+                    size={18}
+                    color={creditUpfront > 0 ? palette.primary : palette.textSecondary}
+                  />
+                </View>
+              </Pressable>
+              {showUpfrontRow && (
+                <View style={{ gap: spacing[3] }}>
+                  <TextInput
+                    style={styles.amountBigInput}
+                    value={creditUpfrontInput}
+                    onChangeText={v => setCreditUpfrontInput(formatAmountInput(v, currency))}
+                    keyboardType="decimal-pad"
+                    placeholder="0"
+                    placeholderTextColor={palette.textDisabled}
+                    selectTextOnFocus
+                    autoFocus
+                    inputAccessoryViewID={Platform.OS === 'ios' ? PAYMENT_SILENT_ACCESSORY_ID : undefined}
+                  />
+                  {creditUpfront > 0 && (
+                    <View style={styles.methodGrid}>
+                      {PAY_NOW_METHODS.map(m => (
+                        <Pressable key={m.key} onPress={() => setCreditPayMethod(m.key)}
+                          style={[styles.methodChip, creditPayMethod === m.key && styles.methodChipActive]}>
+                          <Text variant="label" style={{
+                            color: creditPayMethod === m.key ? palette.textInverse : palette.textSecondary,
+                            textAlign: 'center', fontSize: 13,
+                            opacity: creditPayMethod === m.key ? 1 : 0.45,
+                          }}>
+                            {m.label}
+                          </Text>
+                        </Pressable>
+                      ))}
                     </View>
                   )}
                 </View>
               )}
+
+              <Pressable onPress={() => setShowDiscountRow(v => !v)} style={styles.creditCollapsedRow}>
+                <Text variant="body">Ajouter une réduction</Text>
+                <View style={{ flexDirection: 'row', alignItems: 'center', gap: spacing[2] }}>
+                  {creditDiscount > 0 && (
+                    <Text variant="body" color="secondary">{formatAmount(creditDiscount, currency)}</Text>
+                  )}
+                  <Ionicons
+                    name={creditDiscount > 0 ? 'chevron-forward' : 'add'}
+                    size={18}
+                    color={creditDiscount > 0 ? palette.primary : palette.textSecondary}
+                  />
+                </View>
+              </Pressable>
+              {showDiscountRow && (
+                <TextInput
+                  style={styles.amountBigInput}
+                  value={creditDiscountInput}
+                  onChangeText={v => setCreditDiscountInput(formatAmountInput(v, currency))}
+                  keyboardType="decimal-pad"
+                  placeholder="0"
+                  placeholderTextColor={palette.textDisabled}
+                  selectTextOnFocus
+                  autoFocus
+                  inputAccessoryViewID={Platform.OS === 'ios' ? PAYMENT_SILENT_ACCESSORY_ID : undefined}
+                />
+              )}
+
+              <Pressable onPress={() => { setCreditSearch(''); setCreditPhase('client'); }} style={styles.creditTermsClientRow}>
+                {(() => {
+                  const sum = clientName ? clientName.split('').reduce((acc, ch) => acc + ch.charCodeAt(0), 0) : 0;
+                  const avatarBg = CLIENT_AVATAR_PALETTE[sum % CLIENT_AVATAR_PALETTE.length];
+                  const initial = clientName ? clientName.charAt(0).toUpperCase() : '?';
+                  return (
+                    <View style={[styles.clientAvatar, { backgroundColor: avatarBg }]}>
+                      <Text allowFontScaling={false} style={styles.clientAvatarText}>{initial}</Text>
+                    </View>
+                  );
+                })()}
+                <View style={{ flex: 1 }}>
+                  <Text variant="label">{clientName}</Text>
+                  <Text variant="caption" color="secondary">Changer de client</Text>
+                </View>
+                <Ionicons name="chevron-forward" size={16} color={palette.textDisabled} />
+              </Pressable>
             </View>
           )}
 
           {step === 'pay' && !showClientSection && (
             <View style={styles.payContent}>
               <View style={{ gap: spacing[2] }}>
-                <Text variant="label" style={styles.sectionLabel}>Vendu pour combien ?</Text>
+                <Text variant="label" style={styles.sectionLabel}>Payé par le client</Text>
                 <TextInput
                   style={styles.amountBigInput}
                   value={amountInput}
@@ -546,12 +890,13 @@ function PaymentModal({
                   placeholder={String(total)}
                   placeholderTextColor={palette.textDisabled}
                   selectTextOnFocus
+                  inputAccessoryViewID={Platform.OS === 'ios' ? PAYMENT_SILENT_ACCESSORY_ID : undefined}
                 />
 
                 {isShort && (
                   <View style={styles.disambigBox}>
                     <Text variant="caption" style={{ color: palette.textSecondary }}>
-                      <Text style={{ color: palette.textPrimary, fontWeight: '600' }}>{formatAmount(shortfall, currency)}</Text>
+                      <Text style={{ color: palette.textPrimary, fontFamily: fontFamily.semibold }}>{formatAmount(shortfall, currency)}</Text>
                       {' '}de moins que le prix
                     </Text>
 
@@ -610,7 +955,11 @@ function PaymentModal({
             </View>
           )}
 
-          {/* ── Inline client section ── */}
+          {/* ── Inline client section — step==='pay''s short-payment "Un
+              crédit" disambiguation only; step==='credit' has its own
+              dedicated Qui/Terms flow above and must never also render
+              this, or client selection appears twice. ── */}
+          {step === 'pay' && (
           <View style={styles.clientSection}>
             {clientName ? (
               /* ── Selected tag ── */
@@ -626,6 +975,8 @@ function PaymentModal({
                 <Pressable
                   onPress={() => { setClientName(''); setClientPhone(''); setClientId(undefined); setClientSearch(''); }}
                   hitSlop={12}
+                  accessibilityLabel="Retirer ce client"
+                  accessibilityRole="button"
                 >
                   <Ionicons name="close-circle" size={20} color={palette.textSecondary} />
                 </Pressable>
@@ -664,7 +1015,7 @@ function PaymentModal({
                       style={({ pressed }) => [styles.clientResultRow, styles.clientResultRowNew, pressed && { opacity: 0.55 }]}
                     >
                       <Ionicons name="add-circle-outline" size={16} color={palette.primary} />
-                      <Text variant="body" style={{ color: palette.primary, fontWeight: '600' }}>Nouveau client</Text>
+                      <Text variant="body" style={{ color: palette.primary, fontFamily: fontFamily.semibold }}>Nouveau client</Text>
                     </Pressable>
 
                     {filteredClients.length === 0 && clientSearch.length > 0 ? (
@@ -683,7 +1034,7 @@ function PaymentModal({
                             style={({ pressed }) => [styles.clientResultRow, pressed && { opacity: 0.55 }]}
                           >
                             <View style={[styles.clientAvatar, { backgroundColor: avatarBg }]}>
-                              <Text style={styles.clientAvatarText}>{initial}</Text>
+                              <Text allowFontScaling={false} style={styles.clientAvatarText}>{initial}</Text>
                             </View>
                             <View style={{ flex: 1 }}>
                               <Text variant="body">{c.name}</Text>
@@ -698,9 +1049,9 @@ function PaymentModal({
                   </>
                 ) : (
                   /* ── New client form ── */
-                  <KeyboardAvoidingView behavior={Platform.OS === 'ios' ? 'padding' : 'height'}>
+                  <KeyboardAvoidingView behavior={Platform.OS === 'ios' ? 'padding' : undefined}>
                     <View style={{ flexDirection: 'row', alignItems: 'center', gap: spacing[2], paddingTop: spacing[2], marginBottom: spacing[1] }}>
-                      <Pressable onPress={() => setShowNewClientForm(false)} hitSlop={8}>
+                      <Pressable onPress={() => setShowNewClientForm(false)} hitSlop={8} accessibilityLabel="Retour" accessibilityRole="button">
                         <Ionicons name="arrow-back" size={18} color={palette.textSecondary} />
                       </Pressable>
                       <Text variant="label">Nouveau client</Text>
@@ -738,39 +1089,8 @@ function PaymentModal({
               </Pressable>
             )}
           </View>
-          </ScrollView>
-
-          {/* Footer — morphs based on state, always above keyboard */}
-          <View style={styles.modalFooter}>
-            {showNewClientForm ? (
-              <Button
-                label="Ajouter ce client"
-                onPress={handleAddNewClient}
-                fullWidth
-                size="lg"
-                disabled={!newClientName.trim()}
-              />
-            ) : (
-              <>
-                {step === 'credit' && !canConfirmCredit && !showClientSection && (
-                  <Text variant="caption" style={{ color: palette.warning, textAlign: 'center', marginBottom: spacing[2] }}>
-                    Ajoutez un nom de client pour enregistrer le crédit
-                  </Text>
-                )}
-                <Button
-                  label={submitting ? 'Enregistrement…' : (step === 'credit' ? (creditUpfrontCoversAll ? 'Enregistrer la vente' : 'Enregistrer le crédit') : 'Confirmer la vente')}
-                  onPress={step === 'credit' ? handleConfirmCredit : handleConfirmPay}
-                  loading={submitting}
-                  fullWidth
-                  size="lg"
-                  disabled={step === 'credit' ? !canConfirmCredit : !canConfirmPay}
-                />
-              </>
-            )}
-          </View>
-        </KeyboardAvoidingView>
-      </SafeAreaView>
-    </Modal>
+          )}
+    </FormSheet>
   );
 }
 
@@ -783,15 +1103,24 @@ interface ProductTileProps {
   onAddBulk?: () => void;
   cartQty: number;
   cartBulkQty: number;
+  /** Only meaningful when product.has_variants — undefined while still loading. */
+  variants?: ProductVariant[];
 }
 
-function ProductTile({ product, currency, onAdd, onAddBulk, cartQty, cartBulkQty }: ProductTileProps) {
+function ProductTile({ product, currency, onAdd, onAddBulk, cartQty, cartBulkQty, variants }: ProductTileProps) {
   const { palette } = useTheme();
   const styles = useMemo(() => makeStyles(palette), [palette]);
   const totalInCart = cartQty + cartBulkQty;
-  // Variant products always have stock_qty=0 on the parent — never treat them as out-of-stock.
-  // For plain products, stock already reserved in the cart is no longer sellable this session.
-  const outOfStock = !product.has_variants && product.stock_qty - totalInCart <= 0;
+  // Variant products always have stock_qty=0 on the parent, so that field alone
+  // can't say whether the product is out of stock — a product whose every
+  // variant is at 0 must still show/behave as out-of-stock here, or the tile
+  // stays tappable and opens a picker where nothing can actually be added.
+  // `variants` undefined (not loaded yet) intentionally reads as "not out of
+  // stock" — same fail-open default the grid's own filtering already uses —
+  // rather than flashing every tile as unavailable while variants load.
+  const outOfStock = product.has_variants
+    ? !!(variants && variants.length > 0 && variants.every(v => v.stock_qty <= 0))
+    : product.stock_qty - totalInCart <= 0;
   const hasBulk = !!(product.bulk_price && product.bulk_min_qty);
 
   return (
@@ -806,7 +1135,7 @@ function ProductTile({ product, currency, onAdd, onAddBulk, cartQty, cartBulkQty
     >
       {totalInCart > 0 && (
         <View style={styles.tileBadge}>
-          <Text variant="caption" style={{ color: palette.textInverse, fontWeight: '700' }}>{totalInCart}</Text>
+          <Text variant="caption" style={{ color: palette.textInverse, fontFamily: fontFamily.bold }}>{totalInCart}</Text>
         </View>
       )}
       {hasBulk && (
@@ -815,14 +1144,16 @@ function ProductTile({ product, currency, onAdd, onAddBulk, cartQty, cartBulkQty
         </View>
       )}
       <Text variant="label" numberOfLines={2} style={styles.tileName}>{product.name}</Text>
-      {!product.has_variants && (
+      {!product.has_variants ? (
         <Text variant="caption" color="secondary" numberOfLines={1}>
-          {outOfStock ? 'Épuisé' : `${product.stock_qty - totalInCart} ${product.unit}`}
+          {outOfStock ? 'Fini' : `${product.stock_qty - totalInCart} ${product.unit}`}
         </Text>
-      )}
+      ) : outOfStock ? (
+        <Text variant="caption" color="secondary" numberOfLines={1}>Fini</Text>
+      ) : null}
       <View style={{ flexDirection: 'row', alignItems: 'center', justifyContent: 'space-between' }}>
-        <Text variant="label" style={{ color: outOfStock ? palette.textDisabled : palette.primary }}>
-          {formatAmount(product.sale_price, currency)}
+        <Text variant="label" style={[styles.tilePrice, outOfStock && { color: palette.textDisabled }]}>
+          {formatPriceValue(product.sale_price, currency)}
         </Text>
         {product.has_variants && (
           <Text style={{ color: palette.primary, fontSize: 16 }}>›</Text>
@@ -830,7 +1161,7 @@ function ProductTile({ product, currency, onAdd, onAddBulk, cartQty, cartBulkQty
       </View>
       {hasBulk && product.bulk_price ? (
         <Text variant="caption" style={{ color: palette.warning }}>
-          Gros: {formatAmount(product.bulk_price, currency)}
+          Gros: {formatPriceValue(product.bulk_price, currency)}
         </Text>
       ) : null}
     </Pressable>
@@ -865,16 +1196,27 @@ function VariantPickerSheet({ visible, product, variants, cartQtyByVariant, curr
   const [editingId, setEditingId] = useState<string | null>(null);
   const [editVal, setEditVal] = useState('');
   const editRef = useRef<TextInput>(null);
+  // Tracks which product's quantities `qtys` currently holds, so closing
+  // this sheet without confirming — a backdrop tap, switching apps, the
+  // sheet dismissing some other way — and reopening it for the SAME
+  // product keeps whatever was already typed in, instead of restarting
+  // from zero. A plain "reset every time `visible` flips true" (the old
+  // behavior) couldn't tell "reopened the same picker" apart from "opened
+  // a different product's picker", so it wiped both cases the same way.
+  const qtysForProductId = useRef<string | null>(null);
 
   useEffect(() => {
     if (visible) {
-      setQtys({});
+      if (product && product.id !== qtysForProductId.current) {
+        setQtys({});
+        qtysForProductId.current = product.id;
+      }
       setEditingId(null);
       Animated.spring(translateY, { toValue: 0, useNativeDriver: true, bounciness: 4 }).start();
     } else {
       translateY.setValue(400);
     }
-  }, [visible]);
+  }, [visible, product]);
 
   if (!product) return null;
 
@@ -907,23 +1249,38 @@ function VariantPickerSheet({ visible, product, variants, cartQtyByVariant, curr
       .map(v => ({ variant: v, qty: qtys[v.id] ?? 0 }))
       .filter(s => s.qty > 0);
     onPickMany(selections);
+    // These quantities are now spent into the cart — a later reopen for
+    // this same product should start blank, not show what was just added
+    // as if it were still an unconfirmed draft.
+    setQtys({});
     onClose();
   };
 
   return (
-    <Modal visible={visible} transparent animationType="none" onRequestClose={onClose}>
+    <Modal
+      visible={visible}
+      transparent
+      animationType="none"
+      onRequestClose={onClose}
+      statusBarTranslucent
+      navigationBarTranslucent
+    >
       <Pressable style={StyleSheet.absoluteFill} onPress={onClose}>
         <View style={{ flex: 1, backgroundColor: 'rgba(0,0,0,0.45)' }} />
       </Pressable>
       <Animated.View style={[styles.variantSheet, { transform: [{ translateY }] }]}>
         <View style={styles.variantSheetHandle} />
-        <View style={{ flexDirection: 'row', alignItems: 'center', justifyContent: 'space-between', marginBottom: spacing[4] }}>
+        <View style={{ marginBottom: spacing[4] }}>
           <Text variant="h4">{product.name}</Text>
-          <Text variant="label" style={{ color: palette.primary }}>
-            {formatAmount(product.sale_price, currency)}
-          </Text>
         </View>
-        <ScrollView showsVerticalScrollIndicator={false} keyboardShouldPersistTaps="handled">
+        {/* flex:1 is load-bearing — without it, a ScrollView inside a
+            maxHeight-constrained parent (styles.variantSheet, maxHeight:
+            '70%') doesn't get a bounded region to scroll within: it just
+            renders its full content height and gets silently clipped by
+            the parent, with no working internal scroll at all. This is why
+            scrolling stopped working the moment a product had enough
+            variants to overflow the sheet. */}
+        <ScrollView style={{ flex: 1 }} showsVerticalScrollIndicator={false} keyboardShouldPersistTaps="handled">
           {variants.map(v => {
             // Stock already sitting in the cart this session isn't sellable
             // again until the sale completes or the cart is cleared.
@@ -934,14 +1291,23 @@ function VariantPickerSheet({ visible, product, variants, cartQtyByVariant, curr
             const isEditing = editingId === v.id;
             const atMax = qty >= remaining;
             return (
-              <View
+              <Pressable
                 key={v.id}
+                onPress={() => {
+                  if (!outOfStock && !atMax && !isEditing) {
+                    haptics.selection();
+                    changeQty(v.id, 1, remaining);
+                  }
+                }}
                 style={[styles.variantOption, outOfStock && { opacity: 0.4 }]}
               >
                 <View style={{ flex: 1 }}>
-                  <Text variant="body" style={{ fontWeight: '600' }}>{v.name}</Text>
+                  <Text variant="body" style={{ fontFamily: fontFamily.semibold }}>{v.name}</Text>
+                  <Text variant="label" style={{ color: palette.primary }}>
+                    {formatAmount(v.sale_price, currency)}
+                  </Text>
                   <Text variant="caption" color="secondary">
-                    {outOfStock ? 'Épuisé' : `${remaining} en stock`}
+                    {outOfStock ? 'Fini' : `${remaining} en stock`}
                     {reserved > 0 ? ` · ${reserved} déjà dans le panier` : ''}
                   </Text>
                 </View>
@@ -963,6 +1329,7 @@ function VariantPickerSheet({ visible, product, variants, cartQtyByVariant, curr
                       keyboardType="number-pad"
                       selectTextOnFocus
                       returnKeyType="done"
+                      inputAccessoryViewID={Platform.OS === 'ios' ? VARIANT_SHEET_SILENT_ACCESSORY_ID : undefined}
                     />
                   ) : (
                     <Pressable
@@ -979,13 +1346,13 @@ function VariantPickerSheet({ visible, product, variants, cartQtyByVariant, curr
                     <Text variant="label" style={{ color: (outOfStock || atMax) ? palette.textDisabled : palette.primary }}>+</Text>
                   </Pressable>
                 </View>
-              </View>
+              </Pressable>
             );
           })}
         </ScrollView>
         <View style={{ paddingTop: spacing[4] }}>
           <Button
-            label={totalAdded > 0 ? `Ajouter ${totalAdded} article${totalAdded > 1 ? 's' : ''}` : 'Ajouter'}
+            label="Confirmer"
             onPress={confirm}
             fullWidth
             size="lg"
@@ -993,6 +1360,11 @@ function VariantPickerSheet({ visible, product, variants, cartQtyByVariant, curr
           />
         </View>
       </Animated.View>
+      {Platform.OS === 'ios' && (
+        <InputAccessoryView nativeID={VARIANT_SHEET_SILENT_ACCESSORY_ID}>
+          <View style={{ height: 0 }} />
+        </InputAccessoryView>
+      )}
     </Modal>
   );
 }
@@ -1027,11 +1399,12 @@ function AnimatedFAB({ onPress }: { onPress: () => void }) {
     <Animated.View style={[styles.fabContainer, { transform: [{ scale }], opacity }]}>
       <Pressable
         onPress={onPress}
-        style={({ pressed }) => [styles.fab, pressed && { opacity: 0.82 }]}
+        style={({ pressed }) => [styles.fabExtended, pressed && { opacity: 0.82 }]}
         accessibilityLabel="Ajouter un produit"
         accessibilityRole="button"
       >
-        <Text style={styles.fabIcon}>+</Text>
+        <Ionicons name="add" size={20} color={palette.textInverse} />
+        <Text style={styles.fabExtendedLabel}>Produit</Text>
       </Pressable>
     </Animated.View>
   );
@@ -1042,6 +1415,7 @@ function AnimatedFAB({ onPress }: { onPress: () => void }) {
 export default function VendreScreen() {
   const { palette } = useTheme();
   const styles = useMemo(() => makeStyles(palette), [palette]);
+  const insets = useSafeAreaInsets();
   const session = useAuthStore(s => s.session);
   const business = session?.activeBusiness;
   const userId = session?.user.id ?? '';
@@ -1050,7 +1424,7 @@ export default function VendreScreen() {
   const role = session?.activeMembership?.role;
   const isVendeur = role === 'vendeur';
 
-  const { products: allProducts, vendeurProductScope, variantsByProduct, loading, fetchProducts, fetchVariants } = useProductStore();
+  const { products: allProducts, vendeurProductScope, variantsByProduct, loading, offline, offlineSince, fetchProducts, fetchVariants } = useProductStore();
 
   // Apply vendeur product scope (empty = unscoped, sees everything)
   const products = useMemo(() => {
@@ -1060,24 +1434,66 @@ export default function VendreScreen() {
   const { cart, submitting, error: saleError, addToCart, addToCartVariant, removeFromCart, setQty, toggleBulk, clearCart, submitSale, submitCarnetDebt, clearError } =
     useSalesStore();
 
-  const [mode, setMode] = useState<'vente' | 'credit'>('vente');
-  const [creditName, setCreditName] = useState('');
-  const [creditPhone, setCreditPhone] = useState('');
-  const [creditClientId, setCreditClientId] = useState<string | undefined>();
-  const [creditAmount, setCreditAmount] = useState('');
-  const [clientBalance, setClientBalance] = useState<number | null>(null);
-  const [creditSaving, setCreditSaving] = useState(false);
-  const [creditSuccess, setCreditSuccess] = useState(false);
-  const [creditError, setCreditError] = useState<string | null>(null);
-  const [creditSessionCount, setCreditSessionCount] = useState(0);
-  const [creditPhoneResetKey, setCreditPhoneResetKey] = useState(0);
-  const [showCreditClientList, setShowCreditClientList] = useState(false);
-  const [creditClientSearch, setCreditClientSearch] = useState('');
-  const [creditQuickClients, setCreditQuickClients] = useState<{ id?: string; name: string; phone?: string | null }[]>([]);
-  const creditNameRef = useRef<TextInput>(null);
-  const creditAmountRef = useRef<TextInput>(null);
-  const creditBlinkAnim = useRef(new Animated.Value(0)).current;
-  const creditBlinkLoopRef = useRef<Animated.CompositeAnimation | null>(null);
+  // ActivationForkOverlay's "Une dette" button links here with ?mode=credit
+  // so a brand-new merchant lands straight in the credit tab instead of the
+  // product grid — same direct-open pattern catalogue.tsx's ?openForm=1 uses.
+  // ActivationForkOverlay's "Une dette" button links here with ?mode=credit
+  // so a brand-new merchant lands straight in the credit tab instead of the
+  // product grid — same direct-open pattern catalogue.tsx's ?openForm=1 uses.
+  // Vendre is a tab screen and stays mounted after the first visit, so a
+  // useState initializer only ever applies the very first time — every
+  // later "Une dette" tap re-delivers the same param to an already-mounted
+  // screen and got silently ignored, leaving mode stuck on whatever it was
+  // last (usually 'vente'). This effect re-applies it on every fresh
+  // arrival, not just mount, then clears the param the same way
+  // catalogue.tsx clears openForm.
+  const { mode: initialMode, newClientName } = useLocalSearchParams<{ mode?: string; newClientName?: string }>();
+  const [mode, setMode] = useState<'vente' | 'credit'>(initialMode === 'credit' ? 'credit' : 'vente');
+  // Set only by Clients' "no search match" create-shortcut — lands straight
+  // on the amount step for this name instead of the pick-a-face grid (same
+  // initialClient contract the client ledger's own "+ Nouveau crédit" uses).
+  const [creditInitialClientName, setCreditInitialClientName] = useState<string | undefined>(
+    initialMode === 'credit' ? newClientName : undefined,
+  );
+  // Vendre is a tab root — normally there's nothing to "go back" to, you
+  // just tap a different tab. Arriving here via a push from the fork breaks
+  // that assumption (no swipe-back, no visible way out) without an explicit
+  // back affordance, so show one for the rest of this screen's lifetime
+  // once we know that's how we got here — not just while mode === 'credit',
+  // since switching back to Vente shouldn't strand them either.
+  const [cameFromFork, setCameFromFork] = useState(false);
+  useEffect(() => {
+    if (initialMode === 'credit') {
+      setMode('credit');
+      setCameFromFork(true);
+      setCreditInitialClientName(newClientName);
+      router.setParams({ mode: undefined, newClientName: undefined });
+    }
+  }, [initialMode, newClientName]);
+
+  // The activation fork (app/(app)/_layout.tsx) only knows to stay away for
+  // a fixed ~1.2s after the "Une dette" tap that can land here — enough to
+  // bridge the navigation, not enough to actually fill in a name, phone,
+  // and amount. Suppress it for as long as credit mode is genuinely active
+  // instead (same fix as catalogue.tsx's add-product form and
+  // QuickCaptureSheet), and deliberately ONLY credit mode — switching to
+  // Vente without finishing the debt should still bring the wall back,
+  // since at that point nothing is actively in progress.
+  //
+  // useFocusEffect, not a plain useEffect — Vendre is a TAB, and tabs don't
+  // unmount when you switch away to a different one, they just go inactive.
+  // A plain useEffect's cleanup only re-runs when `mode` itself changes, so
+  // leaving via the tab bar (Catalogue, Accueil, ...) while still in credit
+  // mode never triggered it at all — suppressActivationFork stayed stuck
+  // true forever, on every other screen, until mode happened to change
+  // again. useFocusEffect's cleanup additionally fires on losing focus,
+  // which switching tabs genuinely is.
+  useFocusEffect(
+    useCallback(() => {
+      useAuthStore.setState({ suppressActivationFork: mode === 'credit' });
+      return () => { useAuthStore.setState({ suppressActivationFork: false }); };
+    }, [mode]),
+  );
 
   const [search, setSearch] = useState('');
   const [showPayment, setShowPayment] = useState(false);
@@ -1086,12 +1502,66 @@ export default function VendreScreen() {
   // Whether the sale just confirmed was queued offline rather than synced —
   // same confirm+share sheet either way, just a small "en attente" badge.
   const [confirmQueued, setConfirmQueued] = useState(false);
+  // The just-confirmed sale's id, so "Annuler la vente" on the confirm sheet
+  // can cancel it directly, in the same modal — no second dialog to open.
+  // null for a queued/offline sale (no server row yet to cancel).
+  const [confirmSaleId, setConfirmSaleId] = useState<string | null>(null);
   const [variantPickerProduct, setVariantPickerProduct] = useState<Product | null>(null);
   const [lastReceipt, setLastReceipt] = useState<ReceiptData | null>(null);
   const receiptViewRef = useRef<View>(null);
   const pendingReceiptRef = useRef<ReceiptData | null>(null);
   const cartScrollRef = useRef<ScrollView>(null);
   const cartRowOffsets = useRef<Record<string, number>>({});
+
+  // Quick-checkout — just the visible, pre-selected payment method chip now.
+  // This used to also carry its own inline post-sale confirmation
+  // (quickSaleResult) with its own "Annuler", extending cartPanel's mount
+  // condition open for it — removed on direct feedback: the full confirm
+  // sheet below already shows the amount AND has its own "Annuler la
+  // vente" (added the same night), so the inline block wasn't avoiding
+  // duplication, it was a second, weaker path missing the one thing the
+  // full sheet offers that it didn't — sharing the receipt. One
+  // confirmation surface for every sale, quick or not.
+  const [quickPayMethod, setQuickPayMethod] = useState<'especes' | 'orange' | 'mtn'>('especes');
+  // The product grid needs to reserve exactly this much bottom padding so
+  // its last row can scroll clear of the floating cartPanel sitting on top
+  // of it — measured via onLayout on the panel itself, not a hardcoded
+  // guess. The panel's real height moves with cart size (its own scroll
+  // area caps at 160px) and with whatever's in its footer, so a fixed
+  // number only stays correct until the next time either changes — which
+  // is exactly what happened here (adding the payment chips + a bigger
+  // button label grew the footer past what "300" was ever tuned against).
+  // 220 is a rough floor (footer alone, one cart line) for the one frame
+  // before onLayout fires on a fresh cart — not a return to guessing, just
+  // avoiding a one-frame flash of the exact bug this is fixing; onLayout
+  // overwrites it with the real number immediately after.
+  const [cartPanelHeight, setCartPanelHeight] = useState(220);
+  // Full itemized cart ("Panier") — the Dock summary below only ever shows
+  // the last item added plus a count of the rest, so the panel's own height
+  // never grows with the cart; this sheet is where a merchant actually edits
+  // quantities/removes lines when they need to. Auto-closes if the cart
+  // empties out from under it (last line removed while the sheet is open)
+  // rather than being left open showing nothing to act on.
+  const [showCartSheet, setShowCartSheet] = useState(false);
+  useEffect(() => {
+    if (cart.length === 0) setShowCartSheet(false);
+  }, [cart.length]);
+  // Rapid capture sheet, Vente mode — reached from the empty-catalog state's
+  // "Vente rapide" button below. Vendre's own Vente mode is the full cart/
+  // product-picker POS flow; this is the separate amount-only quick sale
+  // (VenteRapideCapture), so it needs its own sheet instance here rather
+  // than reusing anything already on this screen.
+  const [showQuickCapture, setShowQuickCapture] = useState(false);
+  // Guards the confirm sheet's auto-dismiss (below) against racing a
+  // still-in-flight share — captureRef/Sharing.shareAsync need the sheet's
+  // Modal to stay mounted until they finish, not close out from under them.
+  const [sharingReceipt, setSharingReceipt] = useState(false);
+  const cancelSale = useVentesStore(s => s.cancelSale);
+
+  useEffect(() => {
+    if (!businessId) return;
+    loadDefaultQuickPayMethod(businessId).then(setQuickPayMethod);
+  }, [businessId]);
 
   const membershipId = session?.activeMembership?.id;
 
@@ -1105,6 +1575,16 @@ export default function VendreScreen() {
       .forEach(p => fetchVariants(p.id, businessId));
   }, [products, businessId]);
 
+  // Search is shown once the catalog is big enough to need it (see the render
+  // below) — only relevant in Vente mode, since Crédit has no product grid.
+  const searchVisible = mode === 'vente' && products.length >= SEARCH_VISIBILITY_THRESHOLD;
+  useAnimateLayoutChange(searchVisible);
+  // Clear any typed query when the box disappears, so a stale filter can't
+  // keep silently narrowing the grid with no visible input left to clear it.
+  useEffect(() => {
+    if (!searchVisible) setSearch('');
+  }, [searchVisible]);
+
   // Variant stock can change from another device or the offline queue while this
   // screen stays mounted in the background — refetch on every focus so the cart's
   // stock cap (Math.min against variant.stock_qty) isn't capping against stale data.
@@ -1116,68 +1596,6 @@ export default function VendreScreen() {
   );
 
 
-  useEffect(() => {
-    if (mode === 'credit' && businessId && creditQuickClients.length === 0) {
-      supabase.from('clients').select('id, name, phone').eq('business_id', businessId)
-        .then(({ data }) => {
-          if (data) setCreditQuickClients(
-            (data as { id: string; name: string; phone?: string | null }[])
-              .sort((a, b) => a.name.localeCompare(b.name))
-          );
-        });
-    }
-  }, [mode, businessId]);
-
-  useEffect(() => {
-    if (creditName.trim() && !creditAmount) {
-      creditBlinkLoopRef.current = Animated.loop(
-        Animated.sequence([
-          Animated.timing(creditBlinkAnim, { toValue: 1, duration: 700, useNativeDriver: false }),
-          Animated.timing(creditBlinkAnim, { toValue: 0, duration: 700, useNativeDriver: false }),
-        ])
-      );
-      creditBlinkLoopRef.current.start();
-    } else {
-      creditBlinkLoopRef.current?.stop();
-      creditBlinkLoopRef.current = null;
-      Animated.timing(creditBlinkAnim, { toValue: 0, duration: 150, useNativeDriver: false }).start();
-    }
-    return () => { creditBlinkLoopRef.current?.stop(); };
-  }, [creditName, creditAmount]);
-
-  useEffect(() => {
-    // Resolve ID from direct selection or exact name match
-    const resolvedId = creditClientId ?? creditQuickClients.find(
-      c => c.name.toLowerCase() === creditName.trim().toLowerCase()
-    )?.id;
-    if (!resolvedId || !businessId) { setClientBalance(null); return; }
-
-    // Two-step: get credit orders by client_id, then sum actual payments per order
-    supabase
-      .from('sale_orders')
-      .select('id, total_amount, discount_amount')
-      .eq('business_id', businessId)
-      .eq('client_id', resolvedId)
-      .eq('status', 'credit')
-      .then(async ({ data: orders }) => {
-        if (!orders?.length) { setClientBalance(null); return; }
-        const orderIds = orders.map(o => (o as { id: string }).id);
-        const { data: pays } = await supabase
-          .from('payments')
-          .select('order_id, amount')
-          .in('order_id', orderIds);
-        const paidByOrder: Record<string, number> = {};
-        for (const p of (pays ?? []) as { order_id: string; amount: number }[]) {
-          paidByOrder[p.order_id] = (paidByOrder[p.order_id] ?? 0) + p.amount;
-        }
-        const totalCents = (orders as { id: string; total_amount: number; discount_amount: number | null }[])
-          .reduce((sum, s) => {
-            const remaining = s.total_amount - (s.discount_amount ?? 0) - (paidByOrder[s.id] ?? 0);
-            return sum + (remaining > 0 ? remaining : 0);
-          }, 0);
-        setClientBalance(totalCents > 0 ? totalCents / 100 : null);
-      });
-  }, [creditClientId, creditName, creditQuickClients, businessId]);
 
   const filtered = useMemo(() => {
     const q = search.toLowerCase().trim();
@@ -1225,6 +1643,42 @@ export default function VendreScreen() {
     }
   }, [showConfirmSheet]);
 
+  // Confirm sheet's own entrance/exit motion — deliberately not the Modal's
+  // built-in `animationType`, which is a fixed, uncustomizable curve (the
+  // reason no amount of retiming alone could make it feel calmer). Same
+  // Modal-with-animationType="none" + Animated.View-with-translateY shape
+  // VariantPickerSheet already uses for its own entrance below — extended
+  // here to also animate the exit, which nothing in this file does yet
+  // (VariantPickerSheet's own close is an instant snap, not a real
+  // animation; there was no existing "calm close" to copy).
+  // Entrance decelerates in (a soft spring, minimal overshoot — this is a
+  // money confirmation, not a playful picker, so less bounce than
+  // VariantPickerSheet's own bounciness:4). Exit is a slower, symmetric
+  // ease — motion-design convention pairs deceleration on the way in with
+  // acceleration or a gentle ease on the way out, and RN's default modal
+  // slide gives neither. The lever here is the *quality* of the motion, not
+  // its raw duration — this doesn't cost meaningfully more time than the
+  // abrupt default already took, which matters for a screen used dozens of
+  // times a day.
+  const confirmSheetY = useRef(new Animated.Value(400)).current;
+  const confirmBackdropOpacity = useRef(new Animated.Value(0)).current;
+  useEffect(() => {
+    if (showConfirmSheet) {
+      confirmSheetY.setValue(400);
+      confirmBackdropOpacity.setValue(0);
+      Animated.parallel([
+        Animated.spring(confirmSheetY, { toValue: 0, useNativeDriver: true, bounciness: 3, speed: 14 }),
+        Animated.timing(confirmBackdropOpacity, { toValue: 1, duration: 260, easing: Easing.out(Easing.cubic), useNativeDriver: true }),
+      ]).start();
+    }
+  }, [showConfirmSheet]);
+  const closeConfirmSheet = useCallback(() => {
+    Animated.parallel([
+      Animated.timing(confirmSheetY, { toValue: 400, duration: 380, easing: Easing.inOut(Easing.cubic), useNativeDriver: true }),
+      Animated.timing(confirmBackdropOpacity, { toValue: 0, duration: 380, easing: Easing.inOut(Easing.cubic), useNativeDriver: true }),
+    ]).start(() => setShowConfirmSheet(false));
+  }, []);
+
   // Confirmation sheet: pre-computed breakdown for lastReceipt
   const confirmNet       = lastReceipt ? lastReceipt.total - (lastReceipt.discountAmount ?? 0) : 0;
   const confirmUpfront   = lastReceipt?.amountPaid ?? 0;
@@ -1232,6 +1686,19 @@ export default function VendreScreen() {
   const confirmIsCredit  = lastReceipt
     ? lastReceipt.payment === null || confirmRemaining > 0.01
     : false;
+
+  // Nobody has to actively dismiss "Vente enregistrée" any more, for either
+  // outcome — a plain fully-paid sale still gets the short window (it's the
+  // common, low-stakes case), and credit/partial-payment sales get a longer
+  // one now that "Annuler la vente" below gives them a real, direct way to
+  // undo, the same safety net the quick-checkout path already relies on
+  // instead of a mandatory second look. Guarded on sharingReceipt so this
+  // can never fire mid-capture/mid-share — see handleShareReceipt.
+  useEffect(() => {
+    if (!showConfirmSheet || sharingReceipt) return;
+    const t = setTimeout(() => closeConfirmSheet(), confirmIsCredit ? 7000 : 2200);
+    return () => clearTimeout(t);
+  }, [showConfirmSheet, confirmIsCredit, sharingReceipt]);
 
   const cartQtyMap = useMemo(() => {
     const map: Record<string, { unit: number; bulk: number }> = {};
@@ -1243,48 +1710,21 @@ export default function VendreScreen() {
     return map;
   }, [cart]);
 
-  const openPay = () => { setPayStep('pay'); setShowPayment(true); };
-  const openCredit = () => { setPayStep('credit'); setShowPayment(true); };
-
-  const handleCreditAdd = async () => {
-    const trimmedName = creditName.trim();
-    const trimmedPhone = creditPhone.trim();
-    const parsed = Math.round(parseAmountInput(creditAmount, currency));
-    if (!trimmedName || isNaN(parsed) || parsed <= 0) return;
-    setCreditSaving(true);
-    setCreditError(null);
-
-    let resolvedClientId = creditClientId;
-    if (!resolvedClientId) {
-      const { data } = await supabase.from('clients').upsert(
-        { business_id: businessId, name: trimmedName, phone: trimmedPhone || null },
-        { onConflict: 'business_id,name' },
-      ).select('id').single();
-      resolvedClientId = data?.id ?? undefined;
-    }
-
-    const ok = await submitCarnetDebt(businessId, userId, trimmedName, parsed * 100);
-    setCreditSaving(false);
-    if (!ok) {
-      setCreditError('Impossible d\'enregistrer. Vérifiez votre connexion et réessayez.');
-      return;
-    }
-    setCreditName('');
-    setCreditPhone('');
-    setCreditPhoneResetKey(k => k + 1);
-    setCreditAmount('');
-    setCreditClientId(undefined);
-    setClientBalance(null);
-    setShowCreditClientList(false);
-    setCreditClientSearch('');
-    trackEvent('credit_debt_added', businessId, userId);
-    setCreditSuccess(true);
-    setCreditSessionCount(c => c + 1);
-    setTimeout(() => { setCreditSuccess(false); creditNameRef.current?.focus(); }, 1200);
-  };
+  // Closes the full-cart sheet first (a no-op if it's already closed, e.g.
+  // reached from the Dock directly) — PaymentModal is its own full-screen
+  // Modal, and having two stacked at once is exactly the "two Modals racing"
+  // shape this codebase has been bitten by before (see CLAUDE.md's
+  // NotificationPrimer/ActivationForkOverlay note).
+  const openCredit = () => { setShowCartSheet(false); setPayStep('credit'); setShowPayment(true); };
 
   const handleConfirmPayment = useCallback(
-    async (payment: SalePayment | null, customerName?: string, discountAmount?: number, clientId?: string, dueDate?: string | null) => {
+    // skipConfirmSheet: the quick-checkout path (handleQuickEncaisser) has
+    // its own inline confirmation in cartPanel's footer (quickSaleResult) —
+    // without this, every quick sale ALSO popped open this full sheet right
+    // behind it, showing the same amount and a second "Annuler" a beat
+    // after the first one had already closed. PaymentModal's own confirm
+    // button never passes this, so nothing about that path changes.
+    async (payment: SalePayment | null, customerName?: string, discountAmount?: number, clientId?: string, dueDate?: string | null, skipConfirmSheet = false) => {
       const total = cartTotal;
       const isCredit = payment === null;
 
@@ -1315,11 +1755,15 @@ export default function VendreScreen() {
       if (ok) {
         setLastReceipt(pendingReceiptRef.current);
         setShowPayment(false);
+        setShowCartSheet(false);
         setSearch('');
-        const queued = useSalesStore.getState().lastSubmitQueued;
+        const { lastSubmitQueued: queued, lastSaleId } = useSalesStore.getState();
         if (!queued) fetchProducts(businessId, userId, membershipId, role);
         setConfirmQueued(queued);
-        setShowConfirmSheet(true);
+        // No real server row yet for a queued (offline) sale — cancel_sale
+        // has nothing to target, same rule handleQuickEncaisser follows.
+        setConfirmSaleId(queued ? null : (lastSaleId ?? null));
+        if (!skipConfirmSheet) setShowConfirmSheet(true);
       } else {
         // Sale failed — show a blocking alert so the merchant knows the sale was NOT saved
         const errMsg = useSalesStore.getState().error ?? 'Une erreur est survenue. La vente n\'a pas été enregistrée.';
@@ -1347,8 +1791,92 @@ export default function VendreScreen() {
     [businessId, userId, cartTotal, currency, submitSale, fetchProducts],
   );
 
+  // The default "Encaisser" tap — no modal, straight to submitSale via the
+  // exact same handleConfirmPayment engine the modal's own confirm button
+  // calls, just with the assumed payload (full cart total, the pre-selected
+  // chip, no discount/client) instead of one built from form state. Reading
+  // the store fresh right after awaiting — rather than having
+  // handleConfirmPayment return a value — mirrors how it already reports its
+  // own outcome to itself (`useSalesStore.getState().lastSubmitQueued`
+  // a few lines up), so this doesn't need to change that function's
+  // contract at all.
+  const handleQuickEncaisser = async () => {
+    if (cart.length === 0 || submitting) return;
+    const method = quickPayMethod;
+    await handleConfirmPayment({ method, amount: cartTotal }, undefined, undefined, undefined, null);
+    const { cart: cartAfter } = useSalesStore.getState();
+    if (cartAfter.length > 0) return; // failed — handleConfirmPayment already alerted the merchant
+    recordQuickPayMethodUsed(businessId, method);
+  };
+
+  // Shared between the Dock's own footer and the full-cart sheet's footer —
+  // identical content in both places (same payment chips, same "Encaisser"
+  // total, same credit link) since both ultimately go through
+  // handleQuickEncaisser/openCredit regardless of which one triggered it.
+  // The sheet's caller overrides the border/bottom-padding via `styleOverride`
+  // since it sits inside its own already-bordered/shadowed footer container.
+  const renderCheckoutFooter = (styleOverride?: StyleProp<ViewStyle>) => (
+    <View style={[styles.cartFooter, styleOverride]}>
+      <View style={styles.payMethodChips}>
+        {QUICK_PAY_METHODS.map(m => (
+          <Pressable
+            key={m.key}
+            onPress={() => { haptics.selection(); setQuickPayMethod(m.key); }}
+            style={[styles.payMethodChip, quickPayMethod === m.key && styles.payMethodChipActive]}
+          >
+            <Text
+              variant="caption"
+              style={{ color: quickPayMethod === m.key ? palette.textInverse : palette.textSecondary, fontFamily: fontFamily.semibold }}
+            >
+              {m.label}
+            </Text>
+          </Pressable>
+        ))}
+      </View>
+      <Button
+        label={`Encaisser · ${formatAmount(displayTotal, currency)}`}
+        onPress={handleQuickEncaisser}
+        loading={submitting}
+        size="lg"
+        fullWidth
+        labelStyle={{ fontSize: 19, lineHeight: 24 }}
+      />
+      <Pressable onPress={openCredit} style={styles.creditLink}>
+        <Text variant="caption" style={{ color: palette.primary }}>ou enregistrer à crédit</Text>
+      </Pressable>
+    </View>
+  );
+
+  // Shared by both callers that can cancel a just-submitted sale in place —
+  // currently just the full confirm sheet's "Annuler la vente"
+  // (handleCancelFromConfirmSheet below), kept as its own function since
+  // this is real, load-bearing logic (the actual cancel_sale RPC call +
+  // toast + stock refresh) that shouldn't live inline in a JSX handler.
+  const cancelJustSubmittedSale = async (saleId: string) => {
+    const ok = await cancelSale(saleId, businessId, userId, 'Annulée juste après l\'enregistrement');
+    if (ok) {
+      toast.success('Vente annulée');
+      fetchProducts(businessId, userId, membershipId, role);
+    } else {
+      toast.warning('Connexion nécessaire pour annuler');
+    }
+  };
+
+  // "Annuler la vente" on the full confirm sheet — replaces the old plain
+  // "Ignorer" dismiss for a synced sale. Cancels right here, in the same
+  // modal, instead of closing this sheet and opening a separate one.
+  const handleCancelFromConfirmSheet = async () => {
+    const saleId = confirmSaleId;
+    closeConfirmSheet();
+    if (saleId) await cancelJustSubmittedSale(saleId);
+  };
+
   const handleShareReceipt = async () => {
     if (!receiptViewRef.current || !lastReceipt) return;
+    // Blocks the confirm sheet's own auto-dismiss (below) for the rest of
+    // this call — that timer firing mid-capture/mid-share would close the
+    // Modal `captureRef`/`Sharing.shareAsync` still need mounted.
+    setSharingReceipt(true);
     try {
       const uri = await captureRef(receiptViewRef, { format: 'png', quality: 1 });
       // Share while modal is still mounted — iOS can present share sheet on top.
@@ -1357,13 +1885,21 @@ export default function VendreScreen() {
       trackEvent('receipt_shared', businessId, userId, {
         is_credit: confirmIsCredit,
       });
-      setShowConfirmSheet(false);
+      closeConfirmSheet();
     } catch (shareErr) {
       Alert.alert('Impossible de partager le reçu pour l\'instant.');
+    } finally {
+      setSharingReceipt(false);
     }
   };
 
-  if (loading && products.length === 0) {
+  // Gated on mode !== 'credit' — this skeleton is shaped like the product
+  // grid because that's the only thing that ever needed to wait on
+  // `loading` (the product store's fetch flag). Credit mode never reads
+  // products at all, so blocking it behind a product-shaped skeleton was
+  // showing unrelated content before the real destination, not a genuine
+  // loading state for what was actually about to render.
+  if (mode !== 'credit' && loading && products.length === 0) {
     return (
       <Screen tab>
         <SkeletonList count={9} />
@@ -1373,6 +1909,13 @@ export default function VendreScreen() {
 
   return (
     <Screen tab>
+      {offline && (
+        <OfflineNotice
+          offlineSince={offlineSince}
+          onRetry={() => fetchProducts(businessId, userId, membershipId, role)}
+        />
+      )}
+
       {/* Error banner */}
       {saleError ? (
         <Pressable onPress={clearError} style={styles.errorBanner}>
@@ -1382,6 +1925,15 @@ export default function VendreScreen() {
       ) : null}
 
       {/* Header + mode toggle */}
+      {cameFromFork && (
+        // router.replace (not back()) deliberately — arriving here is a
+        // push into a tab route from a Modal, which may not always leave a
+        // real "back" entry in history to pop; replacing straight to
+        // Accueil is unambiguous regardless of how that navigation landed.
+        <Pressable onPress={() => router.replace('/(app)/(tabs)/')} hitSlop={12} style={{ paddingHorizontal: spacing[5], paddingTop: spacing[2] }}>
+          <Text variant="body" color="brand">← Retour</Text>
+        </Pressable>
+      )}
       <View style={styles.header}>
         <Text variant="h3">Vendre</Text>
         {mode === 'vente' && cart.length > 0 && (
@@ -1395,12 +1947,15 @@ export default function VendreScreen() {
       </View>
 
       {/* Vente / Crédit segment */}
-      <View style={[styles.modeToggle, { backgroundColor: palette.border + '55', borderColor: palette.border }]}>
+      <View style={[styles.modeToggle, { backgroundColor: palette.background, borderColor: palette.border }]}>
         <Pressable
           style={[styles.modeBtn, mode === 'vente' && { backgroundColor: palette.surface }]}
           onPress={() => setMode('vente')}
         >
-          <Text variant="label" style={{ color: mode === 'vente' ? palette.primary : palette.textSecondary }}>
+          <Text
+            variant="label"
+            style={{ color: mode === 'vente' ? palette.primary : palette.textSecondary, fontFamily: mode === 'vente' ? fontFamily.bold : fontFamily.semibold }}
+          >
             Vente
           </Text>
         </Pressable>
@@ -1408,165 +1963,100 @@ export default function VendreScreen() {
           style={[styles.modeBtn, mode === 'credit' && { backgroundColor: palette.surface }]}
           onPress={() => setMode('credit')}
         >
-          <Text variant="label" style={{ color: mode === 'credit' ? palette.primary : palette.textSecondary }}>
+          <Text
+            variant="label"
+            style={{ color: mode === 'credit' ? palette.primary : palette.textSecondary, fontFamily: mode === 'credit' ? fontFamily.bold : fontFamily.semibold }}
+          >
             Crédit
           </Text>
         </Pressable>
       </View>
 
-      {/* Crédit rapide form */}
+      {/* Crédit rapide — shared with Accueil's "+" (QuickCaptureSheet); see
+          CreditRapideCapture for why these used to be two separately-drifting
+          implementations and now are one. Conditional rendering here (not a
+          Modal's `visible` prop) naturally unmounts/remounts on every
+          Vente↔Crédit toggle, which is what gives this a fresh state per
+          visit for free. */}
       {mode === 'credit' && (
-        <View style={styles.creditForm}>
-          {/* Client picker — shows when list is open */}
-          {showCreditClientList ? (
-            <View style={[styles.creditClientList, { borderColor: palette.border }]}>
-              <View style={{ flexDirection: 'row', alignItems: 'center', gap: spacing[2], marginBottom: spacing[2] }}>
-                <TextInput
-                  style={[styles.creditClientSearch, { color: palette.textPrimary, borderColor: palette.border }]}
-                  value={creditClientSearch}
-                  onChangeText={setCreditClientSearch}
-                  placeholder="Rechercher…"
-                  placeholderTextColor={palette.textDisabled}
-                  autoFocus
-                />
-                <Pressable onPress={() => { setShowCreditClientList(false); setCreditClientSearch(''); }} hitSlop={8}>
-                  <Text variant="caption" style={{ color: palette.textSecondary }}>Annuler</Text>
-                </Pressable>
-              </View>
-              <ScrollView style={{ maxHeight: 160 }} keyboardShouldPersistTaps="handled" showsVerticalScrollIndicator={false}>
-                {creditQuickClients
-                  .filter(c => !creditClientSearch || c.name.toLowerCase().includes(creditClientSearch.toLowerCase()) || (c.phone ?? '').includes(creditClientSearch))
-                  .map(c => (
-                    <Pressable
-                      key={c.id ?? c.name}
-                      onPress={() => {
-                        setCreditName(c.name);
-                        setCreditPhone(c.phone ?? '');
-                        setCreditClientId(c.id);
-                        setShowCreditClientList(false);
-                        setCreditClientSearch('');
-                        setTimeout(() => creditAmountRef.current?.focus(), 50);
-                      }}
-                      style={({ pressed }) => [styles.creditClientRow, { borderBottomColor: palette.border }, pressed && { opacity: 0.55 }]}
-                    >
-                      <View style={{ flex: 1 }}>
-                        <Text variant="label">{c.name}</Text>
-                        {c.phone ? <Text variant="caption" color="secondary">{c.phone}</Text> : null}
-                      </View>
-                      <Ionicons name="chevron-forward" size={14} color={palette.textDisabled} />
-                    </Pressable>
-                  ))}
-                {creditQuickClients.filter(c => !creditClientSearch || c.name.toLowerCase().includes(creditClientSearch.toLowerCase()) || (c.phone ?? '').includes(creditClientSearch)).length === 0 && (
-                  <Text variant="caption" color="secondary" style={{ paddingVertical: spacing[2] }}>Aucun client trouvé</Text>
-                )}
-              </ScrollView>
-            </View>
-          ) : (
-            <>
-              <View style={{ flexDirection: 'row', alignItems: 'center', gap: spacing[2] }}>
-                <TextInput
-                  ref={creditNameRef}
-                  style={[styles.creditInput, { flex: 1, color: palette.textPrimary, borderColor: palette.border }]}
-                  placeholder="Nom"
-                  placeholderTextColor={palette.textDisabled}
-                  value={creditName}
-                  onChangeText={v => { setCreditName(v); setCreditClientId(undefined); setCreditError(null); }}
-                  returnKeyType="next"
-                  onSubmitEditing={() => creditAmountRef.current?.focus()}
-                  autoCapitalize="words"
-                  autoFocus={!creditName}
-                />
-                {creditQuickClients.length > 0 && (
-                  <Pressable
-                    onPress={() => setShowCreditClientList(true)}
-                    style={[styles.creditClientBtn, { borderColor: palette.border }]}
-                    hitSlop={4}
-                  >
-                    <Ionicons name="people-outline" size={18} color={palette.primary} />
-                  </Pressable>
-                )}
-              </View>
-              <PhoneInput
-                label="Téléphone (optionnel)"
-                onChange={(e164, isComplete) => { setCreditPhone(isComplete ? e164 : ''); setCreditError(null); }}
-                strict={false}
-                resetKey={creditPhoneResetKey}
-              />
-              <View>
-                <Text variant="label" color="secondary" style={{ marginBottom: spacing[2] }}>
-                  Combien il vous doit ?
-                </Text>
-                <Animated.View style={[styles.moneyAmountBox, {
-                  borderColor: creditBlinkAnim.interpolate({
-                    inputRange: [0, 1],
-                    outputRange: [palette.border, palette.primary],
-                  }),
-                }]}>
-                  <TextInput
-                    ref={creditAmountRef}
-                    style={[styles.moneyAmountInput, { color: creditAmount ? palette.textPrimary : palette.textDisabled }]}
-                    placeholder="0"
-                    placeholderTextColor={palette.textDisabled}
-                    value={creditAmount}
-                    onChangeText={v => { setCreditAmount(formatAmountInput(v, currency)); setCreditError(null); }}
-                    keyboardType="numeric"
-                    returnKeyType="done"
-                    onSubmitEditing={handleCreditAdd}
-                  />
-                  <Text style={[styles.moneyAmountCurrency, { color: palette.textSecondary }]}>{currency}</Text>
-                </Animated.View>
-                {clientBalance !== null && clientBalance > 0 && (
-                  <Text variant="caption" style={{ color: palette.textDisabled, marginTop: spacing[1], textAlign: 'center' }}>
-                    Solde actuel · {formatAmount(clientBalance, currency)}
-                  </Text>
-                )}
-              </View>
-            </>
-          )}
-          <Button
-            label={creditSuccess ? '✓ Noté !' : 'Ajouter'}
-            onPress={handleCreditAdd}
-            loading={creditSaving}
-            fullWidth
-            size="lg"
-            style={creditSuccess ? { backgroundColor: palette.success } : undefined}
+        <View style={styles.creditTabContent}>
+          <CreditRapideCapture
+            // initialClient is mount-only inside CreditRapideCapture (see its
+            // own comment) — keying on the name forces a real remount when
+            // onDone clears it, so a save lands back on the pick grid instead
+            // of getting stuck on a stale "amount" phase for a now-cleared prop.
+            key={creditInitialClientName ?? 'grid'}
+            businessId={businessId}
+            userId={userId}
+            currency={currency}
+            onViewClients={() => router.push({ pathname: '/(app)/clients', params: { filter: 'doivent' } })}
+            initialClient={creditInitialClientName ? { name: creditInitialClientName } : undefined}
+            onDone={creditInitialClientName ? () => setCreditInitialClientName(undefined) : undefined}
           />
-          {creditError ? (
-            <Text variant="caption" style={{ color: palette.warning, textAlign: 'center', marginTop: spacing[2] }}>
-              {creditError}
-            </Text>
-          ) : null}
-          {creditSessionCount > 0 && !creditError ? (
-            <Pressable
-              onPress={() => router.push('/(app)/credits')}
-              style={{ flexDirection: 'row', alignItems: 'center', justifyContent: 'center', gap: spacing[1], marginTop: spacing[3] }}
-            >
-              <Text variant="caption" style={{ color: palette.success }}>
-                {creditSessionCount} crédit{creditSessionCount > 1 ? 's' : ''} enregistré{creditSessionCount > 1 ? 's' : ''}
-              </Text>
-              <Text variant="caption" style={{ color: palette.primary }}>· Voir →</Text>
-            </Pressable>
-          ) : null}
         </View>
       )}
 
-      {/* Empty state — Vente mode, no products yet */}
-      {mode === 'vente' && products.length === 0 && (
+      {/* Empty state — Vente mode, no products yet, offline or vendeur. The
+          admin/manager-online case (the real dead end this used to be — see
+          the block right below) has its own real content now instead of
+          silently relying on this branch's opposite condition. */}
+      {mode === 'vente' && products.length === 0 && (offline || isVendeur) && (
         <View style={styles.emptyFull}>
-          <Ionicons name="receipt-outline" size={48} color={palette.textDisabled} />
-          <Text variant="h4">Point de vente</Text>
+          <Ionicons name={offline ? 'cloud-offline-outline' : 'receipt-outline'} size={48} color={palette.textDisabled} />
+          <Text variant="h4">{offline ? 'Catalogue non disponible hors ligne' : 'Point de vente'}</Text>
           <Text variant="body" color="secondary" style={styles.emptyDesc}>
-            {isVendeur
-              ? 'Le catalogue est vide — votre responsable prépare les produits.'
-              : 'Ajoutez votre premier produit au catalogue pour commencer à vendre.'}
+            {offline
+              ? 'Ouvrez l\'application en ligne une première fois pour activer le mode hors ligne.'
+              : 'Le catalogue est vide — votre responsable prépare les produits.'}
           </Text>
         </View>
       )}
 
-      {/* Search — only in Vente mode with 3+ products */}
-      {mode === 'vente' && products.length >= 3 && (
+      {/* Empty state — Vente mode, admin/manager, online, no products. Used
+          to render literally nothing here (just the small "+" FAB further
+          down, easy to miss) — a real dead end: "Enregistrer une vente" from
+          Accueil's empty day-card landed here with no way forward except the
+          full "Nouveau produit" form. Recording a sale must never require
+          creating a catalog product first, so this offers the actual quick
+          sale directly, with catalog creation as the explicit second choice,
+          not the only one. */}
+      {mode === 'vente' && products.length === 0 && !offline && !isVendeur && (
+        <View style={styles.emptyFull}>
+          <Ionicons name="storefront-outline" size={48} color={palette.textDisabled} />
+          <Text variant="h4">Aucun produit pour le moment.</Text>
+          <Text variant="body" color="secondary" style={styles.emptyDesc}>
+            Pas besoin de catalogue pour vendre.
+          </Text>
+          <View style={styles.emptyActions}>
+            <Button label="Vente rapide" onPress={() => setShowQuickCapture(true)} fullWidth size="lg" />
+            <Button
+              label="Ajouter un produit"
+              variant="ghost"
+              onPress={() => router.push({ pathname: '/(app)/(tabs)/catalogue', params: { openForm: '1' } })}
+              fullWidth
+              size="lg"
+            />
+          </View>
+        </View>
+      )}
+
+      {searchVisible && (
         <View style={styles.searchRow}>
-          <Input placeholder="Rechercher un produit…" value={search} onChangeText={setSearch} />
+          <Input
+            placeholder="Rechercher un produit…"
+            value={search}
+            onChangeText={setSearch}
+            placeholderTextColor={palette.textSecondary}
+            leftIcon={<Ionicons name="search-outline" size={18} color={palette.textSecondary} />}
+          />
+        </View>
+      )}
+
+      {/* Currency declared once here instead of repeated on every tile's
+          price (see formatPriceValue in ProductTile). */}
+      {mode === 'vente' && products.length > 0 && (
+        <View style={styles.priceHeaderRow}>
+          <Text variant="caption" color="secondary">Prix en {currency}</Text>
         </View>
       )}
 
@@ -1586,7 +2076,15 @@ export default function VendreScreen() {
         keyExtractor={p => p.id}
         numColumns={2}
         columnWrapperStyle={styles.tileRow}
-        contentContainerStyle={[styles.tileList, cart.length > 0 && { paddingBottom: 300 }]}
+        // The panel doesn't start at the true screen bottom — it floats
+        // FLOATING_TAB_BAR_CLEARANCE + spacing[4] above it (to clear the
+        // tab bar). cartPanelHeight is the real, load-bearing part (matches
+        // the panel's own measured height so nothing overlaps); the rest
+        // is margin on top of that, not more overlap-prevention — halved
+        // on direct device feedback that the full amount read as a big
+        // empty gap, not a small gap. Only the margin is halved, never
+        // cartPanelHeight itself, so this can't reintroduce the overlap.
+        contentContainerStyle={[styles.tileList, cart.length > 0 && { paddingBottom: cartPanelHeight + (FLOATING_TAB_BAR_CLEARANCE + spacing[4] + spacing[2]) / 2 }]}
         showsVerticalScrollIndicator={false}
         renderItem={({ item }) => (
           <ProductTile
@@ -1594,6 +2092,7 @@ export default function VendreScreen() {
             currency={currency}
             cartQty={cartQtyMap[item.id]?.unit ?? 0}
             cartBulkQty={cartQtyMap[item.id]?.bulk ?? 0}
+            variants={variantsByProduct[item.id]}
             onAdd={() => {
               if (item.sale_price <= 0) {
                 Alert.alert('Prix manquant', 'Ajoutez un prix de vente pour ce produit.');
@@ -1617,58 +2116,130 @@ export default function VendreScreen() {
           />
         )}
         ListEmptyComponent={
-          <View style={styles.emptySearch}>
-            <Text variant="body" color="secondary">Aucun résultat pour "{search}"</Text>
-          </View>
+          search.trim() ? (
+            <NoResultsState
+              query={search}
+              createLabel={`+ Nouveau produit « ${search.trim()} »`}
+              onCreate={() => router.push({
+                pathname: '/(app)/(tabs)/catalogue',
+                params: { openForm: '1', prefillName: search.trim() },
+              })}
+            />
+          ) : null
         }
       />}
 
-      {/* Cart panel (floating) — only in Vente mode */}
-      {mode === 'vente' && cart.length > 0 && (
-        <View style={styles.cartPanel}>
-          <ScrollView ref={cartScrollRef} style={styles.cartScroll} keyboardShouldPersistTaps="handled">
-            {cart.map(line => {
-              const rowKey = line.variant_id ?? `${line.product.id}-${line.is_bulk}`;
-              return (
-                <CartRow
-                  key={rowKey}
-                  line={line}
-                  currency={currency}
-                  onInc={() => setQty(line.product.id, line.qty + 1, line.is_bulk, line.variant_id)}
-                  onDec={() => setQty(line.product.id, line.qty - 1, line.is_bulk, line.variant_id)}
-                  onRemove={() => removeFromCart(line.product.id, line.is_bulk, line.variant_id)}
-                  onToggleBulk={() => toggleBulk(line.product.id, line.is_bulk)}
-                  onSetQty={(qty) => setQty(line.product.id, qty, line.is_bulk, line.variant_id)}
-                  onEditStart={() => {
-                    const y = cartRowOffsets.current[rowKey];
-                    if (y !== undefined) cartScrollRef.current?.scrollTo({ y, animated: true });
-                  }}
-                  onLayout={e => { cartRowOffsets.current[rowKey] = e.nativeEvent.layout.y; }}
-                />
-              );
-            })}
-          </ScrollView>
-          <View style={styles.cartFooter}>
-            <View style={styles.cartTotalRow}>
-              <Text variant="caption" color="secondary">
-                {cartCount} article{cartCount > 1 ? 's' : ''}
+      {/* Cart panel (floating) — only in Vente mode. A "Dock", not a growing
+          list: a fixed-height summary (the last item added, plus how many
+          other lines exist) instead of every line rendered inline, so the
+          panel's own height stays constant regardless of cart size while
+          actively selling — the previous version's per-item rows were real,
+          reported visual clutter once a cart had more than one or two
+          lines. Rendered as one rounded card (summary row + checkout footer
+          together) — an earlier pass had this as a full-bleed strip with a
+          hairline divider, which read as a different, leftover container
+          language from the rounded product cards above it; the card
+          boundary now does all the grouping work on its own. Tapping the
+          summary opens the full itemized "Panier" sheet below for
+          edits/removal. Post-sale confirmation (amount, share, "Annuler la
+          vente") lives entirely in the confirm sheet further down — this
+          panel just unmounts on success like it always did, once the cart
+          clears. */}
+      {mode === 'vente' && cart.length > 0 && (() => {
+        const lastLine = cart[cart.length - 1];
+        const otherLinesCount = cart.length - 1;
+        return (
+          <View style={styles.cartPanel} onLayout={e => setCartPanelHeight(e.nativeEvent.layout.height)}>
+            <Pressable onPress={() => setShowCartSheet(true)} style={styles.cartSummaryRow} hitSlop={4}>
+              <Text variant="label" numberOfLines={1} style={{ flex: 1 }}>
+                {lastLine.qty} {lastLine.product.name}{lastLine.variant_name ? ` · ${lastLine.variant_name}` : ''}
+                {otherLinesCount > 0 && (
+                  <Text variant="label" color="secondary"> et {otherLinesCount} autre{otherLinesCount > 1 ? 's' : ''}</Text>
+                )}
               </Text>
-              <Text variant="amountLarge" numberOfLines={1} style={styles.cartTotalAmount}>
-                {formatAmount(displayTotal, currency)}
-              </Text>
-            </View>
-            <Button label="Encaisser maintenant" onPress={openPay} size="lg" fullWidth />
-            <Pressable onPress={openCredit} style={styles.creditLink}>
-              <Text variant="caption" style={{ color: palette.primary }}>ou enregistrer à crédit</Text>
+              {/* Purple = "taps forward to more," this screen's own rule for
+                  a chevron (matches the payment chip/Encaisser fill) — gray
+                  undersold this as the only entry point to the full cart. */}
+              <Ionicons name="chevron-forward" size={18} color={palette.primary} />
             </Pressable>
+            {renderCheckoutFooter()}
           </View>
-        </View>
-      )}
+        );
+      })()}
 
-      {/* FAB to add first product — Vente mode, no products, not vendeur */}
-      {mode === 'vente' && products.length === 0 && !isVendeur && (
+      {/* Full itemized cart — reached by tapping the Dock summary above.
+          FormSheet (not a bespoke Modal) since CartRow's quantity edit uses
+          a TextInput — see CLAUDE.md's "Form sheets — Android keyboard
+          flicker" note on why any Modal with a keyboard field needs its
+          statusBarTranslucent/navigationBarTranslucent handling. */}
+      <FormSheet
+        visible={showCartSheet}
+        onClose={() => setShowCartSheet(false)}
+        title="Panier"
+        cancelLabel="Fermer"
+        ref={cartScrollRef}
+        keyboardShouldPersistTaps="handled"
+        headerRight={
+          <Pressable
+            onPress={() => Alert.alert('Vider le panier ?', '', [
+              { text: 'Annuler', style: 'cancel' },
+              { text: 'Vider', style: 'destructive', onPress: clearCart },
+            ])}
+            style={{ minWidth: 64, alignItems: 'flex-end' }}
+          >
+            <Text variant="body" color="danger">Vider</Text>
+          </Pressable>
+        }
+        footer={
+          <View style={styles.cartSheetFooter}>
+            {renderCheckoutFooter({ borderTopWidth: 0, paddingBottom: Math.max(insets.bottom, spacing[5]) })}
+          </View>
+        }
+      >
+        {cart.map(line => {
+          const rowKey = line.variant_id ?? `${line.product.id}-${line.is_bulk}`;
+          return (
+            <CartRow
+              key={rowKey}
+              line={line}
+              currency={currency}
+              onInc={() => setQty(line.product.id, line.qty + 1, line.is_bulk, line.variant_id)}
+              onDec={() => setQty(line.product.id, line.qty - 1, line.is_bulk, line.variant_id)}
+              onRemove={() => removeFromCart(line.product.id, line.is_bulk, line.variant_id)}
+              onToggleBulk={() => toggleBulk(line.product.id, line.is_bulk)}
+              onSetQty={(qty) => setQty(line.product.id, qty, line.is_bulk, line.variant_id)}
+              onEditStart={() => {
+                const y = cartRowOffsets.current[rowKey];
+                if (y !== undefined) cartScrollRef.current?.scrollTo({ y, animated: true });
+              }}
+              onLayout={e => { cartRowOffsets.current[rowKey] = e.nativeEvent.layout.y; }}
+            />
+          );
+        })}
+      </FormSheet>
+
+      {/* FAB to add first product — Vente mode, no products, not vendeur.
+          Scoped to offline now: the online case has its own explicit
+          "Ajouter un produit" button in the empty-state block above, and
+          showing both would just duplicate the same action twice on one
+          screen. Offline still needs it — that branch's own empty state has
+          no button of its own. */}
+      {mode === 'vente' && products.length === 0 && !isVendeur && offline && (
         <AnimatedFAB onPress={() => router.push({ pathname: '/(app)/(tabs)/catalogue', params: { openForm: '1' } })} />
       )}
+
+      {/* Vente rapide — reached from the empty-catalog "Vente rapide"
+          button above. Reuses the same rapid capture sheet Accueil's "+"
+          opens, defaulting straight to Vente mode here since Crédit already
+          has its own always-visible tab on this screen. */}
+      <QuickCaptureSheet
+        visible={showQuickCapture}
+        onClose={() => setShowQuickCapture(false)}
+        businessId={businessId}
+        userId={userId}
+        currency={currency}
+        initialMode="vente"
+      />
 
       <VariantPickerSheet
         visible={variantPickerProduct !== null}
@@ -1700,12 +2271,17 @@ export default function VendreScreen() {
         submitting={submitting}
       />
 
-      {/* Confirm + share sheet — slides up immediately after each online sale */}
+      {/* Confirm + share sheet — its own spring-in / eased-out motion below
+          (confirmSheetY/confirmBackdropOpacity), not the Modal's built-in
+          animationType, which is a fixed curve with no room to make the
+          exit feel calmer. */}
       <Modal
         visible={showConfirmSheet}
         transparent
-        animationType="slide"
-        onRequestClose={() => setShowConfirmSheet(false)}
+        animationType="none"
+        onRequestClose={closeConfirmSheet}
+        statusBarTranslucent
+        navigationBarTranslucent
       >
         {/* Receipt at (0,0) — within modal bounds so GPU composites it; captureRef reads it directly */}
         {lastReceipt && (
@@ -1723,12 +2299,11 @@ export default function VendreScreen() {
         {/* Outer container — box-none so it never consumes touches itself */}
         <View style={styles.sheetOverlay} pointerEvents="box-none">
           {/* Backdrop — sits behind the sheet in z-order (rendered first) */}
-          <Pressable
-            style={[StyleSheet.absoluteFill, { backgroundColor: 'rgba(0,0,0,0.45)' }]}
-            onPress={() => setShowConfirmSheet(false)}
-          />
+          <Animated.View pointerEvents="auto" style={[StyleSheet.absoluteFill, { backgroundColor: 'rgba(0,0,0,0.45)', opacity: confirmBackdropOpacity }]}>
+            <Pressable style={StyleSheet.absoluteFill} onPress={closeConfirmSheet} />
+          </Animated.View>
           {/* Sheet — rendered after backdrop, higher z-order, captures its own touches */}
-          <View style={styles.sheet}>
+          <Animated.View style={[styles.sheet, { transform: [{ translateY: confirmSheetY }] }]}>
             <View style={styles.sheetHead}>
               <View style={styles.sheetCheckCircle}>
                 <Animated.View style={[styles.sheetCheckmark, { width: sheetCheckW }]} />
@@ -1769,13 +2344,25 @@ export default function VendreScreen() {
                 </View>
               </View>
               <Button label="Partager le reçu" onPress={handleShareReceipt} fullWidth size="lg" />
-              <Pressable onPress={() => setShowConfirmSheet(false)} style={styles.ignorePressable}>
-                <Text variant="caption" color="secondary">Ignorer</Text>
+              {/* Replaces the old plain "Ignorer" — cancels right here, in
+                  this same sheet, instead of closing it to open a separate
+                  cancel dialog elsewhere. Falls back to a plain dismiss for
+                  a queued/offline sale, which has no server row yet to
+                  cancel (confirmSaleId is null in that case). */}
+              <Pressable onPress={handleCancelFromConfirmSheet} style={styles.ignorePressable}>
+                <Text variant="caption" style={{ color: confirmSaleId ? palette.warning : palette.textSecondary }}>
+                  {confirmSaleId ? 'Annuler la vente' : 'Ignorer'}
+                </Text>
               </Pressable>
             </View>
-          </View>
+          </Animated.View>
         </View>
       </Modal>
+      {Platform.OS === 'ios' && (
+        <InputAccessoryView nativeID={VENDRE_SILENT_ACCESSORY_ID}>
+          <View style={{ height: 0 }} />
+        </InputAccessoryView>
+      )}
     </Screen>
   );
 }
@@ -1793,7 +2380,7 @@ function makeStyles(p: Palette) {
     },
     header: {
       flexDirection: 'row', alignItems: 'center', justifyContent: 'space-between',
-      paddingHorizontal: spacing[5], paddingTop: spacing[4], paddingBottom: spacing[2],
+      paddingHorizontal: spacing[5], paddingTop: spacing[3], paddingBottom: spacing[2],
     },
     modeToggle: {
       flexDirection: 'row', marginHorizontal: spacing[5], marginBottom: spacing[3],
@@ -1802,45 +2389,8 @@ function makeStyles(p: Palette) {
     modeBtn: {
       flex: 1, paddingVertical: spacing[2], alignItems: 'center',
     },
-    creditForm: {
-      paddingHorizontal: spacing[5], paddingBottom: spacing[4], gap: spacing[3],
-    },
-    creditInput: {
-      borderWidth: 1, borderRadius: radius.md,
-      paddingHorizontal: spacing[3], paddingVertical: spacing[3],
-      fontSize: 15,
-    },
-    creditInputAmount: {},
-    creditAmountInner: {
-      paddingHorizontal: spacing[3], paddingVertical: spacing[3],
-      fontSize: 15,
-    },
-    moneyAmountBox: {
-      borderWidth: 1, borderRadius: radius.md,
-      flexDirection: 'row', alignItems: 'center',
-      paddingHorizontal: spacing[4], paddingVertical: spacing[4],
-      gap: spacing[2],
-    },
-    moneyAmountInput: {
-      flex: 1, fontSize: 32, fontWeight: '800', textAlign: 'center',
-    },
-    moneyAmountCurrency: {
-      fontSize: 16, fontWeight: '600',
-    },
-    creditClientBtn: {
-      borderWidth: 1, borderRadius: radius.md,
-      padding: spacing[3], alignItems: 'center', justifyContent: 'center',
-    },
-    creditClientList: {
-      borderWidth: 1, borderRadius: radius.md, padding: spacing[3],
-    },
-    creditClientSearch: {
-      flex: 1, borderWidth: 1, borderRadius: radius.md,
-      paddingHorizontal: spacing[3], paddingVertical: spacing[2], fontSize: 15,
-    },
-    creditClientRow: {
-      flexDirection: 'row', alignItems: 'center', gap: spacing[2],
-      paddingVertical: spacing[3], borderBottomWidth: 1,
+    creditTabContent: {
+      paddingHorizontal: spacing[5], paddingBottom: spacing[4],
     },
     searchRow: { paddingHorizontal: spacing[5], paddingBottom: spacing[2] },
     hintBanner: {
@@ -1850,7 +2400,12 @@ function makeStyles(p: Palette) {
       marginBottom: spacing[2],
     },
 
-    tileList: { paddingHorizontal: spacing[5], paddingBottom: spacing[6] },
+    // Base clearance includes the floating tab bar's own footprint — without
+    // this, an empty cart (the common case) left the grid's last row only
+    // spacing[6] (24px) clear of a ~88px floating pill. The cart-open case
+    // below still fully replaces this with its own cartPanelHeight-based
+    // value, so this only fixes the no-cart state.
+    tileList: { paddingHorizontal: spacing[5], paddingBottom: spacing[6] + FLOATING_TAB_BAR_CLEARANCE },
     tileRow: { gap: TILE_GAP, marginBottom: TILE_GAP },
     tile: {
       flex: 1, backgroundColor: p.surface, borderRadius: radius.lg,
@@ -1858,6 +2413,10 @@ function makeStyles(p: Palette) {
     },
     tileDisabled: { opacity: 0.45 },
     tileName: { minHeight: 36 },
+    // Neutral and tabular — an ordinary price is not an accent moment (see
+    // the Vendre visual-refinement brief's color-hierarchy rule).
+    tilePrice: { color: p.textPrimary, fontVariant: ['tabular-nums'] as ['tabular-nums'] },
+    priceHeaderRow: { paddingHorizontal: spacing[5], alignItems: 'flex-end', paddingBottom: spacing[1] },
     tileBadge: {
       position: 'absolute', top: 8, right: 8, backgroundColor: p.primary,
       borderRadius: radius.full, width: 22, height: 22, alignItems: 'center', justifyContent: 'center', zIndex: 10,
@@ -1868,11 +2427,39 @@ function makeStyles(p: Palette) {
       borderWidth: 1, borderColor: p.warning,
     },
 
+    // The Dock is one card, not a full-bleed strip — same container language
+    // as the product cards above it (rounded, inset, bordered). `left`/
+    // `right` sit at the same spacing[4] the Encaisser button already used
+    // as its own margin before this was a card, so the button's real
+    // on-screen position is unchanged, only now traced by a visible boundary
+    // instead of implied by a hairline. No border/shadow direction specific
+    // to "docked at the bottom" any more (the old `borderTopWidth` +
+    // upward-only shadow) — it floats on all sides now, so it gets the same
+    // all-around elevation treatment `Card`'s own `elevated` prop uses.
     cartPanel: {
-      position: 'absolute', bottom: 0, left: 0, right: 0,
-      backgroundColor: p.surface, borderTopWidth: 1, borderTopColor: p.border,
-      shadowColor: p.shadow, shadowOffset: { width: 0, height: -4 },
-      shadowOpacity: 0.1, shadowRadius: 12, elevation: 10,
+      position: 'absolute', bottom: FLOATING_TAB_BAR_CLEARANCE + spacing[4], left: spacing[4], right: spacing[4],
+      backgroundColor: p.surface, borderRadius: radius.xl, borderWidth: 1, borderColor: p.border,
+      overflow: 'hidden', ...shadow.md,
+    },
+    // The Dock's own one-line summary — deliberately just text + a chevron,
+    // no price (the total already lives on the "Encaisser" button directly
+    // below, same restraint as cartFooter's own comment on not repeating
+    // information twice). No border of its own — the card boundary does all
+    // the grouping work; a divider here would fake structure the outer card
+    // already provides.
+    cartSummaryRow: {
+      flexDirection: 'row', alignItems: 'center', justifyContent: 'space-between',
+      paddingHorizontal: spacing[4], paddingVertical: spacing[4], gap: spacing[2],
+    },
+    // FormSheet's `footer` prop has no styling of its own (see CLAUDE.md's
+    // "Form sheets" note) — every screen supplies its own. No padding here:
+    // the inner cartFooter (via renderCheckoutFooter's styleOverride) already
+    // supplies it, including the insets.bottom-aware bottom edge, since this
+    // View renders as a sibling of the sheet's SafeAreaView rather than
+    // inside it.
+    cartSheetFooter: {
+      backgroundColor: p.background,
+      ...shadow.md, shadowOffset: { width: 0, height: -2 },
     },
     sheetOverlay: { flex: 1, justifyContent: 'flex-end' },
     sheet: { backgroundColor: p.surface, borderTopLeftRadius: 24, borderTopRightRadius: 24, overflow: 'hidden' },
@@ -1902,7 +2489,6 @@ function makeStyles(p: Palette) {
       borderRadius: radius.card, padding: spacing[4],
     },
     ignorePressable: { paddingVertical: spacing[2] },
-    cartScroll: { maxHeight: 160 },
     cartRow: {
       flexDirection: 'row', alignItems: 'center', paddingHorizontal: spacing[4],
       paddingVertical: spacing[2], borderBottomWidth: 1, borderBottomColor: p.border, gap: spacing[2],
@@ -1924,8 +2510,14 @@ function makeStyles(p: Palette) {
       color: p.textPrimary, paddingVertical: 2,
       borderBottomWidth: 1.5, borderBottomColor: p.primary,
     },
+    // No border here in the Dock — the card's own outer boundary (cartPanel)
+    // already separates the summary row above from this footer; an internal
+    // hairline on top of that would fake structure the card already
+    // provides. The full-cart sheet's own call site still passes an explicit
+    // `borderTopWidth: 0` override too — now redundant, kept as it's still
+    // accurate and self-documenting there.
     cartFooter: {
-      padding: spacing[4], borderTopWidth: 1, borderTopColor: p.border, gap: spacing[3],
+      padding: spacing[4], gap: spacing[3],
     },
     cartTotalRow: {
       flexDirection: 'row', alignItems: 'baseline',
@@ -1933,13 +2525,30 @@ function makeStyles(p: Palette) {
     },
     cartTotalAmount: { flexShrink: 1, textAlign: 'right' },
     creditLink: { alignItems: 'center' },
+    payMethodChips: { flexDirection: 'row', gap: spacing[2] },
+    payMethodChip: {
+      flex: 1, alignItems: 'center', paddingVertical: spacing[2],
+      borderRadius: radius.full, borderWidth: 1, borderColor: p.border, backgroundColor: p.surface,
+    },
+    payMethodChipActive: { backgroundColor: p.primary, borderColor: p.primary },
 
     emptyFull: { flex: 1, alignItems: 'center', justifyContent: 'center', padding: spacing[8], gap: spacing[3] },
     emptyDesc: { textAlign: 'center', maxWidth: 260 },
-    fabContainer: { position: 'absolute', bottom: 194, right: spacing[4], zIndex: 10 },
-    fab: { width: 56, height: 56, borderRadius: radius.full, backgroundColor: p.primary, alignItems: 'center', justifyContent: 'center', shadowColor: p.textPrimary, shadowOffset: { width: 0, height: 4 }, shadowOpacity: 0.18, shadowRadius: 8, elevation: 8 },
-    fabIcon: { fontSize: 28, lineHeight: 32, fontWeight: '300' as const, color: p.textInverse, marginTop: -2 },
-    emptySearch: { alignItems: 'center', paddingVertical: spacing[10] },
+    emptyActions: { width: '100%', maxWidth: 320, gap: spacing[3], marginTop: spacing[2] },
+    // 194 was tuned against the old flush tab bar's flex space; the floating
+    // pill no longer reserves that space, so the same clearance is added
+    // here too to keep this FAB sitting exactly where it did before.
+    fabContainer: { position: 'absolute', bottom: 194 + FLOATING_TAB_BAR_CLEARANCE, right: spacing[4], zIndex: 10 },
+    // Extended (icon + label), never a bare "+" — an icon-only action button
+    // can't be recognized by name, only by shape.
+    fabExtended: {
+      flexDirection: 'row', alignItems: 'center', gap: spacing[2],
+      height: 56, paddingHorizontal: spacing[5], borderRadius: radius.full,
+      backgroundColor: p.primary,
+      shadowColor: p.textPrimary, shadowOffset: { width: 0, height: 4 },
+      shadowOpacity: 0.18, shadowRadius: 8, elevation: 8,
+    },
+    fabExtendedLabel: { fontFamily: fontFamily.semibold, fontSize: 15, color: p.textInverse },
     outOfStockHeader: { flexDirection: 'row', alignItems: 'center', paddingTop: spacing[4], paddingBottom: spacing[3] },
     outOfStockLine: { flex: 1, height: StyleSheet.hairlineWidth, backgroundColor: p.border },
 
@@ -1958,9 +2567,44 @@ function makeStyles(p: Palette) {
       paddingHorizontal: spacing[5], paddingTop: spacing[5], paddingBottom: spacing[5],
       borderBottomWidth: 1, borderBottomColor: p.border, gap: spacing[1],
     },
-    totalBig: { fontSize: 36, lineHeight: 50, fontWeight: '700', letterSpacing: -0.5 },
+    totalBig: { fontFamily: fontFamily.bold, fontSize: 36, lineHeight: 50, letterSpacing: -0.5 },
 
     payContent: { padding: spacing[5], gap: spacing[4] },
+
+    // "Choisir le client" with zero clients — no search field, no list
+    // header, just the invitation to create the first one. Centered via the
+    // FormSheet's own flexGrow'd content container (see its
+    // contentContainerStyle above), not a fixed height guess.
+    creditEmptyClients: {
+      flex: 1, alignItems: 'center', justifyContent: 'center',
+      paddingHorizontal: spacing[8], paddingVertical: spacing[10], gap: spacing[3],
+    },
+    creditEmptyIconWrap: {
+      width: 64, height: 64, borderRadius: 32,
+      borderWidth: 1.5, borderColor: p.border,
+      alignItems: 'center', justifyContent: 'center',
+      marginBottom: spacing[2],
+    },
+
+    // "Il devra 340 USD" agreement sentence — a plain, neutral card, not an
+    // amber warning box: the big amber number above already carries the
+    // "money at risk" signal, so this shouldn't double up on it.
+    creditSentenceBox: {
+      backgroundColor: p.background, borderRadius: radius.card,
+      borderWidth: 1, borderColor: p.border, padding: spacing[4],
+    },
+    // "Encaisser une partie" / "Ajouter une réduction" — collapsed rows,
+    // values shown in place, a plus (unused) or chevron (editable) on the
+    // right per the design brief's own anatomy.
+    creditCollapsedRow: {
+      flexDirection: 'row', alignItems: 'center', justifyContent: 'space-between',
+      paddingVertical: spacing[3],
+    },
+    creditTermsClientRow: {
+      flexDirection: 'row', alignItems: 'center', gap: spacing[3],
+      paddingTop: spacing[4], marginTop: spacing[2],
+      borderTopWidth: 1, borderTopColor: p.border,
+    },
 
     clientSection: {
       paddingHorizontal: spacing[5],
@@ -1993,7 +2637,7 @@ function makeStyles(p: Palette) {
       borderBottomWidth: 1, borderBottomColor: p.border,
     },
     clientAvatar: { width: 40, height: 40, borderRadius: 20, justifyContent: 'center', alignItems: 'center' },
-    clientAvatarText: { fontSize: 16, fontWeight: '700', color: p.textPrimary },
+    clientAvatarText: { fontFamily: fontFamily.bold, fontSize: 16, color: p.textPrimary },
 
     methodSection: { paddingHorizontal: spacing[5], paddingTop: spacing[3], paddingBottom: spacing[4], gap: spacing[2] },
     sectionLabel: { marginBottom: spacing[2] },

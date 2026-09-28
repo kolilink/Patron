@@ -17,7 +17,12 @@ interface BusinessDetailsStepProps {
   // point (welcome/creer.tsx) — an already-authenticated user reaching this
   // via onboarding/creer.tsx has no equivalent referral flow yet.
   showReferralCode?: boolean;
-  submitLabel?: string;
+  // Required, not defaulted — the two call sites are different moments
+  // ("Ouvrir mon commerce" for a fresh signup vs. "Créer le commerce" for an
+  // already-verified user adding another) and a shared fallback previously
+  // let one of them go stale (still "Créer mon commerce") without anyone
+  // noticing, since there was nothing forcing a deliberate choice.
+  submitLabel: string;
   autoFocusName?: boolean;
 }
 
@@ -27,7 +32,7 @@ interface BusinessDetailsStepProps {
 // because the two used to be copy-pasted and had already drifted apart in
 // currency-lock copy and button label.
 export function BusinessDetailsStep({
-  loading, error, initialCurrency, onSubmit, showReferralCode, submitLabel = 'Créer mon commerce', autoFocusName,
+  loading, error, initialCurrency, onSubmit, showReferralCode, submitLabel, autoFocusName,
 }: BusinessDetailsStepProps) {
   const { palette } = useTheme();
   const styles = makeStyles(palette);
@@ -63,7 +68,7 @@ export function BusinessDetailsStep({
         value={name}
         onChangeText={t => { setName(t); if (nameError) setNameError(null); }}
         error={nameError ?? undefined}
-        placeholder="Boutique Mamadou"
+        placeholder="Commerce de Mamadou"
         autoCapitalize="words"
         returnKeyType="done"
         onSubmitEditing={handleSubmit}
@@ -110,13 +115,6 @@ export function BusinessDetailsStep({
             })}
           </View>
         )}
-
-        <View style={styles.lockNote}>
-          <Ionicons name="lock-closed-outline" size={13} color={palette.textDisabled} />
-          <Text variant="caption" color="secondary" style={{ flex: 1 }}>
-            La monnaie sera verrouillée après votre première vente.
-          </Text>
-        </View>
       </View>
 
       {showReferralCode && (
@@ -133,6 +131,9 @@ export function BusinessDetailsStep({
       )}
 
       <Button label={submitLabel} loading={loading} onPress={handleSubmit} fullWidth size="lg" />
+      <Text variant="caption" color="secondary" style={styles.currencyNote}>
+        Modifiable jusqu&apos;à votre première vente.
+      </Text>
     </View>
   );
 }
@@ -156,6 +157,6 @@ function makeStyles(p: Palette) {
     currencyRowBorder:   { borderBottomWidth: StyleSheet.hairlineWidth, borderBottomColor: p.border },
     currencyFlag:        { fontSize: 22, width: 30, textAlign: 'center' as const },
 
-    lockNote: { flexDirection: 'row', alignItems: 'center', gap: spacing[2], paddingHorizontal: spacing[1] },
+    currencyNote: { textAlign: 'center' },
   });
 }

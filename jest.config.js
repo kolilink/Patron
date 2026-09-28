@@ -20,6 +20,7 @@ module.exports = {
     '^expo-file-system(/.*)?$': '<rootDir>/__mocks__/expo-file-system.js',
     '^@react-native-async-storage/async-storage$': '<rootDir>/__mocks__/async-storage.js',
     '^@sentry/react-native$': '<rootDir>/__mocks__/sentry.js',
+    '^react-native$': '<rootDir>/__mocks__/react-native.js',
   },
   transform: {
     '^.+\\.tsx?$': ['ts-jest', {

@@ -12,7 +12,7 @@ import { runReconciliation, renderReconciliationSection } from '../_shared/recon
 // it only ever delivers to the founder's own inbox.
 //
 // When include_reconciliation is true (used by the daily 6am combined
-// report), this function also runs the 78-check reconciliation + financial
+// report), this function also runs the 82-check reconciliation + financial
 // snapshot itself (service-role DB access, same as send-reconciliation-report)
 // and renders it as the top section of the email, above the caller's own
 // `html` section — so the founder gets exactly ONE email per day instead of

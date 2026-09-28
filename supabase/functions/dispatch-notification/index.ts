@@ -1,5 +1,6 @@
 import { serve } from 'https://deno.land/std@0.177.0/http/server.ts';
 import { createClient } from 'https://esm.sh/@supabase/supabase-js@2';
+import { safeErrorResponse } from '../_shared/errors.ts';
 
 const corsHeaders = {
   'Access-Control-Allow-Origin': '*',
@@ -12,11 +13,13 @@ const EXPO_PUSH_URL = 'https://exp.host/--/api/v2/push/send';
 const ROUTE_MAP: Record<string, string> = {
   sale_completed:    '/(app)/ventes',
   sale_cancelled:    '/(app)/ventes',
+  sale_edited:       '/(app)/ventes',
   credit_paid:       '/(app)/ventes',
   expense_submitted: '/(app)/depenses',
   expense_approved:  '/(app)/depenses',
   expense_rejected:  '/(app)/depenses',
-  low_stock:         '/(app)/catalogue',
+  low_stock:         '/(app)/(tabs)/catalogue',
+  price_changed:     '/(app)/(tabs)/catalogue',
   member_joined:     '/(app)/equipe',
   role_changed:      '/(app)/equipe',
   member_removed:    '/(app)/equipe',
@@ -28,6 +31,24 @@ const ROUTE_MAP: Record<string, string> = {
   support_reply:         '/(app)/support',
   alpha_quota_reset:     '/(app)/alpha',
   daily_digest:          '/(app)/rapports',
+  // nudge_1 skips the wall entirely — the copy promises "une dette, 30
+  // secondes," so tapping it lands exactly where the fork's own "Une dette"
+  // button lands (vendre.tsx's mode=credit quick-debt form), not back on a
+  // generic choice screen. nudge_2 names all three options, so it routes to
+  // the wall itself, which still offers all three.
+  activation_nudge_1:    '/(app)/(tabs)/vendre?mode=credit',
+  activation_nudge_2:    '/(app)/(tabs)/',
+  // All three variants nudge toward selling (directly, or as the natural
+  // next step after a product/debt) — plain Vendre, no mode param, which
+  // defaults to 'vente'.
+  second_action_reminder: '/(app)/(tabs)/vendre',
+  // Same routing as daily_digest — a revenue figure, so Rapports is where
+  // the fuller picture behind the number lives.
+  revenue_milestone: '/(app)/rapports',
+  // Fallback only — debt_aging_reminder always supplies its own per-client
+  // route via payload.route (see the override just below), since which
+  // client's carnet to open can't be known from the event type alone.
+  debt_aging_reminder: '/(app)/clients',
 };
 
 // ─── Three-line format ───────────────────────────────────────────────────────
@@ -38,11 +59,13 @@ const ROUTE_MAP: Record<string, string> = {
 const SUBTITLE_MAP: Record<string, string | null> = {
   sale_completed:    null, // body already says "a vendu" — a "Vente" subtitle was redundant
   sale_cancelled:    'Vente annulée',
-  credit_paid:       'Crédit soldé',
+  sale_edited:       'Vente modifiée',
+  credit_paid:       'Crédit',
   expense_submitted: 'Dépense en attente',
   expense_approved:  'Dépense validée',
   expense_rejected:  'Dépense refusée',
   low_stock:         'Stock critique',
+  price_changed:     'Prix modifié',
   member_joined:     'Équipe',
   role_changed:      'Votre compte',
   member_removed:    'Votre compte',
@@ -54,29 +77,67 @@ const SUBTITLE_MAP: Record<string, string | null> = {
   support_reply:         null, // body is a self-explanatory full sentence — no subtitle needed
   alpha_quota_reset:     null, // body is a self-explanatory full sentence — no subtitle needed
   daily_digest:          null, // body is a self-explanatory full sentence — no subtitle needed
+  activation_nudge_1:    null, // body is a self-explanatory full sentence — no subtitle needed
+  activation_nudge_2:    null, // body is a self-explanatory full sentence — no subtitle needed
+  second_action_reminder: null, // body is a self-explanatory full sentence — no subtitle needed
+  revenue_milestone: null, // body is a self-explanatory full sentence — no subtitle needed
+  debt_aging_reminder: null, // body already opens with "Rappel :" — no subtitle needed
 };
 
 function buildBody(eventType: string, p: Record<string, string | number>): string {
   switch (eventType) {
-    // Subtitle carries the "Vente" label — body is: seller a vendu {desc} pour {amount}
-    case 'sale_completed':
-      return `${p.seller} a vendu ${p.desc} pour ${p.amount}`;
+    // Subtitle carries the "Vente" label. With a resolved seller name:
+    // "{seller} a vendu {desc} pour {amount}". When the seller has no name at
+    // all (no membership display_name, no profile name), don't fall back to a
+    // generic "Vendeur" placeholder — reframe product-first: "{desc} a/ont été
+    // vendu(s) pour {amount}". qty drives the singular/plural agreement.
+    case 'sale_completed': {
+      if (p.seller) return `${p.seller} a vendu ${p.desc} pour ${p.amount}`;
+      const saleQty = Number(p.qty) || 0;
+      return saleQty > 1
+        ? `${p.desc} ont été vendus pour ${p.amount}`
+        : `${p.desc} a été vendu pour ${p.amount}`;
+    }
     // Subtitle carries "Vente annulée" — body is: amount and reason if any
     case 'sale_cancelled':
       return `${p.amount}${p.reason ? ` — ${p.reason}` : ''}`;
-    // Subtitle carries "Crédit soldé" — body: client and amount
-    case 'credit_paid':
-      return `${p.customer} — ${p.amount}`;
-    // Subtitle carries "Dépense en attente" — body: who · amount — description
+    // Subtitle carries "Vente modifiée" — body: who corrected it and the new total
+    case 'sale_edited':
+      return `${p.editor} · ${p.amount}`;
+    // Subtitle carries "Crédit" — body states in full whether this payment
+    // cleared the debt entirely or was only partial, and names the client
+    // when the sale/credit has one. p.status is 'total' | 'partiel'; p.amount
+    // is the debt just cleared (total) or the amount just paid (partiel) —
+    // never the same figure for both, see stores/ventes.ts.
+    case 'credit_paid': {
+      const hasName = !!p.customer;
+      if (p.status === 'total') {
+        return hasName
+          ? `${p.customer} a totalement payé sa dette de ${p.amount}`
+          : `Une dette de ${p.amount} a été totalement payée`;
+      }
+      return hasName
+        ? `${p.customer} a payé ${p.amount} de son crédit`
+        : `Un paiement de ${p.amount} a été reçu sur un crédit`;
+    }
+    // Subtitle carries "Dépense en attente" — full sentence naming who spent
     case 'expense_submitted':
-      return `${p.name} · ${p.amount} — ${p.description}`;
-    // Subtitle carries result — body: amount and description
+      return `${p.name} a fait une dépense de ${p.amount} — ${p.description}`;
+    // Subtitle carries result — full sentence addressed to the submitter
     case 'expense_approved':
+      return `Votre dépense de ${p.amount} a été confirmée — ${p.description}`;
     case 'expense_rejected':
-      return `${p.amount} — ${p.description}`;
+      return `Votre dépense de ${p.amount} n'a pas été confirmée — ${p.description}`;
     // Subtitle carries "Stock critique" — body: flat, no pronoun, fast to scan
     case 'low_stock':
       return `Il reste ${p.qty} ${p.product} en stock`;
+    // Subtitle carries "Prix modifié" — full sentence, "de X à Y" (not a bare
+    // arrow) states both figures explicitly so a price quietly lowered is
+    // visible at a glance, not just "something changed".
+    case 'price_changed': {
+      const target = p.variant ? `${p.product} (${p.variant})` : String(p.product);
+      return `${p.editor} a changé le prix de ${target} de ${p.old_price} à ${p.new_price}`;
+    }
     // Subtitle carries "Équipe" — body: name and role
     case 'member_joined':
       return `${p.name} · ${p.role}`;
@@ -92,9 +153,13 @@ function buildBody(eventType: string, p: Record<string, string | number>): strin
       return `${p.sender_name} vous a envoyé une demande d'ami`;
     case 'partnership_accepted':
       return `${p.acceptor_name} a accepté votre demande`;
-    // Subtitle carries "Livraison" — body: count and supplier
-    case 'po_received':
-      return `${p.N} article${Number(p.N) > 1 ? 's' : ''} de ${p.supplier}`;
+    // Subtitle carries "Livraison" — full sentence, singular/plural agreement
+    case 'po_received': {
+      const n = Number(p.N) || 0;
+      return n > 1
+        ? `${n} nouveaux produits de ${p.supplier} sont arrivés`
+        : `${n} nouveau produit de ${p.supplier} est arrivé`;
+    }
     // No subtitle — generic full sentence (never the merchant's name or raw
     // message text, same posture as support_reply below)
     case 'support_message':
@@ -111,6 +176,68 @@ function buildBody(eventType: string, p: Record<string, string | number>): strin
       return p.tier === 'bonne'
         ? `La journée est bonne, vous avez fait : ${p.amount}.`
         : 'La journée était calme. On se retrouve demain.';
+    // First activation nudge (~2h after business creation, still nothing
+    // recorded) — targets the debt/carnet action deliberately, not the
+    // product or sale action: most shop owners already track customer debts
+    // on a paper notebook, so "digitize what you already know" is zero new
+    // data entry and the lowest-friction of the three fork actions. Opens
+    // with a question, not a command — "un client vous doit de l'argent ?"
+    // is a near-guaranteed internal "oui" for any shop owner who's been open
+    // more than a day, so the self-recognition happens before the ask
+    // instead of after it. See migration_v161.sql.
+    case 'activation_nudge_1':
+      return "Ah, un client vous doit de l'argent ? Notez-le, ça prend environ 30 secondes";
+    // Second activation nudge (~20h after creation, still nothing recorded)
+    // — this person already didn't act on nudge_1, so it can't just repeat
+    // that pitch. Opens by naming the likely real reason (busy, not
+    // uninterested) instead of nagging, then an honest, ungimmicked claim:
+    // all three fork actions genuinely take "quelques instants" (the
+    // fastest, "une dette," is a 2-field form — see migration_v161.sql's
+    // review notes). Closes on the guide itself ending, not the business
+    // "closing" — the business's ability to add a product/sale/debt never
+    // actually goes away, only ActivationForkOverlay does, at 24h.
+    case 'activation_nudge_2':
+      return "On sait que vous êtes occupé. Saviez-vous qu'ajouter un produit, une vente, ou une dette ne prend que quelques instants ? Et on est encore là pour vous guider";
+    // Second-action reminder ("Segment B" of the post-24h retention map) —
+    // fires once, hours after their one-and-only action so far (see
+    // migration_v163.sql). p.action_type is resolved server-side from
+    // real sale_orders/products rows, never guessed client-side. Product
+    // and debt both redirect toward selling (the one core action they
+    // haven't tried); sale asks for a repeat, not a redirect, since
+    // habit forms from repetition of the same action, not variety.
+    case 'second_action_reminder': {
+      switch (p.action_type) {
+        case 'debt':
+          return 'Vous avez enregistré votre première dette. Vous pouvez aussi noter vos ventes';
+        case 'product':
+          return 'Vous avez ajouté votre premier produit. Vous pouvez aussi noter vos ventes';
+        case 'sale':
+        default:
+          return 'Vous avez enregistré votre première vente. Prêt pour la suivante ?';
+      }
+    }
+    // Revenue milestone — achievement-based, not calendar-based (see
+    // migration_v165.sql). The one deliberate exception to this codebase's
+    // no-emoji push convention: every other event here is a task-ask, where
+    // restraint matters (see the Day-1 nudges' "calm, not needy" register).
+    // A milestone is the one moment that's pure celebration, nothing asked
+    // for — a different register earns different treatment, the same way
+    // the founder dashboard's health-red color is a scoped exception to the
+    // no-red UI rule elsewhere. "Franchi" (crossed) over "dépassé"
+    // (exceeded) — reads as crossing a real threshold, not just posting a
+    // bigger number. Closes by addressing the merchant directly as
+    // "patron" (vocative, not a description) — the same brand-name pun as
+    // an earlier draft ("vous êtes un patron"), delivered more personally:
+    // someone telling them "be proud, boss, you earned it" rather than
+    // stating a fact about them.
+    case 'revenue_milestone':
+      return `🎉 Félicitations. Vous avez franchi ${p.amount} de ventes — soyez fier de vous, patron, vous le méritez`;
+    // The v1 reminder earned by the "Ne ratez aucun paiement" permission
+    // sheet — p.amount already carries its own currency (see
+    // send-debt-reminders' formatAmount), so there's no separate {devise}
+    // token here, matching every other amount-bearing case in this switch.
+    case 'debt_aging_reminder':
+      return `Rappel : ${p.name} vous doit ${p.amount} depuis ${p.days} jours.`;
     default:
       return String(p.body ?? '');
   }
@@ -136,6 +263,7 @@ const TIME_SENSITIVE_EVENTS = new Set([
   ...URGENT_EVENTS,
   'expense_approved',
   'expense_rejected',
+  'sale_edited',
 ]);
 
 // ─── iOS notification action categories ─────────────────────────────────────
@@ -173,7 +301,7 @@ const FOUNDER_EVENTS = new Set(['support_reply']);
 // Events dispatched by a background job, not a logged-in user — there is no
 // session to hold a Bearer JWT, so these authenticate via a shared secret
 // instead (see send-alpha-quota-reminders and send-daily-digest).
-const CRON_EVENTS = new Set(['alpha_quota_reset', 'daily_digest']);
+const CRON_EVENTS = new Set(['alpha_quota_reset', 'daily_digest', 'activation_nudge_1', 'activation_nudge_2', 'second_action_reminder', 'revenue_milestone', 'debt_aging_reminder']);
 
 async function callerIsFounder(supabase: ReturnType<typeof createClient>, userId: string): Promise<boolean> {
   const { data: profile } = await supabase.from('profiles').select('phone').eq('id', userId).maybeSingle();
@@ -336,6 +464,25 @@ serve(async (req) => {
       userIds = (members ?? []).map((m: { user_id: string }) => m.user_id);
     }
     if (exclude_user_id) userIds = userIds.filter(id => id !== exclude_user_id);
+
+    // Per-user opt-out for the one notification type most likely to stack
+    // up for a busy, successful shop — one push per sale, for every sale,
+    // by any team member. profiles.notify_on_every_sale (migration_v176.sql)
+    // defaults true, so this only ever removes someone who explicitly
+    // turned it off; every other event type is unaffected.
+    if (event_type === 'sale_completed' && userIds.length > 0) {
+      const { data: prefs } = await supabase
+        .from('profiles')
+        .select('id, notify_on_every_sale')
+        .in('id', userIds);
+      const optedOut = new Set(
+        (prefs ?? [])
+          .filter((p: { id: string; notify_on_every_sale: boolean }) => p.notify_on_every_sale === false)
+          .map((p: { id: string }) => p.id),
+      );
+      if (optedOut.size > 0) userIds = userIds.filter(id => !optedOut.has(id));
+    }
+
     if (userIds.length === 0) {
       return new Response(JSON.stringify({ sent: 0 }), {
         headers: { ...corsHeaders, 'Content-Type': 'application/json' },
@@ -370,10 +517,37 @@ serve(async (req) => {
         .map(r => [r.id, r.unread_notification_count]),
     );
 
+    // Per-recipient business-name suppression. The push title is the business
+    // name — but for someone who belongs to exactly one business, repeating it
+    // on every notification is pure noise (they always know which shop it is).
+    // Suppress the title only for a recipient who is a member of *this*
+    // business and has no other membership; anyone in multiple businesses keeps
+    // it (they need the disambiguation), and a non-member recipient — the
+    // founder on a support_message, who is never a member of the merchant's
+    // business — always keeps it, since the business name is the whole point.
+    const { data: recipientMemberships } = await supabase
+      .from('memberships')
+      .select('user_id, business_id')
+      .in('user_id', recipientUserIds);
+    const bizByUser = new Map<string, Set<string>>();
+    for (const m of (recipientMemberships ?? []) as { user_id: string; business_id: string }[]) {
+      const set = bizByUser.get(m.user_id) ?? new Set<string>();
+      set.add(m.business_id);
+      bizByUser.set(m.user_id, set);
+    }
+    const shouldShowBizName = (userId: string): boolean => {
+      const set = bizByUser.get(userId);
+      return !set || set.size !== 1 || !set.has(business_id);
+    };
+
     // Build notification fields
     const body            = buildBody(event_type, payload as Record<string, string | number>);
     const subtitle        = SUBTITLE_MAP[event_type] ?? null;
-    const route           = ROUTE_MAP[event_type] ?? '/(app)';
+    // payload.route lets a caller override the static per-event-type route —
+    // needed for debt_aging_reminder, whose deep link is per-client and can't
+    // be known from event_type alone. Every other event's payload has never
+    // set this key, so this is purely additive for them.
+    const route           = (payload.route as string | undefined) ?? ROUTE_MAP[event_type] ?? '/(app)';
     const isUrgent        = URGENT_EVENTS.has(event_type);
     const isTimeSensitive = TIME_SENSITIVE_EVENTS.has(event_type);
     const soundFile       = isUrgent ? 'patron_urgent.wav' : 'patron_default.wav';
@@ -387,7 +561,10 @@ serve(async (req) => {
       const chunk = tokens.slice(i, i + CHUNK);
       const messages = chunk.map(({ token: to, user_id }) => ({
         to,
-        title: bizName,                               // business name — always
+        // business name — but only when it actually disambiguates for this
+        // recipient (multi-business, or a non-member like the founder). Omitted
+        // entirely for a single-business member so the body stands on its own.
+        ...(shouldShowBizName(user_id) ? { title: bizName } : {}),
         ...(subtitle ? { subtitle } : {}),            // event category in French
         body,                                         // the core fact
         data: { route, event_type, business_id, ...payload },
@@ -426,11 +603,6 @@ serve(async (req) => {
       headers: { ...corsHeaders, 'Content-Type': 'application/json' },
     });
   } catch (e) {
-    const msg = e instanceof Error ? e.message : 'Erreur inconnue';
-    console.error('dispatch-notification crash:', msg);
-    return new Response(JSON.stringify({ error: msg }), {
-      status: 500,
-      headers: { ...corsHeaders, 'Content-Type': 'application/json' },
-    });
+    return safeErrorResponse(e, corsHeaders, 'dispatch-notification');
   }
 });

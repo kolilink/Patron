@@ -1,7 +1,7 @@
 import { create } from 'zustand';
 import { supabase } from '@/lib/supabase';
 import { translateError } from '@/lib/errors';
-import { isNetworkError } from '@/lib/sync';
+import { isNetworkError, withTimeout, withNetworkRetry, reportOfflineFallback } from '@/lib/sync';
 import type { AlphaConversation, AlphaMessage, AlphaQuotaStatus } from '@/src/types';
 
 function dedupeAppend(messages: AlphaMessage[], msg: AlphaMessage): AlphaMessage[] {
@@ -33,13 +33,6 @@ interface AlphaStore {
   sendMessage: (params: { businessId: string; content: string }) => Promise<boolean>;
   appendMessage: (msg: AlphaMessage) => void;
   fetchQuota: (businessId: string) => Promise<void>;
-  // Read-only check for the in-app WhatsApp-reminder consent prompt —
-  // see db/migration_v145.sql. Deliberately only true once the caller
-  // has ALREADY hit the free cap on 3+ separate days this week, never
-  // asked speculatively on the first block — a premature ask is a
-  // promise disconnected from anything that's actually happened yet.
-  checkWhatsappConsentEligibility: (businessId: string) => Promise<boolean>;
-  recordWhatsappConsent: (businessId: string, accepted: boolean) => Promise<void>;
   reset: () => void;
 }
 
@@ -59,24 +52,29 @@ export const useAlphaStore = create<AlphaStore>((set, get) => ({
   load: async (businessId) => {
     set({ loading: get().messages.length === 0, error: null });
     try {
-      const { data: conv, error: convErr } = await supabase.rpc('open_or_get_alpha_conversation', {
-        p_business_id: businessId,
-      });
+      const { data: conv, error: convErr } = await withNetworkRetry(() =>
+        supabase.rpc('open_or_get_alpha_conversation', {
+          p_business_id: businessId,
+        }),
+      );
       if (convErr) throw convErr;
 
       const conversation = conv as AlphaConversation;
-      const { data: msgs, error: msgsErr } = await supabase
-        .from('alpha_messages')
-        .select('*')
-        .eq('conversation_id', conversation.id)
-        .order('created_at', { ascending: true })
-        .limit(200);
+      const { data: msgs, error: msgsErr } = await withNetworkRetry(() =>
+        supabase
+          .from('alpha_messages')
+          .select('*')
+          .eq('conversation_id', conversation.id)
+          .order('created_at', { ascending: true })
+          .limit(200),
+      );
       if (msgsErr) throw msgsErr;
 
       set({ conversation, messages: msgs ?? [], loading: false, offline: false });
       void get().fetchQuota(businessId);
     } catch (err) {
       if (isNetworkError(err)) {
+        reportOfflineFallback('alpha.load', err);
         set({ loading: false, offline: true });
       } else {
         set({ loading: false, error: translateError(err, 'Erreur de chargement') });
@@ -103,10 +101,12 @@ export const useAlphaStore = create<AlphaStore>((set, get) => ({
     get().appendMessage(optimisticMsg);
 
     try {
-      const { data, error } = await supabase.rpc('send_alpha_message', {
-        p_business_id: businessId,
-        p_content: trimmed,
-      });
+      const { data, error } = await withTimeout(
+        supabase.rpc('send_alpha_message', {
+          p_business_id: businessId,
+          p_content: trimmed,
+        }),
+      );
       if (error) throw error;
 
       const realMsg = data as AlphaMessage;
@@ -130,9 +130,16 @@ export const useAlphaStore = create<AlphaStore>((set, get) => ({
       // the caller's `await sendMessage(...)` no longer blocks on it.
       (async () => {
         try {
-          const { data: invokeData } = await supabase.functions.invoke('alpha-chat', {
-            body: { conversation_id: realMsg.conversation_id, business_id: businessId },
-          });
+          // Longer cap than the default 12s — a real LLM reply (with up to
+          // 3 rounds of tool-calling, see CLAUDE.md's "On-demand tool-calling")
+          // can legitimately take longer than a plain DB read, and a
+          // premature timeout here would cut off an in-progress answer.
+          const { data: invokeData } = await withTimeout(
+            supabase.functions.invoke('alpha-chat', {
+              body: { conversation_id: realMsg.conversation_id, business_id: businessId },
+            }),
+            45000,
+          );
           const replyMsg = (invokeData as { message?: AlphaMessage } | null)?.message;
           if (replyMsg) get().appendMessage(replyMsg);
           set({ sending: false });
@@ -166,6 +173,7 @@ export const useAlphaStore = create<AlphaStore>((set, get) => ({
       // translateError only overrides it for known Supabase/auth/network
       // patterns.
       const raw = err instanceof Error ? err.message : (err as Record<string, unknown>)?.message as string | undefined;
+      if (netErr) reportOfflineFallback('alpha.sendMessage', err);
       set(state => ({
         messages: state.messages.filter(m => m.id !== localId),
         sending: false,
@@ -183,19 +191,14 @@ export const useAlphaStore = create<AlphaStore>((set, get) => ({
   },
 
   fetchQuota: async (businessId) => {
-    const { data, error } = await supabase.rpc('get_alpha_quota_status', { p_business_id: businessId });
-    if (error || !data) return;
-    set({ quota: data as AlphaQuotaStatus });
-  },
-
-  checkWhatsappConsentEligibility: async (businessId) => {
-    const { data, error } = await supabase.rpc('alpha_whatsapp_reminder_eligible_now', { p_business_id: businessId });
-    if (error || !data) return false;
-    return data as boolean;
-  },
-
-  recordWhatsappConsent: async (businessId, accepted) => {
-    await supabase.rpc('record_alpha_whatsapp_consent', { p_business_id: businessId, p_accepted: accepted });
+    try {
+      const { data, error } = await supabase.rpc('get_alpha_quota_status', { p_business_id: businessId });
+      if (error || !data) return;
+      set({ quota: data as AlphaQuotaStatus });
+    } catch {
+      // Fire-and-forget — callers already treat a still-null `quota` as
+      // "not yet known" (see app/(app)/alpha/index.tsx's 4s fallback timer).
+    }
   },
 
   reset: () => set(initialState),

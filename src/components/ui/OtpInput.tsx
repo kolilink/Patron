@@ -44,7 +44,6 @@ export function OtpInput({ length = 6, onComplete, disabled = false, autoFocus =
       sub?.remove();
       stopSmsRetriever();
     };
-    // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [whatsappAutofill, disabled, length]);
 
   // On some Android OEM keyboards (OPPO, Xiaomi) calling focus() on an already-focused
@@ -67,7 +66,8 @@ export function OtpInput({ length = 6, onComplete, disabled = false, autoFocus =
           const isFilled  = i < value.length;
           return (
             <View key={i} style={[styles.box, isFilled && styles.boxFilled, isFocused && styles.boxFocused]}>
-              <Text variant="h2" style={[styles.digit, !isFilled && styles.digitEmpty]}>{digit}</Text>
+              {/* Single glyph in a fixed 48×56 box, no room to grow — pinned regardless of OS text-size setting. */}
+              <Text variant="h2" allowFontScaling={false} style={[styles.digit, !isFilled && styles.digitEmpty]}>{digit}</Text>
               {isFocused && <View style={styles.cursor} />}
             </View>
           );
