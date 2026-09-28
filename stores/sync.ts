@@ -16,10 +16,23 @@ interface SyncStore {
   lastResult: SyncResult | null;
   refreshCount: () => Promise<void>;
   sync: () => Promise<SyncResult>;
+  // Fire-and-forget: tells the drainer "go now" without the caller
+  // awaiting anything. This is what §5's write paths call right after
+  // enqueueing, instead of the old "try the RPC live, fall back to queue
+  // on failure" branch — under the local-write-first model (Decision A),
+  // the UI must never wait on this, only on the durable local write.
+  // Safe to call redundantly: drainQueue's own _running guard (lib/sync.ts)
+  // makes an overlapping call a no-op, and a call on a still-genuinely-
+  // offline device just re-confirms that and returns quickly. This is the
+  // ONLY place any store should ever trigger a sync pass outside the
+  // existing AppState foreground listener — a write path calling the RPC
+  // itself directly (the old pattern) would reintroduce the exact
+  // two-call-sites split this rework removes.
+  kick: () => void;
   reset: () => void;
 }
 
-export const useSyncStore = create<SyncStore>((set) => ({
+export const useSyncStore = create<SyncStore>((set, get) => ({
   pendingCount: 0,
   syncing: false,
   lastResult: null,
@@ -41,6 +54,10 @@ export const useSyncStore = create<SyncStore>((set) => ({
     const count = await getQueueCount();
     set({ syncing: false, lastResult: result, pendingCount: count });
     return result;
+  },
+
+  kick: () => {
+    void get().sync();
   },
 
   reset: () => set({ pendingCount: 0, syncing: false, lastResult: null }),
