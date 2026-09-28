@@ -4,11 +4,12 @@ import { generateId, generateFallbackName } from '@/lib/id';
 import { translateError } from '@/lib/errors';
 import { trackEvent } from '@/lib/analytics';
 import { saveVentesCache, getVentesCache, getCacheTimestamp, enqueue, getQueueCount } from '@/lib/db';
-import { isNetworkError, withTimeout, withNetworkRetry, reportOfflineFallback } from '@/lib/sync';
+import { isNetworkError, withNetworkRetry, reportOfflineFallback } from '@/lib/sync';
 import { useSyncStore } from '@/stores/sync';
 import { notifyEvent } from '@/src/utils/notifications';
 import { useAuthStore } from '@/stores/auth';
 import { formatAmount } from '@/src/utils/format';
+import { rebuildPendingOverlay, type OverlayContext } from '@/lib/pendingOverlay';
 
 // See stores/products.ts for the full explanation — a fetch already in
 // flight when the user switches businesses must not overwrite the new
@@ -88,6 +89,13 @@ export interface Vente {
   lines?: VenteLigne[];
   payments?: VentePayment[];
   edits?: SaleEdit[];
+  // Set by lib/pendingOverlay.ts's rebuildPendingOverlay — this row (or a
+  // patch already applied to it) exists only because of a still-unsynced
+  // sync_queue entry. Never rendered as a badge/chrome (the standing "zero
+  // sync noise" rule) — a data-layer marker only, used to know which rows
+  // are safe to treat as the real synced baseline the next time the
+  // overlay is rebuilt (see refreshPendingOverlay below).
+  _pending?: true;
 }
 
 interface VentesStore {
@@ -108,6 +116,17 @@ interface VentesStore {
   // every other caller (dashboard, clients screens) omits them and keeps
   // getting the exact same full, unfiltered fetch as before.
   fetchSales: (businessId: string, sellerId?: string, since?: string, limit?: number, status?: 'paye' | 'credit' | 'annule') => Promise<void>;
+  // The single entry point every Phase-1 write path (stores/sales.ts's
+  // submitCarnetDebt/submitQuickSale/submitSale, and this file's own
+  // recordClientPayment/cancelSale) calls right after a local write
+  // durably enqueues, and that §6's read-side hydration also calls on
+  // mount/focus. Always recomputes from (current `sales` with any
+  // previous overlay stripped out) + (whatever's currently in the durable
+  // sync_queue outbox) — never incrementally patched — so it self-heals
+  // across a kill, a drain success/failure, or a live fetch replacing the
+  // synced baseline underneath it. See lib/pendingOverlay.ts's own header
+  // comment for the full reasoning.
+  refreshPendingOverlay: () => Promise<void>;
   loadDetail: (saleId: string) => Promise<void>;
   recordPayment: (saleId: string, amount: number, method: string, date: string) => Promise<{ ok: boolean; fullyPaid: boolean; paymentId?: string }>;
   recordClientPayment: (customerName: string, businessId: string, amount: number, method: string, date: string) => Promise<{ ok: boolean; fullySettled: boolean; paymentIds?: string[] }>;
@@ -140,6 +159,41 @@ export interface EditSaleParams {
   reason: string | null;
 }
 
+// Shared by every Phase-1 write path's post-enqueue refresh (this file
+// and stores/sales.ts) — resolved from the current session the same way
+// stores/sales.ts's old submitSale offline branch already did (seller
+// name for a NEW projected sale), extended to canceller name for
+// cancel_sale's patch too. Kept here rather than inside
+// refreshPendingOverlay itself so it's the one place this resolution
+// logic lives, not duplicated at each of the 5 call sites.
+function currentOverlayContext(): OverlayContext {
+  const session = useAuthStore.getState().session;
+  return {
+    currentUserId: session?.user.id ?? null,
+    currentUserName: session?.user.name ?? '',
+  };
+}
+
+// Vente's optional fields (?) vs OverlaySale's required-with-null ones is a
+// real, structural difference — Vente is "whatever a live Supabase fetch
+// happened to return," OverlaySale is "every field this module's own
+// projectors always populate." Normalized explicitly, field by field,
+// rather than a blanket cast, so a future field added to one side without
+// the other doesn't silently paper over a real shape mismatch.
+function toOverlaySale(v: Vente): import('@/lib/pendingOverlay').OverlaySale {
+  return {
+    id: v.id, business_id: v.business_id, customer_name: v.customer_name, client_id: v.client_id,
+    seller_id: v.seller_id, seller_name: v.seller_name, status: v.status, is_credit: v.is_credit,
+    total_amount: v.total_amount, discount_amount: v.discount_amount, amount_paid: v.amount_paid ?? 0,
+    paid_at: v.paid_at, sale_date: v.sale_date, due_date: v.due_date ?? null,
+    created_at: v.created_at, cancelled_at: v.cancelled_at, cancellation_reason: v.cancellation_reason,
+    cancelled_by_id: v.cancelled_by_id ?? null, cancelled_by_name: v.cancelled_by_name ?? null,
+    edit_count: v.edit_count, last_edited_at: v.last_edited_at, profit: v.profit,
+    lines: (v.lines ?? []).map(l => ({ ...l, variant_id: l.variant_id ?? null, variant_name: l.variant_name ?? null })),
+    payments: v.payments ?? [],
+  };
+}
+
 export const useVentesStore = create<VentesStore>((set, get) => ({
   sales: [],
   salesFetchedFor: null,
@@ -148,6 +202,37 @@ export const useVentesStore = create<VentesStore>((set, get) => ({
   error: null,
   offline: false,
   offlineSince: null,
+
+  refreshPendingOverlay: async () => {
+    const session = useAuthStore.getState().session;
+    if (!session?.activeBusiness) return;
+    const businessId = session.activeBusiness.id;
+    const isVendeur = session.activeMembership?.role === 'vendeur';
+    // Same scoping rule fetchSales itself is always called with
+    // (app/(app)/_layout.tsx: fetchSales(businessId, isVendeur ? userId :
+    // undefined)) — a vendeur must never have another seller's sales
+    // folded into their own view via this mechanism either. Resolved from
+    // the session directly rather than threaded through all 5 write-path
+    // call sites, so a caller can't accidentally get this wrong.
+    const cacheKey = `${businessId}:${isVendeur ? session.user.id : 'all'}`;
+
+    // The baseline MUST be the last genuinely-synced snapshot (ventes_cache,
+    // which this overlay mechanism never writes to — see
+    // lib/pendingOverlay.ts's header comment), never the CURRENT in-memory
+    // `sales`. Using in-memory `sales` as the next baseline was tried first
+    // and is a real bug: a previous rebuild may have already applied a
+    // payment/cancellation patch to an existing, genuinely-synced sale, and
+    // stripping `_pending` rows alone doesn't undo a patch already applied
+    // to a non-pending row — re-folding the same still-queued payment on
+    // top of its own already-applied effect would allocate it twice.
+    // Re-reading the untouched cache every time avoids this class of bug
+    // entirely: nothing here is ever partially-applied, because the
+    // baseline never carries any prior overlay effect at all.
+    const cached = (await getVentesCache(cacheKey)) as Vente[] | null;
+    const syncedBaseline = (cached ?? []).map(toOverlaySale);
+    const { sales } = await rebuildPendingOverlay(syncedBaseline, currentOverlayContext());
+    set({ sales: sales as Vente[] });
+  },
 
   fetchSales: async (businessId, sellerId, since, limit, status) => {
     // status branches the cache key off into its own slot so a filtered
@@ -502,107 +587,88 @@ export const useVentesStore = create<VentesStore>((set, get) => ({
     }
   },
 
+  // Local-write-first (§5, same shape as stores/sales.ts's three functions).
+  // record_client_payment now has a real idempotency key (migration_v203,
+  // §7) — required before this could safely go local-write-first at all:
+  // without it, an outbox retry of the exact same payment (a drain retry
+  // after a partial network failure) could double-allocate real money
+  // against the client's debt. See that migration's own header comment for
+  // why the mechanism is a dedicated claim table, not a column on
+  // `payments` itself (this RPC's FIFO allocation can fan out into a
+  // variable number of payments rows per call).
   recordClientPayment: async (customerName, businessId, amount, method, date) => {
     set({ saving: true, error: null });
 
-    // Oldest credit sales for this client first (FIFO). All allocation logic runs
-    // purely over in-memory state, so it works identically online and offline.
-    const creditSales = get().sales
-      .filter(s =>
-        s.customer_name === customerName &&
-        s.business_id === businessId &&
-        s.status === 'credit',
-      )
-      .sort((a, b) => new Date(a.created_at).getTime() - new Date(b.created_at).getTime());
-
+    // Cheap local pre-check only (not authoritative — the RPC's own FOR
+    // UPDATE row locking + idempotency claim is what actually prevents
+    // double-payment). Guards against enqueueing a payment this device
+    // can already tell has nothing to allocate against.
+    const creditSales = get().sales.filter(s =>
+      s.customer_name === customerName && s.business_id === businessId && s.status === 'credit',
+    );
     if (creditSales.length === 0) {
       set({ saving: false, error: 'Aucun crédit trouvé pour ce client' });
       return { ok: false, fullySettled: false };
     }
-
-    // Sum of what this client owed across all their credit sales right
-    // before this payment — used for the "total" credit_paid notification
-    // ("a totalement payé sa dette de X"), since that's the actual debt that
-    // just got cleared, not just the amount of this one payment.
+    // Sum of what this client owed right before this payment — used for
+    // the "total" credit_paid notification wording ("a totalement payé sa
+    // dette de X"), the actual debt that just got cleared, not just the
+    // amount of this one payment.
     const totalOwedBefore = creditSales.reduce(
-      (sum, s) => sum + (s.total_amount - (s.discount_amount ?? 0) - (s.amount_paid ?? 0)),
-      0,
+      (sum, s) => sum + (s.total_amount - (s.discount_amount ?? 0) - (s.amount_paid ?? 0)), 0,
     );
 
-    let toAllocate = amount;
-    const storeUpdates: { id: string; newAmountPaid: number; fullyPaid: boolean; paidAt: string }[] = [];
-    const now = new Date().toISOString();
-
-    for (const sale of creditSales) {
-      if (toAllocate <= 0.005) break;
-      const saleOwed = sale.total_amount - (sale.discount_amount ?? 0);
-      const saleRemaining = saleOwed - (sale.amount_paid ?? 0);
-      if (saleRemaining <= 0.005) continue;
-
-      const allocated = Math.min(toAllocate, saleRemaining);
-      const newAmountPaid = (sale.amount_paid ?? 0) + allocated;
-      const fullyPaid = newAmountPaid >= saleOwed - 0.01;
-
-      storeUpdates.push({ id: sale.id, newAmountPaid, fullyPaid, paidAt: now });
-      toAllocate -= allocated;
-    }
-
-    const applyOptimistic = () => {
-      set(state => ({
-        sales: state.sales.map(s => {
-          const upd = storeUpdates.find(u => u.id === s.id);
-          if (!upd) return s;
-          return {
-            ...s,
-            amount_paid: upd.newAmountPaid,
-            status: upd.fullyPaid ? 'paye' : s.status,
-            paid_at: upd.fullyPaid ? upd.paidAt : s.paid_at,
-          };
-        }),
-        saving: false,
-      }));
-    };
-
-    let fullySettled = false;
+    // v157 jsonb contract (PR #41): record_client_payment fans out into a
+    // variable number of payments rows; the SaveConfirmation undo voids each
+    // returned id. Local-write-first has no synchronous server row yet, so
+    // paymentIds stays undefined until the queued RPC drains (undo unavailable
+    // until sync — the same documented tradeoff as the old offline branch).
     let paymentIds: string[] | undefined;
-    // Server-side atomic allocation with row locks prevents double-payment —
-    // both online and queued-offline replay go through this same RPC, so a
-    // second payment that arrives after the debt is already settled finds
-    // nothing left to allocate against instead of recording extra cash nowhere.
+    const idempotencyKey = generateId();
     const rpcPayload = {
-      p_business_id: businessId,
-      p_customer_name: customerName,
-      p_amount: Math.round(amount * 100),
-      p_method: method,
-      p_date: date,
+      p_business_id:      businessId,
+      p_customer_name:    customerName,
+      p_amount:           Math.round(amount * 100),
+      p_method:           method,
+      p_date:             date,
+      p_idempotency_key:  idempotencyKey,
     };
+
     try {
-      const { data: rpcData, error: rpcErr } = await supabase.rpc('record_client_payment', rpcPayload);
-      if (rpcErr) throw rpcErr;
-      applyOptimistic();
-      const result = rpcData as { fully_settled: boolean; payment_ids: string[] };
-      fullySettled = result.fully_settled;
-      paymentIds = result.payment_ids;
+      await enqueue('record_client_payment', rpcPayload);
     } catch (err) {
-      if (isNetworkError(err)) {
-        await enqueue('record_client_payment', rpcPayload);
-        const count = await getQueueCount();
-        useSyncStore.setState({ pendingCount: count });
-        applyOptimistic();
-        fullySettled = get().sales
-          .filter(s => s.customer_name === customerName && s.business_id === businessId && s.status === 'credit')
-          .reduce((sum, s) => sum + (s.total_amount - (s.discount_amount ?? 0) - (s.amount_paid ?? 0)), 0) < 0.01;
-        // Queued offline — same as recordPayment, no real payment id(s) exist
-        // yet, so paymentIds stays undefined and undo is unavailable.
-      } else {
-        set({ saving: false, error: translateError(err, 'Paiement impossible') });
-        return { ok: false, fullySettled: false };
-      }
+      console.error('[recordClientPayment] local write failed', err);
+      set({ saving: false, error: "Impossible d'enregistrer sur cet appareil. Réessayez." });
+      return { ok: false, fullySettled: false };
     }
+
+    const count = await getQueueCount();
+    useSyncStore.setState({ pendingCount: count });
+    try {
+      await get().refreshPendingOverlay();
+    } catch (err) {
+      console.error('[recordClientPayment] refreshPendingOverlay failed (write already succeeded)', err);
+    }
+    set({ saving: false });
+    useSyncStore.getState().kick();
+
+    const fullySettled = get().sales
+      .filter(s => s.customer_name === customerName && s.business_id === businessId && s.status === 'credit')
+      .reduce((sum, s) => sum + (s.total_amount - (s.discount_amount ?? 0) - (s.amount_paid ?? 0)), 0) < 0.01;
 
     trackEvent('debt_payment_recorded', businessId, null, { fully_settled: fullySettled });
-    // Always notify — not just on full settlement — so a partial installment
-    // ("a payé X de son crédit") is visible too, not just the final one.
+    // Fired unconditionally here (not from lib/sync.ts) — matches this
+    // function's own pre-existing behavior (it already notified on both
+    // the old live and offline-queued paths, unlike submit_sale, which
+    // needed its notify moved entirely into executeOp to avoid a double-
+    // fire). No double-notify risk here since lib/sync.ts's
+    // record_client_payment case never notifies. Optimistic like every
+    // other Phase-1 confirmation: if the RPC is later rejected (§3,
+    // failed_permanent — e.g. the debt was already settled by another
+    // device before this synced), a notification may rarely have already
+    // gone out for a payment that didn't ultimately apply. Pre-existing
+    // characteristic, not introduced by this rework — the old "offline"
+    // branch already notified before confirming sync.
     {
       const currency = useAuthStore.getState().session?.activeBusiness?.currency ?? 'GNF';
       notifyEvent({
@@ -641,81 +707,66 @@ export const useVentesStore = create<VentesStore>((set, get) => ({
     }
   },
 
+  // Local-write-first (§5). cancel_sale needed no idempotency-key migration
+  // (§7 audit) — it was already naturally idempotent via a status guard
+  // added in migration_v125 (`IF v_sale.status = 'annule' THEN RETURN true;
+  // END IF;`), so a drain retry safely no-ops instead of double-restoring
+  // stock. Verified this directly against migration_v125.sql before relying
+  // on it, rather than assuming — the ORIGINAL migration_v22.sql version had
+  // no such guard and would have needed one added here.
   cancelSale: async (saleId, businessId, userId, reason) => {
     set({ saving: true, error: null });
     const _cancelledSale = get().sales.find(s => s.id === saleId);
-    const now = new Date().toISOString();
-    // Best-effort — a hang/failure here must never leave `saving` stuck
-    // (the actual cancel RPC below is what matters; this only decorates the
-    // audit-trail name), so it falls back the same way an empty `name`
-    // already does.
-    let cancellerName = generateFallbackName(userId);
+
+    const rpcPayload = { p_sale_id: saleId, p_business_id: businessId, p_reason: reason };
     try {
-      const { data: profileData } = await supabase.from('profiles').select('name').eq('id', userId).single();
-      cancellerName = profileData?.name || cancellerName;
-    } catch {
-      // keep the fallback name
-    }
-    const cancelPatch = {
-      status: 'annule' as const,
-      cancelled_at: now,
-      cancellation_reason: reason,
-      cancelled_by_id: userId,
-      cancelled_by_name: cancellerName,
-    };
-    try {
-      const { error } = await supabase.rpc('cancel_sale', {
-        p_sale_id: saleId,
-        p_business_id: businessId,
-        p_reason: reason,
-      });
-      if (error) throw error;
-      set(state => ({
-        sales: state.sales.map(s => s.id === saleId ? { ...s, ...cancelPatch } : s),
-        saving: false,
-      }));
-      // Notify original seller (if different from canceller) and admins
-      if (_cancelledSale) {
-        const currency = useAuthStore.getState().session?.activeBusiness?.currency ?? 'GNF';
-        const targetUserIds: string[] = [];
-        if (_cancelledSale.seller_id && _cancelledSale.seller_id !== userId) {
-          targetUserIds.push(_cancelledSale.seller_id);
-        }
-        notifyEvent({
-          businessId,
-          eventType: 'sale_cancelled',
-          // amount/reason kept here for the notification_log audit trail —
-          // the edge function's registry strips both before anything reaches
-          // a device (lock-screen rule: only sale_id survives into the push).
-          // Net of discount, matching what the sale_completed notification
-          // showed for this same sale — total_amount alone is the catalog
-          // gross, so a discounted sale sold for e.g. 45 000 was reading back
-          // as "annulée · 50 000" here.
-          payload: { amount: formatAmount(_cancelledSale.total_amount - (_cancelledSale.discount_amount ?? 0), currency), reason, sale_id: saleId },
-          targetUserIds: targetUserIds.length > 0 ? targetUserIds : undefined,
-          targetRoles: ['administrateur', 'manager'],
-        });
-      }
-      return true;
+      await enqueue('cancel_sale', rpcPayload);
     } catch (err) {
-      if (isNetworkError(err)) {
-        await enqueue('cancel_sale', { p_sale_id: saleId, p_business_id: businessId, p_reason: reason });
-        const count = await getQueueCount();
-        useSyncStore.setState({ pendingCount: count });
-        const updatedSales = get().sales.map(s =>
-          s.id === saleId ? { ...s, ...cancelPatch } : s,
-        );
-        set({ sales: updatedSales, saving: false });
-        const sale = get().sales.find(s => s.id === saleId);
-        if (sale?.business_id) {
-          const cacheKey = `${sale.business_id}:all`;
-          void saveVentesCache(cacheKey, updatedSales as unknown[]);
-        }
-        return true;
-      }
-      set({ saving: false, error: translateError(err, "Impossible d'annuler") });
+      console.error('[cancelSale] local write failed', err);
+      set({ saving: false, error: "Impossible d'annuler sur cet appareil. Réessayez." });
       return false;
     }
+
+    const count = await getQueueCount();
+    useSyncStore.setState({ pendingCount: count });
+    try {
+      await get().refreshPendingOverlay();
+    } catch (err) {
+      console.error('[cancelSale] refreshPendingOverlay failed (write already succeeded)', err);
+    }
+    set({ saving: false });
+    useSyncStore.getState().kick();
+
+    // Notify original seller (if different from canceller) and admins.
+    // Fired unconditionally here now — a real, disclosed fix, not just an
+    // architectural necessity: the OLD code only ever notified on the live-
+    // success path; lib/sync.ts's executeOp never notified for a queued
+    // cancel_sale replay either, so an offline-queued cancellation
+    // previously never notified anyone at all. cancel_sale's own natural
+    // idempotency (above) is what makes firing this unconditionally safe —
+    // even if the drainer later retries the same cancellation, the RPC
+    // itself no-ops on the second call, and this notify only ever runs
+    // once per cancelSale() invocation regardless.
+    if (_cancelledSale) {
+      const currency = useAuthStore.getState().session?.activeBusiness?.currency ?? 'GNF';
+      const targetUserIds: string[] = [];
+      if (_cancelledSale.seller_id && _cancelledSale.seller_id !== userId) {
+        targetUserIds.push(_cancelledSale.seller_id);
+      }
+      notifyEvent({
+        businessId,
+        eventType: 'sale_cancelled',
+        // Net of discount, matching what the sale_completed notification
+        // showed for this same sale — total_amount alone is the catalog
+        // gross, so a discounted sale sold for e.g. 45 000 was reading back
+        // as "annulée · 50 000" here. Same convention as the owed/net figure
+        // used everywhere else (total_amount − discount_amount).
+        payload: { amount: formatAmount(_cancelledSale.total_amount - (_cancelledSale.discount_amount ?? 0), currency), reason },
+        targetUserIds: targetUserIds.length > 0 ? targetUserIds : undefined,
+        targetRoles: ['administrateur'],
+      });
+    }
+    return true;
   },
 
   updateSaleClient: async (saleId, customerName) => {

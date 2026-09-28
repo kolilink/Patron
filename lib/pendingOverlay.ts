@@ -73,11 +73,15 @@ export interface OverlaySale {
   profit: number | null;
   lines: OverlayLine[];
   payments: OverlayPayment[];
-  // True for every row this module produces or touches — lets a caller
-  // distinguish "still pending" from real synced data without needing a
-  // separate lookup. Never rendered as a badge (the standing "zero sync
-  // noise" rule) — purely a data-layer flag for merge/dedup logic.
-  _pending: true;
+  // Set (true) only on a row this module created or patched from a still-
+  // pending queue item — absent/undefined on genuine baseline (synced)
+  // data passed into rebuildPendingOverlay. Lets a caller distinguish
+  // "still pending" from real synced data without a separate lookup.
+  // Never rendered as a badge (the standing "zero sync noise" rule) —
+  // purely a data-layer flag for merge/dedup logic (see
+  // stores/ventes.ts's refreshPendingOverlay, which strips it back out
+  // before every rebuild so a previous overlay is never folded twice).
+  _pending?: true;
 }
 
 export interface OverlayContext {
