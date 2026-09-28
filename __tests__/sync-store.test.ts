@@ -57,6 +57,21 @@ describe('useSyncStore.sync()', () => {
     expect(mockTrackEvent).toHaveBeenCalledWith('sync_op_failed_corrupt', null, null, { operation: 'submit_sale', stage: 'decrypt' });
   });
 
+  it('kick() fires sync() without the caller awaiting it (§4 — the sole RPC-firing trigger a write path should ever call)', async () => {
+    mockDrainQueue.mockResolvedValueOnce({ synced: 1, failed: 0, rejectedPayments: [], syncHealthEvents: [] });
+    useSyncStore.getState().kick();
+    // kick() itself returns void/undefined synchronously — the caller
+    // never waits on it, which is the entire point (see kick's own doc
+    // comment in stores/sync.ts).
+    expect(useSyncStore.getState().syncing).toBe(true);
+    // Let the fire-and-forget promise actually resolve before asserting
+    // the eventual state, without the store's own API ever exposing that
+    // promise to a caller.
+    await Promise.resolve();
+    await Promise.resolve();
+    expect(mockDrainQueue).toHaveBeenCalledTimes(1);
+  });
+
   it('still returns the full result and updates pendingCount even when events are present', async () => {
     mockGetQueueCount.mockResolvedValueOnce(3);
     mockDrainQueue.mockResolvedValueOnce({
