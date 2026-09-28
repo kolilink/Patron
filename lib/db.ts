@@ -798,12 +798,19 @@ export async function getAllQueueItemsForOverlay(): Promise<{ ok: SyncQueueItem[
   return { ok, corrupt };
 }
 
-// Replaces getPendingOps above once lib/sync.ts is switched over: selects
-// only 'pending' rows whose backoff has elapsed, with no attempts-count
-// cap at all — failed_permanent and failed_corrupt rows are excluded by
-// their status, not by counting, so a still-backing-off item never blocks
-// the ones behind it and a permanently-failed one is never retried again.
-export async function getPendingOpsForDrain(): Promise<SyncQueueItem[]> {
+// Replaces getPendingOps above — lib/sync.ts's drainQueue is switched over
+// to this as of the §3 outbox rework. Selects only 'pending' rows whose
+// backoff has elapsed, with no attempts-count cap at all — failed_permanent
+// and failed_corrupt rows are excluded by their status, not by counting, so
+// a still-backing-off item never blocks the ones behind it and a
+// permanently-failed one is never retried again.
+//
+// Returns {ok, corrupt} rather than a flat array (matching
+// getAllQueueItemsForOverlay's shape) so a decrypt failure is reported to
+// the caller instead of silently vanishing from the result the way the old
+// getPendingOps did — drainQueue classifies each corrupt row via
+// markOpCorrupt instead of quietly excluding it and leaving it invisible.
+export async function getPendingOpsForDrain(): Promise<{ ok: SyncQueueItem[]; corrupt: QueuedOpMeta[] }> {
   const db = await openDb();
   const now = new Date().toISOString();
   const rows = await db.getAllAsync<SyncQueueItem>(
@@ -812,21 +819,23 @@ export async function getPendingOpsForDrain(): Promise<SyncQueueItem[]> {
      ORDER BY id ASC`,
     [now],
   );
-  const result: SyncQueueItem[] = [];
+  const ok: SyncQueueItem[] = [];
+  const corrupt: QueuedOpMeta[] = [];
   for (const row of rows) {
     try {
       const payload = row.payload.startsWith('PLAIN:')
         ? row.payload.slice(6)
         : await decrypt(row.payload);
-      result.push({ ...row, payload });
+      ok.push({ ...row, payload });
     } catch {
-      // Decrypt/parse failure — the future caller classifies this via
-      // markOpCorrupt instead of silently skipping it the way the old
-      // getPendingOps does (that silent skip is exactly what left a
-      // corrupt item invisible instead of surfaced).
+      corrupt.push({
+        id: row.id, operation: row.operation, entity_type: row.entity_type,
+        idempotency_key: row.idempotency_key, status: row.status,
+        queued_at: row.queued_at, attempts: row.attempts, last_error: row.last_error,
+      });
     }
   }
-  return result;
+  return { ok, corrupt };
 }
 
 // ─── Shared encrypted-cache writer ─────────────────────────────────────────────
