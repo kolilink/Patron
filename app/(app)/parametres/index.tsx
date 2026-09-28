@@ -1,5 +1,5 @@
 import { useEffect, useMemo, useRef, useState } from 'react';
-import { Alert, Animated, KeyboardAvoidingView, Linking, Platform, Pressable, ScrollView, Share, StyleSheet, TextInput, View } from 'react-native';
+import { Alert, Animated, KeyboardAvoidingView, Linking, Platform, Pressable, ScrollView, Share, StyleSheet, Switch, TextInput, View } from 'react-native';
 import * as Clipboard from 'expo-clipboard';
 import * as Application from 'expo-application';
 import * as Updates from 'expo-updates';
@@ -77,7 +77,8 @@ const OTA_BUILD_NUMBER = 1;
 export default function ParametresScreen() {
   const { palette, colorScheme, setColorScheme } = useTheme();
   const styles = useMemo(() => makeStyles(palette), [palette]);
-  const { session, sendEmailOtp, linkRecoveryEmail, emailOtpLoading, error: authError, clearError } = useAuthStore();
+  const { session, sendEmailOtp, linkRecoveryEmail, emailOtpLoading, error: authError, clearError, revokeOtherSessions } = useAuthStore();
+  const [revokingSessions, setRevokingSessions] = useState(false);
   const business = session?.activeBusiness;
   const userId   = session?.user.id ?? '';
   const role     = session?.activeMembership?.role;
@@ -99,6 +100,25 @@ export default function ParametresScreen() {
   const [userName, setUserName] = useState(session?.user.name ?? '');
   const [saving,   setSaving]   = useState(false);
   const [hasSales, setHasSales] = useState<boolean | null>(null);
+
+  // Per-sale push opt-out — see migration_v184.sql. Optimistic toggle with
+  // rollback on failure, same shape as every other one-tap preference in
+  // this screen; the underlying update is a plain profiles row update,
+  // already permitted by the existing "Modifier son profil" RLS policy
+  // (auth.uid() = id) — no RPC needed, same as resetUnreadBadge.
+  const [notifyEverySale, setNotifyEverySale] = useState(session?.user.notify_on_every_sale ?? true);
+  const handleToggleNotifyEverySale = async (value: boolean) => {
+    setNotifyEverySale(value);
+    const { error } = await supabase.from('profiles').update({ notify_on_every_sale: value }).eq('id', userId);
+    if (error) {
+      setNotifyEverySale(!value);
+      toast.warning('Vérifiez votre connexion et réessayez.');
+      return;
+    }
+    useAuthStore.setState(state =>
+      state.session ? { session: { ...state.session, user: { ...state.session.user, notify_on_every_sale: value } } } : {},
+    );
+  };
 
   // Email recovery linking
   const [emailStep, setEmailStep]     = useState<'idle' | 'input' | 'otp'>('idle');
@@ -300,6 +320,31 @@ export default function ParametresScreen() {
   // hedging with "if you're alone, X — if not, Y" in the confirmation box:
   // either there's nobody to protect (open the real delete confirmation),
   // or there's a real reason to stop (say it immediately, no typing needed).
+  const handleRevokeOtherSessions = () => {
+    Alert.alert(
+      'Déconnecter tous les autres appareils',
+      "Tous les autres appareils connectés à votre compte seront déconnectés. Cet appareil-ci restera connecté.",
+      [
+        { text: 'Annuler', style: 'cancel' },
+        {
+          text: 'Déconnecter',
+          style: 'destructive',
+          onPress: async () => {
+            setRevokingSessions(true);
+            const ok = await revokeOtherSessions();
+            setRevokingSessions(false);
+            if (ok) {
+              haptics.success();
+              toast.success('Les autres appareils ont été déconnectés');
+            } else {
+              toast.warning('Vérifiez votre connexion et réessayez.');
+            }
+          },
+        },
+      ],
+    );
+  };
+
   const handleQuitterPress = async () => {
     if (!isAdmin) { handleLeave(); return; }
     if (!business?.id) return;
@@ -336,49 +381,57 @@ export default function ParametresScreen() {
     haptics.error();
     setDeleting(true);
 
-    const adminMemberships = (session?.memberships ?? []).filter(m => m.role === 'administrateur');
+    try {
+      const adminMemberships = (session?.memberships ?? []).filter(m => m.role === 'administrateur');
 
-    if (adminMemberships.length > 0) {
-      const { data: others } = await supabase
-        .from('memberships').select('business_id')
-        .in('business_id', adminMemberships.map(m => m.business_id)).neq('user_id', userId);
+      if (adminMemberships.length > 0) {
+        const { data: others } = await supabase
+          .from('memberships').select('business_id')
+          .in('business_id', adminMemberships.map(m => m.business_id)).neq('user_id', userId);
 
-      const blockingIds = new Set((others ?? []).map(o => o.business_id));
-      if (blockingIds.size > 0) {
-        const names = adminMemberships
-          .filter(m => blockingIds.has(m.business_id))
-          .map(m => m.business?.name ?? 'un commerce')
-          .join(', ');
+        const blockingIds = new Set((others ?? []).map(o => o.business_id));
+        if (blockingIds.size > 0) {
+          const names = adminMemberships
+            .filter(m => blockingIds.has(m.business_id))
+            .map(m => m.business?.name ?? 'un commerce')
+            .join(', ');
+          setDeleting(false);
+          resetDeleteFlow();
+          Alert.alert(
+            'Suppression impossible',
+            `Vous êtes gérant de : ${names}.\n\nRetirez tous les autres membres de ces commerces, ou quittez-les depuis cet écran, avant de supprimer votre compte.`,
+          );
+          return;
+        }
+      }
+
+      const phone = session?.user.phone;
+      if (!phone) {
         setDeleting(false);
-        resetDeleteFlow();
-        Alert.alert(
-          'Suppression impossible',
-          `Vous êtes gérant de : ${names}.\n\nRetirez tous les autres membres de ces commerces, ou quittez-les depuis cet écran, avant de supprimer votre compte.`,
-        );
+        toast.warning('Numéro introuvable. Contactez le support.');
         return;
       }
-    }
 
-    const phone = session?.user.phone;
-    if (!phone) {
+      const { data, error: fnErr } = await supabase.functions.invoke('create-phone-verification', {
+        body: { phone, login: true },
+      });
+      const sendErr = await extractFnError(fnErr) ?? data?.error;
+      if (sendErr || !data?.verificationId) {
+        setDeleting(false);
+        toast.warning("Impossible d'envoyer le code. Réessayez.");
+        return;
+      }
+
+      setDeleteVerificationId(data.verificationId);
       setDeleting(false);
-      toast.warning('Numéro introuvable. Contactez le support.');
-      return;
-    }
-
-    const { data, error: fnErr } = await supabase.functions.invoke('create-phone-verification', {
-      body: { phone, login: true },
-    });
-    const sendErr = await extractFnError(fnErr) ?? data?.error;
-    if (sendErr || !data?.verificationId) {
+      setDeleteAccountStep('otp');
+    } catch {
+      // A thrown exception (e.g. a network timeout) here must never leave
+      // `deleting` stuck true with no feedback — same posture as every other
+      // bare-await-in-an-action-flow fix (see CLAUDE.md's withTimeout() sweep).
       setDeleting(false);
-      toast.warning("Impossible d'envoyer le code. Réessayez.");
-      return;
+      toast.warning('Vérifiez votre connexion et réessayez.');
     }
-
-    setDeleteVerificationId(data.verificationId);
-    setDeleting(false);
-    setDeleteAccountStep('otp');
   };
 
   // Step 2: the code just sent is verified, then (only then) delete_my_account
@@ -390,35 +443,44 @@ export default function ParametresScreen() {
     setDeleteOtpError(null);
     const phone = session?.user.phone ?? '';
 
-    const { data, error: fnErr } = await supabase.functions.invoke('verify-phone-code', {
-      body: { phone, code, verificationId: deleteVerificationId },
-    });
-    const verifyErr = await extractFnError(fnErr) ?? data?.error;
-    if (verifyErr || !data?.verified) {
-      setDeleteOtpError(verifyErr || 'Code incorrect. Vérifiez et réessayez.');
+    try {
+      const { data, error: fnErr } = await supabase.functions.invoke('verify-phone-code', {
+        body: { phone, code, verificationId: deleteVerificationId },
+      });
+      const verifyErr = await extractFnError(fnErr) ?? data?.error;
+      if (verifyErr || !data?.verified) {
+        setDeleteOtpError(verifyErr || 'Code incorrect. Vérifiez et réessayez.');
+        setDeleteOtpKey(k => k + 1);
+        return;
+      }
+
+      setDeleting(true);
+      const { error } = await supabase.rpc('delete_my_account');
+      setDeleting(false);
+      if (error) {
+        // The RPC's own block message (a real, named-business error, same
+        // shape as leave_or_delete_business's) is shown as-is if that's what
+        // this is — the client precheck above only catches this ahead of time
+        // on the common path, not a race where membership changed in between.
+        // Anything else (a raw infrastructure error) is translated, never shown raw.
+        resetDeleteFlow();
+        Alert.alert('Suppression impossible', rpcErrorMessage(error, "Ça n'a pas fonctionné. Écrivez-nous si ça continue :)"));
+        return;
+      }
+
+      Alert.alert(
+        'Compte programmé pour suppression',
+        'Votre compte sera définitivement supprimé dans 30 jours.\n\nReconnectez-vous à tout moment avant cette date pour annuler.',
+        [{ text: 'OK', onPress: async () => { await useAuthStore.getState().logout(); } }],
+      );
+    } catch {
+      // A thrown exception (e.g. a network timeout, whether during the OTP
+      // check or the delete RPC itself) must never leave `deleting` stuck
+      // true nor the OTP screen silent with no feedback.
+      setDeleting(false);
+      setDeleteOtpError('Vérifiez votre connexion et réessayez.');
       setDeleteOtpKey(k => k + 1);
-      return;
     }
-
-    setDeleting(true);
-    const { error } = await supabase.rpc('delete_my_account');
-    setDeleting(false);
-    if (error) {
-      // The RPC's own block message (a real, named-business error, same
-      // shape as leave_or_delete_business's) is shown as-is if that's what
-      // this is — the client precheck above only catches this ahead of time
-      // on the common path, not a race where membership changed in between.
-      // Anything else (a raw infrastructure error) is translated, never shown raw.
-      resetDeleteFlow();
-      Alert.alert('Suppression impossible', rpcErrorMessage(error, "Ça n'a pas fonctionné. Écrivez-nous si ça continue :)"));
-      return;
-    }
-
-    Alert.alert(
-      'Compte programmé pour suppression',
-      'Votre compte sera définitivement supprimé dans 30 jours.\n\nReconnectez-vous à tout moment avant cette date pour annuler.',
-      [{ text: 'OK', onPress: async () => { await useAuthStore.getState().logout(); } }],
-    );
   };
 
   // One RPC handles the whole "Quitter" button for an admin: it decides for
@@ -433,7 +495,15 @@ export default function ParametresScreen() {
     haptics.error();
     setDeleting(true);
 
-    const { error } = await supabase.rpc('leave_or_delete_business', { p_business_id: business.id });
+    let error: { code?: string; message?: string } | null;
+    try {
+      ({ error } = await supabase.rpc('leave_or_delete_business', { p_business_id: business.id }));
+    } catch (err) {
+      // A thrown exception (e.g. a network timeout) must be treated the
+      // same as a returned {error} — otherwise `deleting` is left stuck
+      // true forever with no message shown, on a genuinely destructive flow.
+      error = err instanceof Error ? { message: err.message } : { message: String(err) };
+    }
     if (error) {
       setDeleting(false);
       resetDeleteFlow();
@@ -688,7 +758,45 @@ export default function ParametresScreen() {
           </Card>
 
 
+          {/* Notifications */}
+          <Card style={styles.section}>
+            <Text variant="label" color="secondary">Notifications</Text>
+            <View style={styles.linkRow}>
+              <View style={{ flex: 1, marginRight: spacing[3] }}>
+                <Text variant="body">Une notification à chaque vente</Text>
+                <Text variant="caption" color="secondary">
+                  Reçue pour chaque vente faite par vous ou votre équipe
+                </Text>
+              </View>
+              <Switch
+                value={notifyEverySale}
+                onValueChange={handleToggleNotifyEverySale}
+                trackColor={{ false: palette.border, true: palette.primary }}
+                thumbColor={palette.surface}
+              />
+            </View>
+          </Card>
+
           {/* À propos */}
+          {/* Sécurité — lost/stolen-phone flow (security audit 2026-09-27,
+              checklist 1.15). Server-side via GoTrue's `others` scope
+              (stores/auth.ts's revokeOtherSessions) — kills every other
+              refresh token immediately without touching this device's own
+              session. Deliberately just this one button, no per-device list:
+              at this app's current scale nobody runs multiple simultaneous
+              devices as a normal pattern, so "kill everything else" matches
+              what a worried vendor actually wants to tap, not a session
+              picker they'd have to reason about first. */}
+          <Card style={styles.section}>
+            <Text variant="label" color="secondary">Sécurité</Text>
+            <Pressable onPress={handleRevokeOtherSessions} disabled={revokingSessions} style={styles.linkRow}>
+              <Text variant="body">
+                {revokingSessions ? 'Déconnexion en cours…' : 'Déconnecter tous les autres appareils'}
+              </Text>
+              <Text variant="caption" color="secondary">›</Text>
+            </Pressable>
+          </Card>
+
           <Card style={styles.section}>
             <Text variant="label" color="secondary">À propos</Text>
             <Pressable onPress={() => Linking.openURL('https://patron.kolilink.com/privacy.html')} style={styles.linkRow}>

@@ -1,10 +1,10 @@
-import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
+import { useEffect, useMemo, useState } from 'react';
 import {
-  Alert, ActivityIndicator, Linking, Modal,
+  Alert, InputAccessoryView, Linking, Modal,
   Platform, Pressable, ScrollView, StyleSheet, View,
 } from 'react-native';
 import { Ionicons } from '@expo/vector-icons';
-import { SafeAreaView, useSafeAreaInsets } from 'react-native-safe-area-context';
+import { SafeAreaView } from 'react-native-safe-area-context';
 import { Screen } from '@/src/components/ui/Screen';
 import { FormSheet } from '@/src/components/ui/FormSheet';
 import { router, useLocalSearchParams } from 'expo-router';
@@ -13,317 +13,41 @@ import { Card } from '@/src/components/ui/Card';
 import { Input } from '@/src/components/ui/Input';
 import { Text } from '@/src/components/ui/Text';
 import { ProofControl } from '@/src/components/ui/ProofControl';
-import { useTheme, spacing, radius, shadow } from '@/src/theme';
+import { useTheme, spacing, shadow, fontFamily } from '@/src/theme';
 import type { Palette } from '@/src/theme';
 import { useAuthStore } from '@/stores/auth';
-import { useRapportsStore } from '@/stores/rapports';
 import { useProductStore } from '@/stores/products';
-import { supabase } from '@/lib/supabase';
 import {
   useFournisseursStore,
   type CommandeAchat,
   type Fournisseur,
   type SupplierPayment,
 } from '@/stores/fournisseurs';
-import type { Product } from '@/src/types';
+import { supabase } from '@/lib/supabase';
 import { formatAmountInput, parseAmountInput } from '@/src/utils/format';
+
+// iOS-only: suppresses the OS's auto-injected floating "Done" pill above
+// number-pad/decimal-pad keyboards — the pay form below already has a
+// persistent, always-visible footer button, so the pill is redundant.
+const PAY_FORM_SILENT_ACCESSORY_ID = 'fournisseurs-id-pay-form-silent-accessory';
 
 function fmt(n: number, cur: string) {
   return `${Math.round(n).toLocaleString('fr-FR')} ${cur}`;
 }
 
-const STATUS_LABEL: Record<string, string> = {
-  brouillon: 'Non confirmé', envoye: 'Envoyé',
-  recu_partiel: 'Partiel', recu: 'Reçu', annule: 'Annulé',
-};
-function getStatusColor(status: string, p: Palette): string {
-  const map: Record<string, string> = {
-    brouillon: p.textSecondary, envoye: p.primary,
-    recu_partiel: p.warning, recu: p.success, annule: p.danger,
-  };
-  return map[status] ?? p.textSecondary;
+function digitsOnly(phone: string): string {
+  return phone.replace(/[^0-9]/g, '');
 }
 
-// ── Commande Form ─────────────────────────────────────────────────────────────
+// ── Livraison detail — one unified sheet, replacing the two divergent ones
+// this screen and the Fournisseurs list used to each maintain independently
+// (one titled "Commande" with a photo control, one titled with the supplier's
+// name and a "Confirmer la réception" button). Under the new model every
+// livraison shown here is already status='recu' — there is nothing left to
+// confirm, only to look at. ──────────────────────────────────────────────────
 
-type POLine = {
-  product_id: string;
-  product_name: string;
-  qty: string;
-  total_cost: string;
-  variant_id?: string;
-};
-
-function CommandeForm({
-  visible, fournisseur, products, currency, saving, businessId, onClose, onSave,
-}: {
-  visible: boolean; fournisseur: Fournisseur; products: Product[];
-  currency: string; saving: boolean; businessId: string; onClose: () => void;
-  onSave: (lines: { product_id: string; product_name: string; qty: number; unit_cost: number; variant_id: string | null }[], amountPaid: number) => Promise<void>;
-}) {
-  const { palette } = useTheme();
-  const styles = useMemo(() => makeStyles(palette), [palette]);
-  const insets = useSafeAreaInsets();
-  const { fetchVariants, variantsByProduct } = useProductStore();
-  const session = useAuthStore(s => s.session);
-  const cashOnHand = useRapportsStore(s => s.yearReport?.cash_on_hand ?? null);
-  const [lines, setLines] = useState<POLine[]>([]);
-  const [showPicker, setShowPicker] = useState(false);
-  const [paymentInput, setPaymentInput] = useState('');
-  const [seeding, setSeeding] = useState(false);
-  const seededRef = useRef<string | null>(null);
-
-  const addProductToLines = useCallback(async (p: Product) => {
-    if (p.has_variants) {
-      const cached = variantsByProduct[p.id];
-      const variants = cached?.length ? cached : await fetchVariants(p.id, businessId);
-      if (variants.length > 0) {
-        setLines(prev => [
-          ...prev,
-          ...variants.map(v => ({
-            product_id: p.id,
-            product_name: `${p.name} (${v.name})`,
-            qty: '1',
-            total_cost: v.cost_price > 0 ? formatAmountInput(String(Math.round(v.cost_price)), currency) : '',
-            variant_id: v.id,
-          })),
-        ]);
-        return;
-      }
-    }
-    setLines(prev => [...prev, {
-      product_id: p.id, product_name: p.name, qty: '1',
-      total_cost: p.cost_price > 0 ? formatAmountInput(String(Math.round(p.cost_price)), currency) : '',
-    }]);
-  }, [businessId, fetchVariants, variantsByProduct]);
-
-  useEffect(() => {
-    if (!visible) { seededRef.current = null; setPaymentInput(''); setLines([]); return; }
-    const fId = fournisseur.id;
-    if (seededRef.current === fId && lines.length > 0) return;
-    seededRef.current = fId;
-    setShowPicker(false);
-    setSeeding(true);
-
-    (async () => {
-      // Fetch extra product-supplier links beyond products.supplier_id
-      const { data: psData } = await supabase
-        .from('product_suppliers')
-        .select('product_id')
-        .eq('supplier_id', fId);
-      const extraIds = new Set((psData ?? []).map(r => r.product_id as string));
-
-      const linked = products.filter(p =>
-        (p.supplier_id === fId || extraIds.has(p.id)) && !p.archived,
-      );
-
-      const seedLines: POLine[] = [];
-      for (const p of linked) {
-        if (p.has_variants) {
-          const cached = variantsByProduct[p.id];
-          const variants = cached?.length ? cached : await fetchVariants(p.id, businessId);
-          if (variants.length > 0) {
-            for (const v of variants) {
-              seedLines.push({
-                product_id: p.id,
-                product_name: `${p.name} (${v.name})`,
-                qty: '1',
-                total_cost: v.cost_price > 0 ? formatAmountInput(String(Math.round(v.cost_price)), currency) : '',
-                variant_id: v.id,
-              });
-            }
-            continue;
-          }
-        }
-        seedLines.push({
-          product_id: p.id, product_name: p.name, qty: '1',
-          total_cost: p.cost_price > 0 ? formatAmountInput(String(Math.round(p.cost_price)), currency) : '',
-        });
-      }
-      // Only set if still the same fournisseur (guard against race)
-      if (seededRef.current === fId) setLines(seedLines);
-      setSeeding(false);
-    })();
-  }, [visible, fournisseur.id]);
-
-  // Best-effort background refresh so the overspend warning below has a
-  // real number to compare against — see the identical comment in
-  // fournisseurs/index.tsx's CommandeForm.
-  useEffect(() => {
-    if (!visible) return;
-    const role = session?.activeMembership?.role;
-    const uid = session?.user?.id;
-    if (!businessId || !role || !uid) return;
-    useRapportsStore.getState().fetchYearReport(businessId, new Date().getFullYear(), role, uid);
-  }, [visible, businessId, session?.activeMembership?.role, session?.user?.id]);
-
-  const total = lines.reduce((s, l) => s + parseAmountInput(l.total_cost, currency), 0);
-  const parsedPaid = paymentInput.trim() === ''
-    ? total
-    : parseAmountInput(paymentInput, currency);
-  const owed = Math.max(0, total - parsedPaid);
-  // A product is "in the order" if any of its lines (possibly variant lines) are present
-  const lineProductIds = new Set(lines.map(l => l.product_id));
-  const pickerProducts = [...products]
-    .filter(p => !lineProductIds.has(p.id) && !p.archived)
-    .sort((a, b) => (a.supplier_id === fournisseur.id ? -1 : 0) - (b.supplier_id === fournisseur.id ? -1 : 0));
-
-  return (
-    <FormSheet
-      visible={visible}
-      onClose={onClose}
-      title="Nouvelle commande"
-      contentContainerStyle={styles.mpad}
-      footer={
-        <View style={[styles.mfooter, { paddingBottom: Math.max(insets.bottom, spacing[5]) }]}>
-          <Button
-            label={saving ? '…' : 'Passer la commande'} loading={saving} fullWidth size="lg"
-            disabled={lines.length === 0 || seeding}
-            onPress={() => {
-              const parsed = lines.map(l => {
-                const qty = parseInt(l.qty) || 0;
-                const tc = parseAmountInput(l.total_cost, currency);
-                return {
-                  product_id: l.product_id, product_name: l.product_name,
-                  qty, unit_cost: qty > 0 ? tc / qty : 0,
-                  variant_id: l.variant_id ?? null,
-                };
-              });
-              const invalid = parsed.find(l => l.qty <= 0 || l.unit_cost <= 0);
-              if (invalid) { Alert.alert(`Un petit contrôle sur la quantité et le coût :)`, `"${invalid.product_name}"`); return; }
-              const effectivePaid = paymentInput.trim() === '' ? total : parsedPaid;
-              // Soft, non-blocking warning only — never prevents ordering on
-              // credit/against savings not tracked as "cash on hand".
-              if (cashOnHand !== null && effectivePaid > cashOnHand) {
-                Alert.alert(
-                  'Montant supérieur à l\'argent disponible',
-                  `Vous payez ${fmt(effectivePaid, currency)} alors que l'argent disponible est de ${fmt(cashOnHand, currency)}. Continuer quand même ?`,
-                  [
-                    { text: 'Annuler', style: 'cancel' },
-                    { text: 'Continuer', onPress: () => onSave(parsed, effectivePaid) },
-                  ],
-                );
-                return;
-              }
-              onSave(parsed, effectivePaid);
-            }}
-          />
-        </View>
-      }
-    >
-          <Text variant="label" color="secondary">{fournisseur.name}</Text>
-
-          {seeding ? (
-            <ActivityIndicator size="small" color={palette.primary} style={{ marginVertical: 20 }} />
-          ) : (lines.length === 0 || showPicker) && (
-            <>
-              <Text variant="label">{lines.length === 0 ? 'Produits à commander' : 'Ajouter depuis le catalogue'}</Text>
-              {pickerProducts.length > 0 ? (
-                <ScrollView horizontal showsHorizontalScrollIndicator={false} style={{ flexGrow: 0 }}>
-                  {pickerProducts.map(p => (
-                    <Pressable
-                      key={p.id}
-                      onPress={() => { void addProductToLines(p); setShowPicker(false); }}
-                      style={[styles.prodChip, p.supplier_id === fournisseur.id && styles.prodChipLinked]}>
-                      <Text variant="caption" numberOfLines={1}
-                        style={{ color: p.supplier_id === fournisseur.id ? palette.primary : palette.textPrimary }}>
-                        {p.name}
-                      </Text>
-                    </Pressable>
-                  ))}
-                </ScrollView>
-              ) : (
-                <Text variant="caption" color="secondary">Tous les produits sont déjà dans la commande.</Text>
-              )}
-            </>
-          )}
-
-          {lines.map((l, i) => (
-            <Card key={i} style={styles.lineCard}>
-              <View style={styles.lineTop}>
-                <Text variant="label" style={{ flex: 1 }} numberOfLines={1}>{l.product_name}</Text>
-                <Pressable onPress={() => setLines(prev => prev.filter((_, j) => j !== i))}>
-                  <Text variant="caption" color="danger">Retirer</Text>
-                </Pressable>
-              </View>
-              <View style={styles.lineInputs}>
-                <View style={{ flex: 1, minWidth: 80 }}>
-                  <Input label="Qté" value={l.qty}
-                    onChangeText={v => setLines(prev => prev.map((x, j) => j === i ? { ...x, qty: v } : x))}
-                    keyboardType="number-pad" />
-                </View>
-                <View style={{ flex: 2 }}>
-                  <Input label={`Coût total (${currency})`} value={l.total_cost}
-                    onChangeText={v => setLines(prev => prev.map((x, j) => j === i ? { ...x, total_cost: formatAmountInput(v, currency) } : x))}
-                    keyboardType="decimal-pad" />
-                </View>
-              </View>
-              {(() => {
-                const qty = parseInt(l.qty) || 0;
-                const tc = parseAmountInput(l.total_cost, currency);
-                const unit = qty > 0 && tc > 0 ? fmt(tc / qty, currency) : '—';
-                return (
-                  <Text variant="caption" color="secondary">
-                    Prix d'achat unitaire : {unit}
-                  </Text>
-                );
-              })()}
-            </Card>
-          ))}
-
-          {lines.length > 0 && !showPicker && (
-            <Pressable onPress={() => setShowPicker(true)} style={styles.addMoreBtn}>
-              <Ionicons name="add-circle-outline" size={18} color={palette.primary} />
-              <Text variant="label" style={{ color: palette.primary, marginLeft: 6 }}>Ajouter un autre produit</Text>
-            </Pressable>
-          )}
-
-          {lines.length > 0 && (
-            <>
-              <Card style={styles.totalRow}>
-                <Text variant="label" color="secondary">Total</Text>
-                <Text
-                  variant="amountLarge"
-                  numberOfLines={1}
-                  adjustsFontSizeToFit
-                  style={{ color: palette.primary }}
-                >
-                  {fmt(total, currency)}
-                </Text>
-              </Card>
-
-              <Input
-                label={`Montant payé (${currency})`}
-                value={paymentInput}
-                onChangeText={v => setPaymentInput(formatAmountInput(v, currency))}
-                keyboardType="decimal-pad"
-                placeholder={total > 0 ? String(Math.round(total)) : '0'}
-              />
-
-              {owed > 0 && (
-                <Card style={styles.owedBanner}>
-                  <Ionicons name="time-outline" size={16} color={palette.warning} />
-                  <Text style={styles.owedText}>
-                    Ce solde de {fmt(owed, currency)} sera enregistré comme crédit auprès de ce fournisseur
-                  </Text>
-                </Card>
-              )}
-              {paymentInput.trim() !== '' && owed === 0 && parsedPaid >= total && total > 0 && (
-                <Card style={styles.paidBanner}>
-                  <Ionicons name="checkmark-circle-outline" size={16} color={palette.success} />
-                  <Text style={styles.paidText}>Commande entièrement payée</Text>
-                </Card>
-              )}
-            </>
-          )}
-    </FormSheet>
-  );
-}
-
-// ── Order detail modal ─────────────────────────────────────────────────────────
-
-function OrderDetail({ order, currency, businessId, canAttach, offline, onClose, onProofAttached, onProofDeleted }: {
-  order: CommandeAchat; currency: string; businessId: string;
+function LivraisonDetail({ livraison, fournisseurName, currency, businessId, canAttach, offline, onClose, onProofAttached, onProofDeleted }: {
+  livraison: CommandeAchat; fournisseurName: string; currency: string; businessId: string;
   canAttach: boolean; offline: boolean;
   onClose: () => void;
   onProofAttached: (proof: { url: string; width: number; height: number }) => void;
@@ -331,45 +55,42 @@ function OrderDetail({ order, currency, businessId, canAttach, offline, onClose,
 }) {
   const { palette } = useTheme();
   const styles = useMemo(() => makeStyles(palette), [palette]);
+  const dateLabel = new Date(livraison.ordered_at).toLocaleDateString('fr-FR', { day: 'numeric', month: 'short' });
   return (
     <Modal visible animationType="slide" presentationStyle="formSheet" onRequestClose={onClose} statusBarTranslucent navigationBarTranslucent backdropColor={palette.background}>
       <SafeAreaView style={styles.modalSafe} edges={Platform.OS === 'android' ? ['top', 'bottom'] : ['bottom']}>
         <View style={styles.mhdr}>
           <Pressable onPress={onClose}><Text variant="body" color="secondary">Fermer</Text></Pressable>
-          <Text variant="h4">Commande</Text>
+          <Text variant="h4" numberOfLines={1}>{fournisseurName} · {dateLabel}</Text>
           <View style={{ width: 60 }} />
         </View>
         <ScrollView contentContainerStyle={styles.mpad}>
           <Card style={{ gap: spacing[2] }}>
-            <View style={styles.dr}><Text variant="caption" color="secondary">Statut</Text>
-              <Text variant="label" style={{ color: getStatusColor(order.status, palette) }}>{STATUS_LABEL[order.status]}</Text></View>
-            <View style={styles.dr}><Text variant="caption" color="secondary">Date</Text>
-              <Text variant="label">{new Date(order.ordered_at).toLocaleDateString('fr-FR')}</Text></View>
             <View style={styles.dr}><Text variant="caption" color="secondary">Total</Text>
-              <Text variant="label">{fmt(order.total_cost, currency)}</Text></View>
+              <Text variant="label">{fmt(livraison.total_cost, currency)}</Text></View>
           </Card>
-          {order.lines?.map(l => (
+          {livraison.lines?.map(l => (
             <Card key={l.id} style={{ gap: 2 }}>
               <Text variant="body">{l.product_name}</Text>
               <View style={styles.dr}>
-                <Text variant="caption" color="secondary">×{l.qty_ordered} × {fmt(l.unit_cost, currency)}/u</Text>
+                <Text variant="caption" color="secondary">×{l.qty_ordered} · {fmt(l.unit_cost, currency)}/u</Text>
                 <Text variant="label">{fmt(l.qty_ordered * l.unit_cost, currency)}</Text>
               </View>
             </Card>
           ))}
 
           <View style={{ gap: spacing[2], marginTop: spacing[2] }}>
-            <Text variant="label" color="secondary">Image</Text>
+            <Text variant="label" color="secondary">Photo</Text>
             <ProofControl
               variant="row"
               kind="purchase_order"
-              id={order.id}
+              id={livraison.id}
               businessId={businessId}
-              imageUrl={order.proof_image_url}
-              imageWidth={order.proof_image_width}
-              imageHeight={order.proof_image_height}
-              attachedBy={order.proof_attached_by}
-              attachedAt={order.proof_attached_at}
+              imageUrl={livraison.proof_image_url}
+              imageWidth={livraison.proof_image_width}
+              imageHeight={livraison.proof_image_height}
+              attachedBy={livraison.proof_attached_by}
+              attachedAt={livraison.proof_attached_at}
               canAttach={canAttach}
               offline={offline}
               onAttached={onProofAttached}
@@ -396,13 +117,13 @@ export default function FournisseurProfile() {
 
   const { products, fetchProducts } = useProductStore();
   const {
-    fournisseurs, commandes, debts, payments, saving, offline,
+    fournisseurs, commandes, debts, payments, offline,
     fetchFournisseurs, fetchCommandes, fetchPayments,
-    createCommande, loadCommandeLines, deleteFournisseur, payDebt,
+    loadCommandeLines, deleteFournisseur, payDebt,
   } = useFournisseursStore();
   const canWrite = role === 'administrateur' || role === 'manager';
 
-  const fournisseur    = fournisseurs.find(f => f.id === id);
+  const fournisseur = fournisseurs.find(f => f.id === id);
 
   // Extra product links from the many-to-many product_suppliers table
   const [extraProductIds, setExtraProductIds] = useState<Set<string>>(new Set());
@@ -413,23 +134,25 @@ export default function FournisseurProfile() {
     (p.supplier_id === id || extraProductIds.has(p.id)) && !p.archived,
   );
 
-  const supplierOrders = commandes
-    .filter(c => c.supplier_id === id)
+  // A livraison is a purchase_order that made it all the way to 'recu' — no
+  // pending/partial order is ever created going forward under the new model,
+  // so anything else simply isn't shown here.
+  const supplierLivraisons = commandes
+    .filter(c => c.supplier_id === id && c.status === 'recu')
     .sort((a, b) => new Date(b.ordered_at).getTime() - new Date(a.ordered_at).getTime());
   const totalOwed = debts
     .filter(d => d.supplier_id === id)
     .reduce((s, d) => s + Math.max(0, d.amount - d.amount_paid), 0);
 
-  const [showCommande, setShowCommande] = useState(false);
   const [showPay, setShowPay]           = useState(false);
   const [payAmount, setPayAmount]       = useState('');
   const [paying, setPaying]             = useState(false);
-  const [detailOrder, setDetailOrder]   = useState<CommandeAchat | null>(null);
+  const [detailLivraison, setDetailLivraison] = useState<CommandeAchat | null>(null);
 
   useEffect(() => {
     if (!businessId || !id) return;
     if (fournisseurs.length === 0) fetchFournisseurs(businessId);
-    if (products.length === 0) fetchProducts(businessId, userId);
+    if (products.length === 0) fetchProducts(businessId, userId, session?.activeMembership?.id, session?.activeMembership?.role);
     fetchCommandes(businessId);
     fetchPayments(businessId, id);
   }, [businessId, id]);
@@ -444,16 +167,27 @@ export default function FournisseurProfile() {
 
   const linkProduct = async (productId: string) => {
     setLinkingProducts(true);
-    const { error } = await supabase.from('product_suppliers').insert({ product_id: productId, supplier_id: id });
-    if (!error) setExtraProductIds(prev => new Set([...prev, productId]));
-    setLinkingProducts(false);
-    setShowProductLink(false);
+    try {
+      const { error } = await supabase.from('product_suppliers').insert({ product_id: productId, supplier_id: id });
+      if (!error) setExtraProductIds(prev => new Set([...prev, productId]));
+    } catch {
+      // A network timeout here must never leave `linkingProducts` stuck
+      // true (it permanently disables the link chip) — see CLAUDE.md's
+      // withTimeout() sweep for the established shape of this fix.
+    } finally {
+      setLinkingProducts(false);
+      setShowProductLink(false);
+    }
   };
 
   const unlinkProduct = async (productId: string) => {
-    const { error } = await supabase.from('product_suppliers')
-      .delete().eq('product_id', productId).eq('supplier_id', id);
-    if (!error) setExtraProductIds(prev => { const s = new Set(prev); s.delete(productId); return s; });
+    try {
+      const { error } = await supabase.from('product_suppliers')
+        .delete().eq('product_id', productId).eq('supplier_id', id);
+      if (!error) setExtraProductIds(prev => { const s = new Set(prev); s.delete(productId); return s; });
+    } catch {
+      // best-effort — no loading flag depends on this
+    }
   };
 
   const handleDelete = () => {
@@ -467,7 +201,7 @@ export default function FournisseurProfile() {
           onPress: async () => {
             const ok = await deleteFournisseur(id, businessId);
             if (ok) router.back();
-            else Alert.alert('Ce fournisseur a des commandes enregistrées — retirez-les d\'abord :)');
+            else Alert.alert('Ce fournisseur a des livraisons enregistrées — retirez-les d\'abord :)');
           },
         },
       ]
@@ -488,10 +222,10 @@ export default function FournisseurProfile() {
     else Alert.alert('Le paiement n\'est pas passé :)');
   };
 
-  const openOrderDetail = async (order: CommandeAchat) => {
-    if (!order.lines) await loadCommandeLines(order.id);
-    const updated = useFournisseursStore.getState().commandes.find(c => c.id === order.id) ?? order;
-    setDetailOrder(updated);
+  const openLivraisonDetail = async (livraison: CommandeAchat) => {
+    if (!livraison.lines) await loadCommandeLines(livraison.id);
+    const updated = useFournisseursStore.getState().commandes.find(c => c.id === livraison.id) ?? livraison;
+    setDetailLivraison(updated);
   };
 
   if (!fournisseur) {
@@ -541,12 +275,20 @@ export default function FournisseurProfile() {
           </View>
           <Text style={styles.heroName}>{fournisseur.name}</Text>
           {fournisseur.phone ? (
-            <Pressable
-              onPress={() => Linking.openURL(`tel:${fournisseur.phone}`)}
-              style={styles.callBtn}>
-              <Ionicons name="call-outline" size={15} color={palette.primary} />
-              <Text style={styles.callText}>Appeler</Text>
-            </Pressable>
+            <View style={styles.contactRow}>
+              <Pressable
+                onPress={() => Linking.openURL(`tel:${fournisseur.phone}`).catch(() => {})}
+                style={styles.callBtn}>
+                <Ionicons name="call-outline" size={15} color={palette.primary} />
+                <Text style={styles.callText}>Appeler</Text>
+              </Pressable>
+              <Pressable
+                onPress={() => Linking.openURL(`https://wa.me/${digitsOnly(fournisseur.phone!)}`).catch(() => {})}
+                style={styles.callBtn}>
+                <Ionicons name="logo-whatsapp" size={15} color={palette.primary} />
+                <Text style={styles.callText}>WhatsApp</Text>
+              </Pressable>
+            </View>
           ) : (
             <Text variant="caption" color="secondary" style={{ marginTop: 8 }}>Pas de numéro</Text>
           )}
@@ -559,7 +301,7 @@ export default function FournisseurProfile() {
             {(role === 'administrateur' || role === 'manager') && (
               <Pressable onPress={() => setShowProductLink(v => !v)} hitSlop={8}>
                 <Text variant="caption" style={{ color: palette.primary }}>
-                  {showProductLink ? 'Fermer' : '+ Lier'}
+                  {showProductLink ? 'Fermer' : '+ Ajouter un produit'}
                 </Text>
               </Pressable>
             )}
@@ -591,7 +333,7 @@ export default function FournisseurProfile() {
                     <Text style={styles.chipText}>{p.name}</Text>
                     {canUnlink && (
                       <Pressable onPress={() => { void unlinkProduct(p.id); }} hitSlop={14} style={{ marginLeft: 4 }}>
-                        <Text style={{ color: palette.primary, fontSize: 13, fontWeight: '700' }}>×</Text>
+                        <Text style={{ color: palette.primary, fontSize: 13, fontFamily: fontFamily.bold }}>×</Text>
                       </Pressable>
                     )}
                   </View>
@@ -636,24 +378,19 @@ export default function FournisseurProfile() {
           );
         })()}
 
-        {/* ── Order history ── */}
-        {supplierOrders.length > 0 && <View style={styles.section}>
-          <Text variant="label" color="secondary" style={{ marginBottom: spacing[3] }}>Historique des commandes</Text>
-          {supplierOrders.map(order => (
+        {/* ── Livraisons ── */}
+        {supplierLivraisons.length > 0 && <View style={styles.section}>
+          <Text variant="label" color="secondary" style={{ marginBottom: spacing[3] }}>Livraisons</Text>
+          {supplierLivraisons.map(livraison => (
             <Pressable
-              key={order.id}
-              onPress={() => openOrderDetail(order)}
+              key={livraison.id}
+              onPress={() => openLivraisonDetail(livraison)}
               style={({ pressed }) => [styles.orderRow, pressed && { opacity: 0.6 }]}>
               <View style={{ flex: 1 }}>
                 <Text variant="body">
-                  {new Date(order.ordered_at).toLocaleDateString('fr-FR', { day: 'numeric', month: 'long', year: 'numeric' })}
+                  {new Date(livraison.ordered_at).toLocaleDateString('fr-FR', { day: 'numeric', month: 'long', year: 'numeric' })}
                 </Text>
-                <Text variant="caption" color="secondary">{fmt(order.total_cost, currency)}</Text>
-              </View>
-              <View style={[styles.statusPill, { backgroundColor: getStatusColor(order.status, palette) + '22' }]}>
-                <Text style={[styles.statusText, { color: getStatusColor(order.status, palette) }]}>
-                  {STATUS_LABEL[order.status]}
-                </Text>
+                <Text variant="caption" color="secondary">{fmt(livraison.total_cost, currency)}</Text>
               </View>
               <Ionicons name="chevron-forward" size={14} color={palette.textDisabled} style={{ marginLeft: 4 }} />
             </Pressable>
@@ -664,24 +401,14 @@ export default function FournisseurProfile() {
 
       {/* ── Pinned CTA ── */}
       <View style={styles.footer}>
-        <Button label="Passer une commande" onPress={() => setShowCommande(true)} fullWidth size="lg" />
+        <Button
+          label="Nouvelle livraison"
+          onPress={() => router.push({ pathname: '/(app)/fournisseurs/reception', params: { supplierId: fournisseur.id } })}
+          fullWidth size="lg"
+        />
       </View>
 
       {/* ── Modals ── */}
-      <CommandeForm
-        visible={showCommande}
-        fournisseur={fournisseur}
-        products={products}
-        currency={currency}
-        saving={saving}
-        businessId={businessId}
-        onClose={() => setShowCommande(false)}
-        onSave={async (lines, amountPaid) => {
-          const ok = await createCommande(businessId, userId, { supplierId: fournisseur.id, lines, amountPaid });
-          if (ok) setShowCommande(false);
-        }}
-      />
-
       <FormSheet
         visible={showPay}
         onClose={() => { setShowPay(false); setPayAmount(''); }}
@@ -697,6 +424,13 @@ export default function FournisseurProfile() {
             />
           </View>
         }
+        accessory={
+          Platform.OS === 'ios' ? (
+            <InputAccessoryView nativeID={PAY_FORM_SILENT_ACCESSORY_ID}>
+              <View style={{ height: 0 }} />
+            </InputAccessoryView>
+          ) : undefined
+        }
       >
         <Card style={{ padding: spacing[4], gap: spacing[1] }}>
           <Text variant="caption" color="secondary">Solde dû à {fournisseur.name}</Text>
@@ -707,19 +441,21 @@ export default function FournisseurProfile() {
           value={payAmount}
           onChangeText={v => setPayAmount(formatAmountInput(v, currency))}
           keyboardType="decimal-pad"
+          inputAccessoryViewID={Platform.OS === 'ios' ? PAY_FORM_SILENT_ACCESSORY_ID : undefined}
         />
       </FormSheet>
 
-      {detailOrder && (
-        <OrderDetail
-          order={detailOrder}
+      {detailLivraison && (
+        <LivraisonDetail
+          livraison={detailLivraison}
+          fournisseurName={fournisseur.name}
           currency={currency}
           businessId={businessId}
           canAttach={canWrite}
           offline={offline}
-          onClose={() => setDetailOrder(null)}
+          onClose={() => setDetailLivraison(null)}
           onProofAttached={(proof) => {
-            setDetailOrder(prev => prev ? {
+            setDetailLivraison(prev => prev ? {
               ...prev,
               proof_image_url: proof.url,
               proof_image_width: proof.width,
@@ -728,7 +464,7 @@ export default function FournisseurProfile() {
             void fetchCommandes(businessId);
           }}
           onProofDeleted={() => {
-            setDetailOrder(prev => prev ? {
+            setDetailLivraison(prev => prev ? {
               ...prev,
               proof_image_url: null,
               proof_image_width: null,
@@ -754,10 +490,11 @@ function makeStyles(p: Palette) {
     // Hero
     hero:     { alignItems: 'center', paddingTop: spacing[8], paddingBottom: spacing[6], paddingHorizontal: spacing[5] },
     avatar:   { width: 70, height: 70, borderRadius: 35, backgroundColor: p.primaryLight, alignItems: 'center', justifyContent: 'center' },
-    initials: { fontSize: 26, lineHeight: 26, fontWeight: '700' as const, color: p.primary, includeFontPadding: false },
-    heroName: { fontSize: 22, fontWeight: '700' as const, color: p.textPrimary, marginTop: 12, textAlign: 'center' },
-    callBtn:  { flexDirection: 'row', alignItems: 'center', gap: 6, marginTop: 10, paddingHorizontal: 18, paddingVertical: 8, borderRadius: 20, borderWidth: 1.5, borderColor: p.primary },
-    callText: { fontSize: 14, fontWeight: '600' as const, color: p.primary },
+    initials: { fontFamily: fontFamily.bold, fontSize: 26, lineHeight: 26, color: p.primary, includeFontPadding: false },
+    heroName: { fontFamily: fontFamily.bold, fontSize: 22, color: p.textPrimary, marginTop: 12, textAlign: 'center' },
+    contactRow: { flexDirection: 'row', gap: spacing[2], marginTop: 10 },
+    callBtn:  { flexDirection: 'row', alignItems: 'center', gap: 6, paddingHorizontal: 18, paddingVertical: 8, borderRadius: 20, borderWidth: 1.5, borderColor: p.primary },
+    callText: { fontFamily: fontFamily.semibold, fontSize: 14, color: p.primary },
 
     // Sections
     section: { paddingHorizontal: spacing[5], paddingTop: spacing[5], paddingBottom: spacing[2] },
@@ -765,16 +502,14 @@ function makeStyles(p: Palette) {
     // Products
     chipWrap: { flexDirection: 'row', flexWrap: 'wrap', gap: spacing[2] },
     chip:     { flexDirection: 'row' as const, alignItems: 'center' as const, backgroundColor: p.primaryLight, paddingHorizontal: 12, paddingVertical: 6, borderRadius: 16 },
-    chipText: { fontSize: 13, fontWeight: '500' as const, color: p.primary },
+    chipText: { fontFamily: fontFamily.medium, fontSize: 13, color: p.primary },
 
     // Debt
     debtCard: { flexDirection: 'row', alignItems: 'center', justifyContent: 'space-between' },
-    debtAmt:  { fontSize: 20, fontWeight: '700' as const, color: p.danger, marginTop: 2 },
+    debtAmt:  { fontFamily: fontFamily.bold, fontSize: 20, color: p.danger, marginTop: 2 },
 
-    // Orders
+    // Livraisons
     orderRow:   { flexDirection: 'row', alignItems: 'center', paddingVertical: spacing[3], borderBottomWidth: StyleSheet.hairlineWidth, borderBottomColor: p.border },
-    statusPill: { paddingHorizontal: spacing[2], paddingVertical: 2, borderRadius: radius.sm },
-    statusText: { fontSize: 12, fontWeight: '500' as const },
 
     // Footer
     footer: {
@@ -794,23 +529,6 @@ function makeStyles(p: Palette) {
     // rectangle sitting behind the button rather than part of the sheet.
     mfooter:   { padding: spacing[5], backgroundColor: p.background, ...shadow.md, shadowOffset: { width: 0, height: -2 } },
 
-    // CommandeForm
-    prodChip:       { paddingHorizontal: spacing[3], paddingVertical: spacing[2], marginRight: spacing[2], borderRadius: radius.md, borderWidth: 1, borderColor: p.border, backgroundColor: p.surface, maxWidth: 140 },
-    prodChipLinked: { borderColor: p.primary, backgroundColor: p.primaryLight },
-    lineCard:       { gap: spacing[2] },
-    lineTop:        { flexDirection: 'row', alignItems: 'center', justifyContent: 'space-between' },
-    lineInputs:     { flexDirection: 'row', gap: spacing[3] },
-    // Stacked, not a row with the label and amount fighting for horizontal
-    // space — "Total" no longer needs to share a line with a number that can
-    // run long on a big order (see mfooter comment above for the sibling fix).
-    totalRow:       { gap: spacing[1] },
-    addMoreBtn:     { flexDirection: 'row', alignItems: 'center', paddingVertical: spacing[3] },
-    owedBanner:     { flexDirection: 'row', alignItems: 'center', gap: 8, backgroundColor: p.warningLight, borderColor: p.warning, borderWidth: 1 },
-    owedText:       { flex: 1, fontSize: 13, color: p.warning },
-    paidBanner:     { flexDirection: 'row', alignItems: 'center', gap: 8, backgroundColor: p.successLight, borderColor: p.success, borderWidth: 1 },
-    paidText:       { flex: 1, fontSize: 13, color: p.success },
-
-    // OrderDetail
     dr: { flexDirection: 'row', justifyContent: 'space-between', alignItems: 'center' },
   });
 }

@@ -1,5 +1,5 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
-import { ActivityIndicator, Alert, Animated, Easing, FlatList, Modal, Platform, Pressable, RefreshControl, ScrollView, StyleSheet, TextInput, View } from 'react-native';
+import { ActivityIndicator, Alert, Animated, Easing, FlatList, InputAccessoryView, Modal, Platform, Pressable, RefreshControl, ScrollView, StyleSheet, TextInput, View } from 'react-native';
 import { captureRef } from 'react-native-view-shot';
 import * as Sharing from 'expo-sharing';
 import { SafeAreaView } from 'react-native-safe-area-context';
@@ -21,7 +21,18 @@ import { SaleReceiptView, type ReceiptData, type ReceiptItem } from '@/src/compo
 import { haptics } from '@/lib/haptics';
 import { supabase } from '@/lib/supabase';
 import { SkeletonList } from '@/src/components/ui/SkeletonPlaceholder';
-import { BouncingSmileyEmpty } from '@/src/components/ui/BouncingSmileyEmpty';
+import { EmptyState } from '@/src/components/ui/EmptyState';
+
+// iOS-only: suppresses the OS's auto-injected floating "Done" pill above
+// the numeric keyboard — PaymentSheet already has a persistent, always-
+// visible "Confirmer le paiement" footer button, so the pill is redundant.
+// Deliberately NOT applied to DetailModal's sale-edit fields (line prices,
+// discount, payment amounts) — that form's "Modifier" button is inline at
+// the bottom of a long scrollable card, not a sticky footer, so while
+// editing an earlier field the button genuinely isn't visible without
+// scrolling. The OS pill is the only reachable way to dismiss the keyboard
+// there, so removing it would be a real regression, not a cleanup.
+const PAYMENT_SHEET_SILENT_ACCESSORY_ID = 'ventes-payment-sheet-silent-accessory';
 
 function fmt(n: number, cur: string) { return formatAmount(n, cur); }
 
@@ -269,6 +280,13 @@ function PaymentSheet({ visible, sale, currency, onClose, onConfirm, saving }: P
           />
         </View>
       }
+      accessory={
+        Platform.OS === 'ios' ? (
+          <InputAccessoryView nativeID={PAYMENT_SHEET_SILENT_ACCESSORY_ID}>
+            <View style={{ height: 0 }} />
+          </InputAccessoryView>
+        ) : undefined
+      }
     >
           {/* Debt context card */}
           <Card style={[styles.contextCard, { borderLeftColor: palette.warning, borderLeftWidth: 3 }]}>
@@ -287,6 +305,7 @@ function PaymentSheet({ visible, sale, currency, onClose, onConfirm, saving }: P
                 keyboardType="numeric"
                 placeholderTextColor={palette.textSecondary}
                 selectTextOnFocus
+                inputAccessoryViewID={Platform.OS === 'ios' ? PAYMENT_SHEET_SILENT_ACCESSORY_ID : undefined}
               />
               <Pressable
                 style={styles.solderBtn}
@@ -1351,15 +1370,19 @@ export default function VentesScreen() {
           <Text variant="body" color="secondary" style={{ textAlign: 'center' }}>Données non disponibles hors ligne</Text>
         </View>
       ) : filtered.length === 0 ? (
-        <View style={styles.emptyState}>
-          {sales.length === 0 ? (
-            <BouncingSmileyEmpty />
-          ) : (
+        sales.length === 0 ? (
+          <EmptyState
+            icon="receipt-outline"
+            title="Aucune vente pour le moment."
+            subtitle="Vos ventes apparaîtront ici."
+          />
+        ) : (
+          <View style={styles.emptyState}>
             <Text variant="body" color="secondary" style={{ textAlign: 'center' }}>
               Aucune vente ne correspond à ce filtre.
             </Text>
-          )}
-        </View>
+          </View>
+        )
       ) : (
         <FlatList
           data={visibleItems}

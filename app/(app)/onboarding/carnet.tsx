@@ -1,6 +1,7 @@
 import { useRef, useState, useMemo } from 'react';
 import {
   FlatList,
+  InputAccessoryView,
   KeyboardAvoidingView,
   Platform,
   Pressable,
@@ -26,6 +27,11 @@ interface CarnetEntry {
   name: string;
   amountCents: number;
 }
+
+// iOS-only: suppresses the OS's auto-injected floating "Done" pill above
+// the numeric keyboard — the "+" add button sits immediately next to the
+// field, always visible with no scrolling.
+const CARNET_SILENT_ACCESSORY_ID = 'onboarding-carnet-silent-accessory';
 
 export default function CarnetScreen() {
   const { palette } = useTheme();
@@ -73,11 +79,23 @@ export default function CarnetScreen() {
       // step vendre.tsx's own carnet tab does — without this, a bulk-imported
       // debt book has no client_id at all, and the balance shown for these
       // same customers later reads as understated or zero (see migration_v168.sql).
-      const { data } = await supabase.from('clients').upsert(
-        { business_id: businessId, name: entry.name },
-        { onConflict: 'business_id,name' },
-      ).select('id').single();
-      const ok = await submitCarnetDebt(businessId, userId, entry.name, entry.amountCents, data?.id ?? null);
+      //
+      // A failure here (including a network timeout) must never abort the
+      // loop or leave `saving` stuck true forever — it's treated the same
+      // as a failed submitCarnetDebt call: this one entry counts as failed,
+      // the rest of the batch still gets a chance to save.
+      let clientId: string | null = null;
+      try {
+        const { data } = await supabase.from('clients').upsert(
+          { business_id: businessId, name: entry.name },
+          { onConflict: 'business_id,name' },
+        ).select('id').single();
+        clientId = data?.id ?? null;
+      } catch {
+        failed++;
+        continue;
+      }
+      const ok = await submitCarnetDebt(businessId, userId, entry.name, entry.amountCents, clientId);
       if (!ok) failed++;
     }
     setSaving(false);
@@ -129,6 +147,7 @@ export default function CarnetScreen() {
             keyboardType="numeric"
             returnKeyType="done"
             onSubmitEditing={handleAdd}
+            inputAccessoryViewID={Platform.OS === 'ios' ? CARNET_SILENT_ACCESSORY_ID : undefined}
           />
           <Pressable
             style={[styles.addBtn, { backgroundColor: canAdd ? palette.primary : palette.border }]}
@@ -188,6 +207,11 @@ export default function CarnetScreen() {
           />
         </View>
       </KeyboardAvoidingView>
+      {Platform.OS === 'ios' && (
+        <InputAccessoryView nativeID={CARNET_SILENT_ACCESSORY_ID}>
+          <View style={{ height: 0 }} />
+        </InputAccessoryView>
+      )}
     </Screen>
   );
 }

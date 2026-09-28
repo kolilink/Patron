@@ -1,18 +1,21 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
-import { KeyboardAvoidingView, Modal, Platform, Pressable, ScrollView, StyleSheet, TextInput, View } from 'react-native';
+import { InputAccessoryView, KeyboardAvoidingView, Modal, Platform, Pressable, ScrollView, StyleSheet, TextInput, View } from 'react-native';
 import { Gesture, GestureDetector } from 'react-native-gesture-handler';
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
 import { runOnJS } from 'react-native-reanimated';
 import { Screen } from '@/src/components/ui/Screen';
 import { OfflineNotice } from '@/src/components/ui/OfflineNotice';
+import { QuickCaptureSheet } from '@/src/components/QuickCaptureSheet';
+import { FirstRunHeroOverlay } from '@/src/components/FirstRunHeroOverlay';
 import { router, useFocusEffect } from 'expo-router';
 import { Ionicons } from '@expo/vector-icons';
 import { Button } from '@/src/components/ui/Button';
 import { Card } from '@/src/components/ui/Card';
 import { Pill } from '@/src/components/ui/Pill';
 import { Text } from '@/src/components/ui/Text';
-import { useTheme, radius, spacing } from '@/src/theme';
+import { useTheme, radius, spacing, FLOATING_TAB_BAR_CLEARANCE } from '@/src/theme';
 import type { Palette } from '@/src/theme';
+import { trackEvent } from '@/lib/analytics';
 import { useAuthStore } from '@/stores/auth';
 import { useProductStore } from '@/stores/products';
 import { useVentesStore } from '@/stores/ventes';
@@ -24,6 +27,7 @@ import { useEquipeStore } from '@/stores/equipe';
 import { useInvestorStore } from '@/stores/investor';
 import type { MemberProductStake } from '@/src/types';
 import { formatAmount, formatAmountInput, parseAmountInput } from '@/src/utils/format';
+import { debtAgeTier } from '@/src/utils/clientReminder';
 import { supabase } from '@/lib/supabase';
 import { isNetworkError, withTimeout } from '@/lib/sync';
 import { saveDashboardKpiCache, getDashboardKpiCache, getKV, setKV } from '@/lib/db';
@@ -41,6 +45,10 @@ interface KPIs {
   credit_count: number;
   low_stock: number;
   expenses_month: number;
+  // Lifetime — the business's very first real (status='paye') sale ever,
+  // null if none yet. Drives the one-time "Première vente notée ✓"
+  // acknowledgment; never scoped to today/this month like the rest of KPIs.
+  first_sale_at: string | null;
 }
 
 interface BestSeller {
@@ -52,6 +60,25 @@ interface BestSeller {
 
 function fmt(n: number, cur: string) {
   return `${Math.round(n).toLocaleString('fr-FR')} ${cur}`;
+}
+
+// Same clamped-to-zero "days ago" logic as clients/index.tsx's getDaysAgo —
+// duplicated rather than shared, matching that file's own precedent (its
+// sibling clients/[name].tsx also computes this locally rather than
+// exporting a shared helper with no theme/store context of its own).
+function getDaysAgo(dateStr: string): number {
+  const d = dateStr.includes('T') ? new Date(dateStr) : new Date(dateStr + 'T00:00:00');
+  return Math.max(0, Math.floor((Date.now() - d.getTime()) / (1000 * 60 * 60 * 24)));
+}
+
+// Maps the shared age tier to this screen's palette tokens — age escalates
+// the color, never the amount itself (see clients/index.tsx's own
+// debtAgeColor for the same reasoning).
+function debtAgeColor(days: number, palette: Palette): string {
+  const tier = debtAgeTier(days);
+  if (tier === 'urgent') return palette.recouvrementOwed;
+  if (tier === 'attention') return palette.recouvrementPending;
+  return palette.textSecondary;
 }
 
 // Invisible strip along the left edge that catches the swipe-to-open-drawer
@@ -68,6 +95,11 @@ const EDGE_SWIPE_WIDTH = 24;
 const HEADER_ROW_HEIGHT = 56;
 const EDGE_SWIPE_OPEN_DISTANCE = 40;
 const EDGE_SWIPE_OPEN_VELOCITY = 600;
+
+// iOS-only: suppresses the OS's auto-injected floating "Done" pill above
+// the numeric keyboard — the withdraw sheet's "Envoyer la demande" button
+// sits immediately below the field, always visible with no scrolling.
+const WITHDRAW_SHEET_SILENT_ACCESSORY_ID = 'dashboard-withdraw-sheet-silent-accessory';
 
 type DayPart = 'morning' | 'active' | 'evening' | 'night';
 
@@ -170,7 +202,15 @@ export default function AccueilScreen() {
   // null = not yet checked, true = dismissed, false = active
   const [onboardingDismissed, setOnboardingDismissed] = useState<boolean | null>(null);
   const [showCarnetSheet, setShowCarnetSheet] = useState(false);
+  const [showQuickCapture, setShowQuickCapture] = useState(false);
+  const [quickCaptureMode, setQuickCaptureMode] = useState<'credit' | 'vente'>('credit');
   const [isPrivate, setIsPrivate] = useState(false);
+  // Debt card's zero-debts CTA opens the exact same single-purpose form the
+  // first-run gate uses — "the deferred hero action," not a separate flow.
+  // Independent of _layout.tsx's heroBusinessId latch (that one only governs
+  // the once-per-business gate's own eligibility); this is a plain,
+  // repeatable manual trigger, safe to open any time credit_count reads 0.
+  const [showDebtCapture, setShowDebtCapture] = useState(false);
 
   // Helpers: when privacy mode is on, replace money amounts with bullets
   const amtOrMask = (n: number) => isPrivate ? `••••• ${currency}` : fmt(n, currency);
@@ -311,6 +351,33 @@ export default function AccueilScreen() {
     }, [loadAll]),
   );
 
+  // FirstRunHeroOverlay (app/(app)/_layout.tsx) bumps this the moment it
+  // closes. It's a plain RN Modal outside the tab navigator, so closing it
+  // never actually unfocuses/refocuses Accueil — useFocusEffect above never
+  // fires for it, which is why a debt saved there used to only ever show up
+  // after a real business switch. Skips the very first render (ref, not
+  // state) so this doesn't fire a redundant second loadAll() alongside the
+  // one useFocusEffect already runs on initial mount.
+  const homeRefreshToken = useAuthStore(s => s.homeRefreshToken);
+  const homeRefreshMounted = useRef(false);
+  useEffect(() => {
+    if (!homeRefreshMounted.current) { homeRefreshMounted.current = true; return; }
+    loadAll();
+  }, [homeRefreshToken, loadAll]);
+
+  // ActivationForkOverlay's "Une vente" button (app/(app)/_layout.tsx) sets
+  // this cross-cutting signal and navigates here, since the fork itself is
+  // evaluated at the root layout with no direct reference to this screen's
+  // own showQuickCapture state. Open the sheet in that mode, then clear the
+  // signal so it doesn't re-fire on some unrelated future re-render.
+  const requestQuickCapture = useAuthStore(s => s.requestQuickCapture);
+  useEffect(() => {
+    if (!requestQuickCapture) return;
+    setQuickCaptureMode(requestQuickCapture);
+    setShowQuickCapture(true);
+    useAuthStore.setState({ requestQuickCapture: null });
+  }, [requestQuickCapture]);
+
   const loadKpis = async () => {
     const localDate = new Date().toLocaleDateString('en-CA'); // YYYY-MM-DD device local date
     const { data, error } = await withTimeout(
@@ -340,22 +407,24 @@ export default function AccueilScreen() {
           low_stock:         pOffline.filter(p => !p.has_variants && p.reorder_level > 0 && p.stock_qty <= p.reorder_level).length
                              + Object.values(vOffline).flat().filter(v => v.reorder_level > 0 && v.stock_qty <= v.reorder_level).length,
           expenses_month:    cached?.expenses_month    ?? 0,
+          first_sale_at:     cached?.first_sale_at     ?? null,
         });
         return;
       }
       throw error;
     }
 
-    const d = data as Record<string, number>;
+    const d = data as Record<string, number | string | null>;
     const freshKpis: KPIs = {
-      revenue_today:     d.revenue_today     / 100,
-      revenue_yesterday: d.revenue_yesterday / 100,
-      revenue_month:     d.revenue_month     / 100,
-      sales_today:       d.sales_today,
-      credit_total:      d.credit_total      / 100,
-      credit_count:      d.credit_count,
-      low_stock:         d.low_stock,
-      expenses_month:    d.expenses_month    / 100,
+      revenue_today:     Number(d.revenue_today)     / 100,
+      revenue_yesterday: Number(d.revenue_yesterday) / 100,
+      revenue_month:     Number(d.revenue_month)     / 100,
+      sales_today:       Number(d.sales_today),
+      credit_total:      Number(d.credit_total)      / 100,
+      credit_count:      Number(d.credit_count),
+      low_stock:         Number(d.low_stock),
+      expenses_month:    Number(d.expenses_month)    / 100,
+      first_sale_at:     (d.first_sale_at as string | null) ?? null,
     };
     setKpis(freshKpis);
     void saveDashboardKpiCache(businessId, freshKpis);
@@ -388,6 +457,34 @@ export default function AccueilScreen() {
 
   const lowStock = kpis?.low_stock ?? 0;
 
+  // Oldest-debt aging for the "clients qui doivent" card — computed
+  // client-side from the already-fetched sales list (same per-client
+  // grouping clients/index.tsx uses) rather than adding a new RPC field,
+  // since this is purely a "is anything genuinely old" signal, not a new
+  // source of truth for the total owed (kpis.credit_total already covers that).
+  const creditAging = useMemo(() => {
+    const oldestByClient = new Map<string, string>();
+    for (const s of ventesSales) {
+      if (s.status !== 'credit') continue;
+      const remaining = s.total_amount - (s.discount_amount ?? 0) - (s.amount_paid ?? 0);
+      if (remaining <= 0.01) continue;
+      const name = s.customer_name?.trim();
+      const key = s.client_id ?? name;
+      if (!key) continue;
+      const saleDate = s.sale_date ?? s.created_at.split('T')[0];
+      const existing = oldestByClient.get(key);
+      if (!existing || saleDate < existing) oldestByClient.set(key, saleDate);
+    }
+    let agingCount = 0;
+    let oldestDays = 0;
+    for (const dateStr of oldestByClient.values()) {
+      const days = getDaysAgo(dateStr);
+      if (days >= 7) agingCount++;
+      if (days > oldestDays) oldestDays = days;
+    }
+    return { agingCount, oldestDays };
+  }, [ventesSales]);
+
   const visibleBestSellers = useMemo(() => {
     const archivedIds = new Set(products.filter(p => p.archived).map(p => p.id));
     if (isInvestisseur && investorScope.length > 0) {
@@ -419,33 +516,57 @@ export default function AccueilScreen() {
   const monthOrderCount = rapportsSnapshot?.period_order_count ?? 0;
 
   const salesCount = kpis?.sales_today ?? 0;
+  const hasSoldToday = salesCount > 0;
   const delta = (kpis?.revenue_today ?? 0) - (kpis?.revenue_yesterday ?? 0);
-  const showAttentionCards = (kpis?.credit_count ?? 0) > 0 || lowStock > 0;
 
   const dayPart = getDayPart();
   const dayGreeting = dayPart === 'morning' ? 'Bonne journée'
     : dayPart === 'evening' ? 'Voici votre journée'
     : null;
+  // Never prints "0 ventes" — a zero-sales day drops the count entirely
+  // rather than stating it, same reasoning as the debt card's zero-state
+  // below: a quiet fact stated as a number reads as a verdict, a CTA reads
+  // as an invitation.
   const heroCaption = dayPart === 'morning'
-    ? `Bonjour · ${salesCount} vente${salesCount !== 1 ? 's' : ''}`
+    ? (hasSoldToday ? `Bonjour · ${salesCount} vente${salesCount !== 1 ? 's' : ''}` : 'Bonjour')
     : dayPart === 'evening'
-    ? `Ce soir · ${salesCount} vente${salesCount !== 1 ? 's' : ''}`
-    : `${salesCount} vente${salesCount !== 1 ? 's' : ''} aujourd'hui`;
+    ? (hasSoldToday ? `Ce soir · ${salesCount} vente${salesCount !== 1 ? 's' : ''}` : 'Ce soir')
+    : (hasSoldToday ? `${salesCount} vente${salesCount !== 1 ? 's' : ''} aujourd'hui` : "Aujourd'hui");
 
   const isEvening = dayPart === 'evening' || dayPart === 'night';
-  const isBusinessCreatedToday = business?.created_at
-    ? new Date(business.created_at).toDateString() === new Date().toDateString()
-    : false;
+  // "Bienvenue" used to be keyed on the business's creation date — wrong,
+  // since a business created today but already mid-testing (or genuinely
+  // busy from hour one) would show "Bienvenue" right alongside real sales
+  // already on the board. The real signal is whether she has ever recorded
+  // a real (status='paye') sale at all — get_dashboard_kpis' first_sale_at
+  // is business-wide and RLS-bypassing (SECURITY DEFINER), so a vendeur
+  // sees the business's true first sale, not just their own. A credit debt
+  // deliberately does NOT count — submit_carnet_debt writes status='credit',
+  // which the RPC's MIN(paid_at) WHERE status='paye' never touches, so a
+  // business whose only activity so far is a debt still reads "Bienvenue."
+  const firstSaleAt = kpis?.first_sale_at ? new Date(kpis.first_sale_at) : null;
+  const hasEverSold = firstSaleAt !== null;
+  // "Local midnight" per the spec — toDateString() compares in device local
+  // time, same technique the old isBusinessCreatedToday check already used.
+  const isFirstSaleToday = hasEverSold && firstSaleAt.toDateString() === new Date().toDateString();
   const deltaAmt = isPrivate ? `••••• ${currency}` : fmt(Math.abs(delta), currency);
-  // Only a genuine directional signal earns the loud solid pill — a flat day
-  // stays plain text, same restraint as everywhere else in this app's color
-  // system. "Bienvenue"/"Ce mois" aren't deltas at all, so they never pill.
-  const comparisonText = isBusinessCreatedToday
+  // The ONLY conditional line here, deliberately — no time-of-day greeting
+  // variants, no tips, no streaks. Once the first-sale day has passed, this
+  // never says "Première vente" again for this business (falls through to
+  // the ordinary Ce mois/Même niveau qu'hier comparison instead) — a
+  // one-time acknowledgment, not a recurring one.
+  const comparisonText = !hasEverSold
     ? 'Bienvenue'
+    : isFirstSaleToday
+    ? 'Première vente notée ✓'
     : isEvening
     ? `Ce mois : ${amtOrMask(kpis?.revenue_month ?? 0)}`
     : "Même niveau qu'hier";
-  const showDeltaPill = !isBusinessCreatedToday && !isEvening && delta !== 0;
+  // Only a genuine directional signal earns the loud solid pill — a flat day
+  // stays plain text, same restraint as everywhere else in this app's color
+  // system. "Bienvenue"/"Première vente"/"Ce mois" aren't deltas at all, so
+  // they never pill.
+  const showDeltaPill = hasEverSold && !isFirstSaleToday && !isEvening && delta !== 0;
 
   return (
     <KeyboardAvoidingView style={{ flex: 1, backgroundColor: palette.background }} behavior={Platform.OS === 'ios' ? 'padding' : undefined}>
@@ -677,22 +798,33 @@ export default function AccueilScreen() {
                 <Text variant="caption" color="secondary">
                   {heroCaption}
                 </Text>
-                <View style={styles.heroAmountRow}>
-                  <Text
-                    variant="amountLarge"
-                    color={salesCount > 0 ? 'success' : undefined}
-                    style={styles.heroAmount}
-                  >
-                    {rawOrMask(kpis?.revenue_today ?? 0)}
-                  </Text>
-                  <Text
-                    variant="amountLarge"
-                    color={salesCount > 0 ? 'success' : undefined}
-                    style={styles.heroCurrency}
-                  >
-                    {currency}
-                  </Text>
-                </View>
+                {hasSoldToday ? (
+                  <View style={styles.heroAmountRow}>
+                    <Text variant="amountLarge" color="success" style={styles.heroAmount}>
+                      {rawOrMask(kpis?.revenue_today ?? 0)}
+                    </Text>
+                    <Text variant="amountLarge" color="success" style={styles.heroCurrency}>
+                      {currency}
+                    </Text>
+                  </View>
+                ) : (
+                  // Never a giant "0" — a quiet fact plus an invitation to act
+                  // on it, instead of a number that reads as a verdict. A real
+                  // button, not a text link — this is the single most likely
+                  // next action on the screen a busy shop owner opens most.
+                  <View style={styles.heroEmptyState}>
+                    <Text variant="body" color="secondary">Aucune vente aujourd'hui.</Text>
+                    <Text variant="caption" color="secondary">
+                      Votre première vente du jour apparaîtra ici.
+                    </Text>
+                    <Button
+                      label="Enregistrer une vente"
+                      onPress={() => { setQuickCaptureMode('vente'); setShowQuickCapture(true); }}
+                      size="sm"
+                      style={styles.heroEmptyAction}
+                    />
+                  </View>
+                )}
               </View>
               <View style={styles.heroComparison}>
                 {showDeltaPill ? (
@@ -709,30 +841,75 @@ export default function AccueilScreen() {
               </View>
             </Card>
 
-            {/* ── Zone 2: Attention — conditional. Nothing renders when there's
-                nothing that needs attention (no "all good" placeholder). ── */}
-            {showAttentionCards && (
-              <View style={styles.attentionZone}>
-                {(kpis?.credit_count ?? 0) > 0 && (
-                  <KpiCard
-                    label={`${kpis?.credit_count} client${(kpis?.credit_count ?? 0) > 1 ? 's' : ''} qui doivent`}
-                    value={amtOrMask(kpis?.credit_total ?? 0)}
-                    onPress={() => router.push({ pathname: '/(app)/clients', params: { filter: 'doivent' } })}
-                    tone="warning"
-                    icon="cash-outline"
+            {/* ── Zone 2: Attention. The debt card always renders — data
+                variant when someone owes money, or the zero-debts CTA (the
+                deferred hero action) when nobody currently does — so this
+                zone is never entirely empty for the default role branch. The
+                low-stock card stays purely conditional: it's a genuine "is
+                anything wrong" signal with no equivalent always-useful
+                zero-state. The two resolve independently of each other. ── */}
+            <View style={styles.attentionZone}>
+              {(kpis?.credit_count ?? 0) > 0 ? (
+                // Bespoke, not <KpiCard> — this is about PEOPLE who owe
+                // her, not a warning/cash state, so it deliberately skips
+                // KpiCard's colored icon-circle + tone-tinted amount
+                // treatment (still used, unchanged, by "À racheter" below).
+                // The amount is plain foreground; color appears only on
+                // the aging line, and only when a debt is genuinely old.
+                <Card
+                  onPress={() => router.push({ pathname: '/(app)/clients', params: { filter: 'doivent' } })}
+                  style={{ gap: spacing[1] }}
+                >
+                  <View style={{ flexDirection: 'row', alignItems: 'center', gap: spacing[2] }}>
+                    <Text variant="caption" color="secondary" style={{ flex: 1 }}>
+                      {kpis?.credit_count} client{(kpis?.credit_count ?? 0) > 1 ? 's' : ''} vous {(kpis?.credit_count ?? 0) > 1 ? 'doivent' : 'doit'}
+                    </Text>
+                    <Ionicons name="chevron-forward" size={16} color={palette.textSecondary} />
+                  </View>
+                  <Text variant="amountLarge">{amtOrMask(kpis?.credit_total ?? 0)}</Text>
+                  {creditAging.agingCount > 0 && (
+                    <Text variant="caption" style={{ color: debtAgeColor(creditAging.oldestDays, palette) }}>
+                      dont {creditAging.agingCount} depuis {creditAging.oldestDays} jour{creditAging.oldestDays > 1 ? 's' : ''}
+                    </Text>
+                  )}
+                </Card>
+              ) : (
+                // The deferred hero action — same single-purpose form the
+                // first-run gate itself uses (see FirstRunHeroOverlay,
+                // opened below via showDebtCapture), reachable again any
+                // time there are currently zero outstanding debts, not just
+                // once at first run.
+                <Card style={{ gap: spacing[2] }}>
+                  <Text variant="h4">Qui vous doit de l&apos;argent ?</Text>
+                  <Text variant="body" color="secondary">Écrivez son nom et le montant.</Text>
+                  <Button
+                    label="Enregistrer une dette"
+                    onPress={() => setShowDebtCapture(true)}
+                    fullWidth
+                    size="md"
+                    style={{ marginTop: spacing[1] }}
                   />
-                )}
-                {lowStock > 0 && (
-                  <KpiCard
-                    label="À racheter"
-                    value={String(lowStock)}
-                    sub={`produit${lowStock > 1 ? 's' : ''} à racheter`}
-                    onPress={isVendeur ? undefined : () => router.push('/(app)/(tabs)/catalogue')}
-                    tone="warning"
-                    icon="leaf-outline"
-                  />
-                )}
-              </View>
+                </Card>
+              )}
+              {lowStock > 0 && (
+                <KpiCard
+                  label="À racheter"
+                  value={String(lowStock)}
+                  sub={`produit${lowStock > 1 ? 's' : ''} à racheter`}
+                  onPress={isVendeur ? undefined : () => router.push('/(app)/(tabs)/catalogue')}
+                  tone="warning"
+                  icon="leaf-outline"
+                />
+              )}
+            </View>
+
+            {showDebtCapture && (
+              <FirstRunHeroOverlay
+                businessId={businessId}
+                userId={userId}
+                currency={currency}
+                onDone={() => { setShowDebtCapture(false); loadAll(); }}
+              />
             )}
 
             {/* ── Best sellers ── */}
@@ -794,6 +971,7 @@ export default function AccueilScreen() {
                   placeholder="0"
                   placeholderTextColor={palette.textDisabled}
                   selectTextOnFocus
+                  inputAccessoryViewID={Platform.OS === 'ios' ? WITHDRAW_SHEET_SILENT_ACCESSORY_ID : undefined}
                 />
                 <Text variant="label" color="secondary">{currency}</Text>
               </View>
@@ -824,7 +1002,53 @@ export default function AccueilScreen() {
             </Pressable>
           </Pressable>
         </Pressable>
+        {Platform.OS === 'ios' && (
+          <InputAccessoryView nativeID={WITHDRAW_SHEET_SILENT_ACCESSORY_ID}>
+            <View style={{ height: 0 }} />
+          </InputAccessoryView>
+        )}
       </Modal>
+
+      {/* One-tap capture — the "radical simplicity" entry point. Investisseur
+          is read-only (no write access to sale_orders/clients), so it's the
+          one role that never sees this. Positioned above the floating tab
+          bar the same way catalogue.tsx's/vendre.tsx's own FABs are, plus a
+          small extra `spacing[4]` lift on top of `FLOATING_TAB_BAR_CLEARANCE`
+          — the bare clearance value read as sitting too close to the bar on
+          a real device. A pure shortcut alongside Vendre — nothing about
+          the underlying credit/sale flow changes, only how fast it's
+          reached from the screen the app actually opens to. */}
+      {!isInvestisseur && (
+        <Pressable
+          onPress={() => {
+            trackEvent('quick_capture_opened', businessId, userId, { source: 'accueil_fab' });
+            setShowQuickCapture(true);
+          }}
+          style={styles.quickCaptureFab}
+        >
+          <Text style={styles.quickCaptureFabIcon}>+</Text>
+        </Pressable>
+      )}
+
+      <QuickCaptureSheet
+        visible={showQuickCapture}
+        onClose={() => {
+          // This sheet is a plain RN Modal rendered by Accueil itself — but
+          // per FirstRunHeroOverlay's own fix above, a native Modal opening/
+          // closing never triggers a real react-navigation focus transition
+          // regardless of where in the tree it's mounted, so useFocusEffect
+          // alone would leave the day-card/debt-card stale after a credit
+          // debt or quick sale recorded here, exactly like that bug. loadAll
+          // is cheap and idempotent — a no-op close (nothing was ever
+          // recorded this session) just refetches the same numbers.
+          setShowQuickCapture(false);
+          loadAll();
+        }}
+        businessId={businessId}
+        userId={userId}
+        currency={currency}
+        initialMode={quickCaptureMode}
+      />
 
     </Screen>
     </KeyboardAvoidingView>
@@ -844,6 +1068,14 @@ function makeStyles(p: Palette) {
       zIndex: 20,
     },
     content: { padding: spacing[5], gap: spacing[4], paddingBottom: spacing[10] },
+    quickCaptureFab: {
+      position: 'absolute', bottom: FLOATING_TAB_BAR_CLEARANCE + spacing[4], right: spacing[4], zIndex: 10,
+      width: 56, height: 56, borderRadius: radius.full,
+      backgroundColor: p.primary, alignItems: 'center', justifyContent: 'center',
+      shadowColor: p.textPrimary, shadowOffset: { width: 0, height: 4 },
+      shadowOpacity: 0.18, shadowRadius: 8, elevation: 8,
+    },
+    quickCaptureFabIcon: { fontSize: 28, lineHeight: 32, fontWeight: '300' as const, color: p.textInverse, marginTop: -2 },
     header: { paddingBottom: spacing[2], flexDirection: 'row', alignItems: 'center', justifyContent: 'space-between' },
     chatBtn: { padding: spacing[1] },
     chatIconBox: { width: 24, height: 24, alignItems: 'center', justifyContent: 'center' },
@@ -869,6 +1101,8 @@ function makeStyles(p: Palette) {
     heroAmountRow: { position: 'relative' },
     heroAmount: { fontSize: 52, lineHeight: 64 },
     heroCurrency: { fontSize: 18, lineHeight: 24, position: 'absolute', top: 4, right: 0 },
+    heroEmptyState: { gap: spacing[1], paddingVertical: spacing[2] },
+    heroEmptyAction: { alignSelf: 'flex-start', marginTop: spacing[2] },
     heroComparison: {
       flexDirection: 'row',
       alignItems: 'center',

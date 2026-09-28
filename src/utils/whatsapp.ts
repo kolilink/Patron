@@ -9,3 +9,12 @@ import { Linking } from 'react-native';
 export function openWhatsApp(): void {
   Linking.openURL('whatsapp://').catch(() => {});
 }
+
+const SUPPORT_WA_URL = `https://wa.me/16094454809?text=${encodeURIComponent("Bonjour ! J'ai une question sur Patron 🙂")}`;
+
+// One shared "contact support" link — same number and pre-filled greeting
+// everywhere it's offered (landing screen, signup flow, ...), so the two
+// never drift apart the way this codebase's copy has drifted elsewhere.
+export function openSupportChat(): void {
+  Linking.openURL(SUPPORT_WA_URL).catch(() => {});
+}

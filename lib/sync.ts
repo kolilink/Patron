@@ -215,6 +215,21 @@ async function executeOp(operation: string, payload: Record<string, unknown>): P
       void notifyQueuedSaleSynced(payload, (saleId as string) ?? null);
       break;
     }
+    case 'submit_carnet_debt': {
+      // No notification hookup needed — the online path (stores/sales.ts)
+      // never fires one for a carnet debt either, so there's no parity gap
+      // to close here (unlike submit_sale's notifyQueuedSaleSynced above).
+      const { error } = await supabase.rpc('submit_carnet_debt', payload);
+      if (error) throw error;
+      break;
+    }
+    case 'submit_quick_sale': {
+      // Same reasoning as submit_carnet_debt above — the online path
+      // (stores/sales.ts) doesn't notify for this either.
+      const { error } = await supabase.rpc('submit_quick_sale', payload);
+      if (error) throw error;
+      break;
+    }
     case 'create_expense': {
       const { error } = await supabase.from('expenses').insert(payload);
       if (error) throw error;

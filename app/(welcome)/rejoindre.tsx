@@ -89,7 +89,7 @@ export default function RejoindreScreen() {
   };
 
   const SUBS: Record<Step, string> = {
-    phone: 'Votre responsable vous a partagé un code. Vérifiez votre identité pour y accéder.',
+    phone: "Votre responsable vous a envoyé un code d'invitation. Vérifiez votre numéro pour rejoindre son commerce.",
     otp: 'Votre code Patron a été envoyé par WhatsApp. Il est valable pour 10 min.',
     code: 'Entrez le code partagé par votre partenaire pour rejoindre son commerce :)',
   };
@@ -138,12 +138,11 @@ export default function RejoindreScreen() {
           {step === 'phone' && (
             <View style={styles.form}>
               <PhoneInput
-                label="Votre numéro"
                 onChange={(e164, complete) => { setPhone(e164); setPhoneComplete(complete); }}
                 autoFocus
                 resetKey={resetKey}
               />
-              <Button label="Continuer" loading={loading} onPress={handleContinuer} fullWidth size="lg" disabled={!phoneComplete} />
+              <Button label="Envoyer le code" loading={loading} onPress={handleContinuer} fullWidth size="lg" disabled={!phoneComplete} />
             </View>
           )}
 

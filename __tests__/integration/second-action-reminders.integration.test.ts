@@ -116,11 +116,15 @@ describe('get_and_mark_second_action_reminders (real RPC)', () => {
     expect(resultFor(data, businessId)).toMatchObject({ action_type: 'debt' });
   });
 
-  it('a real "Vente rapide"-shaped row (cash sale + a REAL cloned product) is still classified as sale, not excluded as "two actions"', async () => {
+  it('a cash sale plus one real product created around the same time is still classified as sale, not excluded as "two actions"', async () => {
     const { client, userId } = await createTestUser('second-action-sale-realistic');
     const businessId = await createTestBusiness(client, 'Boutique Second Action Sale Realistic');
-    // Mirrors vente-rapide.tsx: createProduct() runs before submitSale(),
-    // so a real (non-system) product exists alongside the cash sale.
+    // This exact shape used to always come from onboarding/vente-rapide.tsx
+    // (createProduct() before submitSale(), deleted in the quick-sale
+    // redesign — see CLAUDE.md), but the RPC's own product_count<=1 guard
+    // has to tolerate it regardless of which real flow produces it: a
+    // merchant who just adds their first product then sells it through the
+    // ordinary Catalogue/Vendre path produces this identical pattern.
     await insertProduct(businessId, userId, { isSystem: false, createdAt: hoursAgo(50) });
     await insertSale(businessId, userId, { status: 'paye', createdAt: hoursAgo(50) });
 

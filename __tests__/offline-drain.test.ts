@@ -43,6 +43,24 @@ function makeSaleOp(id: number) {
   };
 }
 
+function makeCarnetDebtOp(id: number) {
+  return {
+    id,
+    operation: 'submit_carnet_debt',
+    payload: JSON.stringify({
+      p_business_id:     'biz-1',
+      p_seller_id:       'user-1',
+      p_customer_name:   'Mamadou',
+      p_amount:          500000,
+      p_client_id:       null,
+      p_idempotency_key: 'key-1',
+    }),
+    created_at: '2026-01-01T00:00:00Z',
+    attempts: 0,
+    last_error: null,
+  };
+}
+
 beforeEach(() => {
   jest.clearAllMocks();
   mockDeleteQueueItem.mockResolvedValue(undefined);
@@ -93,6 +111,22 @@ describe('drainQueue', () => {
     expect(result).toEqual({ synced: 1, failed: 1, rejectedPayments: [] });
     expect(mockMarkAttemptFailed).toHaveBeenCalledWith(1, expect.any(String));
     expect(mockDeleteQueueItem).toHaveBeenCalledWith(2);
+  });
+
+  it('syncs a queued submit_carnet_debt item (the offline credit-entry flow)', async () => {
+    mockGetPendingOps.mockResolvedValueOnce([makeCarnetDebtOp(3)]);
+    (supabase.rpc as jest.Mock).mockResolvedValueOnce({ error: null });
+
+    const result = await drainQueue();
+
+    expect(result).toEqual({ synced: 1, failed: 0, rejectedPayments: [] });
+    expect(supabase.rpc).toHaveBeenCalledWith('submit_carnet_debt', expect.objectContaining({
+      p_business_id:     'biz-1',
+      p_customer_name:   'Mamadou',
+      p_amount:          500000,
+      p_idempotency_key: 'key-1',
+    }));
+    expect(mockDeleteQueueItem).toHaveBeenCalledWith(3);
   });
 
   it('surfaces a rejected record_payment as rejectedPayments instead of a silent failure', async () => {

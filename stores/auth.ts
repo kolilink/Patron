@@ -34,6 +34,7 @@ import { notifyEvent } from '@/src/utils/notifications';
 
 const LAST_PHONE_KEY      = 'patron_last_phone';
 const BIO_REFRESH_KEY     = 'patron_bio_refresh_token';
+const LAST_BUSINESS_NAME_KEY = 'patron_last_business_name';
 
 async function saveLastPhone(phone: string): Promise<void> {
   try { await SecureStore.setItemAsync(LAST_PHONE_KEY, phone); } catch {}
@@ -41,6 +42,20 @@ async function saveLastPhone(phone: string): Promise<void> {
 
 export async function getLastPhone(): Promise<string | null> {
   try { return await SecureStore.getItemAsync(LAST_PHONE_KEY); } catch { return null; }
+}
+
+// The lock screen (app/(auth)/verrouille.tsx) has no live session to read
+// activeBusiness from — lock() clears it. Cached here on every session
+// establishment (loadSession() below is the one choke point that already
+// covers cold start, login, and biometric restore) the same way
+// getLastPhone already solves the identical "screen has no session yet"
+// problem for the WhatsApp re-login fallback.
+async function saveLastBusinessName(name: string): Promise<void> {
+  try { await SecureStore.setItemAsync(LAST_BUSINESS_NAME_KEY, name); } catch {}
+}
+
+export async function getLastBusinessName(): Promise<string | null> {
+  try { return await SecureStore.getItemAsync(LAST_BUSINESS_NAME_KEY); } catch { return null; }
 }
 
 async function saveBioRefreshToken(token: string): Promise<void> {
@@ -179,8 +194,10 @@ interface AuthStore {
   login: (email: string, password: string) => Promise<void>;
   register: (name: string, email: string, password: string) => Promise<void>;
   logout: () => Promise<void>;
+  revokeOtherSessions: () => Promise<boolean>;
   selectBusiness: (businessId: string) => void;
   createBusiness: (data: { name: string; type?: string; currency: string; referralCode?: string }) => Promise<void>;
+  markFirstRunHeroCompleted: (businessId: string) => Promise<void>;
   joinBusiness: (code: string) => Promise<void>;
   // Founder-only testing tool — see delete_business(), db/migration_v165.sql.
   deleteBusiness: (businessId: string) => Promise<boolean>;
@@ -225,6 +242,48 @@ interface AuthStore {
   // .setState(), same lightweight pattern already used for one-off flags
   // elsewhere in this codebase.
   suppressActivationFork: boolean;
+
+  // Bumped by app/(app)/_layout.tsx when FirstRunHeroOverlay closes, so
+  // Accueil's own local KPI state (credit_count/credit_total, driving the
+  // "N clients vous doivent" card) refreshes immediately. useFocusEffect
+  // alone doesn't catch this: the overlay is a plain <Modal> rendered
+  // outside the tab navigator, so react-navigation never actually
+  // unfocuses/refocuses Accueil while it's open — a real business switch
+  // "fixed" the staleness only because that's a much bigger state change,
+  // not because focus itself changed. Same setState-directly pattern as
+  // suppressActivationFork above, not a dedicated action.
+  homeRefreshToken: number;
+
+  // In-progress FirstRunHeroOverlay state (which phase, the typed name/
+  // amount, the running total, the last saved entry), mirrored here so it
+  // survives a lock/unlock cycle. The app-lock re-entry path is a real
+  // navigation (app/(app)/_layout.tsx returns <Redirect href="/(auth)/
+  // verrouille" />), not an overlay on top of the current screen — so
+  // FirstRunHeroOverlay's own local component state would otherwise be
+  // destroyed the moment someone locks mid-form and rebuilt from scratch on
+  // unlock, silently dropping whatever they'd typed. Keyed on businessId so
+  // a stale draft from a different (or since-completed) business is never
+  // mistakenly rehydrated; cleared on exit (Passer / "Voir mon commerce").
+  // Same setState-directly pattern as the two fields above — the component
+  // owns reading/writing this, no dedicated action.
+  heroDraft: {
+    businessId: string;
+    phase: 'ask' | 'payoff';
+    name: string;
+    amount: string;
+    totalCents: number;
+    lastEntry: { name: string; amountCents: number } | null;
+  } | null;
+
+  // Cross-component open request for Accueil's QuickCaptureSheet, set by
+  // ActivationForkOverlay's "Une vente" button (app/(app)/_layout.tsx) —
+  // the fork itself is evaluated at the root layout, above the tab
+  // navigator, with no direct reference to Accueil's own local sheet-open
+  // state, so this is the same lightweight cross-cutting signal pattern as
+  // suppressActivationFork/homeRefreshToken above, not a dedicated action.
+  // Accueil watches it, opens the sheet in that mode, then clears it back
+  // to null.
+  requestQuickCapture: 'credit' | 'vente' | null;
 
   sendEmailOtp: (email: string) => Promise<{ verificationId: string } | null>;
   recoverByEmail: (email: string, code: string, verificationId: string) => Promise<void>;
@@ -282,6 +341,7 @@ async function loadSession(userId: string, authPhone?: string | null, skipCache 
     avatar_url: p.avatar_url ?? null,
     language: p.language ?? 'fr',
     recovery_email: p.recovery_email ?? null,
+    notify_on_every_sale: p.notify_on_every_sale ?? true,
     created_at: p.created_at,
     updated_at: p.updated_at,
   };
@@ -290,6 +350,7 @@ async function loadSession(userId: string, authPhone?: string | null, skipCache 
   const preferred = lastBusinessId ? memberships.find(m => m.business_id === lastBusinessId) : null;
   const activeMembership = preferred ?? (memberships.length >= 1 ? memberships[0] : null);
   const activeBusiness = (activeMembership?.business as Business) ?? null;
+  if (activeBusiness?.name) void saveLastBusinessName(activeBusiness.name);
 
   const session: AppSession = { user, memberships, activeBusiness, activeMembership };
   if (!skipCache) void persistSessionCache(session);
@@ -311,6 +372,9 @@ export const useAuthStore = create<AuthStore>((set, get) => ({
   businessDrawerOpen: false,
   businessDrawerFullyClosed: true,
   suppressActivationFork: false,
+  homeRefreshToken: 0,
+  heroDraft: null,
+  requestQuickCapture: null,
 
   initialize: async () => {
     // Register BEFORE getSession() so we never miss a TOKEN_REFRESHED event.
@@ -512,6 +576,7 @@ export const useAuthStore = create<AuthStore>((set, get) => ({
         avatar_url: null,
         language: 'fr',
         recovery_email: null,
+        notify_on_every_sale: true,
         created_at: new Date().toISOString(),
         updated_at: new Date().toISOString(),
       };
@@ -585,6 +650,28 @@ export const useAuthStore = create<AuthStore>((set, get) => ({
     // load-bearing (worst case without it: a logged-out device keeps its old
     // push token registered server-side until the next login re-registers a
     // fresh one, or it naturally goes stale — not a crash-worthy tradeoff).
+  },
+
+  // Lost/stolen-phone flow (security audit 2026-09-27, 1.15) — a real,
+  // server-side revocation via GoTrue's own `others` scope: kills every
+  // *other* refresh token for this user immediately, no new table, no
+  // in-app cooperation required from the other device. Deliberately not
+  // "global" — the device tapping this button must stay logged in (that's
+  // the whole point: fix the problem from the phone you're holding without
+  // also locking yourself out). GoTrue fires no SIGNED_OUT event for this
+  // scope, so the current session's own auth-state listener is untouched.
+  // A currently-open session on another device keeps its already-issued
+  // access token valid until it naturally expires (up to 1h, per this
+  // project's confirmed JWT lifetime) — revoking the refresh token stops it
+  // from ever getting a new one, it doesn't retroactively kill the current
+  // one, since that's not something JWTs support.
+  revokeOtherSessions: async () => {
+    try {
+      const { error } = await supabase.auth.signOut({ scope: 'others' });
+      return !error;
+    } catch {
+      return false;
+    }
   },
 
   selectBusiness: (businessId) => {
@@ -706,6 +793,35 @@ export const useAuthStore = create<AuthStore>((set, get) => ({
       trackEvent('business_created', businessId, session.user.id, { currency, business_type: type ?? null });
     } catch (err) {
       set({ error: translateError(err, 'Impossible de créer le commerce'), loading: false });
+    }
+  },
+
+  // Marks the first-run hero gate ("Qui vous doit de l'argent ?") done for
+  // this business — via Passer, or the first successful save. Same plain
+  // client-update pattern createBusiness already uses for
+  // referred_by_business_id above: allowed by the existing "Administrateurs:
+  // modifier leur commerce" RLS policy, no RPC needed. A joined (non-owner)
+  // member never reaches this at all — join_business() (migration_v197.sql)
+  // stamps the business the instant anyone joins it, before a manager or
+  // vendeur's own session could ever render this gate. Best-effort: a
+  // failed write here just means the gate might show once more on a later
+  // launch, never a blocking error worth surfacing to the merchant.
+  markFirstRunHeroCompleted: async (businessId) => {
+    const { session } = get();
+    if (!session) return;
+    const stampedAt = new Date().toISOString();
+    if (session.activeBusiness?.id === businessId) {
+      set({
+        session: {
+          ...session,
+          activeBusiness: { ...session.activeBusiness, first_run_hero_completed_at: stampedAt },
+        },
+      });
+    }
+    try {
+      await supabase.from('businesses').update({ first_run_hero_completed_at: stampedAt }).eq('id', businessId);
+    } catch (err) {
+      console.warn('[markFirstRunHeroCompleted]', err);
     }
   },
 
@@ -888,9 +1004,28 @@ export const useAuthStore = create<AuthStore>((set, get) => ({
       let result;
       try {
         result = await LocalAuthentication.authenticateAsync({
-          promptMessage: 'Confirmez votre identité pour continuer',
+          promptMessage: 'Déverrouiller Patron',
           cancelLabel: 'Annuler',
-          disableDeviceFallback: true, // true biometric only — no OS passcode escape hatch
+          // Reversed 2026-09-26 (was `true`, "no OS passcode escape hatch" —
+          // see the still-accurate reasoning further up this function for
+          // why biometric-vs-device-passcode was ever a distinction worth
+          // making). This screen re-locks after just 2 minutes backgrounded
+          // (BACKGROUND_MS, app/(app)/_layout.tsx) — routing every routine
+          // Face ID miss (sunglasses, bad angle, a hand in the way) through
+          // a full WhatsApp OTP re-login is disproportionate friction for
+          // that short a gap, and a real, recurring WhatsApp/Twilio send
+          // cost for something this frequent. `false` lets iOS/Android
+          // offer their own native "Enter Passcode" option inside the same
+          // sheet — free, instant, hardware-backed, no extra code needed
+          // here since a passcode success still flows through the exact
+          // same result.success branch below as a real biometric match.
+          // Deliberate tradeoff, not an oversight: anyone who knows the
+          // device's own screen-lock code can now unlock Patron too, not
+          // just whoever the device's biometrics are enrolled to — on a
+          // device shared between staff, that's a real, narrower security
+          // boundary than before. Accepted for the routine short-lock case;
+          // revisit if that boundary ever needs to be stricter again.
+          disableDeviceFallback: false,
         });
       } catch (err) {
         Sentry.captureMessage('biometric_authenticate_threw', { extra: { err: String(err) } });

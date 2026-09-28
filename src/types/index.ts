@@ -40,6 +40,11 @@ export interface User {
   avatar_url: string | null;
   language: string;
   recovery_email: string | null;
+  // Personal preference, defaults true — lets an admin/manager on a busy shop
+  // turn off the per-sale push (one fires for every single sale by any team
+  // member) without touching any other notification type. See CLAUDE.md /
+  // the notification-fatigue research this was added against.
+  notify_on_every_sale: boolean;
   created_at: string;
   updated_at: string;
 }
@@ -64,6 +69,7 @@ export interface Business {
   bonus_access_until: string | null;
   referred_by_business_id: string | null;
   referral_code: string | null;
+  first_run_hero_completed_at: string | null;
   created_at: string;
   updated_at: string;
   created_by: string;

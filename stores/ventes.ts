@@ -645,8 +645,17 @@ export const useVentesStore = create<VentesStore>((set, get) => ({
     set({ saving: true, error: null });
     const _cancelledSale = get().sales.find(s => s.id === saleId);
     const now = new Date().toISOString();
-    const { data: profileData } = await supabase.from('profiles').select('name').eq('id', userId).single();
-    const cancellerName = profileData?.name || generateFallbackName(userId);
+    // Best-effort — a hang/failure here must never leave `saving` stuck
+    // (the actual cancel RPC below is what matters; this only decorates the
+    // audit-trail name), so it falls back the same way an empty `name`
+    // already does.
+    let cancellerName = generateFallbackName(userId);
+    try {
+      const { data: profileData } = await supabase.from('profiles').select('name').eq('id', userId).single();
+      cancellerName = profileData?.name || cancellerName;
+    } catch {
+      // keep the fallback name
+    }
     const cancelPatch = {
       status: 'annule' as const,
       cancelled_at: now,
@@ -712,19 +721,24 @@ export const useVentesStore = create<VentesStore>((set, get) => ({
   updateSaleClient: async (saleId, customerName) => {
     set({ saving: true, error: null });
     const businessId = get().sales.find(s => s.id === saleId)?.business_id;
-    const { error } = await supabase
-      .from('sale_orders')
-      .update({ customer_name: customerName.trim() || null })
-      .eq('id', saleId)
-      .eq('business_id', businessId ?? '');
-    if (error) { set({ saving: false, error: translateError(error, 'Impossible de modifier') }); return false; }
-    set(state => ({
-      sales: state.sales.map(s =>
-        s.id === saleId ? { ...s, customer_name: customerName.trim() || null } : s,
-      ),
-      saving: false,
-    }));
-    return true;
+    try {
+      const { error } = await supabase
+        .from('sale_orders')
+        .update({ customer_name: customerName.trim() || null })
+        .eq('id', saleId)
+        .eq('business_id', businessId ?? '');
+      if (error) { set({ saving: false, error: translateError(error, 'Impossible de modifier') }); return false; }
+      set(state => ({
+        sales: state.sales.map(s =>
+          s.id === saleId ? { ...s, customer_name: customerName.trim() || null } : s,
+        ),
+        saving: false,
+      }));
+      return true;
+    } catch (err) {
+      set({ saving: false, error: isNetworkError(err) ? 'Vérifiez votre connexion' : translateError(err, 'Impossible de modifier') });
+      return false;
+    }
   },
 
   // Admin/manager only (enforced server-side) — corrects a mistaken sale in

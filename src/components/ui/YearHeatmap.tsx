@@ -17,7 +17,7 @@ const GAP = 3;
 const STEP = CELL + GAP;
 const ROWS = 7;
 const ROW_LABELS: Record<number, string> = { 0: 'Lun', 2: 'Mer', 4: 'Ven', 6: 'Dim' };
-const MONTH_LABELS_FR = ['Jan', 'Fév', 'Mar', 'Avr', 'Mai', 'Jun', 'Jul', 'Aoû', 'Sep', 'Oct', 'Nov', 'Déc'];
+const MONTH_LABELS_FR = ['Jan', 'Fév', 'Mar', 'Avr', 'Mai', 'Jun', 'Jul', 'Août', 'Sep', 'Oct', 'Nov', 'Déc'];
 const MONTH_ROW_HEIGHT = 16;
 const TOOLTIP_W = 172;
 const TOOLTIP_AUTO_HIDE_MS = 3000;
@@ -131,9 +131,17 @@ export function YearHeatmap({ year, data, highlightRange, defaultMonth }: YearHe
     let scrollX = gridWidth;
     if (defaultMonth !== undefined && defaultMonth > 0 && defaultMonth <= 12) {
       const targetLabel = MONTH_LABELS_FR[defaultMonth - 1];
-      const targetMonth = monthLabels.find(m => m.label === targetLabel);
+      const targetIdx = monthLabels.findIndex(m => m.label === targetLabel);
+      const targetMonth = targetIdx >= 0 ? monthLabels[targetIdx] : undefined;
       if (targetMonth) {
-        scrollX = Math.max(0, targetMonth.col * STEP - 60);
+        // Snap to the START of the previous month's own column, not a flat
+        // pixel offset — a fixed "-60" could (and did) land a few pixels
+        // into the previous label instead of before or after it, cropping
+        // it mid-character ("Août" rendered as "oû"). Snapping to a real
+        // column boundary means that label is either fully shown or not
+        // shown at all, never partially.
+        const prevMonth = targetIdx > 0 ? monthLabels[targetIdx - 1] : null;
+        scrollX = prevMonth ? Math.max(0, prevMonth.col * STEP) : Math.max(0, targetMonth.col * STEP - 60);
       }
     }
     scrollRef.current?.scrollTo({ x: scrollX, animated: false });

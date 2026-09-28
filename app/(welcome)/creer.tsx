@@ -2,30 +2,37 @@ import { useEffect, useMemo, useRef, useState } from 'react';
 import {
   KeyboardAvoidingView,
   Platform,
+  Pressable,
   ScrollView,
   StyleSheet,
   View,
 } from 'react-native';
 import { router, useLocalSearchParams } from 'expo-router';
+import { Ionicons } from '@expo/vector-icons';
 import { Screen } from '@/src/components/ui/Screen';
 import { Button } from '@/src/components/ui/Button';
 import { OtpInput } from '@/src/components/ui/OtpInput';
 import { Text } from '@/src/components/ui/Text';
 import { PhoneInput } from '@/src/components/ui/PhoneInput';
 import { BusinessDetailsStep } from '@/src/components/BusinessDetailsStep';
-import { useTheme, spacing } from '@/src/theme';
+import { useTheme, spacing, radius } from '@/src/theme';
 import type { Palette } from '@/src/theme';
 import { useAuthStore } from '@/stores/auth';
 import { trackEvent, classifyAuthError } from '@/lib/analytics';
 import { useCountdown } from '@/src/hooks/useCountdown';
 import { formatCountdown } from '@/src/utils/format';
 import { inferCurrency } from '@/src/constants/currency';
-import { openWhatsApp } from '@/src/utils/whatsapp';
+import { openWhatsApp, openSupportChat } from '@/src/utils/whatsapp';
 
 const OTP_VALIDITY_SECONDS = 600;
 const RESEND_COOLDOWN_SECONDS = 60;
 
 type Step = 'phone' | 'otp' | 'details';
+// Order the 3 real screens appear in — drives both the "Étape X sur 3"
+// count and the progress bar. Never rendered at 0/3: the phone screen
+// itself is step 1 of 3, not "0% done" (a field-tested progress-bar
+// finding — pre-stamp what's already true instead of starting empty).
+const STEP_ORDER: Step[] = ['phone', 'otp', 'details'];
 
 export default function CreerScreen() {
   const { palette } = useTheme();
@@ -34,6 +41,7 @@ export default function CreerScreen() {
   const { prefillPhone } = useLocalSearchParams<{ prefillPhone?: string }>();
   const hasPhone = Boolean(useAuthStore.getState().session?.user.phone);
   const [step, setStep] = useState<Step>(hasPhone ? 'details' : 'phone');
+  const stepIndex = STEP_ORDER.indexOf(step);
   const [phone, setPhone] = useState('');
   const [phoneComplete, setPhoneComplete] = useState(false);
   const [resetKey, setResetKey] = useState(0);
@@ -106,9 +114,9 @@ export default function CreerScreen() {
   };
 
   const SUBS: Record<Step, string> = {
-    phone: 'Entrez votre numéro, on vous enverra un code',
+    phone: 'Nous vous enverrons un code pour vérifier ce numéro.',
     otp: otpValidity.secondsLeft > 0
-      ? 'Votre code a été envoyé par WhatsApp.'
+      ? 'Votre code a été envoyé sur WhatsApp.'
       : 'Le code a expiré. Demandez-en un nouveau ci-dessous',
     details: 'Pour commencer donnez un nom à votre commerce  :)',
   };
@@ -134,6 +142,19 @@ export default function CreerScreen() {
                 }}
                 style={styles.back}
               />
+              <View style={styles.progress}>
+                <View style={styles.progressBar}>
+                  {STEP_ORDER.map((s, i) => (
+                    <View
+                      key={s}
+                      style={[styles.progressSegment, i <= stepIndex && styles.progressSegmentFilled]}
+                    />
+                  ))}
+                </View>
+                <Text variant="caption" color="secondary">
+                  Étape {stepIndex + 1} sur {STEP_ORDER.length}
+                </Text>
+              </View>
               <Text variant="h2">{TITLES[step]}</Text>
               <Text variant="body" color="secondary" style={styles.sub}>{SUBS[step]}</Text>
             </View>
@@ -159,14 +180,13 @@ export default function CreerScreen() {
             {step === 'phone' && (
               <View style={styles.form}>
                 <PhoneInput
-                  label="Votre numéro"
                   onChange={(e164, complete) => { setPhone(e164); setPhoneComplete(complete); }}
                   autoFocus
                   resetKey={resetKey}
                   initialValue={prefillPhone}
                   autofillOwnNumber
                 />
-                <Button label="Continuer" loading={loading} onPress={handleContinuer} fullWidth size="lg" disabled={!phoneComplete} />
+                <Button label="Envoyer le code" loading={loading} onPress={handleContinuer} fullWidth size="lg" disabled={!phoneComplete} />
               </View>
             )}
 
@@ -181,6 +201,9 @@ export default function CreerScreen() {
                   disabled={!resendCooldown.isDone}
                   onPress={handleResendCreer}
                 />
+                <Text variant="caption" color="secondary" style={styles.antiFraud}>
+                  Patron ne vous demandera jamais votre code.
+                </Text>
                 <Button
                   label="Changer de numéro"
                   variant="ghost"
@@ -199,6 +222,7 @@ export default function CreerScreen() {
                 error={error}
                 initialCurrency={inferCurrency(phoneRef.current || phone)}
                 onSubmit={handleCreate}
+                submitLabel="Ouvrir mon commerce"
                 autoFocusName
               />
             )}
@@ -206,6 +230,13 @@ export default function CreerScreen() {
           </View>
         </ScrollView>
       </KeyboardAvoidingView>
+
+      {/* Kept outside the 3 step branches above so it stays visible across
+          phone/OTP/business-name alike, not just on the landing screen. */}
+      <Pressable style={styles.whatsappCorner} onPress={openSupportChat} hitSlop={12}>
+        <Ionicons name="logo-whatsapp" size={13} color={palette.textSecondary} />
+        <Text variant="caption" color="secondary">Aide</Text>
+      </Pressable>
     </Screen>
   );
 }
@@ -219,10 +250,28 @@ function makeStyles(p: Palette) {
     contentTop:    { justifyContent: 'flex-start', paddingBottom: spacing[10] },
     header:        { gap: spacing[3] },
     back:          { alignSelf: 'flex-start', marginBottom: spacing[1] },
+    progress:      { gap: spacing[2] },
+    progressBar:   { flexDirection: 'row', gap: spacing[1] },
+    progressSegment: {
+      flex: 1,
+      height: 4,
+      borderRadius: radius.full,
+      backgroundColor: p.border,
+    },
+    progressSegmentFilled: { backgroundColor: p.primary },
     sub:           { lineHeight: 22 },
     form:          { gap: spacing[4] },
     formCentered:  { alignItems: 'center' },
     infoBlock:     { gap: spacing[3] },
     infoText:      { textAlign: 'center', lineHeight: 20 },
+    antiFraud:     { textAlign: 'center' },
+    whatsappCorner: {
+      position: 'absolute',
+      bottom: spacing[8],
+      right: spacing[6],
+      flexDirection: 'row',
+      alignItems: 'center',
+      gap: spacing[1],
+    },
   });
 }

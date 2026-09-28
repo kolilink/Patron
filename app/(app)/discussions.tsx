@@ -1064,6 +1064,9 @@ export default function DiscussionsScreen() {
                 <Text variant="body" color="secondary" style={{ textAlign: 'center', lineHeight: 22 }}>
                   Ce que vous écrivez ici reste entre vous et votre équipe uniquement.
                 </Text>
+                <Text variant="body" color="secondary" style={{ textAlign: 'center', lineHeight: 22, marginTop: 8 }}>
+                  Écrivez votre premier message : une note, un rappel, le prix du jour.
+                </Text>
               </View>
             ) : (
               <FlatList<ListItem>

@@ -7,7 +7,6 @@ import { router, useFocusEffect, useLocalSearchParams } from 'expo-router';
 import { Ionicons } from '@expo/vector-icons';
 import { Text } from '@/src/components/ui/Text';
 import { SkeletonList } from '@/src/components/ui/SkeletonPlaceholder';
-import { AppSheet } from '@/src/components/ui/AppSheet';
 import { PaywallScreen } from '@/src/components/PaywallScreen';
 import { LiveWaveformBars } from '@/src/components/ui/VoiceMessageBubble';
 import { useTheme, spacing, radius } from '@/src/theme';
@@ -25,6 +24,12 @@ import type { AlphaMessage } from '@/src/types';
 // (the user and the assistant), so `role` doubles as the grouping key.
 type GroupableAlphaMessage = AlphaMessage & { sender_id: string };
 
+// Chat bubble text uses Inter instead of the app-wide DM Sans (src/theme/typography.ts)
+// — scoped to this screen only, on direct product request for a more legible,
+// distinctly-weighted look for Alpha's replies specifically. Inter was already an
+// installed-but-unused dependency, so this needed no new package.
+const BUBBLE_FF = { regular: 'Inter_400Regular', bold: 'Inter_700Bold' } as const;
+
 const SUGGESTIONS = [
   'Comment vont mes ventes ce mois-ci ?',
   'Que dois-je faire pour gagner plus ?',
@@ -37,12 +42,16 @@ const SUGGESTIONS = [
 // markdown support, so without this split the user would see literal
 // asterisks. Only applied to assistant messages; a user typing "**" is left
 // as plain text.
+// Bold segments render with the real Inter_700Bold font file (BUBBLE_FF.bold),
+// not a synthetic `fontWeight` on top of the regular file — RN can't fatten a
+// custom, statically-weighted font family on its own, so fontWeight alone
+// produced a faint, inconsistent-looking bold on device.
 function renderBold(content: string): React.ReactNode {
   const segments = content.split(/(\*\*[^*]+\*\*)/g).filter(s => s.length > 0);
   if (segments.length === 1) return content;
   return segments.map((seg, i) => {
     const match = seg.match(/^\*\*([^*]+)\*\*$/);
-    return match ? <Text key={i} style={{ fontWeight: '800' }}>{match[1]}</Text> : seg;
+    return match ? <Text key={i} style={{ fontFamily: BUBBLE_FF.bold }}>{match[1]}</Text> : seg;
   });
 }
 
@@ -87,18 +96,9 @@ export default function AlphaScreen() {
 
   const {
     messages, quota, loading, sending, error, offline, load, sendMessage,
-    checkWhatsappConsentEligibility, recordWhatsappConsent,
   } = useAlphaStore();
   const [text, setText] = useState('');
   const [pendingQuestion, setPendingQuestion] = useState<string | null>(null);
-  // Shown after the paywall is dismissed WITHOUT purchasing (never after a
-  // purchase — has_ai_access() becomes true then, so the eligibility check
-  // would already return false on its own). Deliberately not asked on the
-  // very first block, only once alpha_whatsapp_reminder_eligible_now
-  // confirms the free cap was actually hit on 3+ separate days this week —
-  // see db/migration_v145.sql for why an earlier ask would be a promise
-  // disconnected from anything real.
-  const [showWhatsappConsent, setShowWhatsappConsent] = useState(false);
   // Set on a blocked send attempt while at the paid-tier cap — renders the
   // plain waitCard instead of the upgrade popup, since offering an upgrade
   // to someone already paying is nonsensical. Self-clears once quota is no
@@ -295,22 +295,9 @@ export default function AlphaScreen() {
     }
   };
 
-  // Dismissing the paywall WITHOUT purchasing is exactly "the free popup
-  // alone hasn't converted this person" — the natural moment to check
-  // whether they've also crossed the WhatsApp-reminder threshold and, if
-  // so, offer the consent prompt as the next escalation. Not checked on
-  // handlePurchased — a fresh subscriber no longer needs reminding.
-  const dismissPaywall = async () => {
+  const dismissPaywall = () => {
     setPendingQuestion(null);
     setWaitBlocked(false);
-    // No WhatsApp-reminder consent ask while the paywall itself is hidden —
-    // it only makes sense as a follow-up to an upgrade offer nobody is being
-    // shown right now (see PAYWALL_ENABLED in lib/purchases.ts).
-    if (!PAYWALL_ENABLED) return;
-    if (businessId) {
-      const eligible = await checkWhatsappConsentEligibility(businessId);
-      if (eligible) setShowWhatsappConsent(true);
-    }
   };
 
   return (
@@ -502,30 +489,6 @@ export default function AlphaScreen() {
           />
         )}
       </Modal>
-
-      {/* Consent for the WhatsApp re-engagement reminder — only ever
-          reachable once alpha_whatsapp_reminder_eligible_now has already
-          confirmed the free cap was hit on 3+ separate days this week, so
-          the promise here ("we'll message you") is grounded in something
-          that already happened, not speculation. "Non merci" is a real,
-          equally-weighted second choice (AppSheet's secondaryAction), not
-          just a generic dismiss — declining is recorded the same way
-          accepting is. */}
-      <AppSheet
-        visible={PAYWALL_ENABLED && showWhatsappConsent}
-        onClose={() => setShowWhatsappConsent(false)}
-        icon="logo-whatsapp"
-        title="On vous facilite ça ?"
-        body="La prochaine fois, un tap suffira : on vous envoie le lien de paiement par WhatsApp. Une seule fois."
-        action={{
-          label: 'Oui, prévenez-moi',
-          onPress: () => { if (businessId) void recordWhatsappConsent(businessId, true); },
-        }}
-        secondaryAction={{
-          label: 'Non merci',
-          onPress: () => { if (businessId) void recordWhatsappConsent(businessId, false); },
-        }}
-      />
     </Screen>
   );
 }
@@ -561,6 +524,6 @@ function makeStyles(p: Palette) {
     bubble: { maxWidth: '82%', borderRadius: 18, paddingHorizontal: spacing[4], paddingVertical: spacing[3] },
     bubbleOwn: { backgroundColor: p.primary },
     bubbleOther: { backgroundColor: p.surface, borderWidth: 1, borderColor: p.border },
-    bubbleText: { fontSize: 15, lineHeight: 21, color: p.textPrimary },
+    bubbleText: { fontFamily: BUBBLE_FF.regular, fontSize: 15, lineHeight: 21, color: p.textPrimary },
   });
 }
