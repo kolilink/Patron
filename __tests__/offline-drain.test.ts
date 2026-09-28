@@ -1,14 +1,24 @@
-// drainQueue behavior — the engine that replays queued sales when back online.
-// These tests guard the retry logic: what stops, what continues, what gets deleted.
+// drainQueue behavior — the engine that replays queued sales when back
+// online. §3 of the offline-first rewrite replaced the old
+// getPendingOps/markAttemptFailed (attempts-cap, dead_ops-graveyard) shape
+// with getPendingOpsForDrain/rescheduleOp/markOpPermanentlyFailed/
+// markOpCorrupt (three-branch classification, no cap, retries
+// indefinitely). These tests guard that classification: what retries with
+// backoff, what's permanent immediately, what's corrupt, and that ordering
+// (stop-on-network-error) is preserved.
 
-const mockGetPendingOps = jest.fn();
+const mockGetPendingOpsForDrain = jest.fn();
 const mockDeleteQueueItem = jest.fn();
-const mockMarkAttemptFailed = jest.fn();
+const mockRescheduleOp = jest.fn();
+const mockMarkOpPermanentlyFailed = jest.fn();
+const mockMarkOpCorrupt = jest.fn();
 
 jest.mock('@/lib/db', () => ({
-  getPendingOps: mockGetPendingOps,
+  getPendingOpsForDrain: mockGetPendingOpsForDrain,
   deleteQueueItem: mockDeleteQueueItem,
-  markAttemptFailed: mockMarkAttemptFailed,
+  rescheduleOp: mockRescheduleOp,
+  markOpPermanentlyFailed: mockMarkOpPermanentlyFailed,
+  markOpCorrupt: mockMarkOpCorrupt,
   getQueueCount: jest.fn().mockResolvedValue(0),
 }));
 
@@ -27,7 +37,7 @@ jest.mock('@/lib/supabase', () => ({
 import { drainQueue } from '@/lib/sync';
 import { supabase } from '@/lib/supabase';
 
-function makeSaleOp(id: number) {
+function makeSaleOp(id: number, attempts = 0) {
   return {
     id,
     operation: 'submit_sale',
@@ -38,7 +48,12 @@ function makeSaleOp(id: number) {
       p_cart: [],
     }),
     created_at: '2026-01-01T00:00:00Z',
-    attempts: 0,
+    queued_at: '2026-01-01T00:00:00Z',
+    entity_type: 'vente',
+    idempotency_key: null,
+    status: 'pending' as const,
+    next_attempt_at: '2026-01-01T00:00:00Z',
+    attempts,
     last_error: null,
   };
 }
@@ -56,6 +71,11 @@ function makeCarnetDebtOp(id: number) {
       p_idempotency_key: 'key-1',
     }),
     created_at: '2026-01-01T00:00:00Z',
+    queued_at: '2026-01-01T00:00:00Z',
+    entity_type: 'dette',
+    idempotency_key: 'key-1',
+    status: 'pending' as const,
+    next_attempt_at: '2026-01-01T00:00:00Z',
     attempts: 0,
     last_error: null,
   };
@@ -64,32 +84,38 @@ function makeCarnetDebtOp(id: number) {
 beforeEach(() => {
   jest.clearAllMocks();
   mockDeleteQueueItem.mockResolvedValue(undefined);
-  mockMarkAttemptFailed.mockResolvedValue(undefined);
+  mockRescheduleOp.mockResolvedValue(undefined);
+  mockMarkOpPermanentlyFailed.mockResolvedValue(undefined);
+  mockMarkOpCorrupt.mockResolvedValue(undefined);
 });
 
 describe('drainQueue', () => {
-  it('returns {synced: 0, failed: 0} when the queue is empty', async () => {
-    mockGetPendingOps.mockResolvedValueOnce([]);
+  it('returns synced:0 failed:0 with no queue calls when both ok and corrupt are empty', async () => {
+    mockGetPendingOpsForDrain.mockResolvedValueOnce({ ok: [], corrupt: [] });
     const result = await drainQueue();
-    expect(result).toEqual({ synced: 0, failed: 0, rejectedPayments: [] });
+    expect(result.synced).toBe(0);
+    expect(result.failed).toBe(0);
+    expect(result.rejectedPayments).toEqual([]);
+    expect(result.syncHealthEvents).toEqual([]);
     expect(supabase.rpc).not.toHaveBeenCalled();
   });
 
   it('syncs a pending item and deletes it from the queue', async () => {
-    mockGetPendingOps.mockResolvedValueOnce([makeSaleOp(1)]);
+    mockGetPendingOpsForDrain.mockResolvedValueOnce({ ok: [makeSaleOp(1)], corrupt: [] });
     (supabase.rpc as jest.Mock).mockResolvedValueOnce({ error: null });
 
     const result = await drainQueue();
 
-    expect(result).toEqual({ synced: 1, failed: 0, rejectedPayments: [] });
+    expect(result.synced).toBe(1);
+    expect(result.failed).toBe(0);
     expect(supabase.rpc).toHaveBeenCalledWith('submit_sale', expect.objectContaining({
       p_business_id: 'biz-1',
     }));
     expect(mockDeleteQueueItem).toHaveBeenCalledWith(1);
   });
 
-  it('stops immediately on network error — does not attempt remaining items', async () => {
-    mockGetPendingOps.mockResolvedValueOnce([makeSaleOp(1), makeSaleOp(2)]);
+  it('stops immediately on network error, reschedules with backoff (not a hard cap), and does not attempt remaining items', async () => {
+    mockGetPendingOpsForDrain.mockResolvedValueOnce({ ok: [makeSaleOp(1), makeSaleOp(2)], corrupt: [] });
     (supabase.rpc as jest.Mock).mockRejectedValueOnce(new Error('Failed to fetch'));
 
     const result = await drainQueue();
@@ -97,29 +123,91 @@ describe('drainQueue', () => {
     expect(result.failed).toBe(1);
     expect(supabase.rpc).toHaveBeenCalledTimes(1);
     expect(mockDeleteQueueItem).not.toHaveBeenCalled();
-    expect(mockMarkAttemptFailed).not.toHaveBeenCalled();
+    expect(mockMarkOpPermanentlyFailed).not.toHaveBeenCalled();
+    // Rescheduled (retried later), never permanently failed and never
+    // capped — this is the entire point of the §3 rework over the old
+    // MAX_SYNC_ATTEMPTS/dead_ops design.
+    expect(mockRescheduleOp).toHaveBeenCalledWith(1, expect.any(String), expect.any(String));
+    const [, nextAttemptAt] = mockRescheduleOp.mock.calls[0];
+    expect(new Date(nextAttemptAt).getTime()).toBeGreaterThan(Date.now());
+    expect(result.syncHealthEvents).toContainEqual(expect.objectContaining({
+      name: 'sync_drain_failed_network', businessId: 'biz-1',
+    }));
   });
 
-  it('marks attempt failed on server error and continues to next item', async () => {
-    mockGetPendingOps.mockResolvedValueOnce([makeSaleOp(1), makeSaleOp(2)]);
+  it('a non-network (server-side) rejection is marked permanently failed immediately — not retried, continues to next item', async () => {
+    mockGetPendingOpsForDrain.mockResolvedValueOnce({ ok: [makeSaleOp(1), makeSaleOp(2)], corrupt: [] });
     (supabase.rpc as jest.Mock)
-      .mockResolvedValueOnce({ error: { message: 'invalid input syntax' } }) // item 1: server error
+      .mockResolvedValueOnce({ error: { message: 'invalid input syntax' } }) // item 1: server rejection
       .mockResolvedValueOnce({ error: null }); // item 2: success
 
     const result = await drainQueue();
 
-    expect(result).toEqual({ synced: 1, failed: 1, rejectedPayments: [] });
-    expect(mockMarkAttemptFailed).toHaveBeenCalledWith(1, expect.any(String));
+    expect(result.synced).toBe(1);
+    expect(result.failed).toBe(1);
+    expect(mockMarkOpPermanentlyFailed).toHaveBeenCalledWith(1, expect.any(String));
+    expect(mockRescheduleOp).not.toHaveBeenCalled(); // never retried
     expect(mockDeleteQueueItem).toHaveBeenCalledWith(2);
+    expect(result.syncHealthEvents).toContainEqual(expect.objectContaining({
+      name: 'sync_op_failed_permanent', businessId: 'biz-1',
+    }));
   });
 
-  it('syncs a queued submit_carnet_debt item (the offline credit-entry flow)', async () => {
-    mockGetPendingOps.mockResolvedValueOnce([makeCarnetDebtOp(3)]);
+  it('a corrupt (decrypt-failed) row is classified via markOpCorrupt before any RPC attempt, and does not block ok items', async () => {
+    const corruptStub = { id: 99, operation: 'submit_sale', entity_type: 'vente', idempotency_key: null, status: 'pending' as const, queued_at: '2026-01-01T00:00:00Z', attempts: 0, last_error: 'decrypt failed' };
+    mockGetPendingOpsForDrain.mockResolvedValueOnce({ ok: [makeSaleOp(1)], corrupt: [corruptStub] });
     (supabase.rpc as jest.Mock).mockResolvedValueOnce({ error: null });
 
     const result = await drainQueue();
 
-    expect(result).toEqual({ synced: 1, failed: 0, rejectedPayments: [] });
+    expect(mockMarkOpCorrupt).toHaveBeenCalledWith(99, 'decrypt failed');
+    expect(supabase.rpc).toHaveBeenCalledTimes(1); // corrupt row never reached an RPC call
+    expect(result.synced).toBe(1); // the ok item still synced normally
+    expect(result.syncHealthEvents).toContainEqual(expect.objectContaining({
+      name: 'sync_op_failed_corrupt', metadata: expect.objectContaining({ stage: 'decrypt' }),
+    }));
+  });
+
+  it('a row that decrypts fine but is not valid JSON is classified corrupt (parse stage), not permanent', async () => {
+    const badJsonOp = { ...makeSaleOp(7), payload: 'not valid json {{{' };
+    mockGetPendingOpsForDrain.mockResolvedValueOnce({ ok: [badJsonOp], corrupt: [] });
+
+    const result = await drainQueue();
+
+    expect(supabase.rpc).not.toHaveBeenCalled(); // never even attempted
+    expect(mockMarkOpCorrupt).toHaveBeenCalledWith(7, expect.any(String));
+    expect(mockMarkOpPermanentlyFailed).not.toHaveBeenCalled();
+    expect(result.syncHealthEvents).toContainEqual(expect.objectContaining({
+      name: 'sync_op_failed_corrupt', metadata: expect.objectContaining({ stage: 'parse' }),
+    }));
+  });
+
+  it('backoff grows with attempts (exponential, not flat) — a 4th attempt schedules further out than a 1st', async () => {
+    mockGetPendingOpsForDrain.mockResolvedValueOnce({ ok: [makeSaleOp(1, 0)], corrupt: [] });
+    (supabase.rpc as jest.Mock).mockRejectedValueOnce(new Error('Failed to fetch'));
+    await drainQueue();
+    const [, firstNext] = mockRescheduleOp.mock.calls[0];
+    const firstDelayMs = new Date(firstNext).getTime() - Date.now();
+
+    jest.clearAllMocks();
+    mockGetPendingOpsForDrain.mockResolvedValueOnce({ ok: [makeSaleOp(1, 3)], corrupt: [] });
+    (supabase.rpc as jest.Mock).mockRejectedValueOnce(new Error('Failed to fetch'));
+    await drainQueue();
+    const [, laterNext] = mockRescheduleOp.mock.calls[0];
+    const laterDelayMs = new Date(laterNext).getTime() - Date.now();
+
+    // Generous bound (jitter is +/-20%) — this only needs to prove growth,
+    // not pin an exact schedule value.
+    expect(laterDelayMs).toBeGreaterThan(firstDelayMs * 2);
+  });
+
+  it('syncs a queued submit_carnet_debt item (the offline credit-entry flow)', async () => {
+    mockGetPendingOpsForDrain.mockResolvedValueOnce({ ok: [makeCarnetDebtOp(3)], corrupt: [] });
+    (supabase.rpc as jest.Mock).mockResolvedValueOnce({ error: null });
+
+    const result = await drainQueue();
+
+    expect(result.synced).toBe(1);
     expect(supabase.rpc).toHaveBeenCalledWith('submit_carnet_debt', expect.objectContaining({
       p_business_id:     'biz-1',
       p_customer_name:   'Mamadou',
@@ -141,10 +229,15 @@ describe('drainQueue', () => {
         p_date: '2026-06-30',
       }),
       created_at: '2026-06-30T00:00:00Z',
+      queued_at: '2026-06-30T00:00:00Z',
+      entity_type: 'paiement',
+      idempotency_key: null,
+      status: 'pending' as const,
+      next_attempt_at: '2026-06-30T00:00:00Z',
       attempts: 0,
       last_error: null,
     };
-    mockGetPendingOps.mockResolvedValueOnce([paymentOp]);
+    mockGetPendingOpsForDrain.mockResolvedValueOnce({ ok: [paymentOp], corrupt: [] });
     (supabase.rpc as jest.Mock).mockResolvedValueOnce({
       error: { message: 'Le montant dépasse le solde restant dû' },
     });
@@ -153,6 +246,6 @@ describe('drainQueue', () => {
 
     expect(result.failed).toBe(1);
     expect(result.rejectedPayments).toEqual(['Le montant dépasse le solde restant dû']);
-    expect(mockMarkAttemptFailed).toHaveBeenCalledWith(5, 'Le montant dépasse le solde restant dû');
+    expect(mockMarkOpPermanentlyFailed).toHaveBeenCalledWith(5, 'Le montant dépasse le solde restant dû');
   });
 });

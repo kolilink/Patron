@@ -1,9 +1,26 @@
 import * as Sentry from '@sentry/react-native';
 import { Platform, type AppStateStatus } from 'react-native';
 import { supabase } from '@/lib/supabase';
-import { getPendingOps, deleteQueueItem, markAttemptFailed } from '@/lib/db';
+import { getPendingOpsForDrain, deleteQueueItem, rescheduleOp, markOpPermanentlyFailed, markOpCorrupt } from '@/lib/db';
 import { notifyEvent, resolveSellerDisplayName } from '@/src/utils/notifications';
 import { formatAmount } from '@/src/utils/format';
+
+// One sync-health signal drainQueue observed — pure data, no side effect.
+// Deliberately NOT fired as a trackEvent() call from inside this file:
+// lib/sync.ts is foundational and imported by lib/posthog.ts/lib/analytics.ts
+// themselves (isNetworkError, APP_STATE_FLAP_GUARD_MS), and by many test
+// files that have no reason to know about PostHog. Importing trackEvent
+// here was tried and reverted — it transitively runs lib/posthog.ts's
+// module-top-level `new PostHog(...)`, which needs AppState and crashed 5
+// unrelated test suites the instant they imported this file, whether or
+// not they ever called drainQueue. The caller (stores/sync.ts, which
+// already safely imports analytics the same way every other store does)
+// fires the actual trackEvent calls from these records instead.
+export interface SyncHealthEvent {
+  name: 'sync_drain_failed_network' | 'sync_op_failed_permanent' | 'sync_op_failed_corrupt';
+  businessId: string | null;
+  metadata: Record<string, unknown>;
+}
 
 export type SyncResult = {
   synced: number;
@@ -12,6 +29,7 @@ export type SyncResult = {
   // payment before this one synced) — surfaced separately so the caller can
   // alert the merchant instead of letting them vanish into a silent retry.
   rejectedPayments: string[];
+  syncHealthEvents: SyncHealthEvent[];
 };
 
 let _running = false;
@@ -327,36 +345,93 @@ async function executeOp(operation: string, payload: Record<string, unknown>): P
   }
 }
 
+// Backoff schedule for a network/5xx failure — exponential with a fixed
+// ceiling, then holding there, plus +/-20% jitter so every device that lost
+// connectivity to the same outage doesn't retry in the exact same instant
+// once it clears. Matches the approved plan's own sequence (5s -> 30s ->
+// 2min -> 10min -> 30min); retrying INDEFINITELY past that ceiling — never
+// capped — is the entire point of this rework (see the v19 migration's own
+// comment on why a hard attempts cap was the wrong design: it silently and
+// permanently dropped real, unsynced merchant data after 5 tries).
+const BACKOFF_SCHEDULE_MS = [5_000, 30_000, 120_000, 600_000, 1_800_000];
+
+function computeNextAttemptAt(attemptsSoFar: number): string {
+  const base = BACKOFF_SCHEDULE_MS[Math.min(attemptsSoFar, BACKOFF_SCHEDULE_MS.length - 1)];
+  const jitter = base * 0.2 * (Math.random() * 2 - 1);
+  const delayMs = Math.max(1000, Math.round(base + jitter));
+  return new Date(Date.now() + delayMs).toISOString();
+}
+
+// Best-effort, plaintext-only extraction for analytics metadata — every
+// Phase-1 RPC payload carries p_business_id, but this must never throw or
+// block classification if a payload doesn't have one.
+function extractBusinessId(payload: Record<string, unknown> | null): string | null {
+  const v = payload?.p_business_id;
+  return typeof v === 'string' ? v : null;
+}
+
 export async function drainQueue(): Promise<SyncResult> {
-  if (_running) return { synced: 0, failed: 0, rejectedPayments: [] };
+  if (_running) return { synced: 0, failed: 0, rejectedPayments: [], syncHealthEvents: [] };
   _running = true;
 
-  const result: SyncResult = { synced: 0, failed: 0, rejectedPayments: [] };
+  const result: SyncResult = { synced: 0, failed: 0, rejectedPayments: [], syncHealthEvents: [] };
 
   try {
-    const ops = await getPendingOps();
+    const { ok: ops, corrupt } = await getPendingOpsForDrain();
+
+    // Decrypt failures never reach an RPC attempt at all — classify them
+    // immediately so a corrupt row stops being silently re-selected (and
+    // re-failing decrypt the same way) on every future drain pass, and
+    // becomes visible via QueuedOpMeta's plaintext columns instead of
+    // invisible. Storage-level bit rot, not a business rejection — reported
+    // as its own event, never conflated with sync_op_failed_permanent.
+    for (const c of corrupt) {
+      await markOpCorrupt(c.id, c.last_error ?? 'decrypt failed');
+      result.syncHealthEvents.push({ name: 'sync_op_failed_corrupt', businessId: null, metadata: { operation: c.operation, entity_type: c.entity_type, stage: 'decrypt' } });
+    }
+
     if (ops.length === 0) return result;
 
     for (const op of ops) {
+      let payload: Record<string, unknown> | null = null;
       try {
-        const payload = JSON.parse(op.payload) as Record<string, unknown>;
+        payload = JSON.parse(op.payload) as Record<string, unknown>;
         await executeOp(op.operation, payload);
         await deleteQueueItem(op.id);
         result.synced++;
       } catch (e) {
-        if (isNetworkError(e)) {
+        if (payload === null) {
+          // Decrypted cleanly (it wasn't in `corrupt` above) but the
+          // plaintext itself isn't valid JSON — the same storage-level
+          // corruption class as a decrypt failure, just caught one step
+          // later. Classified identically, never as a business rejection.
+          await markOpCorrupt(op.id, extractErrorMessage(e));
+          result.syncHealthEvents.push({ name: 'sync_op_failed_corrupt', businessId: null, metadata: { operation: op.operation, stage: 'parse' } });
           result.failed++;
-          break; // still offline — stop trying
+          continue;
         }
-        // Server/auth/validation error — mark failed, continue with next item.
+        const businessId = extractBusinessId(payload);
+        if (isNetworkError(e)) {
+          const nextAttemptAt = computeNextAttemptAt(op.attempts);
+          await rescheduleOp(op.id, nextAttemptAt, extractErrorMessage(e));
+          result.failed++;
+          result.syncHealthEvents.push({ name: 'sync_drain_failed_network', businessId, metadata: { operation: op.operation, attempts: op.attempts + 1 } });
+          break; // still offline — stop trying the rest of this pass, preserves FIFO ordering
+        }
+        // Not network-shaped and not a decrypt/parse failure — a real
+        // server-side rejection (or any other unexpected error). Per the
+        // approved classification, anything that isn't network-shaped is
+        // permanent immediately, not after N attempts: retrying a
+        // non-network failure blindly can only fail the same way again,
+        // which is exactly what "never retries blindly" exists to prevent.
         // Supabase RPC errors (PostgrestError) are plain objects with a
-        // `.message`, not `Error` instances — fall through to that before
-        // String(e), which would otherwise stringify them as "[object Object]".
-        const msg = e instanceof Error
-          ? e.message
-          : (e && typeof e === 'object' && 'message' in e ? String((e as { message: unknown }).message) : String(e));
-        await markAttemptFailed(op.id, msg);
+        // `.message`, not `Error` instances — extractErrorMessage already
+        // handles that (see its own doc comment above), unlike a bare
+        // String(e), which would stringify them as "[object Object]".
+        const msg = extractErrorMessage(e);
+        await markOpPermanentlyFailed(op.id, msg);
         result.failed++;
+        result.syncHealthEvents.push({ name: 'sync_op_failed_permanent', businessId, metadata: { operation: op.operation, error: msg } });
         if (op.operation === 'record_payment' || op.operation === 'record_client_payment') {
           result.rejectedPayments.push(msg);
         }
