@@ -650,9 +650,9 @@ function PaymentModal({
               <View style={styles.creditEmptyIconWrap}>
                 <Ionicons name="person-add-outline" size={28} color={palette.textSecondary} />
               </View>
-              <Text variant="h4" style={{ textAlign: 'center' }}>Aucun client pour le moment</Text>
+              <Text variant="h4" style={{ textAlign: 'center' }}>Aucun client pour le moment.</Text>
               <Text variant="body" color="secondary" style={{ textAlign: 'center' }}>
-                Les clients à qui vous faites crédit apparaîtront ici.
+                Ici, vous verrez qui vous doit de l'argent.
               </Text>
               <Button
                 label="+ Nouveau client"
@@ -975,6 +975,8 @@ function PaymentModal({
                 <Pressable
                   onPress={() => { setClientName(''); setClientPhone(''); setClientId(undefined); setClientSearch(''); }}
                   hitSlop={12}
+                  accessibilityLabel="Retirer ce client"
+                  accessibilityRole="button"
                 >
                   <Ionicons name="close-circle" size={20} color={palette.textSecondary} />
                 </Pressable>
@@ -1049,7 +1051,7 @@ function PaymentModal({
                   /* ── New client form ── */
                   <KeyboardAvoidingView behavior={Platform.OS === 'ios' ? 'padding' : undefined}>
                     <View style={{ flexDirection: 'row', alignItems: 'center', gap: spacing[2], paddingTop: spacing[2], marginBottom: spacing[1] }}>
-                      <Pressable onPress={() => setShowNewClientForm(false)} hitSlop={8}>
+                      <Pressable onPress={() => setShowNewClientForm(false)} hitSlop={8} accessibilityLabel="Retour" accessibilityRole="button">
                         <Ionicons name="arrow-back" size={18} color={palette.textSecondary} />
                       </Pressable>
                       <Text variant="label">Nouveau client</Text>
@@ -1397,11 +1399,12 @@ function AnimatedFAB({ onPress }: { onPress: () => void }) {
     <Animated.View style={[styles.fabContainer, { transform: [{ scale }], opacity }]}>
       <Pressable
         onPress={onPress}
-        style={({ pressed }) => [styles.fab, pressed && { opacity: 0.82 }]}
+        style={({ pressed }) => [styles.fabExtended, pressed && { opacity: 0.82 }]}
         accessibilityLabel="Ajouter un produit"
         accessibilityRole="button"
       >
-        <Text style={styles.fabIcon}>+</Text>
+        <Ionicons name="add" size={20} color={palette.textInverse} />
+        <Text style={styles.fabExtendedLabel}>Produit</Text>
       </Pressable>
     </Animated.View>
   );
@@ -1444,8 +1447,14 @@ export default function VendreScreen() {
   // last (usually 'vente'). This effect re-applies it on every fresh
   // arrival, not just mount, then clears the param the same way
   // catalogue.tsx clears openForm.
-  const { mode: initialMode } = useLocalSearchParams<{ mode?: string }>();
+  const { mode: initialMode, newClientName } = useLocalSearchParams<{ mode?: string; newClientName?: string }>();
   const [mode, setMode] = useState<'vente' | 'credit'>(initialMode === 'credit' ? 'credit' : 'vente');
+  // Set only by Clients' "no search match" create-shortcut — lands straight
+  // on the amount step for this name instead of the pick-a-face grid (same
+  // initialClient contract the client ledger's own "+ Nouveau crédit" uses).
+  const [creditInitialClientName, setCreditInitialClientName] = useState<string | undefined>(
+    initialMode === 'credit' ? newClientName : undefined,
+  );
   // Vendre is a tab root — normally there's nothing to "go back" to, you
   // just tap a different tab. Arriving here via a push from the fork breaks
   // that assumption (no swipe-back, no visible way out) without an explicit
@@ -1457,9 +1466,10 @@ export default function VendreScreen() {
     if (initialMode === 'credit') {
       setMode('credit');
       setCameFromFork(true);
-      router.setParams({ mode: undefined });
+      setCreditInitialClientName(newClientName);
+      router.setParams({ mode: undefined, newClientName: undefined });
     }
-  }, [initialMode]);
+  }, [initialMode, newClientName]);
 
   // The activation fork (app/(app)/_layout.tsx) only knows to stay away for
   // a fixed ~1.2s after the "Une dette" tap that can land here — enough to
@@ -1971,10 +1981,17 @@ export default function VendreScreen() {
       {mode === 'credit' && (
         <View style={styles.creditTabContent}>
           <CreditRapideCapture
+            // initialClient is mount-only inside CreditRapideCapture (see its
+            // own comment) — keying on the name forces a real remount when
+            // onDone clears it, so a save lands back on the pick grid instead
+            // of getting stuck on a stale "amount" phase for a now-cleared prop.
+            key={creditInitialClientName ?? 'grid'}
             businessId={businessId}
             userId={userId}
             currency={currency}
             onViewClients={() => router.push({ pathname: '/(app)/clients', params: { filter: 'doivent' } })}
+            initialClient={creditInitialClientName ? { name: creditInitialClientName } : undefined}
+            onDone={creditInitialClientName ? () => setCreditInitialClientName(undefined) : undefined}
           />
         </View>
       )}
@@ -2099,7 +2116,16 @@ export default function VendreScreen() {
           />
         )}
         ListEmptyComponent={
-          search.trim() ? <NoResultsState query={search} /> : null
+          search.trim() ? (
+            <NoResultsState
+              query={search}
+              createLabel={`+ Nouveau produit « ${search.trim()} »`}
+              onCreate={() => router.push({
+                pathname: '/(app)/(tabs)/catalogue',
+                params: { openForm: '1', prefillName: search.trim() },
+              })}
+            />
+          ) : null
         }
       />}
 
@@ -2513,12 +2539,16 @@ function makeStyles(p: Palette) {
     // pill no longer reserves that space, so the same clearance is added
     // here too to keep this FAB sitting exactly where it did before.
     fabContainer: { position: 'absolute', bottom: 194 + FLOATING_TAB_BAR_CLEARANCE, right: spacing[4], zIndex: 10 },
-    fab: { width: 56, height: 56, borderRadius: radius.full, backgroundColor: p.primary, alignItems: 'center', justifyContent: 'center', shadowColor: p.textPrimary, shadowOffset: { width: 0, height: 4 }, shadowOpacity: 0.18, shadowRadius: 8, elevation: 8 },
-    // No light-weight DM Sans file exists (see fontFamily in src/theme/typography.ts —
-    // only regular/medium/semibold/bold), so the original fontWeight: '300' here was
-    // always a no-op even before that was understood — regular is the closest
-    // available approximation for a light "+" glyph, and is what actually rendered.
-    fabIcon: { fontSize: 28, lineHeight: 32, color: p.textInverse, marginTop: -2 },
+    // Extended (icon + label), never a bare "+" — an icon-only action button
+    // can't be recognized by name, only by shape.
+    fabExtended: {
+      flexDirection: 'row', alignItems: 'center', gap: spacing[2],
+      height: 56, paddingHorizontal: spacing[5], borderRadius: radius.full,
+      backgroundColor: p.primary,
+      shadowColor: p.textPrimary, shadowOffset: { width: 0, height: 4 },
+      shadowOpacity: 0.18, shadowRadius: 8, elevation: 8,
+    },
+    fabExtendedLabel: { fontFamily: fontFamily.semibold, fontSize: 15, color: p.textInverse },
     outOfStockHeader: { flexDirection: 'row', alignItems: 'center', paddingTop: spacing[4], paddingBottom: spacing[3] },
     outOfStockLine: { flex: 1, height: StyleSheet.hairlineWidth, backgroundColor: p.border },
 

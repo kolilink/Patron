@@ -28,6 +28,7 @@ import Animated, {
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
 import { Screen } from '@/src/components/ui/Screen';
 import { FormSheet } from '@/src/components/ui/FormSheet';
+import { EmptyState } from '@/src/components/ui/EmptyState';
 import { router, useFocusEffect } from 'expo-router';
 import { Ionicons } from '@expo/vector-icons';
 import { Text } from '@/src/components/ui/Text';
@@ -492,6 +493,12 @@ export default function DiscussionsScreen() {
 
   // ─── Amis state ───────────────────────────────────────────────────────────
   const [showAddPartner, setShowAddPartner] = useState(false);
+  // "+ Inviter" on the empty state opens this — the "Mon code"/share UI that
+  // used to sit inline in the empty state itself. Moving it behind a button
+  // tap (per the unified empty-state pattern) must never mean losing it: this
+  // is still the only place in the app a business can see/share its own
+  // partnership code, so the mechanism stays, just one tap deeper.
+  const [showShareCode, setShowShareCode] = useState(false);
   const [partnerCodeInput, setPartnerCodeInput] = useState('');
   const [addPartnerLoading, setAddPartnerLoading] = useState(false);
   const [addPartnerError, setAddPartnerError] = useState('');
@@ -1035,6 +1042,8 @@ export default function DiscussionsScreen() {
             <Pressable
               onPress={() => setShowNewPost(true)}
               style={({ pressed }) => [styles.composeBtn, pressed && { opacity: 0.65 }]}
+              accessibilityLabel="Nouveau post"
+              accessibilityRole="button"
             >
               <Ionicons name="create-outline" size={20} color={palette.primary} />
             </Pressable>
@@ -1062,10 +1071,7 @@ export default function DiscussionsScreen() {
               <View style={styles.empty}>
                 <Text variant="h4" style={{ textAlign: 'center', marginBottom: 8 }}>Votre espace privé</Text>
                 <Text variant="body" color="secondary" style={{ textAlign: 'center', lineHeight: 22 }}>
-                  Ce que vous écrivez ici reste entre vous et votre équipe uniquement.
-                </Text>
-                <Text variant="body" color="secondary" style={{ textAlign: 'center', lineHeight: 22, marginTop: 8 }}>
-                  Écrivez votre premier message : une note, un rappel, le prix du jour.
+                  Seuls vous et votre équipe pouvez lire ce qui s'écrit ici.
                 </Text>
               </View>
             ) : (
@@ -1137,7 +1143,7 @@ export default function DiscussionsScreen() {
                   <Text style={styles.editDockLabel}>Modifier le message</Text>
                   <Text style={styles.replyDockText} numberOfLines={1}>{editingMsg.content}</Text>
                 </View>
-                <Pressable onPress={cancelEdit} hitSlop={12}>
+                <Pressable onPress={cancelEdit} hitSlop={12} accessibilityLabel="Fermer" accessibilityRole="button">
                   <Ionicons name="close" size={18} color={palette.textSecondary} />
                 </Pressable>
               </View>
@@ -1150,7 +1156,7 @@ export default function DiscussionsScreen() {
                   </Text>
                   <Text style={styles.replyDockText} numberOfLines={1}>{replyingTo.content}</Text>
                 </View>
-                <Pressable onPress={() => setReplyingTo(null)} hitSlop={12}>
+                <Pressable onPress={() => setReplyingTo(null)} hitSlop={12} accessibilityLabel="Fermer" accessibilityRole="button">
                   <Ionicons name="close" size={18} color={palette.textSecondary} />
                 </Pressable>
               </View>
@@ -1193,6 +1199,8 @@ export default function DiscussionsScreen() {
                   style={styles.input}
                   value={text}
                   onChangeText={setText}
+                  placeholder="Écrivez une note…"
+                  placeholderTextColor={palette.textSecondary}
                   autoFocus
                   multiline
                   maxLength={1000}
@@ -1234,6 +1242,8 @@ export default function DiscussionsScreen() {
                 onPress={() => { setShowAddPartner(true); setAddPartnerError(''); setAddPartnerSuccess(''); }}
                 style={styles.amisIconBtn}
                 hitSlop={8}
+                accessibilityLabel="Ajouter un ami"
+                accessibilityRole="button"
               >
                 <Ionicons name="person-add-outline" size={22} color={palette.primary} />
               </Pressable>
@@ -1244,63 +1254,13 @@ export default function DiscussionsScreen() {
                 <Text variant="body" color="secondary">Chargement…</Text>
               </View>
             ) : partners.length === 0 && partnerPending.length === 0 ? (
-              /* ── Empty: code is the hero ── */
-              <View style={{ flex: 1 }}>
-                {/* Optical center: 38% from top */}
-                <View style={{ flex: 38 }} />
-                <View style={styles.amisInviteState}>
-                  <Text style={[styles.amisCodeLabel, { color: palette.textSecondary }]}>Mon code</Text>
-                  <View style={{ width: screenWidth - spacing[5] * 4 }}>
-                    <Text
-                      style={[styles.amisCodeValue, { color: palette.textPrimary }]}
-                      adjustsFontSizeToFit
-                      minimumFontScale={0.4}
-                      numberOfLines={1}
-                    >
-                      {inviteCodeLoading ? '…' : (inviteCode?.code ? inviteCode.code.toUpperCase().split('').join(' ') : '…')}
-                    </Text>
-                    <Pressable
-                      onPress={handleCopyMyCode}
-                      disabled={!inviteCode?.code || inviteCodeLoading}
-                      hitSlop={10}
-                      style={({ pressed }) => [
-                        styles.amisCopyBtn,
-                        (!inviteCode?.code || inviteCodeLoading) && { opacity: 0.3 },
-                        pressed && { opacity: 0.6 },
-                      ]}
-                    >
-                      <Ionicons name="copy-outline" size={18} color={palette.textSecondary} />
-                    </Pressable>
-                  </View>
-                  <Text style={[styles.amisCodeMeta, { color: palette.textSecondary }]}>
-                    24h · usage unique
-                  </Text>
-
-                  <Pressable
-                    onPress={handleShareMyCode}
-                    disabled={!inviteCode?.code || inviteCodeLoading}
-                    style={({ pressed }) => [
-                      styles.amisShareBtn,
-                      (!inviteCode?.code || inviteCodeLoading) && { opacity: 0.4 },
-                      pressed && { opacity: 0.7 },
-                    ]}
-                  >
-                    <Ionicons name="logo-whatsapp" size={18} color={palette.textInverse} />
-                    <Text style={{ color: palette.textInverse, fontWeight: '600', fontSize: 16 }}>Partager</Text>
-                  </Pressable>
-
-                  <Pressable
-                    onPress={() => regenerateInviteCode(businessId)}
-                    disabled={inviteCodeLoading}
-                    hitSlop={12}
-                  >
-                    <Text style={[styles.amisRenewLink, { color: palette.textSecondary }]}>
-                      Renouveler le code
-                    </Text>
-                  </Pressable>
-                </View>
-                <View style={{ flex: 62 }} />
-              </View>
+              <EmptyState
+                icon="people-outline"
+                title="Aucun ami pour le moment."
+                subtitle="Invitez un commerçant ami pour discuter ici."
+                actionLabel="+ Inviter"
+                onAction={() => setShowShareCode(true)}
+              />
             ) : (
               /* ── Has partners ── */
               <ScrollView style={{ flex: 1 }} contentContainerStyle={{ paddingBottom: 32 }}>
@@ -1395,15 +1355,28 @@ export default function DiscussionsScreen() {
             {marketLoading && posts.length === 0 ? (
               <SkeletonList count={5} />
             ) : filteredPosts.length === 0 ? (
-              <View style={styles.empty}>
-                <Text variant="body" color="secondary" style={{ textAlign: 'center' }}>
-                  {marketOffline && posts.length === 0
-                    ? 'Données non disponibles hors ligne'
-                    : selectedCat === 'tout'
-                    ? 'Le Marché est calme pour l\'instant.\nSoyez le premier à publier.'
-                    : 'Aucun post dans cette catégorie.'}
-                </Text>
-              </View>
+              marketOffline && posts.length === 0 ? (
+                <View style={styles.empty}>
+                  <Text variant="body" color="secondary" style={{ textAlign: 'center' }}>
+                    Données non disponibles hors ligne
+                  </Text>
+                </View>
+              ) : selectedCat === 'tout' ? (
+                <EmptyState
+                  icon="chatbubbles-outline"
+                  title="Le Marché est calme pour le moment."
+                  subtitle="Les discussions du marché apparaîtront ici."
+                />
+              ) : (
+                // A filtered category with no posts is a narrower state than
+                // "the whole forum is empty" — never conflate the two, or a
+                // real post elsewhere in the forum reads as if it vanished.
+                <View style={styles.empty}>
+                  <Text variant="body" color="secondary" style={{ textAlign: 'center' }}>
+                    Aucun post dans cette catégorie.
+                  </Text>
+                </View>
+              )
             ) : (
               <FlatList<MarketPost>
                 data={filteredPosts}
@@ -1543,6 +1516,74 @@ export default function DiscussionsScreen() {
                   {addPartnerLoading ? 'Envoi…' : 'Envoyer la demande'}
                 </Text>
               </Pressable>
+            </View>
+      </FormSheet>
+
+      {/* ── Share my code modal — reached from the Amis empty state's
+          "+ Inviter" button. Kept as its own sheet (not inlined back into
+          the empty state) so the resting view matches every other screen's
+          icon/title/subtitle/button shape, without losing the only place in
+          the app a business can see/share its own partnership code. ── */}
+      <FormSheet
+        visible={showShareCode}
+        onClose={() => setShowShareCode(false)}
+        title="Mon code"
+        cancelLabel="Fermer"
+      >
+            <View style={styles.modalContent}>
+              <View style={styles.amisInviteState}>
+                <Text style={[styles.amisCodeLabel, { color: palette.textSecondary }]}>Mon code</Text>
+                <View style={{ width: screenWidth - spacing[5] * 4 }}>
+                  <Text
+                    style={[styles.amisCodeValue, { color: palette.textPrimary }]}
+                    adjustsFontSizeToFit
+                    minimumFontScale={0.4}
+                    numberOfLines={1}
+                  >
+                    {inviteCodeLoading ? '…' : (inviteCode?.code ? inviteCode.code.toUpperCase().split('').join(' ') : '…')}
+                  </Text>
+                  <Pressable
+                    onPress={handleCopyMyCode}
+                    disabled={!inviteCode?.code || inviteCodeLoading}
+                    hitSlop={10}
+                    style={({ pressed }) => [
+                      styles.amisCopyBtn,
+                      (!inviteCode?.code || inviteCodeLoading) && { opacity: 0.3 },
+                      pressed && { opacity: 0.6 },
+                    ]}
+                    accessibilityLabel="Copier le code"
+                    accessibilityRole="button"
+                  >
+                    <Ionicons name="copy-outline" size={18} color={palette.textSecondary} />
+                  </Pressable>
+                </View>
+                <Text style={[styles.amisCodeMeta, { color: palette.textSecondary }]}>
+                  24h · usage unique
+                </Text>
+
+                <Pressable
+                  onPress={handleShareMyCode}
+                  disabled={!inviteCode?.code || inviteCodeLoading}
+                  style={({ pressed }) => [
+                    styles.amisShareBtn,
+                    (!inviteCode?.code || inviteCodeLoading) && { opacity: 0.4 },
+                    pressed && { opacity: 0.7 },
+                  ]}
+                >
+                  <Ionicons name="logo-whatsapp" size={18} color={palette.textInverse} />
+                  <Text style={{ color: palette.textInverse, fontWeight: '600', fontSize: 16 }}>Partager</Text>
+                </Pressable>
+
+                <Pressable
+                  onPress={() => regenerateInviteCode(businessId)}
+                  disabled={inviteCodeLoading}
+                  hitSlop={12}
+                >
+                  <Text style={[styles.amisRenewLink, { color: palette.textSecondary }]}>
+                    Renouveler le code
+                  </Text>
+                </Pressable>
+              </View>
             </View>
       </FormSheet>
 

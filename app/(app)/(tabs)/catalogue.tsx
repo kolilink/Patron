@@ -223,6 +223,10 @@ interface ProductFormProps {
   businessId: string;
   userId: string;
   initialVariants?: ProductVariant[];
+  /** Seeds a fresh (non-editing) form's name field — the "no search match"
+   *  dead-end flip: "+ Nouveau produit « X »" opens straight to a form with
+   *  the searched name already typed, instead of a blank one. */
+  initialName?: string;
 }
 
 function generateLocalKey() {
@@ -332,7 +336,7 @@ function VariantRow({ variant, currency, fallbackPrice, onChange, onRemove }: Va
         placeholderTextColor={palette.textDisabled}
         inputAccessoryViewID={Platform.OS === 'ios' ? SILENT_ACCESSORY_ID : undefined}
       />
-      <Pressable onPress={onRemove} hitSlop={10} style={{ width: VARIANT_REMOVE_WIDTH, alignItems: 'flex-end' }}>
+      <Pressable onPress={onRemove} hitSlop={10} style={{ width: VARIANT_REMOVE_WIDTH, alignItems: 'flex-end' }} accessibilityLabel="Retirer cette variante" accessibilityRole="button">
         <Ionicons name="close-circle" size={20} color={palette.textDisabled} />
       </Pressable>
     </View>
@@ -356,7 +360,7 @@ function makeVariantItem(form: FormState, currency: string, overrides?: Partial<
   };
 }
 
-function ProductFormModal({ visible, editing, onClose, onSave, saving, currency, fournisseurs, businessId, userId, initialVariants }: ProductFormProps) {
+function ProductFormModal({ visible, editing, onClose, onSave, saving, currency, fournisseurs, businessId, userId, initialVariants, initialName }: ProductFormProps) {
   const { palette } = useTheme();
   const styles = useMemo(() => makeStyles(palette), [palette]);
   const [form, setForm] = useState<FormState>(EMPTY_FORM);
@@ -375,7 +379,7 @@ function ProductFormModal({ visible, editing, onClose, onSave, saving, currency,
 
   useEffect(() => {
     if (visible) {
-      const f = editing ? productToForm(editing, currency) : EMPTY_FORM;
+      const f = editing ? productToForm(editing, currency) : { ...EMPTY_FORM, name: initialName ?? '' };
       setForm(f);
       setFormError(null);
       setShowDetails(false);
@@ -412,7 +416,7 @@ function ProductFormModal({ visible, editing, onClose, onSave, saving, currency,
         if (raf2Ref.current !== null) cancelAnimationFrame(raf2Ref.current);
       };
     }
-  }, [visible, editing, initialVariants]);
+  }, [visible, editing, initialVariants, initialName]);
 
   const setField = (key: keyof FormState) => (val: string) =>
     setForm(prev => ({ ...prev, [key]: val }));
@@ -1309,9 +1313,13 @@ export default function CatalogueScreen() {
   // the first render) — an effect-driven open meant the bare catalogue
   // screen was visible for a frame before the form slid up on top of it,
   // reading as "arrive, then it opens" instead of one direct motion.
-  const { openForm } = useLocalSearchParams<{ openForm?: string }>();
+  const { openForm, prefillName } = useLocalSearchParams<{ openForm?: string; prefillName?: string }>();
   const [showForm, setShowForm] = useState(openForm === '1');
   const [editingProduct, setEditingProduct] = useState<Product | null>(null);
+  // Set only by the "no search match" create-shortcut below; cleared on every
+  // other way of opening the form so a stale searched name never leaks into
+  // an unrelated "Ajouter un produit" tap.
+  const [prefillProductName, setPrefillProductName] = useState<string | undefined>(undefined);
 
   // Catalogue is a tab screen and stays mounted after the first visit, so
   // the useState initializer above only ever fires the very first time —
@@ -1321,10 +1329,11 @@ export default function CatalogueScreen() {
   useEffect(() => {
     if (openForm === '1') {
       setEditingProduct(null);
+      setPrefillProductName(prefillName ?? undefined);
       setShowForm(true);
-      router.setParams({ openForm: undefined });
+      router.setParams({ openForm: undefined, prefillName: undefined });
     }
-  }, [openForm]);
+  }, [openForm, prefillName]);
 
   // The activation fork (app/(app)/_layout.tsx) is evaluated globally so it
   // can show on top of any screen — but this form is itself a real Modal
@@ -1652,31 +1661,19 @@ export default function CatalogueScreen() {
         <SkeletonList count={8} />
       ) : tab === 'actifs' && products.length === 0 ? (
         !offline && canEdit ? (
-          showActivationEmptyState ? (
-            // 24h onboarding window closed with the catalogue still
-            // completely empty and the activation fork no longer showing —
-            // this is now the merchant's only path to their first product,
-            // so it carries its own button instead of relying on the
-            // bottom FAB (suppressed for this state, see fabContainer below).
-            <EmptyState
-              icon="cube-outline"
-              title="Aucun produit pour le moment."
-              subtitle="Ajoutez ce que vous vendez pour aller plus vite à la caisse."
-              actionLabel="+ Ajouter un produit"
-              onAction={() => { setEditingProduct(null); setShowForm(true); }}
-            />
-          ) : (
-            // Still inside the 24h window: the activation fork
-            // (app/(app)/_layout.tsx) is what actually guides a brand-new
-            // merchant to their first product, and the bottom FAB (still
-            // rendered for this state) is the real action — so this is
-            // context only, no second button to compete with either.
-            <EmptyState
-              icon="cube-outline"
-              title="Aucun produit pour le moment."
-              subtitle="Ajoutez ce que vous vendez pour aller plus vite à la caisse."
-            />
-          )
+          // One consistent empty state regardless of the 24h activation-fork
+          // window — the fork is a modal that overlays whatever's behind it
+          // when it shows, so there's no real conflict with also having a
+          // real inline action here. The floating FAB stays hidden while the
+          // list is empty (see fabContainer below) so it can never collide
+          // with this block's own button.
+          <EmptyState
+            icon="cube-outline"
+            title="Aucun produit pour le moment."
+            subtitle="Ajoutez ce que vous vendez pour aller plus vite à la caisse."
+            actionLabel="+ Ajouter un produit"
+            onAction={() => { setEditingProduct(null); setPrefillProductName(undefined); setShowForm(true); }}
+          />
         ) : (
           <View style={styles.emptyState}>
             <Ionicons name={offline ? 'cloud-offline-outline' : 'cube-outline'} size={72} color={palette.textDisabled} />
@@ -1738,7 +1735,17 @@ export default function CatalogueScreen() {
               <RefreshControl refreshing={refreshing} onRefresh={onRefresh} tintColor={palette.primary} colors={[palette.primary]} />
             }
             ListEmptyComponent={
-              search.trim() ? <NoResultsState query={search} /> : null
+              search.trim() ? (
+                <NoResultsState
+                  query={search}
+                  createLabel={`+ Nouveau produit « ${search.trim()} »`}
+                  onCreate={() => {
+                    setEditingProduct(null);
+                    setPrefillProductName(search.trim());
+                    setShowForm(true);
+                  }}
+                />
+              ) : null
             }
           />
         </View>
@@ -1763,7 +1770,7 @@ export default function CatalogueScreen() {
                 {outOfStockActive.length} produit{outOfStockActive.length !== 1 ? 's' : ''} à réapprovisionner
               </Text>
             </View>
-            <Pressable onPress={() => setShowOutOfStockModal(false)} style={{ padding: spacing[2] }}>
+            <Pressable onPress={() => setShowOutOfStockModal(false)} style={{ padding: spacing[2] }} accessibilityLabel="Fermer" accessibilityRole="button">
               <Ionicons name="close" size={22} color={palette.textSecondary} />
             </Pressable>
           </View>
@@ -1819,7 +1826,7 @@ export default function CatalogueScreen() {
       <ProductFormModal
         visible={showForm}
         editing={editingProduct}
-        onClose={() => { setShowForm(false); setEditingProduct(null); }}
+        onClose={() => { setShowForm(false); setEditingProduct(null); setPrefillProductName(undefined); }}
         onSave={handleSave}
         saving={saving}
         currency={currency}
@@ -1827,6 +1834,7 @@ export default function CatalogueScreen() {
         businessId={businessId}
         userId={userId}
         initialVariants={initialVariants}
+        initialName={prefillProductName}
       />
 
       {/* Stock Adjust Modal */}
@@ -1849,16 +1857,16 @@ export default function CatalogueScreen() {
         fetchStats={fetchProductStats}
       />
 
-      {canEdit && tab === 'actifs' && !showActivationEmptyState && (
+      {canEdit && tab === 'actifs' && products.length > 0 && (
         <Animated.View style={[styles.fabContainer, { opacity: fabOpacity, transform: [{ scale: fabScale }] }]}>
           <Pressable
-            onPress={() => { setEditingProduct(null); setShowForm(true); }}
+            onPress={() => { setEditingProduct(null); setPrefillProductName(undefined); setShowForm(true); }}
             style={({ pressed }) => [styles.fabExtended, pressed && { opacity: 0.82 }]}
             accessibilityLabel="Ajouter un produit"
             accessibilityRole="button"
           >
             <Ionicons name="add" size={20} color={palette.textInverse} />
-            <Text style={styles.fabExtendedLabel}>Ajouter un produit</Text>
+            <Text style={styles.fabExtendedLabel}>Produit</Text>
           </Pressable>
         </Animated.View>
       )}

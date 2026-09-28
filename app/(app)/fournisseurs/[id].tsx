@@ -261,7 +261,9 @@ export default function FournisseurProfile() {
             { text: 'Supprimer', style: 'destructive', onPress: handleDelete },
             { text: 'Annuler', style: 'cancel' },
           ])}
-          style={styles.headerBtn}>
+          style={styles.headerBtn}
+          accessibilityLabel="Plus d'options"
+          accessibilityRole="button">
           <Ionicons name="ellipsis-horizontal" size={22} color={palette.textSecondary} />
         </Pressable>
       </View>

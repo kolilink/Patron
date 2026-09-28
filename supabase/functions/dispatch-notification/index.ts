@@ -45,6 +45,10 @@ const ROUTE_MAP: Record<string, string> = {
   // Same routing as daily_digest — a revenue figure, so Rapports is where
   // the fuller picture behind the number lives.
   revenue_milestone: '/(app)/rapports',
+  // Fallback only — debt_aging_reminder always supplies its own per-client
+  // route via payload.route (see the override just below), since which
+  // client's carnet to open can't be known from the event type alone.
+  debt_aging_reminder: '/(app)/clients',
 };
 
 // ─── Three-line format ───────────────────────────────────────────────────────
@@ -77,6 +81,7 @@ const SUBTITLE_MAP: Record<string, string | null> = {
   activation_nudge_2:    null, // body is a self-explanatory full sentence — no subtitle needed
   second_action_reminder: null, // body is a self-explanatory full sentence — no subtitle needed
   revenue_milestone: null, // body is a self-explanatory full sentence — no subtitle needed
+  debt_aging_reminder: null, // body already opens with "Rappel :" — no subtitle needed
 };
 
 function buildBody(eventType: string, p: Record<string, string | number>): string {
@@ -227,6 +232,12 @@ function buildBody(eventType: string, p: Record<string, string | number>): strin
     // stating a fact about them.
     case 'revenue_milestone':
       return `🎉 Félicitations. Vous avez franchi ${p.amount} de ventes — soyez fier de vous, patron, vous le méritez`;
+    // The v1 reminder earned by the "Ne ratez aucun paiement" permission
+    // sheet — p.amount already carries its own currency (see
+    // send-debt-reminders' formatAmount), so there's no separate {devise}
+    // token here, matching every other amount-bearing case in this switch.
+    case 'debt_aging_reminder':
+      return `Rappel : ${p.name} vous doit ${p.amount} depuis ${p.days} jours.`;
     default:
       return String(p.body ?? '');
   }
@@ -290,7 +301,7 @@ const FOUNDER_EVENTS = new Set(['support_reply']);
 // Events dispatched by a background job, not a logged-in user — there is no
 // session to hold a Bearer JWT, so these authenticate via a shared secret
 // instead (see send-alpha-quota-reminders and send-daily-digest).
-const CRON_EVENTS = new Set(['alpha_quota_reset', 'daily_digest', 'activation_nudge_1', 'activation_nudge_2', 'second_action_reminder', 'revenue_milestone']);
+const CRON_EVENTS = new Set(['alpha_quota_reset', 'daily_digest', 'activation_nudge_1', 'activation_nudge_2', 'second_action_reminder', 'revenue_milestone', 'debt_aging_reminder']);
 
 async function callerIsFounder(supabase: ReturnType<typeof createClient>, userId: string): Promise<boolean> {
   const { data: profile } = await supabase.from('profiles').select('phone').eq('id', userId).maybeSingle();
@@ -532,7 +543,11 @@ serve(async (req) => {
     // Build notification fields
     const body            = buildBody(event_type, payload as Record<string, string | number>);
     const subtitle        = SUBTITLE_MAP[event_type] ?? null;
-    const route           = ROUTE_MAP[event_type] ?? '/(app)';
+    // payload.route lets a caller override the static per-event-type route —
+    // needed for debt_aging_reminder, whose deep link is per-client and can't
+    // be known from event_type alone. Every other event's payload has never
+    // set this key, so this is purely additive for them.
+    const route           = (payload.route as string | undefined) ?? ROUTE_MAP[event_type] ?? '/(app)';
     const isUrgent        = URGENT_EVENTS.has(event_type);
     const isTimeSensitive = TIME_SENSITIVE_EVENTS.has(event_type);
     const soundFile       = isUrgent ? 'patron_urgent.wav' : 'patron_default.wav';

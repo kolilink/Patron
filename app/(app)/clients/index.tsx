@@ -243,7 +243,14 @@ export default function ClientsScreen() {
         </View>
       ) : displayedClients.length === 0 ? (
         search.trim() ? (
-          <NoResultsState query={search} />
+          <NoResultsState
+            query={search}
+            createLabel={isInvestisseur ? undefined : `+ Nouveau client « ${search.trim()} »`}
+            onCreate={isInvestisseur ? undefined : () => router.push({
+              pathname: '/(app)/(tabs)/vendre',
+              params: { mode: 'credit', newClientName: search.trim() },
+            })}
+          />
         ) : filter === 'doivent' ? (
           // Neutral here, deliberately — the header above already carries
           // the one "Tout est réglé ✓" green moment for this exact state;
@@ -324,6 +331,26 @@ export default function ClientsScreen() {
           ItemSeparatorComponent={() => <View style={{ height: 1, backgroundColor: palette.border }} />}
         />
       )}
+
+      {/* A real client isn't created here directly (see the empty state's own
+          copy — "Chaque vente crée un client"), so this FAB is a shortcut
+          into the one place that does create one: Vendre's credit flow,
+          fresh (no prefilled name), for whoever's already looking at this
+          list and wants to log a new debtor without leaving it. Hidden
+          while the list is empty, same as every other screen's FAB. */}
+      {allClients.length > 0 && !isInvestisseur && (
+        <View style={styles.fabContainer}>
+          <Pressable
+            onPress={() => router.push({ pathname: '/(app)/(tabs)/vendre', params: { mode: 'credit' } })}
+            style={({ pressed }) => [styles.fabExtended, pressed && { opacity: 0.82 }]}
+            accessibilityLabel="Nouveau client"
+            accessibilityRole="button"
+          >
+            <Ionicons name="add" size={20} color={palette.textInverse} />
+            <Text style={styles.fabExtendedLabel}>Client</Text>
+          </Pressable>
+        </View>
+      )}
     </Screen>
   );
 }
@@ -370,5 +397,13 @@ function makeStyles(p: Palette) {
       backgroundColor: p.primary + '12',
     },
     waBtnText: { color: p.primary, fontSize: 11 },
+    fabContainer: { position: 'absolute', bottom: 24, right: spacing[4], zIndex: 10 },
+    fabExtended: {
+      flexDirection: 'row', alignItems: 'center', gap: spacing[2],
+      height: 56, paddingHorizontal: spacing[5], borderRadius: radius.full,
+      backgroundColor: p.primary,
+      shadowColor: p.textPrimary, shadowOffset: { width: 0, height: 4 }, shadowOpacity: 0.18, shadowRadius: 8, elevation: 8,
+    },
+    fabExtendedLabel: { fontFamily: fontFamily.semibold, fontSize: 15, color: p.textInverse },
   });
 }

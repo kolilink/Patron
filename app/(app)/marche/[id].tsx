@@ -91,7 +91,7 @@ function PostHeaderBlock({
           </Text>
         </View>
         {isOwnPost && (
-          <Pressable onPress={onEdit} hitSlop={8} style={styles.editPostBtn}>
+          <Pressable onPress={onEdit} hitSlop={8} style={styles.editPostBtn} accessibilityLabel="Plus d'options" accessibilityRole="button">
             <Ionicons name="ellipsis-horizontal" size={20} color={palette.textSecondary} />
           </Pressable>
         )}
@@ -252,6 +252,7 @@ function CommentItem({
           {!isReply && canReply && onReply && (
             <Pressable onPress={onReply} hitSlop={8} style={styles.commentActionBtn}>
               <Ionicons name="arrow-undo-outline" size={14} color={palette.textSecondary} />
+              <Text style={styles.commentActionText}>Répondre</Text>
             </Pressable>
           )}
         </View>

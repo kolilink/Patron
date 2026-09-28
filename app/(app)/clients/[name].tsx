@@ -622,7 +622,7 @@ export default function ClientLedgerScreen() {
         <Pressable onPress={() => router.back()}><Text variant="body" color="secondary">‹ Retour</Text></Pressable>
         <Text variant="h4" style={{ flex: 1, textAlign: 'center' }} numberOfLines={1}>{displayName}</Text>
         {canEdit ? (
-          <Pressable onPress={openMenu} style={{ width: 60, alignItems: 'flex-end' }}>
+          <Pressable onPress={openMenu} style={{ width: 60, alignItems: 'flex-end' }} accessibilityLabel="Plus d'options" accessibilityRole="button">
             <Text variant="body" color="secondary">⋯</Text>
           </Pressable>
         ) : (
@@ -686,7 +686,7 @@ export default function ClientLedgerScreen() {
           onPress={() => setShowNewCreditSheet(true)}
           style={({ pressed }) => [styles.newCreditBtn, { borderColor: palette.primary }, pressed && { opacity: 0.7 }]}
         >
-          <Text variant="label" style={{ color: palette.primary }}>+ Nouveau crédit</Text>
+          <Text variant="label" style={{ color: palette.primary }}>+ Crédit</Text>
         </Pressable>
 
         {/* Secondary contact row — Rappeler sur WhatsApp + Appeler. Only the

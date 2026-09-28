@@ -33,6 +33,14 @@ import type { Role } from '@/src/types';
 // redirect. Single tunable constant, per the lock-screen redesign brief.
 const BACKGROUND_MS = 2 * 60_000;
 
+// PaymentReminderAsker's "fresh session" trigger — a return from background
+// this long counts as a new session moment, same as a real cold start.
+// Deliberately its own constant, not derived from BACKGROUND_MS: the lock
+// threshold and this one answer different questions (is the session secure
+// vs. is this a good moment to ask something) and have no reason to move
+// together just because they're both measured off the same backgroundAt ref.
+const FRESH_SESSION_BACKGROUND_MS = 10 * 60_000;
+
 // debounceAppStateHandler() (guards against Android's rapid AppState
 // flapping — see its own doc comment in lib/sync.ts) now lives there
 // instead of here, so it's importable in isolation for unit tests.
@@ -437,6 +445,15 @@ export default function AppLayout() {
       if (nextState === 'active') {
         const bgStart = backgroundAt.current;
         backgroundAt.current = null;
+
+        // Bumped before the lock check below, deliberately — a background
+        // stretch long enough to qualify here is also long enough to lock,
+        // and the asker should still get credit for "fresh session" once the
+        // user unlocks and actually reaches Accueil, not lose the signal
+        // just because this same tick also redirects to verrouille first.
+        if (bgStart !== null && Date.now() - bgStart >= FRESH_SESSION_BACKGROUND_MS) {
+          useAuthStore.setState(s => ({ freshSessionToken: s.freshSessionToken + 1 }));
+        }
 
         if (bgStart !== null && Date.now() - bgStart >= BACKGROUND_MS) {
           void useAuthStore.getState().lock();

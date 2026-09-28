@@ -126,11 +126,11 @@ export function VenteRapideCapture({ businessId, userId, currency, onAdded }: Ve
       <View style={styles.field}>
         <Text variant="label" color="secondary">Quantité</Text>
         <View style={styles.stepper}>
-          <Pressable onPress={() => { setQty(q => Math.max(1, q - 1)); cancelConfirm(); }} hitSlop={14} style={[styles.stepperBtn, { backgroundColor: palette.surface }]}>
+          <Pressable onPress={() => { setQty(q => Math.max(1, q - 1)); cancelConfirm(); }} hitSlop={14} style={[styles.stepperBtn, { backgroundColor: palette.surface }]} accessibilityLabel="Diminuer la quantité" accessibilityRole="button">
             <Ionicons name="remove" size={20} color={palette.textPrimary} />
           </Pressable>
           <Text variant="h3" style={styles.stepperValue}>{qty}</Text>
-          <Pressable onPress={() => { setQty(q => q + 1); cancelConfirm(); }} hitSlop={14} style={[styles.stepperBtn, { backgroundColor: palette.surface }]}>
+          <Pressable onPress={() => { setQty(q => q + 1); cancelConfirm(); }} hitSlop={14} style={[styles.stepperBtn, { backgroundColor: palette.surface }]} accessibilityLabel="Augmenter la quantité" accessibilityRole="button">
             <Ionicons name="add" size={20} color={palette.textPrimary} />
           </Pressable>
         </View>

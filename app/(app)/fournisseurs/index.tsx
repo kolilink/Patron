@@ -716,11 +716,12 @@ export default function FournisseursScreen() {
         <Animated.View style={[styles.fabContainer, { opacity: fabOpacity, transform: [{ scale: fabScale }] }]}>
           <Pressable
             onPress={() => router.push('/(app)/fournisseurs/reception')}
-            style={({ pressed }) => [styles.fab, pressed && { opacity: 0.82 }]}
+            style={({ pressed }) => [styles.fabExtended, pressed && { opacity: 0.82 }]}
             accessibilityLabel="Nouvelle livraison"
             accessibilityRole="button"
           >
-            <Text style={styles.fabIcon}>+</Text>
+            <Ionicons name="add" size={20} color={palette.textInverse} />
+            <Text style={styles.fabExtendedLabel}>Livraison</Text>
           </Pressable>
         </Animated.View>
       )}
@@ -795,14 +796,16 @@ function makeStyles(p: Palette) {
       paddingHorizontal: spacing[3], paddingVertical: spacing[3],
       borderBottomWidth: StyleSheet.hairlineWidth, borderBottomColor: p.border,
     },
-    // FAB — main screen
+    // FAB — main screen. Extended (icon + label), never a bare "+": an
+    // icon-only action button can't be recognized by name, only by shape.
     fabContainer: { position: 'absolute', bottom: 194, right: spacing[4], zIndex: 10 },
-    fab: {
-      width: 56, height: 56, borderRadius: radius.full, backgroundColor: p.primary,
-      alignItems: 'center', justifyContent: 'center',
+    fabExtended: {
+      flexDirection: 'row', alignItems: 'center', gap: spacing[2],
+      height: 56, paddingHorizontal: spacing[5], borderRadius: radius.full,
+      backgroundColor: p.primary,
       shadowColor: p.shadow, shadowOffset: { width: 0, height: 4 }, shadowOpacity: 0.18, shadowRadius: 8, elevation: 8,
     },
-    fabIcon: { fontSize: 28, lineHeight: 32, color: p.textInverse, marginTop: -2 },
+    fabExtendedLabel: { fontFamily: fontFamily.semibold, fontSize: 15, color: p.textInverse },
 
     // Circular pulsing badge — inside the form product row
     addBadge: { width: 44, height: 44, borderRadius: 22, backgroundColor: p.primaryLight, justifyContent: 'center', alignItems: 'center' },

@@ -211,7 +211,7 @@ export function BusinessDrawer() {
           {/* Header */}
           <View style={styles.header}>
             <Text style={styles.headerTitle}>Mes commerces</Text>
-            <Pressable onPress={closeBusinessDrawer} hitSlop={12}>
+            <Pressable onPress={closeBusinessDrawer} hitSlop={12} accessibilityLabel="Fermer" accessibilityRole="button">
               <Ionicons name="close-outline" size={22} color={palette.textSecondary} />
             </Pressable>
           </View>

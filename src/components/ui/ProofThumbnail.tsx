@@ -38,7 +38,7 @@ export function ProofThumbnail({
       <Modal visible={open} transparent animationType="fade" onRequestClose={() => setOpen(false)} statusBarTranslucent navigationBarTranslucent>
         <Pressable style={styles.backdrop} onPress={() => setOpen(false)}>
           <Image source={{ uri: url }} style={styles.full} contentFit="contain" />
-          <Pressable style={[styles.close, { top: closeTop }]} onPress={() => setOpen(false)} hitSlop={12}>
+          <Pressable style={[styles.close, { top: closeTop }]} onPress={() => setOpen(false)} hitSlop={12} accessibilityLabel="Fermer" accessibilityRole="button">
             <Ionicons name="close" size={26} color={colors.neutral[0]} />
           </Pressable>
         </Pressable>

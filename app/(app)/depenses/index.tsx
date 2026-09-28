@@ -513,6 +513,8 @@ export default function DepensesScreen() {
           icon="wallet-outline"
           title="Aucune dépense pour le moment."
           subtitle="Notez l'argent qui sort de votre commerce."
+          actionLabel="+ Ajouter une dépense"
+          onAction={handleAdd}
         />
       ) : (
         <ScrollView contentContainerStyle={styles.list} showsVerticalScrollIndicator={false}>
@@ -575,16 +577,19 @@ export default function DepensesScreen() {
         offline={offline}
       />
 
-      <Animated.View style={[styles.fabContainer, { opacity: fabOpacity, transform: [{ scale: fabScale }] }]}>
-        <Pressable
-          onPress={handleAdd}
-          style={({ pressed }) => [styles.fab, pressed && { opacity: 0.82 }]}
-          accessibilityLabel="Ajouter une dépense"
-          accessibilityRole="button"
-        >
-          <Text style={styles.fabIcon}>+</Text>
-        </Pressable>
-      </Animated.View>
+      {!isEmpty && (
+        <Animated.View style={[styles.fabContainer, { opacity: fabOpacity, transform: [{ scale: fabScale }] }]}>
+          <Pressable
+            onPress={handleAdd}
+            style={({ pressed }) => [styles.fabExtended, pressed && { opacity: 0.82 }]}
+            accessibilityLabel="Ajouter une dépense"
+            accessibilityRole="button"
+          >
+            <Ionicons name="add" size={20} color={palette.textInverse} />
+            <Text style={styles.fabExtendedLabel}>Dépense</Text>
+          </Pressable>
+        </Animated.View>
+      )}
     </Screen>
   );
 }
@@ -667,15 +672,17 @@ function makeStyles(p: Palette) {
   },
   datePillActive: { backgroundColor: p.primary, borderColor: p.primary },
 
-  // FAB
+  // FAB — extended (icon + label), never a bare "+": an icon-only action
+  // button can't be recognized by name, only by shape.
   fabContainer: { position: 'absolute', bottom: 194, right: spacing[4], zIndex: 10 },
-  fab: {
-    width: 56, height: 56, borderRadius: radius.full,
-    backgroundColor: p.primary, alignItems: 'center', justifyContent: 'center',
+  fabExtended: {
+    flexDirection: 'row', alignItems: 'center', gap: spacing[2],
+    height: 56, paddingHorizontal: spacing[5], borderRadius: radius.full,
+    backgroundColor: p.primary,
     shadowColor: p.textPrimary, shadowOffset: { width: 0, height: 4 },
     shadowOpacity: 0.18, shadowRadius: 8, elevation: 8,
   },
-  fabIcon: { fontSize: 28, lineHeight: 32, fontWeight: '300' as const, color: p.textInverse, marginTop: -2 },
+  fabExtendedLabel: { fontSize: 15, fontWeight: '600' as const, color: p.textInverse },
 
   // Form modal
   modalSafe: { flex: 1, backgroundColor: p.background },
