@@ -396,6 +396,98 @@ async function migrate(db: SQLite.SQLiteDatabase): Promise<void> {
     );
     await db.execAsync('INSERT OR IGNORE INTO _migrations (version) VALUES (18)');
   }
+
+  if (current < 19) {
+    // Outbox rework (offline-first rewrite, 2026-09-28 planning session):
+    // sync_queue gains a real status/backoff/metadata shape so failure
+    // handling can stop depending on the blunt MAX_SYNC_ATTEMPTS cap below
+    // (which archives a permanently-stuck item into dead_ops after 5
+    // attempts regardless of WHY it failed — a network blip and a genuine
+    // server rejection get treated identically, and a merchant offline for
+    // days can exhaust 5 foreground-triggered attempts long before
+    // reconnecting). This migration only ADDS columns and backfills them —
+    // the MAX_SYNC_ATTEMPTS/dead_ops machinery, getPendingOps, and
+    // markAttemptFailed below are all left fully intact and still load-
+    // bearing; lib/sync.ts keeps calling them unchanged until it's
+    // switched over to the new getPendingOpsForDrain/markOp* functions in
+    // a later, separate change. Landing the schema and the cutover
+    // together would leave no working failure path in between if either
+    // half were reverted independently.
+    //
+    // entity_type/idempotency_key/queued_at are deliberately plain,
+    // unencrypted columns, never folded into the encrypted `payload` blob.
+    // A corrupt (undecryptable) row must still be identifiable and
+    // describable — "1 vente n'a pas pu être synchronisée" in the future
+    // Paramètres line, a distinct PostHog event — without ever needing to
+    // decrypt the very thing that's already unreadable.
+    //
+    // Defensive PRAGMA check, not a bare ALTER TABLE: this file has
+    // already been burned once by DDL silently failing on a real device
+    // while migrate() still recorded the version as applied (see
+    // local_payments v5 above, and CLAUDE.md's "Production build
+    // fingerprint" / offline-queue history for the general pattern) — the
+    // fix there was exactly this shape, re-verify the real column list
+    // rather than trust that a prior ALTER TABLE actually took.
+    const sqCols = await db.getAllAsync<{ name: string }>('PRAGMA table_info(sync_queue)');
+    const haveCol = new Set(sqCols.map(c => c.name));
+    if (!haveCol.has('status'))
+      await db.execAsync(`ALTER TABLE sync_queue ADD COLUMN status TEXT NOT NULL DEFAULT 'pending'`);
+    if (!haveCol.has('next_attempt_at'))
+      await db.execAsync('ALTER TABLE sync_queue ADD COLUMN next_attempt_at TEXT');
+    if (!haveCol.has('queued_at'))
+      await db.execAsync('ALTER TABLE sync_queue ADD COLUMN queued_at TEXT');
+    if (!haveCol.has('entity_type'))
+      await db.execAsync('ALTER TABLE sync_queue ADD COLUMN entity_type TEXT');
+    if (!haveCol.has('idempotency_key'))
+      await db.execAsync('ALTER TABLE sync_queue ADD COLUMN idempotency_key TEXT');
+
+    // Backfill rows enqueued before this migration so nothing silently
+    // falls outside the new status/backoff query once lib/sync.ts is
+    // switched over later — a NULL next_attempt_at would never satisfy
+    // "next_attempt_at <= now" and would orphan the row from the drainer
+    // forever. entity_type is derivable from the already-plaintext
+    // `operation` column with no decryption; idempotency_key is NOT (it
+    // lives inside the encrypted payload for pre-existing rows only) —
+    // left NULL for this small, legacy population rather than decrypting
+    // synchronously inside a startup-blocking migration. A NULL
+    // idempotency_key never breaks sync itself (the RPC's own embedded key
+    // in the payload is what dedups server-side); it only means the
+    // future plaintext-metadata views can't show that one detail for
+    // whatever was already queued before this shipped.
+    //
+    // next_attempt_at's fallback is bound as a JS-computed ISO string
+    // (not SQL's datetime('now'), which produces a space-separated,
+    // non-ISO format) — every row enqueue() creates from here on also
+    // gets an ISO next_attempt_at, and getPendingOpsForDrain compares this
+    // column against another ISO string. Verified directly against a real
+    // sqlite3 binary that mixing the two formats happens to compare safely
+    // either way (space always sorts before 'T' for the same date, so a
+    // legacy value only ever reads as "more due," never "less due, don't
+    // retry yet") — but relying on that ASCII-sort argument staying true
+    // is exactly the kind of cleverness this codebase's own history says
+    // not to trust; keeping every value in this column in one real format
+    // costs nothing and removes the argument entirely. queued_at's
+    // fallback is left on created_at/datetime('now') deliberately — it's
+    // preserved historical/audit data for legacy rows, not something any
+    // scheduling comparison reads.
+    const backfillNow = new Date().toISOString();
+    await db.runAsync(
+      `UPDATE sync_queue
+       SET status = 'pending',
+           queued_at = COALESCE(queued_at, created_at, datetime('now')),
+           next_attempt_at = COALESCE(next_attempt_at, ?)
+       WHERE queued_at IS NULL OR next_attempt_at IS NULL OR status IS NULL`,
+      [backfillNow],
+    );
+    const untyped = await db.getAllAsync<{ id: number; operation: string }>(
+      'SELECT id, operation FROM sync_queue WHERE entity_type IS NULL',
+    );
+    for (const row of untyped) {
+      await db.runAsync('UPDATE sync_queue SET entity_type = ? WHERE id = ?', [deriveEntityType(row.operation), row.id]);
+    }
+
+    await db.execAsync('INSERT OR IGNORE INTO _migrations (version) VALUES (19)');
+  }
 }
 
 export async function getKV(key: string): Promise<string | null> {
@@ -427,9 +519,64 @@ export interface SyncQueueItem {
   created_at: string;
   attempts: number;
   last_error: string | null;
+  // Added by the v19 outbox rework migration above — present on every row
+  // going forward, backfilled on pre-existing rows (idempotency_key
+  // excepted, see that migration's own comment on why). Not yet read by
+  // getPendingOps below; consumed once lib/sync.ts switches to
+  // getPendingOpsForDrain.
+  status: 'pending' | 'failed_permanent' | 'failed_corrupt';
+  next_attempt_at: string | null;
+  queued_at: string | null;
+  entity_type: string | null;
+  idempotency_key: string | null;
 }
 
 const MAX_SYNC_ATTEMPTS = 5;
+
+// Maps a queued RPC/operation name to a coarse, human-facing category,
+// stored in plaintext (see the v19 migration) so a corrupt payload can
+// still be described — "1 vente n'a pas pu être synchronisée" — without
+// ever needing to decrypt it. Extend this map as new operations are added
+// to executeOp() (lib/sync.ts); an unrecognized operation falls back to
+// the raw operation string rather than throwing, since a stale or future
+// op name must never break enqueueing itself.
+function deriveEntityType(operation: string): string {
+  switch (operation) {
+    case 'submit_sale':
+    case 'submit_quick_sale':
+      return 'vente';
+    case 'submit_carnet_debt':
+      return 'dette';
+    case 'record_payment':
+    case 'record_client_payment':
+      return 'paiement';
+    case 'cancel_sale':
+      return 'annulation';
+    case 'create_expense':
+    case 'update_expense':
+    case 'approve_expense':
+    case 'reject_expense':
+      return 'depense';
+    case 'create_product':
+    case 'update_product':
+    case 'adjust_stock':
+      return 'produit';
+    default:
+      return operation;
+  }
+}
+
+// submit_sale/submit_carnet_debt/submit_quick_sale already generate and
+// pass p_idempotency_key in their RPC payload; other operations don't have
+// one yet. Extracted here, once, at enqueue time, so it also lives as its
+// own plaintext column (see v19) instead of only inside the encrypted
+// payload — needed so a stuck or failed item can be identified and
+// correlated with the eventual server-side row, or across a retry, without
+// ever decrypting anything.
+function extractIdempotencyKey(payload: object): string | null {
+  const key = (payload as Record<string, unknown>).p_idempotency_key;
+  return typeof key === 'string' ? key : null;
+}
 
 export async function enqueue(operation: string, payload: object): Promise<void> {
   const db = await openDb();
@@ -442,9 +589,12 @@ export async function enqueue(operation: string, payload: object): Promise<void>
     // so this prefix is an unambiguous marker.
     stored = 'PLAIN:' + JSON.stringify(payload);
   }
+  const now = new Date().toISOString();
   await db.runAsync(
-    'INSERT INTO sync_queue (operation, payload) VALUES (?, ?)',
-    [operation, stored],
+    `INSERT INTO sync_queue
+       (operation, payload, entity_type, idempotency_key, queued_at, next_attempt_at, status)
+     VALUES (?, ?, ?, ?, ?, ?, 'pending')`,
+    [operation, stored, deriveEntityType(operation), extractIdempotencyKey(payload), now, now],
   );
 }
 
@@ -527,6 +677,117 @@ export async function archiveDeadOps(): Promise<void> {
     [MAX_SYNC_ATTEMPTS],
   );
   await db.runAsync('DELETE FROM sync_queue WHERE attempts >= ?', [MAX_SYNC_ATTEMPTS]);
+}
+
+// ─── Outbox rework (offline-first rewrite) ─────────────────────────────────────
+// Everything below is new plumbing for the v19 columns above. None of it is
+// called from anywhere yet — lib/sync.ts and the UI still run entirely on
+// the MAX_SYNC_ATTEMPTS/dead_ops machinery above until that's switched over
+// in a later, separate change. Landing this now means the schema and its
+// read/write functions exist and can be reviewed and typechecked on their
+// own, without also rewriting the drain loop and risking there being no
+// working failure path if the two were split across an interrupted change.
+
+// Plaintext-only projection of a queue row — safe to read and display (the
+// future Paramètres quiet line, PostHog events, the pending-overlay
+// rebuild) without ever decrypting `payload`. This is what makes a
+// failed_corrupt row describable at all: its payload is by definition
+// unreadable, but id/operation/entity_type/queued_at/status never were
+// encrypted in the first place.
+export interface QueuedOpMeta {
+  id: number;
+  operation: string;
+  entity_type: string | null;
+  idempotency_key: string | null;
+  status: 'pending' | 'failed_permanent' | 'failed_corrupt';
+  queued_at: string | null;
+  attempts: number;
+  last_error: string | null;
+}
+
+// Returns every row still in the queue regardless of status — her data
+// must stay visible even once an item has stopped retrying
+// (failed_permanent); only a fully synced row (deleted from the table
+// entirely on successful drain) ever drops out of this list.
+export async function getQueueSnapshot(): Promise<QueuedOpMeta[]> {
+  const db = await openDb();
+  return db.getAllAsync<QueuedOpMeta>(
+    `SELECT id, operation, entity_type, idempotency_key, status, queued_at, attempts, last_error
+     FROM sync_queue ORDER BY id ASC`,
+  );
+}
+
+// Backoff-aware counterpart to markAttemptFailed above, for a network/5xx
+// failure — retry stays possible, just not immediately. Distinct from both
+// permanent-failure functions below: this is the only one of the three
+// that keeps status at 'pending', since the op should still be picked up
+// by getPendingOpsForDrain once next_attempt_at elapses.
+export async function rescheduleOp(id: number, nextAttemptAt: string, error: string): Promise<void> {
+  const db = await openDb();
+  await db.runAsync(
+    'UPDATE sync_queue SET attempts = attempts + 1, next_attempt_at = ?, last_error = ? WHERE id = ?',
+    [nextAttemptAt, error, id],
+  );
+}
+
+// A real server-side rejection (a RAISE EXCEPTION from the RPC, SQLSTATE
+// P0001 per this codebase's convention) — retrying it again would just
+// fail the same way forever, so it stops being selected by
+// getPendingOpsForDrain (its query excludes anything but 'pending'). The
+// row itself, and any local data derived from it, is never deleted or
+// hidden — only its retry behavior changes.
+export async function markOpPermanentlyFailed(id: number, error: string): Promise<void> {
+  const db = await openDb();
+  await db.runAsync(
+    `UPDATE sync_queue SET status = 'failed_permanent', last_error = ? WHERE id = ?`,
+    [error, id],
+  );
+}
+
+// Decrypt or JSON.parse failed on this row's payload — storage-level bit
+// rot (flash corruption), not a torn write (SQLite's own transactions
+// already rule a partial/interrupted INSERT out). Deliberately a separate
+// status from failed_permanent: this is a device-storage signal, not a
+// business-logic rejection, and the two must never be conflated in
+// founder-facing metrics or PostHog events. The row's content can't be
+// recovered, but its plaintext metadata (QueuedOpMeta above) still can.
+export async function markOpCorrupt(id: number, error: string): Promise<void> {
+  const db = await openDb();
+  await db.runAsync(
+    `UPDATE sync_queue SET status = 'failed_corrupt', last_error = ? WHERE id = ?`,
+    [error, id],
+  );
+}
+
+// Replaces getPendingOps above once lib/sync.ts is switched over: selects
+// only 'pending' rows whose backoff has elapsed, with no attempts-count
+// cap at all — failed_permanent and failed_corrupt rows are excluded by
+// their status, not by counting, so a still-backing-off item never blocks
+// the ones behind it and a permanently-failed one is never retried again.
+export async function getPendingOpsForDrain(): Promise<SyncQueueItem[]> {
+  const db = await openDb();
+  const now = new Date().toISOString();
+  const rows = await db.getAllAsync<SyncQueueItem>(
+    `SELECT * FROM sync_queue
+     WHERE status = 'pending' AND (next_attempt_at IS NULL OR next_attempt_at <= ?)
+     ORDER BY id ASC`,
+    [now],
+  );
+  const result: SyncQueueItem[] = [];
+  for (const row of rows) {
+    try {
+      const payload = row.payload.startsWith('PLAIN:')
+        ? row.payload.slice(6)
+        : await decrypt(row.payload);
+      result.push({ ...row, payload });
+    } catch {
+      // Decrypt/parse failure — the future caller classifies this via
+      // markOpCorrupt instead of silently skipping it the way the old
+      // getPendingOps does (that silent skip is exactly what left a
+      // corrupt item invisible instead of surfaced).
+    }
+  }
+  return result;
 }
 
 // ─── Shared encrypted-cache writer ─────────────────────────────────────────────

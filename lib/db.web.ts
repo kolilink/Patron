@@ -8,6 +8,13 @@ export async function markAttemptFailed(_id: number, _error: string): Promise<vo
 export async function getQueueCount(): Promise<number> { return 0; }
 export async function getDeadCount(): Promise<number> { return 0; }
 export async function clearDeadOps(): Promise<void> {}
+// Outbox rework additions (lib/db.ts) — not yet called from anywhere real,
+// stubbed here only so a web bundle attempt still compiles.
+export async function getQueueSnapshot(): Promise<never[]> { return []; }
+export async function rescheduleOp(_id: number, _nextAttemptAt: string, _error: string): Promise<void> {}
+export async function markOpPermanentlyFailed(_id: number, _error: string): Promise<void> {}
+export async function markOpCorrupt(_id: number, _error: string): Promise<void> {}
+export async function getPendingOpsForDrain(): Promise<never[]> { return []; }
 export async function saveDashboardKpiCache(_businessId: string, _kpis: unknown): Promise<void> {}
 export async function getDashboardKpiCache(_businessId: string): Promise<null> { return null; }
 export async function saveProductCache(_businessId: string, _products: unknown[]): Promise<void> {}
