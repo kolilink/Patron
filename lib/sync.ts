@@ -436,6 +436,20 @@ export async function drainQueue(): Promise<SyncResult> {
         }
       }
     }
+  } catch (err) {
+    // drainQueue must never throw outward — it's now routinely invoked
+    // fire-and-forget from useSyncStore's kick() (§4), called from every
+    // Phase-1 write path right after a local write enqueues. An unhandled
+    // rejection out of a fire-and-forget call is a real production risk
+    // (this codebase has hit and fixed this exact class of bug more than
+    // once — see CLAUDE.md's investor.ts/submitCarnetDebt history), not
+    // just a test-mocking convenience. Anything reaching this catch is
+    // itself an unexpected failure (getPendingOpsForDrain/deleteQueueItem/
+    // etc. throwing for a reason none of the classification branches
+    // above anticipated) — logged, not silently dropped, and the queue
+    // itself is untouched, so the next drain (foreground, or another kick)
+    // simply tries again from the same state.
+    console.error('[drainQueue] unexpected top-level failure', err);
   } finally {
     _running = false;
   }

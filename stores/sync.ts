@@ -57,7 +57,14 @@ export const useSyncStore = create<SyncStore>((set, get) => ({
   },
 
   kick: () => {
-    void get().sync();
+    // sync() can still reject even with drainQueue's own top-level catch
+    // (lib/sync.ts) — getQueueCount() below it, or trackEvent, could
+    // theoretically throw too. kick() is called fire-and-forget from
+    // every Phase-1 write path right after a LOCAL write already durably
+    // succeeded (§5) — an unhandled rejection here must never surface as
+    // if that write had failed, so it's swallowed at the source rather
+    // than trusting every caller to remember a .catch().
+    get().sync().catch(err => console.error('[useSyncStore.kick] sync() rejected', err));
   },
 
   reset: () => set({ pendingCount: 0, syncing: false, lastResult: null }),

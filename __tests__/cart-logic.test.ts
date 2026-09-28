@@ -14,9 +14,23 @@ jest.mock('@/lib/supabase', () => ({
 }));
 
 jest.mock('@/lib/db', () => ({
-  enqueue: jest.fn(),
+  enqueue: jest.fn().mockResolvedValue(undefined),
   getQueueCount: jest.fn().mockResolvedValue(0),
   openDb: jest.fn(),
+  getProductCache: jest.fn().mockResolvedValue(null),
+  saveProductCache: jest.fn().mockResolvedValue(undefined),
+}));
+
+// This file is about cart state logic, not the offline-first write path
+// (submit-sale.test.ts's job) or the pending-overlay mechanism
+// (pending-overlay.test.ts's job) — both mocked to simple no-ops so the
+// one submitSale test below stays scoped to "was the total computed
+// correctly," not sync/overlay internals.
+jest.mock('@/stores/ventes', () => ({
+  useVentesStore: { getState: () => ({ refreshPendingOverlay: jest.fn().mockResolvedValue(undefined) }) },
+}));
+jest.mock('@/stores/sync', () => ({
+  useSyncStore: { getState: () => ({ kick: jest.fn() }), setState: jest.fn() },
 }));
 
 jest.mock('@/lib/analytics', () => ({ trackEvent: jest.fn() }));
@@ -24,6 +38,7 @@ jest.mock('@/lib/posthog', () => ({ posthog: null }));
 
 import { useSalesStore } from '@/stores/sales';
 import { supabase } from '@/lib/supabase';
+import { enqueue } from '@/lib/db';
 import type { Product } from '@/src/types';
 
 function makeProduct(id: string, price: number, bulkPrice?: number): Product {
@@ -129,9 +144,7 @@ describe('removeFromCart and clearCart', () => {
 });
 
 describe('submitSale — total amount calculation', () => {
-  it('sends the correct total for a multi-item cart to supabase', async () => {
-    (supabase.rpc as jest.Mock).mockResolvedValueOnce({ error: null });
-
+  it('enqueues the correct total for a multi-item cart — never calls supabase.rpc directly (§5, local-write-first)', async () => {
     // p1: 1 × 1000 = 1000
     // p2: added twice → qty 2 × 500 = 1000
     // total = 2000
@@ -141,7 +154,8 @@ describe('submitSale — total amount calculation', () => {
 
     await useSalesStore.getState().submitSale('biz-1', 'user-1', { method: 'especes', amount: 2000 });
 
-    expect(supabase.rpc).toHaveBeenCalledWith('submit_sale', expect.objectContaining({
+    expect(supabase.rpc).not.toHaveBeenCalled();
+    expect(enqueue).toHaveBeenCalledWith('submit_sale', expect.objectContaining({
       p_total_amount: 200000,
     }));
   });

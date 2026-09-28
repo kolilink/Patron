@@ -1,8 +1,5 @@
 import { create } from 'zustand';
-import { supabase } from '@/lib/supabase';
-import { translateError } from '@/lib/errors';
-import { enqueue, getQueueCount, saveProductCache, getProductCache, saveVentesCache, getVentesCache } from '@/lib/db';
-import { isNetworkError, withTimeout } from '@/lib/sync';
+import { enqueue, getQueueCount, saveProductCache, getProductCache } from '@/lib/db';
 import { generateId } from '@/lib/id';
 import { useSyncStore } from '@/stores/sync';
 import { useVentesStore } from '@/stores/ventes';
@@ -11,8 +8,6 @@ import { useProductStore } from '@/stores/products';
 import { trackEvent } from '@/lib/analytics';
 import { haptics } from '@/lib/haptics';
 import { useToastStore } from '@/stores/toast';
-import { notifyEvent, resolveSellerDisplayName } from '@/src/utils/notifications';
-import { formatAmount } from '@/src/utils/format';
 import type { PaymentMethod, Product, ProductVariant } from '@/src/types';
 
 export interface CartLine {
@@ -71,31 +66,6 @@ interface SalesStore {
   ) => Promise<boolean>;
   clearError: () => void;
   reset: () => void;
-}
-
-// Builds the "{qty} {product}" fragment for the sale-completed notification.
-// Groups by base product_id: a single product (even split across variant
-// lines) is named directly; 2+ distinct products fall back to a generic count.
-function describeSaleForNotification(lines: CartLine[]): string {
-  const byProduct = new Map<string, CartLine[]>();
-  for (const l of lines) {
-    const group = byProduct.get(l.product.id);
-    if (group) group.push(l);
-    else byProduct.set(l.product.id, [l]);
-  }
-
-  const totalQty = lines.reduce((s, l) => s + l.qty, 0);
-
-  if (byProduct.size > 1) {
-    return `${totalQty} produits`;
-  }
-
-  const group = byProduct.values().next().value!;
-  const productName = group[0].product.name;
-  if (group.length === 1 && group[0].variant_name) {
-    return `${totalQty} ${productName} ${group[0].variant_name}`;
-  }
-  return `${totalQty} ${productName}`;
 }
 
 export const useSalesStore = create<SalesStore>((set, get) => ({
@@ -215,15 +185,23 @@ export const useSalesStore = create<SalesStore>((set, get) => ({
 
   clearCart: () => set({ cart: [] }),
 
+  // Local-write-first (offline-first rewrite §5): the RPC is never called
+  // from here anymore — only lib/sync.ts's executeOp fires it, on drain.
+  // This function's whole job is: write durably, reflect it, kick the
+  // drainer, return. No network wait of any kind, online or offline —
+  // that's the entire point of the rework (the original 12s-wait finding:
+  // every write used to try a live RPC call first and only fell back to
+  // the queue on failure, so even a marginal-but-not-dead connection made
+  // the UI wait up to withTimeout's 12s before it could even know whether
+  // to show success). enqueue() failing (a genuine local SQLite error, not
+  // a network one) is the only real failure mode left — there's no "try
+  // the network instead" fallback anymore, by design.
   submitCarnetDebt: async (businessId, userId, customerName, amountCents, clientId) => {
-    // Idempotency key generated once and reused across both the live RPC
-    // call and (on a network failure) the offline-queue replay — same
-    // pattern as submitSale, backed by migration_v178.sql's real dedup
-    // guard on submit_carnet_debt. Without this, a bad-connection moment
-    // could either lose the entry entirely (old behavior: hang, fail,
-    // nothing recorded, nothing queued) or — once queued — risk double-
-    // recording a debt that actually succeeded server-side before the
-    // client heard back.
+    // Idempotency key: dedups this exact write server-side (migration_v178)
+    // if the outbox ever replays it more than once (a drain retry racing a
+    // second legitimate attempt, etc.) — the RPC's own unique-index guard
+    // on this key is what makes "exactly one record syncs" true, not
+    // anything client-side.
     const idempotencyKey = generateId();
     const payload = {
       p_business_id:      businessId,
@@ -234,33 +212,34 @@ export const useSalesStore = create<SalesStore>((set, get) => ({
       p_idempotency_key:  idempotencyKey,
     };
     try {
-      const { error } = await withTimeout(supabase.rpc('submit_carnet_debt', payload));
-      if (error) {
-        console.error('[submitCarnetDebt]', error.code, error.message, error.details);
-        useToastStore.getState().show(error.message ?? translateError(error, 'Erreur inconnue'), 'warning');
-        haptics.error();
-        set({ lastCarnetDebtQueued: false });
-        return false;
-      }
-      haptics.heavy();
-      set({ lastCarnetDebtQueued: false });
-      return true;
+      await enqueue('submit_carnet_debt', payload);
     } catch (err) {
-      if (isNetworkError(err)) {
-        await enqueue('submit_carnet_debt', payload);
-        const count = await getQueueCount();
-        useSyncStore.setState({ pendingCount: count });
-        set({ lastCarnetDebtQueued: true });
-        haptics.success();
-        trackEvent('credit_debt_queued', businessId, userId);
-        return true;
-      }
-      console.error('[submitCarnetDebt]', err);
-      useToastStore.getState().show('Vérifiez votre connexion et réessayez.', 'warning');
+      console.error('[submitCarnetDebt] local write failed', err);
+      useToastStore.getState().show("Impossible d'enregistrer sur cet appareil. Réessayez.", 'warning');
       haptics.error();
       set({ lastCarnetDebtQueued: false });
       return false;
     }
+    const count = await getQueueCount();
+    useSyncStore.setState({ pendingCount: count });
+    // Reflects this debt in the carnet/dashboard/ventes list instantly —
+    // rebuilds from the durable outbox, so it survives a kill before the
+    // next line even runs (lib/pendingOverlay.ts). Wrapped: the write
+    // above already durably succeeded, so a failure here (the overlay
+    // rebuild, not the write itself) must never flip this function's
+    // reported outcome to false — that would falsely tell the merchant
+    // her debt wasn't recorded when it actually was. The UI just won't
+    // reflect it until the next natural refresh in that rare case.
+    try {
+      await useVentesStore.getState().refreshPendingOverlay();
+    } catch (err) {
+      console.error('[submitCarnetDebt] refreshPendingOverlay failed (write already succeeded)', err);
+    }
+    useSyncStore.getState().kick();
+    set({ lastCarnetDebtQueued: true });
+    haptics.success();
+    trackEvent('credit_debt_queued', businessId, userId);
+    return true;
   },
 
   submitQuickSale: async (businessId, userId, unitPriceCents, qty, label) => {
@@ -279,35 +258,44 @@ export const useSalesStore = create<SalesStore>((set, get) => ({
       p_idempotency_key:  idempotencyKey,
     };
     try {
-      const { error } = await withTimeout(supabase.rpc('submit_quick_sale', payload));
-      if (error) {
-        console.error('[submitQuickSale]', error.code, error.message, error.details);
-        useToastStore.getState().show(error.message ?? translateError(error, 'Erreur inconnue'), 'warning');
-        haptics.error();
-        set({ lastQuickSaleQueued: false });
-        return false;
-      }
-      haptics.heavy();
-      set({ lastQuickSaleQueued: false });
-      return true;
+      await enqueue('submit_quick_sale', payload);
     } catch (err) {
-      if (isNetworkError(err)) {
-        await enqueue('submit_quick_sale', payload);
-        const count = await getQueueCount();
-        useSyncStore.setState({ pendingCount: count });
-        set({ lastQuickSaleQueued: true });
-        haptics.success();
-        trackEvent('quick_sale_queued', businessId, userId);
-        return true;
-      }
-      console.error('[submitQuickSale]', err);
-      useToastStore.getState().show('Vérifiez votre connexion et réessayez.', 'warning');
+      console.error('[submitQuickSale] local write failed', err);
+      useToastStore.getState().show("Impossible d'enregistrer sur cet appareil. Réessayez.", 'warning');
       haptics.error();
       set({ lastQuickSaleQueued: false });
       return false;
     }
+    const count = await getQueueCount();
+    useSyncStore.setState({ pendingCount: count });
+    try {
+      await useVentesStore.getState().refreshPendingOverlay();
+    } catch (err) {
+      console.error('[submitQuickSale] refreshPendingOverlay failed (write already succeeded)', err);
+    }
+    useSyncStore.getState().kick();
+    set({ lastQuickSaleQueued: true });
+    haptics.success();
+    trackEvent('quick_sale_queued', businessId, userId);
+    return true;
   },
 
+  // Local-write-first, same shape as submitCarnetDebt/submitQuickSale above.
+  // Real, deliberate consequence worth being explicit about: submit_sale's
+  // own server-side rejections (most notably "Stock insuffisant…") can no
+  // longer be discovered synchronously — there is no more live RPC call in
+  // this function at all, only lib/sync.ts's executeOp ever calls it, at
+  // drain time. A genuine oversell attempt now always looks like it
+  // succeeded in the moment (cart clears, confirmation shows) and is only
+  // actually rejected later, quietly, via §3's failed_permanent
+  // classification + the future Paramètres line (§8) — never blocking
+  // capture is the explicit, approved tradeoff (Decision A), and the
+  // approved plan's own FAILURE HANDLING section anticipates exactly this
+  // class of deferred validation failure. vendre.tsx's existing
+  // "Stock insuffisant" refetch-and-trim-cart branch is consequently
+  // unreachable through this path going forward — left in place rather
+  // than removed here (out of this section's stores-only scope), since
+  // dead code that never executes isn't a correctness risk on its own.
   submitSale: async (businessId, userId, payment, customerName, saleDate, discountAmount, clientId, overrideTotalAmount, dueDate) => {
     const { cart } = get();
     if (cart.length === 0) return false;
@@ -316,237 +304,141 @@ export const useSalesStore = create<SalesStore>((set, get) => ({
     const idempotencyKey = generateId();
     set({ submitting: true, error: null });
 
+    const catalogTotal = cartSnapshot.reduce((sum, l) => sum + l.unit_price * l.qty, 0);
+    const totalAmount = overrideTotalAmount ?? catalogTotal;
+    const isFullCredit = payment === null;
+    const discount = discountAmount ?? 0;
+    const isPartialCredit = !isFullCredit && payment!.amount < (totalAmount - discount) - 0.01;
+    const isCredit = isFullCredit || isPartialCredit;
+    const today = new Date().toISOString().split('T')[0];
+
+    // When the merchant sold above catalog price, distribute the override
+    // proportionally across lines so unit_price always holds the real price
+    // charged — there's no separate "catalog vs paid" field any more.
+    const priceRatio = overrideTotalAmount && overrideTotalAmount > catalogTotal + 0.5 && catalogTotal > 0
+      ? overrideTotalAmount / catalogTotal
+      : 1;
+
+    const cartJson = cartSnapshot.map(l => ({
+      product_id:   l.product.id,
+      qty:          l.qty,
+      unit_price:   Math.round(l.unit_price * priceRatio * 100),
+      is_bulk:      l.is_bulk,
+      product_name: l.product.name,
+      variant_id:   l.variant_id ?? null,
+      variant_name: l.variant_name ?? null,
+    }));
+
+    const rpcPayload = {
+      p_business_id:      businessId,
+      p_seller_id:        userId,
+      p_customer_name:    customerName?.trim() || null,
+      p_sale_date:        saleDate || today,
+      p_total_amount:     Math.round(totalAmount * 100),
+      p_discount_amount:  Math.round(discount * 100),
+      p_is_credit:        isCredit,
+      p_cart:             cartJson,
+      p_pay_method:       payment?.method  ?? null,
+      p_pay_amount:       payment?.amount  != null ? Math.round(payment.amount * 100) : null,
+      p_pay_ref:          payment?.ref_external ?? null,
+      p_idempotency_key:  idempotencyKey,
+      p_client_id:        clientId ?? null,
+      ...(dueDate ? { p_due_date: dueDate } : {}),
+    };
+
     try {
-      const catalogTotal = cartSnapshot.reduce((sum, l) => sum + l.unit_price * l.qty, 0);
-      const totalAmount = overrideTotalAmount ?? catalogTotal;
-      const isFullCredit = payment === null;
-      const discount = discountAmount ?? 0;
-      const isPartialCredit = !isFullCredit && payment!.amount < (totalAmount - discount) - 0.01;
-      const isCredit = isFullCredit || isPartialCredit;
-      const today = new Date().toISOString().split('T')[0];
-
-      // When the merchant sold above catalog price, distribute the override
-      // proportionally across lines so unit_price always holds the real price
-      // charged — there's no separate "catalog vs paid" field any more.
-      const priceRatio = overrideTotalAmount && overrideTotalAmount > catalogTotal + 0.5 && catalogTotal > 0
-        ? overrideTotalAmount / catalogTotal
-        : 1;
-
-      const cartJson = cartSnapshot.map(l => ({
-        product_id:   l.product.id,
-        qty:          l.qty,
-        unit_price:   Math.round(l.unit_price * priceRatio * 100),
-        is_bulk:      l.is_bulk,
-        product_name: l.product.name,
-        variant_id:   l.variant_id ?? null,
-        variant_name: l.variant_name ?? null,
-      }));
-
-      const rpcPayload = {
-        p_business_id:      businessId,
-        p_seller_id:        userId,
-        p_customer_name:    customerName?.trim() || null,
-        p_sale_date:        saleDate || today,
-        p_total_amount:     Math.round(totalAmount * 100),
-        p_discount_amount:  Math.round(discount * 100),
-        p_is_credit:        isCredit,
-        p_cart:             cartJson,
-        p_pay_method:       payment?.method  ?? null,
-        p_pay_amount:       payment?.amount  != null ? Math.round(payment.amount * 100) : null,
-        p_pay_ref:          payment?.ref_external ?? null,
-        p_idempotency_key:  idempotencyKey,
-        p_client_id:        clientId ?? null,
-        ...(dueDate ? { p_due_date: dueDate } : {}),
-      };
-
-      const { data: newSaleId, error: rpcErr } = await withTimeout(supabase.rpc('submit_sale', rpcPayload));
-      if (rpcErr) throw rpcErr;
-
-      // Notify managers/admins of the completed sale (online path only).
-      // Seller name is resolved the same way as ventes.ts's history list
-      // (membership display_name override, then profile.name) — not read off
-      // the session's user.name directly — so a manager-set local/nickname
-      // shows up here too, not just a literal "Vendeur" fallback.
-      const _notifSession = useAuthStore.getState().session;
-      if (_notifSession?.activeBusiness && !_notifSession.isDemoMode) {
-        const _saleDesc = describeSaleForNotification(cartSnapshot);
-        const _saleQty = cartSnapshot.reduce((s, l) => s + l.qty, 0);
-        // Net of discount — totalAmount alone is the catalog total (see
-        // "discount_amount convention" in CLAUDE.md), which read as the
-        // product's list price instead of what the customer was actually charged.
-        const _saleAmount = formatAmount(totalAmount - discount, _notifSession.activeBusiness.currency);
-        resolveSellerDisplayName(businessId, userId).then(seller => {
-          notifyEvent({
-            businessId,
-            eventType: 'sale_completed',
-            // qty drives singular/plural agreement in the no-seller-name body.
-            payload: { seller, desc: _saleDesc, amount: _saleAmount, qty: _saleQty },
-            // Investisseurs are looped in on every sale too — keeps them
-            // passively in the know without the admin having to report out.
-            targetRoles: ['administrateur', 'manager', 'investisseur'],
-            // A solo owner (the majority of real administrateurs — no team
-            // yet) making their own sale should never get pushed "you sold
-            // X" for something they just tapped through themselves — only
-            // relevant when someone ELSE on the team did it.
-            excludeUserId: userId,
-          });
-        });
-      }
-
-      set({ cart: [], submitting: false, lastSubmitQueued: false, lastSaleId: (newSaleId as string) ?? null });
-      haptics.heavy();
-      trackEvent('sale_submitted', businessId, userId, {
-        is_credit:      isCredit,
-        items_count:    cartSnapshot.length,
-        has_discount:   (discountAmount ?? 0) > 0,
-        payment_method: payment?.method ?? (isCredit ? 'credit' : null),
-        currency:       useAuthStore.getState().session?.activeBusiness?.currency,
-        total_amount:   totalAmount,
-      });
-      return true;
+      await enqueue('submit_sale', rpcPayload);
     } catch (err) {
-      if (isNetworkError(err)) {
-        const catalogTotalOffline = cartSnapshot.reduce((sum, l) => sum + l.unit_price * l.qty, 0);
-        const totalAmount = overrideTotalAmount ?? catalogTotalOffline;
-        const isFullCredit = payment === null;
-        const discount = discountAmount ?? 0;
-        const isPartialCredit = !isFullCredit && payment!.amount < (totalAmount - discount) - 0.01;
-        const isCredit = isFullCredit || isPartialCredit;
-        const today = new Date().toISOString().split('T')[0];
-
-        const priceRatioOffline = overrideTotalAmount && overrideTotalAmount > catalogTotalOffline + 0.5 && catalogTotalOffline > 0
-          ? overrideTotalAmount / catalogTotalOffline
-          : 1;
-
-        await enqueue('submit_sale', {
-          p_business_id:     businessId,
-          p_seller_id:       userId,
-          p_customer_name:   customerName?.trim() || null,
-          p_sale_date:       saleDate || today,
-          p_total_amount:    Math.round(totalAmount * 100),
-          p_discount_amount: Math.round(discount * 100),
-          p_is_credit:       isCredit,
-          p_cart:            cartSnapshot.map(l => ({
-            product_id:   l.product.id,
-            qty:          l.qty,
-            unit_price:   Math.round(l.unit_price * priceRatioOffline * 100),
-            is_bulk:      l.is_bulk,
-            product_name: l.product.name,
-            variant_id:   l.variant_id ?? null,
-            variant_name: l.variant_name ?? null,
-          })),
-          p_pay_method:      payment?.method  ?? null,
-          p_pay_amount:      payment?.amount  != null ? Math.round(payment.amount * 100) : null,
-          p_pay_ref:         payment?.ref_external ?? null,
-          p_idempotency_key: idempotencyKey,
-          p_client_id:       clientId ?? null,
-          ...(dueDate ? { p_due_date: dueDate } : {}),
-        });
-
-        const count = await getQueueCount();
-        useSyncStore.setState({ pendingCount: count });
-
-        // No server row exists yet for a queued sale — nothing a cancel_sale
-        // call could target — so lastSaleId stays null and the undo window
-        // in vendre.tsx is skipped for this outcome (a known, accepted gap;
-        // see CLAUDE.md's Vendre quick-checkout entry).
-        set({ cart: [], submitting: false, lastSubmitQueued: true, lastSaleId: null });
-        haptics.success();
-        trackEvent('sale_offline_queued', businessId, userId, {
-          items_count: cartSnapshot.length,
-        });
-
-        // Optimistically decrement stock in both the local product cache and the
-        // in-memory Zustand store so the POS reflects updated quantities immediately.
-        void (async () => {
-          const cached = await getProductCache(businessId);
-          const base = cached ?? useProductStore.getState().products;
-          if (!base.length) return;
-          const updated = base.map(p => {
-            // Only decrement plain-product lines (variant stock isn't cached locally)
-            const line = cartSnapshot.find(l => l.product.id === p.id && !l.variant_id);
-            if (!line) return p;
-            return { ...p, stock_qty: Math.max(0, p.stock_qty - line.qty) };
-          });
-          useProductStore.setState({ products: updated });
-          await saveProductCache(businessId, updated);
-        })();
-
-        // Optimistically add this sale to the ventes store so credits, sales
-        // history, and home screen totals reflect it immediately while offline.
-        void (async () => {
-          const sellerName = useAuthStore.getState().session?.user.name ?? '';
-          const now = new Date().toISOString();
-          const optimisticSale = {
-            id: idempotencyKey,
-            business_id: businessId,
-            customer_name: customerName?.trim() || null,
-            client_id: clientId ?? null,
-            seller_id: userId,
-            seller_name: sellerName,
-            status: isCredit ? 'credit' : 'paye',
-            is_credit: isCredit,
-            total_amount: totalAmount,
-            discount_amount: discount,
-            amount_paid: payment?.amount ?? 0,
-            paid_at: isCredit ? null : now,
-            sale_date: saleDate || today,
-            due_date: dueDate ?? null,
-            created_at: now,
-            cancelled_at: null,
-            cancellation_reason: null,
-            edit_count: 0,
-            last_edited_at: null,
-            profit: null,
-            lines: cartSnapshot.map(l => ({
-              id: generateId(),
-              product_id:   l.product.id,
-              product_name: l.product.name,
-              qty:          l.qty,
-              unit_price:   l.unit_price,
-              is_bulk:      l.is_bulk,
-              cost_price:   l.variant_cost_price ?? l.product.cost_price ?? 0,
-              variant_id:   l.variant_id ?? null,
-              variant_name: l.variant_name ?? null,
-            })),
-            payments: payment ? [{
-              id: generateId(),
-              method: payment.method,
-              amount: payment.amount,
-              date: now,
-            }] : [],
-          };
-
-          const ventesStore = useVentesStore.getState();
-          const updatedSales = [optimisticSale, ...ventesStore.sales];
-          useVentesStore.setState({ sales: updatedSales });
-
-          // Update each cache key independently to avoid overwriting a different
-          // user's filtered view with this seller's subset of sales.
-          await saveVentesCache(`${businessId}:${userId}`, updatedSales as unknown[]);
-
-          // For the all-sales cache, load it and prepend — don't overwrite it with
-          // only this seller's sales, which would strip every other seller's rows.
-          const allCached = await getVentesCache(`${businessId}:all`) ?? [];
-          await saveVentesCache(`${businessId}:all`, [optimisticSale, ...allCached] as unknown[]);
-        })();
-
-        return true;
-      }
-      const raw = err instanceof Error
-        ? err.message
-        : typeof (err as { message?: unknown })?.message === 'string'
-          ? (err as { message: string }).message
-          : 'Une erreur est survenue. La vente n\'a pas été enregistrée.';
-      // submit_sale raises plain French exceptions (e.g. "Stock insuffisant…"),
-      // which should reach the UI as-is — translateError only overrides `raw`
-      // when it recognizes a known raw Postgrest/network/auth error pattern,
-      // so a genuine technical error never reaches the merchant untranslated.
-      const friendly = translateError(err, raw);
+      console.error('[submitSale] local write failed', err);
       haptics.error();
-      set({ error: friendly, submitting: false, lastSubmitQueued: false, lastSaleId: null });
+      set({ error: "Impossible d'enregistrer sur cet appareil. Réessayez.", submitting: false, lastSubmitQueued: false, lastSaleId: null });
       return false;
     }
+
+    const count = await getQueueCount();
+    useSyncStore.setState({ pendingCount: count });
+
+    // No server row exists synchronously for ANY sale anymore (not just a
+    // previously-offline one) — nothing a cancel_sale call could target
+    // yet, so lastSaleId always stays null and the undo window in
+    // vendre.tsx no longer has anything to key off in this moment. See
+    // this function's own header comment for the broader "Stock
+    // insuffisant can't be caught live anymore" consequence this is part
+    // of — both are the same underlying tradeoff (Decision A), not two
+    // separate issues.
+    set({ cart: [], submitting: false, lastSubmitQueued: true, lastSaleId: null });
+    haptics.success();
+    trackEvent('sale_submitted', businessId, userId, {
+      is_credit:      isCredit,
+      items_count:    cartSnapshot.length,
+      has_discount:   (discountAmount ?? 0) > 0,
+      payment_method: payment?.method ?? (isCredit ? 'credit' : null),
+      currency:       useAuthStore.getState().session?.activeBusiness?.currency,
+      total_amount:   totalAmount,
+    });
+
+    // Optimistically decrement stock in both the local product cache and the
+    // in-memory Zustand store so the POS reflects updated quantities
+    // immediately — unconditional now (every sale takes this path, not
+    // just a previously-offline one). Orthogonal to the sales pending-
+    // overlay rework below: this is the product store's own best-effort,
+    // session-scoped estimate, not derived from a durable per-product
+    // outbox overlay (that would be real additional scope beyond what
+    // Phase 1 covers — product stock accuracy across a kill+reopen isn't
+    // one of its acceptance criteria, unlike the sales/ledger data this
+    // section is actually responsible for).
+    void (async () => {
+      try {
+        const cached = await getProductCache(businessId);
+        const base = cached ?? useProductStore.getState().products;
+        if (!base.length) return;
+        const updated = base.map(p => {
+          // Only decrement plain-product lines (variant stock isn't cached locally)
+          const line = cartSnapshot.find(l => l.product.id === p.id && !l.variant_id);
+          if (!line) return p;
+          return { ...p, stock_qty: Math.max(0, p.stock_qty - line.qty) };
+        });
+        useProductStore.setState({ products: updated });
+        await saveProductCache(businessId, updated);
+      } catch (err) {
+        // Best-effort, session-only estimate (see the comment above) — a
+        // failure here must never become an unhandled rejection out of
+        // this fire-and-forget IIFE. Same class of bug as drainQueue's own
+        // missing top-level catch (lib/sync.ts), just a different call
+        // site introduced in this same rework — caught by the real test
+        // suite crashing a worker process, not assumed safe.
+        console.error('[submitSale] optimistic stock decrement failed', err);
+      }
+    })();
+
+    // Reflects this sale in the ledger/dashboard instantly, durably —
+    // rebuilds from the outbox (which already has this exact item, just
+    // enqueued above) merged onto the untouched synced cache. Replaces the
+    // old ad hoc "build one optimisticSale object here and prepend it into
+    // ventes_cache directly" pattern entirely: refreshPendingOverlay now
+    // re-derives the same result (and every other pending op's effect)
+    // from the single shared projector in lib/pendingOverlay.ts, so this
+    // function no longer needs its own copy of that logic at all. Wrapped
+    // for the same reason as submitCarnetDebt/submitQuickSale above — the
+    // enqueue already durably succeeded, so a failure here must never
+    // flip this function's return value to false.
+    try {
+      await useVentesStore.getState().refreshPendingOverlay();
+    } catch (err) {
+      console.error('[submitSale] refreshPendingOverlay failed (write already succeeded)', err);
+    }
+    useSyncStore.getState().kick();
+
+    // sale_completed notification: fired ONLY from lib/sync.ts's executeOp
+    // (notifyQueuedSaleSynced), which runs once, unconditionally, the
+    // moment submit_sale's RPC actually succeeds — whether that's 50ms
+    // from now or 5 days from now. This function must NOT also notify
+    // here: under the old two-path design, exactly one of "live success"
+    // or "offline queued+later synced" ever ran, so only one notify call
+    // ever fired for a given sale. Under local-write-first, every sale
+    // takes this same enqueue path, so notifying here too would double-
+    // notify admins/managers for any sale that happens to sync quickly.
+    return true;
   },
 
   clearError: () => set({ error: null }),
