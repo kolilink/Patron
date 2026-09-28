@@ -5,8 +5,11 @@ import CryptoJS from 'crypto-js';
 // AES-256-CBC application-layer encryption for SQLite cache, via crypto-js
 // (pure JavaScript, no native module — see below for why that matters).
 // Key generated once per install, stored in SecureStore (hardware-backed on
-// Android/iOS). Sync queue is intentionally left unencrypted — it's
-// transient and cleared after sync.
+// Android/iOS). Used for every offline read-cache table AND the sync_queue's
+// payload (lib/db.ts's enqueue/getPendingOps) — the queue can hold a real
+// pending sale/expense for as long as the device stays offline, so it gets
+// the same protection as everything else, with a self-describing "PLAIN:"
+// fallback only if encryption itself is ever unavailable (see getKey below).
 //
 // Previously used globalThis.crypto.subtle (Hermes's built-in WebCrypto,
 // AES-GCM) — RN/Expo's own docs claim this is available on RN 0.76+/Expo

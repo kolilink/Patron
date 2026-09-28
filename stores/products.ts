@@ -122,14 +122,22 @@ export const useProductStore = create<ProductStore>((set, get) => ({
       set({ error: null });
     }
     try {
+      // Security audit 2026-09-27 (1.14, real enforcement): vendeur's own
+      // cost_price is never in this response at all — the base products
+      // table's SELECT RLS now excludes vendeur outright (migration_v185.sql),
+      // so get_products_for_vendeur() is their only actual read path, not
+      // just the one this call happens to prefer. Every caller of
+      // fetchProducts must pass role for this to actually take effect.
       const { data, error } = await withNetworkRetry(() =>
-        supabase
-          .from('products')
-          .select('*')
-          .eq('business_id', businessId)
-          .eq('archived', false)
-          .eq('is_system', false)
-          .order('name'),
+        role === 'vendeur'
+          ? supabase.rpc('get_products_for_vendeur', { p_business_id: businessId })
+          : supabase
+              .from('products')
+              .select('*')
+              .eq('business_id', businessId)
+              .eq('archived', false)
+              .eq('is_system', false)
+              .order('name'),
       );
 
       if (error) throw error;
@@ -434,13 +442,22 @@ export const useProductStore = create<ProductStore>((set, get) => ({
   },
 
   fetchVariants: async (productId, businessId) => {
-    const { data, error } = await supabase
-      .from('product_variants')
-      .select('*')
-      .eq('product_id', productId)
-      .eq('business_id', businessId)
-      .eq('archived', false)
-      .order('name');
+    // Security audit 2026-09-27 (1.14, real enforcement): a vendeur's own
+    // cost_price is never in the response at all for this role — the base
+    // table's SELECT RLS now excludes vendeur outright, so this is their
+    // only actual read path, not just the one the app happens to prefer.
+    // Role read from the session directly rather than added as a param —
+    // this function has 6 call sites and none of them need to change.
+    const role = useAuthStore.getState().session?.activeMembership?.role;
+    const { data, error } = role === 'vendeur'
+      ? await supabase.rpc('get_variants_for_vendeur', { p_product_id: productId, p_business_id: businessId })
+      : await supabase
+          .from('product_variants')
+          .select('*')
+          .eq('product_id', productId)
+          .eq('business_id', businessId)
+          .eq('archived', false)
+          .order('name');
     if (error || !data) return [];
     const variants: ProductVariant[] = (data as ProductVariant[]).map(v => ({
       ...v,

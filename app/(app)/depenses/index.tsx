@@ -1,5 +1,5 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
-import { Alert, Animated, Easing, Pressable, ScrollView, StyleSheet, View } from 'react-native';
+import { Alert, Animated, Easing, InputAccessoryView, Platform, Pressable, ScrollView, StyleSheet, View } from 'react-native';
 import { Ionicons } from '@expo/vector-icons';
 import { Screen } from '@/src/components/ui/Screen';
 import { FormSheet } from '@/src/components/ui/FormSheet';
@@ -21,7 +21,7 @@ import { toast } from '@/stores/toast';
 import { SkeletonList } from '@/src/components/ui/SkeletonPlaceholder';
 import { ProofControl } from '@/src/components/ui/ProofControl';
 import { ProofPhotoField, type PickedImage } from '@/src/components/ui/ProofPhotoField';
-import { BouncingSmileyEmpty } from '@/src/components/ui/BouncingSmileyEmpty';
+import { EmptyState } from '@/src/components/ui/EmptyState';
 import { attachTransactionProof } from '@/lib/proofs';
 import { formatAmountInput, parseAmountInput } from '@/src/utils/format';
 
@@ -35,6 +35,11 @@ function yesterdayIso() {
   d.setDate(d.getDate() - 1);
   return `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, '0')}-${String(d.getDate()).padStart(2, '0')}`;
 }
+
+// iOS-only: suppresses the OS's auto-injected floating "Done" pill above
+// the numeric keyboard — this form already has a persistent, always-
+// visible footer button.
+const EXPENSE_FORM_SILENT_ACCESSORY_ID = 'depenses-form-silent-accessory';
 
 // ─── Expense Form ─────────────────────────────────────────────────────────────
 
@@ -112,12 +117,20 @@ function ExpenseFormModal({ visible, editing, onClose, onSave, saving, currency,
           />
         </View>
       }
+      accessory={
+        Platform.OS === 'ios' ? (
+          <InputAccessoryView nativeID={EXPENSE_FORM_SILENT_ACCESSORY_ID}>
+            <View style={{ height: 0 }} />
+          </InputAccessoryView>
+        ) : undefined
+      }
     >
           <Input
             label={`Montant (${currency})`}
             value={amount}
             onChangeText={v => setAmount(formatAmountInput(v, currency))}
             keyboardType="decimal-pad"
+            inputAccessoryViewID={Platform.OS === 'ios' ? EXPENSE_FORM_SILENT_ACCESSORY_ID : undefined}
           />
 
           <Input
@@ -496,9 +509,11 @@ export default function DepensesScreen() {
           <Text variant="body" color="secondary" style={{ textAlign: 'center' }}>Données non disponibles hors ligne</Text>
         </View>
       ) : isEmpty ? (
-        <View style={styles.empty}>
-          <BouncingSmileyEmpty />
-        </View>
+        <EmptyState
+          icon="wallet-outline"
+          title="Aucune dépense pour le moment."
+          subtitle="Notez l'argent qui sort de votre commerce."
+        />
       ) : (
         <ScrollView contentContainerStyle={styles.list} showsVerticalScrollIndicator={false}>
           {pendingExpenses.length > 0 && (

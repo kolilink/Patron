@@ -1,5 +1,5 @@
 import { useEffect, useMemo } from 'react';
-import { Linking, Pressable, StyleSheet, View } from 'react-native';
+import { Pressable, StyleSheet, View } from 'react-native';
 import { router } from 'expo-router';
 import { Screen } from '@/src/components/ui/Screen';
 import { Ionicons } from '@expo/vector-icons';
@@ -8,8 +8,7 @@ import { Text } from '@/src/components/ui/Text';
 import { useTheme, spacing } from '@/src/theme';
 import type { Palette } from '@/src/theme';
 import { useAuthStore } from '@/stores/auth';
-
-const SUPPORT_WA_URL = `https://wa.me/16094454809?text=${encodeURIComponent("Bonjour ! J'ai une question sur Patron 🙂")}`;
+import { openSupportChat } from '@/src/utils/whatsapp';
 
 export default function WelcomeScreen() {
   const { palette } = useTheme();
@@ -77,14 +76,7 @@ export default function WelcomeScreen() {
         </View>
       </View>
 
-      <Pressable
-        style={styles.whatsappCorner}
-        // No WhatsApp installed (or no app registered for the wa.me scheme)
-        // rejects instead of resolving — unhandled here previously, surfacing
-        // as a Sentry error for any unauthenticated visitor without WhatsApp.
-        onPress={() => Linking.openURL(SUPPORT_WA_URL).catch(() => {})}
-        hitSlop={12}
-      >
+      <Pressable style={styles.whatsappCorner} onPress={openSupportChat} hitSlop={12}>
         <Ionicons name="logo-whatsapp" size={13} color={palette.textSecondary} />
         <Text variant="caption" color="secondary">WhatsApp</Text>
       </Pressable>

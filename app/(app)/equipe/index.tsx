@@ -1,5 +1,5 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
-import { Alert, Animated, Easing, FlatList, Linking, Modal, Pressable, ScrollView, Share, StyleSheet, TextInput, View } from 'react-native';
+import { Alert, Animated, Easing, FlatList, InputAccessoryView, Linking, Modal, Platform, Pressable, ScrollView, Share, StyleSheet, TextInput, View } from 'react-native';
 import { Ionicons } from '@expo/vector-icons';
 import { SafeAreaView } from 'react-native-safe-area-context';
 import { Screen } from '@/src/components/ui/Screen';
@@ -10,8 +10,10 @@ import { SkeletonList } from '@/src/components/ui/SkeletonPlaceholder';
 import { OfflineNotice } from '@/src/components/ui/OfflineNotice';
 import { Button } from '@/src/components/ui/Button';
 import { Card } from '@/src/components/ui/Card';
+import { Input } from '@/src/components/ui/Input';
 import { Text } from '@/src/components/ui/Text';
-import { useTheme, spacing, radius, fontFamily as FF, AVATAR_PALETTE, ROLE_COLORS } from '@/src/theme';
+import { useTheme, spacing, radius, fontFamily as FF, SEARCH_VISIBILITY_THRESHOLD } from '@/src/theme';
+import { useAnimateLayoutChange } from '@/src/hooks/useAnimateLayoutChange';
 import type { Palette } from '@/src/theme';
 import { useAuthStore } from '@/stores/auth';
 import { generateFallbackName } from '@/lib/id';
@@ -24,6 +26,16 @@ import { formatAmount, formatAmountInput, parseAmountInput } from '@/src/utils/f
 import { toast } from '@/stores/toast';
 import type { Role, MemberProductStake, Product } from '@/src/types';
 
+// iOS-only: suppresses the OS's auto-injected floating "Done" pill above
+// the numeric keyboard — the payout sheet's "Confirmer le paiement" button
+// sits immediately after the amount field in this compact backdrop+panel
+// sheet, always visible without scrolling, so the pill is redundant.
+// Deliberately NOT applied to the per-product investisseur stake field
+// above it — that field lives in a potentially long scrollable list, and
+// "Enregistrer les montants" only appears after every row, not as a sticky
+// footer, so it isn't reliably visible while editing an earlier row.
+const PAYOUT_SHEET_SILENT_ACCESSORY_ID = 'equipe-payout-sheet-silent-accessory';
+
 const ROLES: Role[] = ['manager', 'vendeur', 'investisseur'];
 
 const ROLE_LABELS: Record<Role, string> = {
@@ -34,6 +46,16 @@ const ROLE_BADGE_LABELS: Record<Role, string> = {
   administrateur: 'Gérant', manager: 'Gérant', vendeur: 'Vendeur', investisseur: 'Observateur',
 };
 
+// The member list groups by role instead of color-coding a badge per row —
+// who can do what reads from which group someone is in, not from comparing
+// pill colors. administrateur and manager share one group since both are
+// labeled "Gérant" to the user (see ROLE_LABELS above).
+const MEMBER_GROUPS: { key: string; title: string; description: string; roles: Role[] }[] = [
+  { key: 'gerants', title: 'Gérants', description: 'Accès complet', roles: ['administrateur', 'manager'] },
+  { key: 'vendeurs', title: 'Vendeurs', description: 'Vente et crédit', roles: ['vendeur'] },
+  { key: 'observateurs', title: 'Observateurs', description: 'Lecture seule', roles: ['investisseur'] },
+];
+
 const ROLE_DESCRIPTIONS: Record<string, string> = {
   manager: 'Gère le commerce sans pouvoir le supprimer',
   vendeur: 'Enregistre les ventes uniquement',
@@ -41,17 +63,17 @@ const ROLE_DESCRIPTIONS: Record<string, string> = {
 };
 
 
-function avatarColor(name: string): string {
-  return AVATAR_PALETTE[(name.charCodeAt(0) || 0) % AVATAR_PALETTE.length];
-}
-
+// Neutral for every role — color used to differ per role (and the same
+// "Gérant" label rendered in two different colors depending on whether the
+// person was technically an administrateur or a manager, which read as a
+// real inconsistency). Role is information, not a state to accent; the
+// member list communicates it structurally now (grouped sections) instead.
 function RoleBadge({ role }: { role: string }) {
   const { palette } = useTheme();
   const styles = useMemo(() => makeStyles(palette), [palette]);
-  const c = ROLE_COLORS[role] ?? palette.primary;
   return (
-    <View style={[styles.badge, { backgroundColor: c + '20' }]}>
-      <Text variant="labelSmall" style={{ color: c, textTransform: 'capitalize' }}>
+    <View style={styles.badge}>
+      <Text variant="labelSmall" color="secondary" style={{ textTransform: 'capitalize' }}>
         {ROLE_BADGE_LABELS[role as Role] ?? role}
       </Text>
     </View>
@@ -87,6 +109,12 @@ function ProductScopePicker({ visible, onClose, products, selectedIds, onConfirm
     return q ? products.filter(p => p.name.toLowerCase().includes(q)) : products;
   }, [products, search]);
 
+  const searchVisible = products.length >= SEARCH_VISIBILITY_THRESHOLD;
+  useAnimateLayoutChange(searchVisible);
+  useEffect(() => {
+    if (!searchVisible) setSearch('');
+  }, [searchVisible]);
+
   const toggle = (id: string) => {
     setSelected(prev => {
       const next = new Set(prev);
@@ -107,21 +135,22 @@ function ProductScopePicker({ visible, onClose, products, selectedIds, onConfirm
       }
       scrollable={false}
     >
-        {/* Search */}
-        <View style={styles.pickerSearch}>
-          <TextInput
-            style={[styles.pickerSearchInput, { color: palette.textPrimary }]}
-            placeholder="Rechercher un produit…"
-            placeholderTextColor={palette.textDisabled}
-            value={search}
-            onChangeText={setSearch}
-          />
-          {search.length > 0 && (
-            <Pressable onPress={() => setSearch('')} hitSlop={8}>
-              <Ionicons name="close-circle" size={16} color={palette.textDisabled} />
-            </Pressable>
-          )}
-        </View>
+        {searchVisible && (
+          <View style={styles.pickerSearch}>
+            <TextInput
+              style={[styles.pickerSearchInput, { color: palette.textPrimary }]}
+              placeholder="Rechercher un produit…"
+              placeholderTextColor={palette.textDisabled}
+              value={search}
+              onChangeText={setSearch}
+            />
+            {search.length > 0 && (
+              <Pressable onPress={() => setSearch('')} hitSlop={8}>
+                <Ionicons name="close-circle" size={16} color={palette.textDisabled} />
+              </Pressable>
+            )}
+          </View>
+        )}
 
         <FlatList
           data={filtered}
@@ -317,8 +346,8 @@ function MemberDetailSheet({
     >
           {/* Identity */}
           <View style={styles.identityRow}>
-            <View style={[styles.avatar, { backgroundColor: avatarColor(displayedName) + '20' }]}>
-              <Text variant="h4" allowFontScaling={false} style={{ color: avatarColor(displayedName) }}>
+            <View style={styles.avatar}>
+              <Text variant="h4" allowFontScaling={false} style={{ color: palette.textSecondary }}>
                 {displayedName[0]?.toUpperCase()}
               </Text>
             </View>
@@ -397,7 +426,7 @@ function MemberDetailSheet({
                 return totalInvested > 0 ? (
                   <View style={[styles.scopeRow, { flexDirection: 'column', alignItems: 'flex-start', gap: spacing[1] }]}>
                     <Text variant="caption" color="secondary">Capital investi</Text>
-                    <Text style={{ fontSize: 22, fontWeight: '700', lineHeight: 30, color: palette.primary }}>
+                    <Text style={{ fontFamily: FF.bold, fontSize: 22, lineHeight: 30, color: palette.primary }}>
                       {formatAmount(totalInvested, currency)}
                     </Text>
                   </View>
@@ -406,7 +435,7 @@ function MemberDetailSheet({
 
               <View style={[styles.scopeRow, { flexDirection: 'column', alignItems: 'flex-start', gap: spacing[1] }]}>
                 <Text variant="caption" color="secondary">Part des bénéfices accumulée</Text>
-                <Text style={{ fontSize: 22, fontWeight: '700', lineHeight: 30, color: palette.success }}>
+                <Text style={{ fontFamily: FF.bold, fontSize: 22, lineHeight: 30, color: palette.success }}>
                   {formatAmount(balance ?? 0, currency)}
                 </Text>
               </View>
@@ -589,6 +618,7 @@ function MemberDetailSheet({
                   placeholder="0"
                   placeholderTextColor={palette.textDisabled}
                   selectTextOnFocus
+                  inputAccessoryViewID={Platform.OS === 'ios' ? PAYOUT_SHEET_SILENT_ACCESSORY_ID : undefined}
                 />
                 <Text variant="label" color="secondary">{currency}</Text>
               </View>
@@ -623,6 +653,11 @@ function MemberDetailSheet({
             </Pressable>
           </Pressable>
         </Pressable>
+        {Platform.OS === 'ios' && (
+          <InputAccessoryView nativeID={PAYOUT_SHEET_SILENT_ACCESSORY_ID}>
+            <View style={{ height: 0 }} />
+          </InputAccessoryView>
+        )}
       </Modal>
     </>
   );
@@ -732,7 +767,7 @@ function NewCodeModal({ visible, onClose, onGenerate, saving, hasManager, produc
           {managerLocked && (
             <View style={styles.lockedNote}>
               <Ionicons name="time-outline" size={18} color={palette.warning} />
-              <Text variant="bodySmall" style={{ flex: 1, color: palette.warning, fontWeight: '600', lineHeight: 20 }}>
+              <Text variant="bodySmall" style={{ flex: 1, color: palette.warning, fontFamily: FF.semibold, lineHeight: 20 }}>
                 La gestion de plusieurs gérants arrive bientôt — restez à l'écoute 🙂
               </Text>
             </View>
@@ -851,7 +886,6 @@ interface CodeRevealModalProps {
 function CodeRevealModal({ visible, code, role, businessName, onClose }: CodeRevealModalProps) {
   const { palette } = useTheme();
   const styles = useMemo(() => makeStyles(palette), [palette]);
-  const roleColor = ROLE_COLORS[role] ?? palette.primary;
   const roleLabel = ROLE_LABELS[role];
   const shareMsg = `${businessName} vous invite à rejoindre son équipe sur Patron.\n\nCode d'accès : ${code}\n\nCe code est valable 24 heures.`;
 
@@ -867,8 +901,8 @@ function CodeRevealModal({ visible, code, role, businessName, onClose }: CodeRev
         </View>
 
         <View style={styles.revealBody}>
-          <View style={[styles.badge, { backgroundColor: roleColor + '20', alignSelf: 'center' }]}>
-            <Text variant="label" style={{ color: roleColor }}>{roleLabel}</Text>
+          <View style={[styles.badge, { alignSelf: 'center' }]}>
+            <Text variant="label" color="secondary">{roleLabel}</Text>
           </View>
 
           <View style={styles.revealCodeBlock}>
@@ -924,7 +958,7 @@ export default function EquipeScreen() {
     }
   }, [role]);
 
-  const { membres, codes, loading, saving, error, hasFetched, offline, offlineSince, fetchMembres, fetchCodes, createCode, revokeCode } = useEquipeStore();
+  const { membres, codes, redeemedCodes, loading, saving, error, hasFetched, offline, offlineSince, fetchMembres, fetchCodes, createCode, revokeCode } = useEquipeStore();
   const { products, fetchProducts } = useProductStore();
 
   const [tab, setTab] = useState<'membres' | 'codes'>('membres');
@@ -933,6 +967,7 @@ export default function EquipeScreen() {
   const [revealData, setRevealData] = useState<{ code: string; role: Role } | null>(null);
   const [showManagerLimit, setShowManagerLimit] = useState(false);
   const [selectedMembre, setSelectedMembre] = useState<Membre | null>(null);
+  const [search, setSearch] = useState('');
 
   const hasManager = membres.some(m => m.role === 'manager');
 
@@ -942,6 +977,24 @@ export default function EquipeScreen() {
   // Membres (generating a code via "+ Inviter" brings the tab back).
   const hasCodes = codes.length > 0;
   const effectiveTab = hasCodes ? tab : 'membres';
+
+  // Search is shown once the team is big enough to need it — irrelevant on
+  // the Codes tab, which is a different list entirely (invite codes, not people).
+  const searchVisible = effectiveTab === 'membres' && membres.length >= SEARCH_VISIBILITY_THRESHOLD;
+  useAnimateLayoutChange(searchVisible);
+  useEffect(() => {
+    if (!searchVisible) setSearch('');
+  }, [searchVisible]);
+
+  const filteredMembres = useMemo(() => {
+    const q = search.trim().toLowerCase();
+    if (!q) return membres;
+    return membres.filter(m => {
+      const name = (m.display_name ?? m.user_name ?? '').toLowerCase();
+      const phone = (m.user_phone ?? '').toLowerCase();
+      return name.includes(q) || phone.includes(q);
+    });
+  }, [membres, search]);
 
   useFocusEffect(
     useCallback(() => {
@@ -993,53 +1046,86 @@ export default function EquipeScreen() {
         </View>
       )}
 
+      {searchVisible && (
+        <View style={styles.searchRow}>
+          <Input placeholder="Rechercher un membre…" value={search} onChangeText={setSearch} />
+        </View>
+      )}
+
       {effectiveTab === 'membres' ? (
         (!hasFetched || loading) && membres.length === 0 ? (
           <SkeletonList count={5} />
         ) : !loading && membres.length === 0 && (error || offline) ? (
           <Text variant="body" color="secondary" style={styles.center}>Données non disponibles hors ligne</Text>
+        ) : filteredMembres.length === 0 ? (
+          search.trim() ? (
+            <View style={styles.empty}>
+              <Ionicons name="search-outline" size={40} color={palette.textDisabled} />
+              <Text variant="body" color="secondary" style={{ marginTop: spacing[3] }}>Aucun résultat pour "{search}"</Text>
+            </View>
+          ) : (
+            <View style={styles.empty}>
+              <Text variant="body" color="secondary">Personne d'autre n'utilise ce commerce</Text>
+              <Text variant="caption" color="secondary" style={{ textAlign: 'center', marginTop: spacing[1] }}>
+                Invitez un vendeur ou un gérant pour partager le travail
+              </Text>
+              <Button label="+ Inviter quelqu'un" size="sm" onPress={() => isDemoMode ? setShowDemoGate(true) : setShowNewCode(true)} style={{ marginTop: spacing[3] }} />
+            </View>
+          )
         ) : (
-          <FlatList
-            data={membres}
-            keyExtractor={m => m.id}
-            contentContainerStyle={styles.list}
-            ListEmptyComponent={
-              <View style={styles.empty}>
-                <Text variant="body" color="secondary">Personne d'autre n'utilise ce commerce</Text>
-                <Text variant="caption" color="secondary" style={{ textAlign: 'center', marginTop: spacing[1] }}>
-                  Invitez un vendeur ou un gérant pour partager le travail
-                </Text>
-                <Button label="+ Inviter quelqu'un" size="sm" onPress={() => isDemoMode ? setShowDemoGate(true) : setShowNewCode(true)} style={{ marginTop: spacing[3] }} />
-              </View>
-            }
-            renderItem={({ item }) => {
-              const shownName = item.display_name ?? item.user_name;
+          // Grouped by role instead of one flat list — who can do what reads
+          // from which section someone is in, not from a colored badge per
+          // row. A plain ScrollView (not FlatList) is deliberate: a team
+          // roster is small enough that virtualization buys nothing, and
+          // this shape (N independent rounded groups) isn't something
+          // FlatList/SectionList render naturally.
+          <ScrollView contentContainerStyle={styles.list} showsVerticalScrollIndicator={false} keyboardShouldPersistTaps="handled">
+            {MEMBER_GROUPS.map(group => {
+              const groupMembres = filteredMembres.filter(m => group.roles.includes(m.role));
+              if (groupMembres.length === 0) return null;
               return (
-                <Pressable
-                  onPress={() => setSelectedMembre(item)}
-                  style={({ pressed }) => [styles.memberRow, pressed && { opacity: 0.75 }]}
-                >
-                  <View style={[styles.avatar, { backgroundColor: avatarColor(shownName) + '20' }]}>
-                    <Text variant="label" allowFontScaling={false} style={{ color: avatarColor(shownName) }}>
-                      {shownName[0]?.toUpperCase()}
-                    </Text>
+                <View key={group.key} style={styles.memberGroup}>
+                  <View style={styles.groupHeading}>
+                    <Text style={styles.groupTitle}>{group.title}</Text>
+                    <Text style={styles.groupMeta}>{group.description} · {groupMembres.length}</Text>
                   </View>
-                  <View style={{ flex: 1, gap: 2 }}>
-                    <View style={styles.nameRow}>
-                      <Text variant="label">{shownName}</Text>
-                      {item.id === myMembershipId && <Text variant="caption" color="secondary">(vous)</Text>}
-                    </View>
-                    {item.user_phone
-                      ? <Text variant="caption" color="secondary">{item.user_phone}</Text>
-                      : <Text variant="caption" color="secondary">{item.user_email !== '—' ? item.user_email : 'Pas de contact'}</Text>
-                    }
+                  <View style={styles.memberGroupCard}>
+                    {groupMembres.map((item, i) => {
+                      const shownName = item.display_name ?? item.user_name;
+                      return (
+                        <Pressable
+                          key={item.id}
+                          onPress={() => setSelectedMembre(item)}
+                          style={({ pressed }) => [
+                            styles.memberRow,
+                            i < groupMembres.length - 1 && styles.memberRowDivider,
+                            pressed && { opacity: 0.75 },
+                          ]}
+                        >
+                          <View style={styles.avatar}>
+                            <Text variant="label" allowFontScaling={false} style={{ color: palette.textSecondary }}>
+                              {shownName[0]?.toUpperCase()}
+                            </Text>
+                          </View>
+                          <View style={{ flex: 1, gap: 2 }}>
+                            <View style={styles.nameRow}>
+                              <Text variant="label">{shownName}</Text>
+                              {item.id === myMembershipId && <Text variant="caption" color="secondary">(vous)</Text>}
+                            </View>
+                            {item.user_phone
+                              ? <Text variant="caption" color="secondary">{item.user_phone}</Text>
+                              : <Text variant="caption" color="secondary">{item.user_email !== '—' ? item.user_email : 'Pas de contact'}</Text>
+                            }
+                          </View>
+                          <Ionicons name="chevron-forward" size={16} color={palette.textDisabled} />
+                        </Pressable>
+                      );
+                    })}
                   </View>
-                  <RoleBadge role={item.role} />
-                </Pressable>
+                </View>
               );
-            }}
-            ItemSeparatorComponent={() => <View style={{ height: 1, backgroundColor: palette.border }} />}
-          />
+            })}
+          </ScrollView>
         )
       ) : !loading && codes.length === 0 && error ? (
         <Text variant="body" color="secondary" style={styles.center}>Données non disponibles hors ligne</Text>
@@ -1049,6 +1135,27 @@ export default function EquipeScreen() {
           keyExtractor={c => c.id}
           contentContainerStyle={styles.list}
           ListEmptyComponent={<View style={styles.empty}><Text variant="body" color="secondary">Aucun code actif.</Text></View>}
+          ListFooterComponent={
+            redeemedCodes.length > 0 ? (
+              <View style={{ marginTop: spacing[5], gap: spacing[2] }}>
+                <Text variant="label" color="secondary">Codes utilisés</Text>
+                {redeemedCodes.map(c => (
+                  <Card key={c.id} style={[styles.codeCard, { opacity: 0.75 }]}>
+                    <View style={styles.codeTop}>
+                      <Text variant="body" numberOfLines={1} style={{ flex: 1, color: palette.textSecondary }}>
+                        {c.code}
+                      </Text>
+                      <RoleBadge role={c.role} />
+                    </View>
+                    <Text variant="caption" color="secondary">
+                      {c.redeemed_by_name ? `Utilisé par ${c.redeemed_by_name}` : 'Utilisé'}
+                      {c.redeemed_at ? ` · ${new Date(c.redeemed_at).toLocaleDateString('fr-FR')}` : ''}
+                    </Text>
+                  </Card>
+                ))}
+              </View>
+            ) : null
+          }
           renderItem={({ item }) => {
             const expired = item.expires_at ? new Date(item.expires_at) < new Date() : false;
             return (
@@ -1149,11 +1256,34 @@ function makeStyles(p: Palette) {
     tabs: { flexDirection: 'row', padding: spacing[4], gap: spacing[2] },
     tab: { flex: 1, paddingVertical: spacing[2], alignItems: 'center', borderRadius: radius.md, borderWidth: 1, borderColor: p.border },
     tabActive: { backgroundColor: p.primary, borderColor: p.primary },
-    list: { paddingBottom: spacing[10] },
-    memberRow: { flexDirection: 'row', alignItems: 'center', gap: spacing[3], paddingHorizontal: spacing[5], paddingVertical: spacing[3], backgroundColor: p.surface },
-    avatar: { width: 40, height: 40, borderRadius: 20, alignItems: 'center', justifyContent: 'center' },
+    searchRow: { paddingHorizontal: spacing[5], paddingBottom: spacing[2] },
+    list: { paddingTop: spacing[2], paddingBottom: spacing[10] },
+    memberGroup: { marginHorizontal: spacing[5], marginBottom: spacing[5] },
+    groupHeading: {
+      flexDirection: 'row', justifyContent: 'space-between', alignItems: 'baseline',
+      paddingHorizontal: spacing[1], paddingBottom: spacing[2],
+    },
+    groupTitle: { fontFamily: FF.semibold, fontSize: 13, color: p.textPrimary },
+    groupMeta: { fontSize: 12, color: p.textSecondary },
+    // Same rounded-container language as the Produits list — one bordered
+    // card per group, corners clipped to its own rows via overflow: 'hidden'.
+    memberGroupCard: {
+      borderRadius: radius.md, borderWidth: 1, borderColor: p.border,
+      backgroundColor: p.surface, overflow: 'hidden',
+    },
+    memberRowDivider: { borderBottomWidth: 1, borderBottomColor: p.border },
+    memberRow: { flexDirection: 'row', alignItems: 'center', gap: spacing[3], paddingHorizontal: spacing[4], paddingVertical: spacing[3], backgroundColor: p.surface },
+    // One neutral tile for every member — role and identity no longer carry
+    // color; a name/initial is enough to tell people apart in a small team.
+    avatar: {
+      width: 40, height: 40, borderRadius: 20, alignItems: 'center', justifyContent: 'center',
+      backgroundColor: p.background, borderWidth: 1, borderColor: p.border,
+    },
     nameRow: { flexDirection: 'row', alignItems: 'center', gap: spacing[2] },
-    badge: { paddingHorizontal: spacing[2], paddingVertical: 2, borderRadius: 6 },
+    badge: {
+      paddingHorizontal: spacing[2], paddingVertical: 2, borderRadius: 6,
+      backgroundColor: p.background, borderWidth: 1, borderColor: p.border,
+    },
     codeCard: { marginHorizontal: spacing[5], marginVertical: spacing[2], gap: spacing[2] },
     codeTop: { flexDirection: 'row', alignItems: 'center', justifyContent: 'space-between' },
     codeMeta: { flexDirection: 'row', alignItems: 'center', justifyContent: 'space-between' },
@@ -1168,7 +1298,7 @@ function makeStyles(p: Palette) {
     mfooter: { padding: spacing[5], borderTopWidth: 1, borderTopColor: p.border },
     revealBody: { flex: 1, alignItems: 'center', justifyContent: 'center', padding: spacing[6], gap: spacing[8] },
     revealCodeBlock: { alignItems: 'center', gap: spacing[3] },
-    revealCode: { fontSize: 36, lineHeight: 48, fontWeight: '700', color: p.textPrimary, textAlign: 'center', width: '100%' },
+    revealCode: { fontFamily: FF.bold, fontSize: 36, lineHeight: 48, color: p.textPrimary, textAlign: 'center', width: '100%' },
     revealActions: { width: '100%', gap: spacing[3] },
     roleGrid: { gap: spacing[2] },
     roleChip: { padding: spacing[4], borderRadius: radius.lg, borderWidth: 1.5, borderColor: p.border, gap: 4 },

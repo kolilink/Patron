@@ -37,8 +37,7 @@ export default function CreerCommerceScreen() {
             <Pressable onPress={() => router.back()} style={styles.backBtn}>
               <Text variant="body" color="brand">← Retour</Text>
             </Pressable>
-            <Text variant="h2">Créer un commerce</Text>
-            <Text variant="body" color="secondary">Vous serez automatiquement le Gérant.</Text>
+            <Text variant="h2">Ajouter un commerce</Text>
           </View>
 
           {alreadyOwns ? (
@@ -54,7 +53,7 @@ export default function CreerCommerceScreen() {
               error={error}
               initialCurrency={inferCurrency(session?.user.phone)}
               onSubmit={handleSubmit}
-              submitLabel="Créer le commerce"
+              submitLabel="Ouvrir mon commerce"
             />
           )}
         </ScrollView>

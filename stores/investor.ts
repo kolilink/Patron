@@ -137,31 +137,41 @@ export const useInvestorStore = create<InvestorStore>((set, get) => ({
 
   requestPayout: async (businessId, amountCents) => {
     set({ saving: true, error: null });
-    const { error } = await supabase.rpc('request_payout', {
-      p_business_id: businessId,
-      p_amount: Number(amountCents),
-    });
-    if (error) {
-      set({ saving: false, error: translateError(error, 'Impossible de soumettre la demande') });
+    try {
+      const { error } = await supabase.rpc('request_payout', {
+        p_business_id: businessId,
+        p_amount: Number(amountCents),
+      });
+      if (error) {
+        set({ saving: false, error: translateError(error, 'Impossible de soumettre la demande') });
+        return false;
+      }
+      set({ saving: false });
+      await get().fetchPayouts(businessId);
+      return true;
+    } catch (err) {
+      set({ saving: false, error: isNetworkError(err) ? 'Vérifiez votre connexion' : translateError(err, 'Impossible de soumettre la demande') });
       return false;
     }
-    set({ saving: false });
-    await get().fetchPayouts(businessId);
-    return true;
   },
 
   confirmPayout: async (payoutId, paidAmountCents) => {
     set({ saving: true, error: null });
-    const { error } = await supabase.rpc('confirm_payout', {
-      p_payout_id: payoutId,
-      p_paid_amount: Number(paidAmountCents),
-    });
-    if (error) {
-      set({ saving: false, error: translateError(error, 'Impossible de confirmer le paiement') });
+    try {
+      const { error } = await supabase.rpc('confirm_payout', {
+        p_payout_id: payoutId,
+        p_paid_amount: Number(paidAmountCents),
+      });
+      if (error) {
+        set({ saving: false, error: translateError(error, 'Impossible de confirmer le paiement') });
+        return false;
+      }
+      set({ saving: false });
+      return true;
+    } catch (err) {
+      set({ saving: false, error: isNetworkError(err) ? 'Vérifiez votre connexion' : translateError(err, 'Impossible de confirmer le paiement') });
       return false;
     }
-    set({ saving: false });
-    return true;
   },
 
   reset: () => set({ balance: null, payouts: [], loading: false, saving: false, error: null, offline: false, offlineSince: null }),

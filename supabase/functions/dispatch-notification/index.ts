@@ -1,5 +1,6 @@
 import { serve } from 'https://deno.land/std@0.177.0/http/server.ts';
 import { createClient } from 'https://esm.sh/@supabase/supabase-js@2';
+import { safeErrorResponse } from '../_shared/errors.ts';
 
 const corsHeaders = {
   'Access-Control-Allow-Origin': '*',
@@ -452,6 +453,25 @@ serve(async (req) => {
       userIds = (members ?? []).map((m: { user_id: string }) => m.user_id);
     }
     if (exclude_user_id) userIds = userIds.filter(id => id !== exclude_user_id);
+
+    // Per-user opt-out for the one notification type most likely to stack
+    // up for a busy, successful shop — one push per sale, for every sale,
+    // by any team member. profiles.notify_on_every_sale (migration_v176.sql)
+    // defaults true, so this only ever removes someone who explicitly
+    // turned it off; every other event type is unaffected.
+    if (event_type === 'sale_completed' && userIds.length > 0) {
+      const { data: prefs } = await supabase
+        .from('profiles')
+        .select('id, notify_on_every_sale')
+        .in('id', userIds);
+      const optedOut = new Set(
+        (prefs ?? [])
+          .filter((p: { id: string; notify_on_every_sale: boolean }) => p.notify_on_every_sale === false)
+          .map((p: { id: string }) => p.id),
+      );
+      if (optedOut.size > 0) userIds = userIds.filter(id => !optedOut.has(id));
+    }
+
     if (userIds.length === 0) {
       return new Response(JSON.stringify({ sent: 0 }), {
         headers: { ...corsHeaders, 'Content-Type': 'application/json' },
@@ -568,11 +588,6 @@ serve(async (req) => {
       headers: { ...corsHeaders, 'Content-Type': 'application/json' },
     });
   } catch (e) {
-    const msg = e instanceof Error ? e.message : 'Erreur inconnue';
-    console.error('dispatch-notification crash:', msg);
-    return new Response(JSON.stringify({ error: msg }), {
-      status: 500,
-      headers: { ...corsHeaders, 'Content-Type': 'application/json' },
-    });
+    return safeErrorResponse(e, corsHeaders, 'dispatch-notification');
   }
 });

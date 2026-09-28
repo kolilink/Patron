@@ -58,10 +58,26 @@ export interface CommandeAchat {
   lines?: CommandeLigne[];
 }
 
-export interface CreateCommandeInput {
-  supplierId: string;
-  lines: { product_id: string; product_name: string; variant_id: string | null; qty: number; unit_cost: number }[];
-  amountPaid?: number; // display units; undefined or >= total means fully paid
+// "Réception intelligente" — Stage 1 (manual draft; Stage 2's AI extraction
+// produces this exact same shape, just pre-filled instead of hand-typed).
+// product_id null means "create this as a new product" — variant_id is
+// only ever set alongside an existing product_id (a brand-new product never
+// has variants yet, per the design brief).
+export interface ReceptionLine {
+  product_id: string | null;
+  variant_id: string | null;
+  name: string;
+  qty: number;
+  unit_cost_cents: number;
+  sale_price_cents: number | null;
+}
+
+export interface ConfirmReceptionInput {
+  supplierId: string | null; // null = "Marché"
+  poId?: string | null;      // Porte 2: the existing order this closes
+  lines: ReceptionLine[];
+  transportCostCents?: number;
+  marginPercent?: number | null;
 }
 
 export interface SupplierDebt {
@@ -102,9 +118,13 @@ interface FournisseursStore {
   payDebt: (businessId: string, supplierId: string, paymentAmount: number) => Promise<boolean>;
 
   fetchCommandes: (businessId: string) => Promise<void>;
-  createCommande: (businessId: string, userId: string, input: CreateCommandeInput) => Promise<boolean>;
   loadCommandeLines: (commandeId: string) => Promise<void>;
-  recevoirCommande: (commandeId: string, businessId: string, userId: string, lines?: { id: string; qty: number }[], shippingCostCents?: number) => Promise<boolean>;
+  confirmReception: (businessId: string, userId: string, input: ConfirmReceptionInput) => Promise<string | null>;
+  // Post-save fix-up for the Confirmé step's "De :" chip — confirmReception
+  // has already run and already linked any new product to whichever
+  // supplier resolved at that moment, so changing it afterward has to be a
+  // real UPDATE, not a client-side draft patch. See migration_v181.sql.
+  updateReceptionSupplier: (poId: string, businessId: string, userId: string, supplierId: string | null) => Promise<boolean>;
 
   fetchDebts: (businessId: string) => Promise<void>;
   createDebt: (businessId: string, userId: string, d: { supplierId: string; amount: number; description?: string | null; date: string }) => Promise<boolean>;
@@ -168,74 +188,94 @@ export const useFournisseursStore = create<FournisseursStore>((set, get) => ({
 
   createFournisseur: async (businessId, userId, d) => {
     set({ saving: true, error: null });
-    const { error } = await supabase.from('suppliers').insert({
-      id: generateId(),
-      business_id: businessId,
-      name: d.name.trim(),
-      phone: d.phone?.trim() || null,
-      country: d.country?.trim() || null,
-      notes: d.notes?.trim() || null,
-      lead_days: d.lead_days ?? null,
-      created_by: userId,
-    });
-    if (error) { set({ error: translateError(error, 'Impossible de créer le fournisseur'), saving: false }); return false; }
-    await get().fetchFournisseurs(businessId);
-    set({ saving: false });
-    return true;
+    try {
+      const { error } = await supabase.from('suppliers').insert({
+        id: generateId(),
+        business_id: businessId,
+        name: d.name.trim(),
+        phone: d.phone?.trim() || null,
+        country: d.country?.trim() || null,
+        notes: d.notes?.trim() || null,
+        lead_days: d.lead_days ?? null,
+        created_by: userId,
+      });
+      if (error) { set({ error: translateError(error, 'Impossible de créer le fournisseur'), saving: false }); return false; }
+      await get().fetchFournisseurs(businessId);
+      set({ saving: false });
+      return true;
+    } catch (err) {
+      set({ saving: false, error: isNetworkError(err) ? 'Vérifiez votre connexion' : translateError(err, 'Impossible de créer le fournisseur') });
+      return false;
+    }
   },
 
   updateFournisseur: async (id, d) => {
     set({ saving: true, error: null });
-    const { error } = await supabase.from('suppliers').update({
-      name: d.name.trim(),
-      phone: d.phone?.trim() || null,
-      country: d.country?.trim() || null,
-      notes: d.notes?.trim() || null,
-      lead_days: d.lead_days ?? null,
-    }).eq('id', id);
-    if (error) { set({ error: translateError(error, 'Impossible de modifier le fournisseur'), saving: false }); return false; }
-    set(state => ({
-      fournisseurs: state.fournisseurs.map(f =>
-        f.id === id ? { ...f, ...d, name: d.name.trim() } : f,
-      ),
-      saving: false,
-    }));
-    return true;
+    try {
+      const { error } = await supabase.from('suppliers').update({
+        name: d.name.trim(),
+        phone: d.phone?.trim() || null,
+        country: d.country?.trim() || null,
+        notes: d.notes?.trim() || null,
+        lead_days: d.lead_days ?? null,
+      }).eq('id', id);
+      if (error) { set({ error: translateError(error, 'Impossible de modifier le fournisseur'), saving: false }); return false; }
+      set(state => ({
+        fournisseurs: state.fournisseurs.map(f =>
+          f.id === id ? { ...f, ...d, name: d.name.trim() } : f,
+        ),
+        saving: false,
+      }));
+      return true;
+    } catch (err) {
+      set({ saving: false, error: isNetworkError(err) ? 'Vérifiez votre connexion' : translateError(err, 'Impossible de modifier le fournisseur') });
+      return false;
+    }
   },
 
   deleteFournisseur: async (id, businessId) => {
-    // Unlink products so their FK doesn't block deletion
-    await supabase.from('products').update({ supplier_id: null }).eq('supplier_id', id);
-    const { error } = await supabase.from('suppliers').delete().eq('id', id).eq('business_id', businessId);
-    if (error) { set({ error: translateError(error, 'Impossible de supprimer le fournisseur') }); return false; }
-    set(state => ({ fournisseurs: state.fournisseurs.filter(f => f.id !== id) }));
-    return true;
+    try {
+      // Unlink products so their FK doesn't block deletion
+      await supabase.from('products').update({ supplier_id: null }).eq('supplier_id', id);
+      const { error } = await supabase.from('suppliers').delete().eq('id', id).eq('business_id', businessId);
+      if (error) { set({ error: translateError(error, 'Impossible de supprimer le fournisseur') }); return false; }
+      set(state => ({ fournisseurs: state.fournisseurs.filter(f => f.id !== id) }));
+      return true;
+    } catch (err) {
+      set({ error: isNetworkError(err) ? 'Vérifiez votre connexion' : translateError(err, 'Impossible de supprimer le fournisseur') });
+      return false;
+    }
   },
 
   payDebt: async (businessId, supplierId, paymentAmount) => {
     set({ saving: true, error: null });
-    const { data, error } = await supabase.rpc('pay_supplier_debt', {
-      p_business_id:  businessId,
-      p_supplier_id:  supplierId,
-      p_amount_cents: Math.round(paymentAmount * 100),
-    });
-    if (error) {
-      set({ saving: false, error: translateError(error, 'Erreur lors du paiement') });
-      return false;
-    }
-    const remaining = (data as { remaining_cents?: number } | null)?.remaining_cents ?? 0;
-    if (remaining > 0) {
-      // The supplier has no more outstanding debts — the excess was not applied anywhere.
-      set({
-        saving: false,
-        error: `Paiement partiellement alloué — ${remaining / 100} excèdent les dettes enregistrées. Créez une dette si nécessaire.`,
+    try {
+      const { data, error } = await supabase.rpc('pay_supplier_debt', {
+        p_business_id:  businessId,
+        p_supplier_id:  supplierId,
+        p_amount_cents: Math.round(paymentAmount * 100),
       });
-      await get().fetchDebts(businessId);
+      if (error) {
+        set({ saving: false, error: translateError(error, 'Erreur lors du paiement') });
+        return false;
+      }
+      const remaining = (data as { remaining_cents?: number } | null)?.remaining_cents ?? 0;
+      if (remaining > 0) {
+        // The supplier has no more outstanding debts — the excess was not applied anywhere.
+        set({
+          saving: false,
+          error: `Paiement partiellement alloué — ${remaining / 100} excèdent les dettes enregistrées. Créez une dette si nécessaire.`,
+        });
+        await get().fetchDebts(businessId);
+        return false;
+      }
+      await Promise.all([get().fetchDebts(businessId), get().fetchPayments(businessId, supplierId)]);
+      set({ saving: false });
+      return true;
+    } catch (err) {
+      set({ saving: false, error: isNetworkError(err) ? 'Vérifiez votre connexion' : translateError(err, 'Erreur lors du paiement') });
       return false;
     }
-    await Promise.all([get().fetchDebts(businessId), get().fetchPayments(businessId, supplierId)]);
-    set({ saving: false });
-    return true;
   },
 
   fetchCommandes: async (businessId) => {
@@ -276,36 +316,6 @@ export const useFournisseursStore = create<FournisseursStore>((set, get) => ({
     set({ commandes, loading: false, offline: false, offlineSince: null });
   },
 
-  createCommande: async (businessId, userId, input) => {
-    set({ saving: true, error: null });
-    // create_purchase_order() creates the PO + lines, records a
-    // supplier_debts row for any unpaid shortfall, AND records a
-    // supplier_payments row for whatever was actually paid at order time —
-    // all atomically. The old client-side sequence (PO insert → lines
-    // insert → an unchecked debt insert) never recorded the paid portion
-    // anywhere, so cash_on_hand never reflected money actually paid to a
-    // supplier at order time. See db/migration_v172.sql.
-    const { error } = await supabase.rpc('create_purchase_order', {
-      p_business_id: businessId,
-      p_supplier_id: input.supplierId,
-      p_lines: input.lines.map(l => ({
-        product_id: l.product_id,
-        variant_id: l.variant_id ?? null,
-        qty: l.qty,
-        unit_cost: l.unit_cost,
-      })),
-      p_amount_paid: input.amountPaid,
-    });
-    if (error) {
-      set({ error: translateError(error, 'Impossible de créer la commande'), saving: false });
-      return false;
-    }
-
-    await Promise.all([get().fetchCommandes(businessId), get().fetchDebts(businessId)]);
-    set({ saving: false });
-    return true;
-  },
-
   loadCommandeLines: async (commandeId) => {
     const { data, error } = await supabase
       .from('po_lines')
@@ -334,43 +344,71 @@ export const useFournisseursStore = create<FournisseursStore>((set, get) => ({
     }));
   },
 
-  recevoirCommande: async (commandeId, businessId, userId, lines, shippingCostCents = 0) => {
+  confirmReception: async (businessId, userId, input) => {
     set({ saving: true, error: null });
+    try {
+      // confirm_reception() creates-or-updates the order + lines (creating
+      // any new product along the way) and then calls the existing
+      // receive_purchase_order() to do the real stock/cost/transport work —
+      // see db/migration_v180.sql for why this reuses that RPC outright
+      // instead of duplicating its logic.
+      const { data, error } = await supabase.rpc('confirm_reception', {
+        p_business_id: businessId,
+        p_supplier_id: input.supplierId,
+        p_po_id: input.poId ?? null,
+        p_lines: input.lines.map(l => ({
+          product_id: l.product_id,
+          variant_id: l.variant_id,
+          name: l.name,
+          qty: l.qty,
+          unit_cost_cents: l.unit_cost_cents,
+          sale_price_cents: l.sale_price_cents,
+        })),
+        p_transport_cost_cents: input.transportCostCents ?? 0,
+        p_margin_percent: input.marginPercent ?? null,
+      });
 
-    const _commande = get().commandes.find(c => c.id === commandeId);
+      if (error) {
+        set({ saving: false, error: translateError(error, 'Impossible d\'enregistrer la réception') });
+        return null;
+      }
 
-    const { error } = await supabase.rpc('receive_purchase_order', {
-      p_po_id: commandeId,
-      p_business_id: businessId,
-      p_line_ids: lines ? lines.map(l => l.id) : null,
-      p_line_qtys: lines ? lines.map(l => l.qty) : null,
-      p_shipping_cost_cents: shippingCostCents,
-    });
+      await Promise.all([get().fetchCommandes(businessId), get().fetchFournisseurs(businessId)]);
+      void useProductStore.getState().fetchProducts(businessId, userId);
+      set({ saving: false });
 
-    if (error) {
-      set({ saving: false, error: translateError(error, 'Impossible de recevoir la commande') });
+      const totalItems = input.lines.reduce((s, l) => s + l.qty, 0);
+      const supplierName = input.supplierId
+        ? get().fournisseurs.find(f => f.id === input.supplierId)?.name ?? ''
+        : 'Marché';
+      notifyEvent({
+        businessId,
+        eventType: 'po_received',
+        payload: { N: totalItems, supplier: supplierName },
+        targetRoles: ['administrateur', 'manager', 'vendeur'],
+      });
+
+      return data as string;
+    } catch (err) {
+      set({ saving: false, error: isNetworkError(err) ? 'Vérifiez votre connexion' : translateError(err, 'Impossible d\'enregistrer la réception') });
+      return null;
+    }
+  },
+
+  updateReceptionSupplier: async (poId, businessId, userId, supplierId) => {
+    try {
+      const { error } = await supabase.rpc('update_reception_supplier', {
+        p_po_id: poId,
+        p_business_id: businessId,
+        p_supplier_id: supplierId,
+      });
+      if (error) return false;
+      await Promise.all([get().fetchCommandes(businessId), get().fetchFournisseurs(businessId)]);
+      void useProductStore.getState().fetchProducts(businessId, userId);
+      return true;
+    } catch {
       return false;
     }
-
-    // Re-fetch to get accurate status (recu vs recu_partiel determined server-side)
-    await get().fetchCommandes(businessId);
-    set({ saving: false });
-
-    // Refresh products so the edit form pre-fills with the updated cost_price
-    void useProductStore.getState().fetchProducts(businessId, userId);
-
-    // Notify team that new stock has arrived
-    const totalItems = lines
-      ? lines.reduce((s, l) => s + l.qty, 0)
-      : (_commande?.lines?.reduce((s, l) => s + l.qty_ordered, 0) ?? 1);
-    notifyEvent({
-      businessId,
-      eventType: 'po_received',
-      payload: { N: totalItems, supplier: _commande?.supplier_name ?? '' },
-      targetRoles: ['administrateur', 'manager', 'vendeur'],
-    });
-
-    return true;
   },
 
   fetchDebts: async (businessId) => {
@@ -396,19 +434,24 @@ export const useFournisseursStore = create<FournisseursStore>((set, get) => ({
 
   createDebt: async (businessId, userId, d) => {
     set({ saving: true, error: null });
-    const { error } = await supabase.from('supplier_debts').insert({
-      business_id: businessId,
-      supplier_id: d.supplierId,
-      amount: Math.round(d.amount * 100),
-      description: d.description?.trim() || null,
-      date: d.date,
-      amount_paid: 0,
-      created_by: userId,
-    });
-    if (error) { set({ saving: false, error: translateError(error, 'Impossible d\'enregistrer la dette') }); return false; }
-    await get().fetchDebts(businessId);
-    set({ saving: false });
-    return true;
+    try {
+      const { error } = await supabase.from('supplier_debts').insert({
+        business_id: businessId,
+        supplier_id: d.supplierId,
+        amount: Math.round(d.amount * 100),
+        description: d.description?.trim() || null,
+        date: d.date,
+        amount_paid: 0,
+        created_by: userId,
+      });
+      if (error) { set({ saving: false, error: translateError(error, 'Impossible d\'enregistrer la dette') }); return false; }
+      await get().fetchDebts(businessId);
+      set({ saving: false });
+      return true;
+    } catch (err) {
+      set({ saving: false, error: isNetworkError(err) ? 'Vérifiez votre connexion' : translateError(err, 'Impossible d\'enregistrer la dette') });
+      return false;
+    }
   },
 
   fetchPayments: async (businessId, supplierId) => {

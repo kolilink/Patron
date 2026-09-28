@@ -1,7 +1,8 @@
-import { useEffect, useMemo, useRef, useState } from 'react';
+import { useEffect, useId, useMemo, useRef, useState } from 'react';
 import {
   Animated,
   FlatList,
+  InputAccessoryView,
   InteractionManager,
   Platform,
   Pressable,
@@ -62,6 +63,17 @@ function buildList(search: string): ListItem[] {
 export function PhoneInput({ onChange, label, autoFocus, resetKey, strict = true, initialValue, autofillOwnNumber }: PhoneInputProps) {
   const { palette } = useTheme();
   const styles = useMemo(() => makeStyles(palette), [palette]);
+
+  // number-pad has no built-in return key on iOS, so the OS auto-injects its
+  // own floating "Done" pill above the keyboard when nothing else claims
+  // that role. Every real usage of this field sits inside a form that
+  // already has its own visible submit/continue button on screen, so that
+  // pill is pure redundant chrome — a blank, linked InputAccessoryView
+  // suppresses it (the mere presence of a linked accessory claims the slot)
+  // without showing anything in its place. `useId()` keeps this unique per
+  // instance rather than a fixed string, in case this component is ever
+  // mounted more than once on screen at the same time.
+  const accessoryId = `phoneInput-${useId()}`;
 
   const defaultCode    = detectCountryCode();
   const defaultCountry = ALL_COUNTRIES.find(c => c.code === defaultCode) ?? PINNED[0];
@@ -211,9 +223,15 @@ export function PhoneInput({ onChange, label, autoFocus, resetKey, strict = true
             selectionColor="transparent"
             textContentType={autofillOwnNumber ? 'telephoneNumber' : undefined}
             autoComplete={autofillOwnNumber ? 'tel' : undefined}
+            inputAccessoryViewID={Platform.OS === 'ios' ? accessoryId : undefined}
           />
         </View>
       </Pressable>
+      {Platform.OS === 'ios' && (
+        <InputAccessoryView nativeID={accessoryId}>
+          <View style={{ height: 0 }} />
+        </InputAccessoryView>
+      )}
       <FormSheet
         visible={pickerOpen}
         onClose={() => { setPickerOpen(false); setSearch(''); }}

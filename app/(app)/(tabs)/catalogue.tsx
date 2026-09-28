@@ -22,12 +22,15 @@ import { Screen } from '@/src/components/ui/Screen';
 import { FormSheet } from '@/src/components/ui/FormSheet';
 import { Button } from '@/src/components/ui/Button';
 import { Card } from '@/src/components/ui/Card';
+import { EmptyState } from '@/src/components/ui/EmptyState';
 import { Input } from '@/src/components/ui/Input';
+import { NoResultsState } from '@/src/components/ui/NoResultsState';
 import { Pill } from '@/src/components/ui/Pill';
 import { Text } from '@/src/components/ui/Text';
 import { PhoneInput } from '@/src/components/ui/PhoneInput';
 import { Ionicons } from '@expo/vector-icons';
-import { useTheme, radius, spacing, shadow, fontFamily as FF, FLOATING_TAB_BAR_CLEARANCE, PRODUCT_BADGE_PALETTE } from '@/src/theme';
+import { useTheme, radius, spacing, shadow, fontFamily as FF, FLOATING_TAB_BAR_CLEARANCE, SEARCH_VISIBILITY_THRESHOLD } from '@/src/theme';
+import { useAnimateLayoutChange } from '@/src/hooks/useAnimateLayoutChange';
 import type { Palette } from '@/src/theme';
 import type { Product, ProductVariant } from '@/src/types';
 import { useAuthStore } from '@/stores/auth';
@@ -42,6 +45,12 @@ import { SkeletonList } from '@/src/components/ui/SkeletonPlaceholder';
 
 function formatPrice(amount: number, currency: string) {
   return `${amount.toLocaleString('fr-FR')} ${currency}`;
+}
+
+// List rows show the bare number — the currency is declared once above the
+// list instead of repeated on every row (see the "Prix (devise)" header).
+function formatPriceValue(amount: number) {
+  return amount.toLocaleString('fr-FR');
 }
 
 
@@ -76,7 +85,16 @@ function productToForm(p: Product, currency: string): FormState {
     extra_fees: '',
     sale_price: formatAmountInput(String(Math.round(p.sale_price)), currency),
     initial_stock: '',
-    purchase_qty: '1',
+    // Defaults to the product's real current stock, not a flat '1' — this is
+    // the divisor for "Frais supplémentaires" below, and a merchant editing
+    // an existing product almost always means to spread a new fee across
+    // what she already has in stock, not across a single mystery unit.
+    // Dividing by 1 by default silently inflates cost_price by the full fee
+    // amount instead of the intended per-unit share. p.stock_qty is always 0
+    // for a has_variants product (documented invariant) — Math.max(...,1)
+    // falls back to the old safe default there, since variants track their
+    // own cost independently and this field's output isn't meaningful for them.
+    purchase_qty: String(Math.max(p.stock_qty || 0, 1)),
     reorder_level: p.reorder_level > 0 ? String(p.reorder_level) : '',
     supplier_id: p.supplier_id ?? '',
   };
@@ -215,6 +233,16 @@ function generateLocalKey() {
 // "Suivant" chain for those fields needs a shared accessory bar above the keyboard.
 const PRICE_ACCESSORY_ID = 'catalogue-product-form-price-accessory';
 
+// The product form's "Plus d'informations" fields (purchase_qty, extra_fees,
+// reorder_level) and each variant row's qty/price cells are numeric but have
+// no natural "next field" to chain to the way purchase→sale→quantity does —
+// and this modal's "Enregistrer" button is always visible (FormSheet footer,
+// never scrolls away), so a keyboard "Done" affordance would just repeat it.
+// A blank, linked accessory suppresses iOS's own auto-injected Done pill
+// without showing anything in its place.
+const SILENT_ACCESSORY_ID = 'catalogue-product-form-silent-accessory';
+const STOCK_ADJUST_ACCESSORY_ID = 'catalogue-stock-adjust-silent-accessory';
+
 // _touched: has the merchant directly typed into THIS row's price field at
 // least once (even if they cleared it back to empty)? Distinct from
 // sale_price===0 alone — an untouched row at 0 is still silently tracking
@@ -286,6 +314,7 @@ function VariantRow({ variant, currency, fallbackPrice, onChange, onRemove }: Va
         keyboardType="number-pad"
         placeholder="0"
         placeholderTextColor={palette.textDisabled}
+        inputAccessoryViewID={Platform.OS === 'ios' ? SILENT_ACCESSORY_ID : undefined}
       />
       <TextInput
         style={[
@@ -301,6 +330,7 @@ function VariantRow({ variant, currency, fallbackPrice, onChange, onRemove }: Va
         keyboardType="decimal-pad"
         placeholder="0"
         placeholderTextColor={palette.textDisabled}
+        inputAccessoryViewID={Platform.OS === 'ios' ? SILENT_ACCESSORY_ID : undefined}
       />
       <Pressable onPress={onRemove} hitSlop={10} style={{ width: VARIANT_REMOVE_WIDTH, alignItems: 'flex-end' }}>
         <Ionicons name="close-circle" size={20} color={palette.textDisabled} />
@@ -476,15 +506,20 @@ function ProductFormModal({ visible, editing, onClose, onSave, saving, currency,
         // stands in for it so Prix d'achat → Prix de vente → Quantité can chain
         // the same way "Suivant" on the keyboard would. Never wired to handleSave.
         Platform.OS === 'ios' ? (
-          <InputAccessoryView nativeID={PRICE_ACCESSORY_ID}>
-            <View style={styles.priceAccessoryBar}>
-              <Pressable onPress={handlePriceAccessoryNext} hitSlop={8}>
-                <Text variant="body" style={{ color: palette.primary, fontFamily: FF.semibold }}>
-                  {priceAccessoryLabel}
-                </Text>
-              </Pressable>
-            </View>
-          </InputAccessoryView>
+          <>
+            <InputAccessoryView nativeID={PRICE_ACCESSORY_ID}>
+              <View style={styles.priceAccessoryBar}>
+                <Pressable onPress={handlePriceAccessoryNext} hitSlop={8}>
+                  <Text variant="body" style={{ color: palette.primary, fontFamily: FF.semibold }}>
+                    {priceAccessoryLabel}
+                  </Text>
+                </Pressable>
+              </View>
+            </InputAccessoryView>
+            <InputAccessoryView nativeID={SILENT_ACCESSORY_ID}>
+              <View style={{ height: 0 }} />
+            </InputAccessoryView>
+          </>
         ) : undefined
       }
     >
@@ -692,8 +727,9 @@ function ProductFormModal({ visible, editing, onClose, onSave, saving, currency,
                         onChangeText={setField('purchase_qty')}
                         keyboardType="number-pad"
                         placeholderTextColor={palette.textDisabled}
+                        inputAccessoryViewID={Platform.OS === 'ios' ? SILENT_ACCESSORY_ID : undefined}
                       />
-                      <Text variant="caption" color="secondary">Utilisé pour répartir les frais par unité</Text>
+                      <Text variant="caption" color="secondary">Utilisée pour répartir les frais par unité</Text>
                     </View>
                   )}
 
@@ -706,6 +742,7 @@ function ProductFormModal({ visible, editing, onClose, onSave, saving, currency,
                       keyboardType="decimal-pad"
                       placeholder="0"
                       placeholderTextColor={palette.textDisabled}
+                      inputAccessoryViewID={Platform.OS === 'ios' ? SILENT_ACCESSORY_ID : undefined}
                     />
                   </View>
 
@@ -718,6 +755,7 @@ function ProductFormModal({ visible, editing, onClose, onSave, saving, currency,
                         onChangeText={setField('reorder_level')}
                         keyboardType="number-pad"
                         placeholderTextColor={palette.textDisabled}
+                        inputAccessoryViewID={Platform.OS === 'ios' ? SILENT_ACCESSORY_ID : undefined}
                       />
                       <Text variant="caption" color="secondary">Vous serez alerté à ce niveau de stock</Text>
                     </View>
@@ -773,6 +811,13 @@ function StockAdjustModal({ visible, product, onClose, onConfirm, saving, curren
           />
         </View>
       }
+      accessory={
+        Platform.OS === 'ios' ? (
+          <InputAccessoryView nativeID={STOCK_ADJUST_ACCESSORY_ID}>
+            <View style={{ height: 0 }} />
+          </InputAccessoryView>
+        ) : undefined
+      }
     >
       <Card style={styles.stockPreview}>
         <Text variant="label">{product.name}</Text>
@@ -795,7 +840,10 @@ function StockAdjustModal({ visible, product, onClose, onConfirm, saving, curren
         </Pressable>
       </View>
 
-      <Input label="Quantité" value={qty} onChangeText={setQty} keyboardType="number-pad" />
+      <Input
+        label="Quantité" value={qty} onChangeText={setQty} keyboardType="number-pad"
+        inputAccessoryViewID={Platform.OS === 'ios' ? STOCK_ADJUST_ACCESSORY_ID : undefined}
+      />
       <Input label="Note (optionnel)" value={note} onChangeText={setNote}
         placeholder="Livraison, retour client, casse" />
     </FormSheet>
@@ -938,14 +986,14 @@ function StockStatus({ product, variants }: { product: Product; variants?: Produ
     if (!variants || variants.length === 0) return null;
     const isOut = variants.every(v => v.stock_qty <= 0);
     if (!isOut) return null;
-    return <Pill tone="warning">Épuisé</Pill>;
+    return <Pill tone="warning">Fini</Pill>;
   }
 
   const isOut = product.stock_qty === 0;
   const isLow = !isOut && product.reorder_level > 0 && product.stock_qty <= product.reorder_level;
 
   if (isOut) {
-    return <Pill tone="warning">Épuisé</Pill>;
+    return <Pill tone="warning">Fini</Pill>;
   }
   if (isLow) {
     return (
@@ -959,21 +1007,70 @@ function StockStatus({ product, variants }: { product: Product; variants?: Produ
   );
 }
 
-function productBadgeColor(name: string) {
-  const sum = name.split('').reduce((acc, ch) => acc + ch.charCodeAt(0), 0);
-  return PRODUCT_BADGE_PALETTE.bg[sum % PRODUCT_BADGE_PALETTE.bg.length];
-}
-
-function productBadgeTextColor(name: string) {
-  const sum = name.split('').reduce((acc, ch) => acc + ch.charCodeAt(0), 0);
-  return PRODUCT_BADGE_PALETTE.text[sum % PRODUCT_BADGE_PALETTE.text.length];
-}
-
-function ProductRow({ product, currency, onPress, onLongPress, archived, variants }: ProductRowProps) {
+// ─── Archive switch (Actifs / Archivés) ────────────────────────────────────
+// One sliding-pill control instead of two independent chips sitting side by
+// side — same binary choice, but reads as a single switch with a satisfying
+// slide + settle bounce, not "two buttons that happen to be next to each
+// other". Labels are the real state names (Actifs/Archivés), never a
+// generic ON/OFF baked into the control itself.
+function ArchiveSwitch({ value, onChange }: { value: 'actifs' | 'archives'; onChange: (v: 'actifs' | 'archives') => void }) {
   const { palette } = useTheme();
   const styles = useMemo(() => makeStyles(palette), [palette]);
-  const badgeBg = productBadgeColor(product.name);
-  const badgeTextColor = productBadgeTextColor(product.name);
+  const [trackWidth, setTrackWidth] = useState(0);
+  const slide = useRef(new Animated.Value(value === 'archives' ? 1 : 0)).current;
+  const bounce = useRef(new Animated.Value(1)).current;
+
+  useEffect(() => {
+    Animated.parallel([
+      Animated.spring(slide, {
+        toValue: value === 'archives' ? 1 : 0,
+        useNativeDriver: true,
+        friction: 8,
+        tension: 60,
+      }),
+      // A tiny squash-and-settle on the thumb itself — the "cool" tactile
+      // feedback on top of the slide, not just a flat linear move.
+      Animated.sequence([
+        Animated.timing(bounce, { toValue: 0.92, duration: 90, useNativeDriver: true }),
+        Animated.spring(bounce, { toValue: 1, useNativeDriver: true, friction: 5, tension: 140 }),
+      ]),
+    ]).start();
+  }, [value, slide, bounce]);
+
+  const inset = 3;
+  const thumbWidth = Math.max(trackWidth / 2 - inset, 0);
+  const thumbTranslate = slide.interpolate({ inputRange: [0, 1], outputRange: [0, thumbWidth] });
+
+  return (
+    <View style={styles.switchTrack} onLayout={e => setTrackWidth(e.nativeEvent.layout.width)}>
+      {trackWidth > 0 && (
+        <Animated.View
+          style={[
+            styles.switchThumb,
+            { width: thumbWidth, transform: [{ translateX: thumbTranslate }, { scale: bounce }] },
+          ]}
+        />
+      )}
+      {(['actifs', 'archives'] as const).map(t => (
+        <Pressable key={t} onPress={() => onChange(t)} style={styles.switchOption} hitSlop={4}>
+          <Text
+            variant="caption"
+            style={{
+              color: value === t ? palette.textInverse : palette.textSecondary,
+              fontWeight: value === t ? '700' : '500',
+            }}
+          >
+            {t === 'actifs' ? 'Actifs' : 'Archivés'}
+          </Text>
+        </Pressable>
+      ))}
+    </View>
+  );
+}
+
+function ProductRow({ product, onPress, onLongPress, archived, variants }: ProductRowProps) {
+  const { palette } = useTheme();
+  const styles = useMemo(() => makeStyles(palette), [palette]);
   const initial = product.name.charAt(0).toUpperCase();
   const isOutOfStock = !archived && (
     product.has_variants
@@ -988,8 +1085,8 @@ function ProductRow({ product, currency, onPress, onLongPress, archived, variant
         onLongPress={onLongPress}
         style={({ pressed }) => [styles.productRow, pressed && { opacity: 0.65 }]}
       >
-        <View style={[styles.productBadge, { backgroundColor: badgeBg, opacity: 0.5 }]}>
-          <Text allowFontScaling={false} style={[styles.productBadgeText, { color: badgeTextColor }]}>{initial}</Text>
+        <View style={[styles.productBadge, { opacity: 0.5 }]}>
+          <Text allowFontScaling={false} style={styles.productBadgeText}>{initial}</Text>
         </View>
         <View style={styles.productCenter}>
           <Text style={[styles.productName, { color: palette.textDisabled }]} numberOfLines={1}>{product.name}</Text>
@@ -1004,8 +1101,8 @@ function ProductRow({ product, currency, onPress, onLongPress, archived, variant
 
   return (
     <Pressable onPress={onPress} style={({ pressed }) => [styles.productRow, pressed && { opacity: 0.65 }]}>
-      <View style={[styles.productBadge, { backgroundColor: badgeBg, opacity: isOutOfStock ? 0.38 : 1 }]}>
-        <Text style={[styles.productBadgeText, { color: badgeTextColor }]}>{initial}</Text>
+      <View style={[styles.productBadge, { opacity: isOutOfStock ? 0.38 : 1 }]}>
+        <Text style={styles.productBadgeText}>{initial}</Text>
       </View>
       <View style={styles.productCenter}>
         <View style={{ flexDirection: 'row', alignItems: 'center', gap: spacing[2] }}>
@@ -1021,18 +1118,24 @@ function ProductRow({ product, currency, onPress, onLongPress, archived, variant
         </View>
         <StockStatus product={product} variants={variants} />
       </View>
-      <View style={[styles.productRight, product.has_variants && { alignSelf: 'stretch' }]}>
-        <Text style={[styles.priceText, isOutOfStock && { color: palette.textDisabled }]}>
-          {formatPrice(product.sale_price, currency)}
-        </Text>
-        {product.has_variants ? (
-          <Ionicons
-            name="chevron-forward"
-            size={14}
-            color={palette.primary}
-            style={{ position: 'absolute', bottom: 0, right: 0 }}
-          />
-        ) : null}
+      {/* One non-wrapping row: price, then — only for a real variant product
+          — its chevron. Previously the chevron sat absolutely positioned at
+          the bottom of a stretched container while the price sat at the
+          top, which could visually split them onto two lines; and a second,
+          unrelated chevron had been added to every non-variant row, when
+          the chevron's only real meaning is "this product has varieties". */}
+      <View style={styles.productRight}>
+        <View style={styles.priceRow}>
+          <Text
+            style={[styles.priceText, isOutOfStock && { color: palette.textDisabled }]}
+            numberOfLines={1}
+          >
+            {formatPriceValue(product.sale_price)}
+          </Text>
+          {product.has_variants && (
+            <Ionicons name="chevron-forward" size={14} color={palette.textDisabled} />
+          )}
+        </View>
       </View>
     </Pressable>
   );
@@ -1240,6 +1343,18 @@ export default function CatalogueScreen() {
   const [showAdjust, setShowAdjust] = useState(false);
   const [adjustTarget, setAdjustTarget] = useState<Product | null>(null);
   const [tab, setTab] = useState<'actifs' | 'archives'>('actifs');
+
+  // Search is shown once the CURRENT tab's own list is big enough to need it
+  // — an active catalogue of 3 products with 40 archived items shouldn't get
+  // a search box just because the archive is long.
+  const searchVisible = (tab === 'actifs' ? products.length : archivedProducts.length) >= SEARCH_VISIBILITY_THRESHOLD;
+  useAnimateLayoutChange(searchVisible);
+  // Clear a typed query when the box disappears (list shrank, or a tab
+  // switch landed on a shorter list) so it can't silently keep narrowing
+  // whichever tab is current with no visible input left to clear it.
+  useEffect(() => {
+    if (!searchVisible) setSearch('');
+  }, [searchVisible]);
   const [successMsg, setSuccessMsg] = useState('');
   const [showStats, setShowStats] = useState(false);
   const [statsTarget, setStatsTarget] = useState<Product | null>(null);
@@ -1292,7 +1407,7 @@ export default function CatalogueScreen() {
 
   useEffect(() => {
     if (businessId) {
-      fetchProducts(businessId, userId);
+      fetchProducts(businessId, userId, session?.activeMembership?.id, session?.activeMembership?.role);
       fetchFournisseurs(businessId);
       // Also needed on mount (not just on tab switch, see the effect below)
       // so showActivationEmptyState can tell "truly zero products anywhere"
@@ -1304,7 +1419,7 @@ export default function CatalogueScreen() {
 
   useFocusEffect(
     useCallback(() => {
-      if (businessId) fetchProducts(businessId, userId);
+      if (businessId) fetchProducts(businessId, userId, session?.activeMembership?.id, session?.activeMembership?.role);
     }, [businessId, userId]),
   );
 
@@ -1317,7 +1432,7 @@ export default function CatalogueScreen() {
   const onRefresh = useCallback(async () => {
     if (!businessId) return;
     setRefreshing(true);
-    await (tab === 'archives' ? fetchArchivedProducts(businessId) : fetchProducts(businessId, userId));
+    await (tab === 'archives' ? fetchArchivedProducts(businessId) : fetchProducts(businessId, userId, session?.activeMembership?.id, session?.activeMembership?.role));
     setRefreshing(false);
   }, [businessId, userId, tab]);
 
@@ -1460,7 +1575,7 @@ export default function CatalogueScreen() {
       ) : null}
 
       {offline && (
-        <OfflineNotice offlineSince={offlineSince} onRetry={() => fetchProducts(businessId, userId)} />
+        <OfflineNotice offlineSince={offlineSince} onRetry={() => fetchProducts(businessId, userId, session?.activeMembership?.id, session?.activeMembership?.role)} />
       )}
 
       {/* Header */}
@@ -1475,32 +1590,36 @@ export default function CatalogueScreen() {
             </Text>
           )}
         </View>
+        {/* Currency declared once here instead of repeated on every row's
+            price (see formatPriceValue in ProductRow) — archived rows don't
+            show a price at all, so this only applies to Actifs. */}
+        {!showActivationEmptyState && tab === 'actifs' && (
+          <Text variant="caption" color="secondary">Prix ({currency})</Text>
+        )}
       </View>
 
       {/* Tabs — hidden once the 24h onboarding window has closed on a still
           completely empty catalogue; nothing to switch between yet. */}
       {!showActivationEmptyState && (
         <View style={styles.tabRow}>
-          {(['actifs', 'archives'] as const).map(t => (
-            <Pressable key={t} onPress={() => setTab(t)} style={[styles.tabChip, tab === t && styles.tabChipActive]}>
-              <Text variant="caption" style={{ color: tab === t ? palette.textInverse : palette.textSecondary }}>
-                {t === 'actifs' ? 'Actifs' : 'Archivés'}
-              </Text>
-            </Pressable>
-          ))}
+          <ArchiveSwitch value={tab} onChange={setTab} />
         </View>
       )}
 
-      {/* Search — hidden when the current tab's own list is empty: nothing to search yet */}
-      {(tab === 'actifs' ? products.length > 0 : archivedProducts.length > 0) && (
+      {searchVisible && (
         <View style={styles.searchRow}>
           <Input placeholder="Rechercher un produit…" value={search} onChangeText={setSearch} style={{ flex: 1 }} />
         </View>
       )}
 
-      {/* Stats row (actifs only) */}
+      {/* Stats row (actifs only). "Valeur du stock" is cost_price-derived —
+          hidden for vendeur to match the real data-level gate (cost_price is
+          always 0 in their own fetched data as of migration_v185.sql; this
+          is the display-side complement, not a substitute for it, since a
+          raw "0 GNF" would just look like a bug rather than actually hidden). */}
       {products.length > 0 && tab === 'actifs' && (
         <View style={styles.statsCard}>
+          {role !== 'vendeur' && (
           <View style={styles.statCol}>
             <Text variant="caption" color="secondary">Valeur du stock</Text>
             <Text style={styles.statValue}>
@@ -1511,6 +1630,7 @@ export default function CatalogueScreen() {
               )}
             </Text>
           </View>
+          )}
           {outOfStockActive.length > 0 && (
             <>
               <View style={styles.statDivider} />
@@ -1536,24 +1656,26 @@ export default function CatalogueScreen() {
             // 24h onboarding window closed with the catalogue still
             // completely empty and the activation fork no longer showing —
             // this is now the merchant's only path to their first product,
-            // so it replaces the corner FAB instead of sitting beside it.
-            <View style={styles.emptyState}>
-              <Text variant="h4" style={{ textAlign: 'center' }}>Ajouter un produit</Text>
-              <Pressable
-                onPress={() => { setEditingProduct(null); setShowForm(true); }}
-                style={({ pressed }) => [styles.fab, pressed && { opacity: 0.82 }]}
-                accessibilityLabel="Ajouter un produit"
-                accessibilityRole="button"
-              >
-                <Text style={styles.fabIcon}>+</Text>
-              </Pressable>
-            </View>
+            // so it carries its own button instead of relying on the
+            // bottom FAB (suppressed for this state, see fabContainer below).
+            <EmptyState
+              icon="cube-outline"
+              title="Aucun produit pour le moment."
+              subtitle="Ajoutez ce que vous vendez pour aller plus vite à la caisse."
+              actionLabel="+ Ajouter un produit"
+              onAction={() => { setEditingProduct(null); setShowForm(true); }}
+            />
           ) : (
-            // Still inside the 24h window: nothing renders here — the
-            // activation fork (app/(app)/_layout.tsx) is what actually
-            // guides a brand-new merchant to their first product now, so a
-            // second CTA on top of it would be redundant.
-            null
+            // Still inside the 24h window: the activation fork
+            // (app/(app)/_layout.tsx) is what actually guides a brand-new
+            // merchant to their first product, and the bottom FAB (still
+            // rendered for this state) is the real action — so this is
+            // context only, no second button to compete with either.
+            <EmptyState
+              icon="cube-outline"
+              title="Aucun produit pour le moment."
+              subtitle="Ajoutez ce que vous vendez pour aller plus vite à la caisse."
+            />
           )
         ) : (
           <View style={styles.emptyState}>
@@ -1567,47 +1689,59 @@ export default function CatalogueScreen() {
           </View>
         )
       ) : tab === 'archives' && archivedFiltered.length === 0 ? (
-        <View style={styles.emptyState}>
-          <Ionicons name="cube-outline" size={48} color={palette.textDisabled} />
-          <Text variant="body" color="secondary">Aucun produit archivé.</Text>
-        </View>
+        // Two distinct states, never conflated: a search with no match must
+        // never read as "your archive is empty" — that would make a merchant
+        // fear her archived products are gone, when they simply don't match
+        // what she typed.
+        search.trim() ? (
+          <NoResultsState query={search} />
+        ) : (
+          <EmptyState
+            icon="cube-outline"
+            title="Aucun produit archivé."
+            subtitle="Les produits que vous archivez apparaîtront ici."
+          />
+        )
       ) : (
-        <FlatList
-          data={displayList}
-          keyExtractor={p => p.id}
-          renderItem={({ item }) => (
-            <ProductRow
-              product={item}
-              currency={currency}
-              archived={tab === 'archives'}
-              variants={variantsByProduct[item.id]}
-              onPress={() => {
-                if (tab === 'archives') {
-                  setRestoreSheetProduct(item);
-                  setShowRestoreSheet(true);
-                  return;
-                }
-                openOptions(item);
-              }}
-              onLongPress={() => tab === 'archives' ? undefined : openOptions(item)}
-            />
-          )}
-          ItemSeparatorComponent={() => <View style={styles.separator} />}
-          contentContainerStyle={styles.list}
-          showsVerticalScrollIndicator={false}
-          keyboardShouldPersistTaps="handled"
-          refreshControl={
-            <RefreshControl refreshing={refreshing} onRefresh={onRefresh} tintColor={palette.primary} colors={[palette.primary]} />
-          }
-          ListEmptyComponent={
-            search.trim() ? (
-              <View style={[styles.emptyState, { paddingTop: spacing[10] }]}>
-                <Ionicons name="search-outline" size={48} color={palette.textDisabled} />
-                <Text variant="body" color="secondary">Aucun résultat pour "{search}"</Text>
-              </View>
-            ) : null
-          }
-        />
+        // Inset, rounded container matching the search field / "Valeur du
+        // stock" card above it — the list used to be a full-width, sharp-
+        // edged block with no visual relationship to those. overflow:
+        // 'hidden' is what clips the first/last row's corners to the
+        // container's own radius instead of them staying square.
+        <View style={styles.listContainer}>
+          <FlatList
+            style={{ flex: 1 }}
+            data={displayList}
+            keyExtractor={p => p.id}
+            renderItem={({ item }) => (
+              <ProductRow
+                product={item}
+                currency={currency}
+                archived={tab === 'archives'}
+                variants={variantsByProduct[item.id]}
+                onPress={() => {
+                  if (tab === 'archives') {
+                    setRestoreSheetProduct(item);
+                    setShowRestoreSheet(true);
+                    return;
+                  }
+                  openOptions(item);
+                }}
+                onLongPress={() => tab === 'archives' ? undefined : openOptions(item)}
+              />
+            )}
+            ItemSeparatorComponent={() => <View style={styles.separator} />}
+            contentContainerStyle={styles.list}
+            showsVerticalScrollIndicator={false}
+            keyboardShouldPersistTaps="handled"
+            refreshControl={
+              <RefreshControl refreshing={refreshing} onRefresh={onRefresh} tintColor={palette.primary} colors={[palette.primary]} />
+            }
+            ListEmptyComponent={
+              search.trim() ? <NoResultsState query={search} /> : null
+            }
+          />
+        </View>
       )}
 
       {/* Out-of-stock bottom sheet */}
@@ -1719,11 +1853,12 @@ export default function CatalogueScreen() {
         <Animated.View style={[styles.fabContainer, { opacity: fabOpacity, transform: [{ scale: fabScale }] }]}>
           <Pressable
             onPress={() => { setEditingProduct(null); setShowForm(true); }}
-            style={({ pressed }) => [styles.fab, pressed && { opacity: 0.82 }]}
+            style={({ pressed }) => [styles.fabExtended, pressed && { opacity: 0.82 }]}
             accessibilityLabel="Ajouter un produit"
             accessibilityRole="button"
           >
-            <Text style={styles.fabIcon}>+</Text>
+            <Ionicons name="add" size={20} color={palette.textInverse} />
+            <Text style={styles.fabExtendedLabel}>Ajouter un produit</Text>
           </Pressable>
         </Animated.View>
       )}
@@ -1749,15 +1884,29 @@ function makeStyles(p: Palette) {
       paddingHorizontal: spacing[5], paddingTop: spacing[4], paddingBottom: spacing[3],
     },
     tabRow: {
-      flexDirection: 'row', gap: spacing[2],
+      flexDirection: 'row',
       paddingHorizontal: spacing[5], paddingBottom: spacing[3],
     },
-    tabChip: {
-      paddingHorizontal: spacing[4], paddingVertical: spacing[1.5],
-      borderRadius: radius.full, borderWidth: 1, borderColor: p.border,
-      backgroundColor: p.surface,
+    // Fixed width, not flex/intrinsic — the two switchOption labels below
+    // use flex:1 each, so they need a resolved parent width to split
+    // evenly; that's also what keeps the sliding thumb's "half the track"
+    // math exact regardless of which label is longer ("Archivés" vs "Actifs").
+    switchTrack: {
+      flexDirection: 'row',
+      width: 224, height: 40,
+      borderRadius: radius.full,
+      backgroundColor: p.background,
+      borderWidth: 1, borderColor: p.border,
+      position: 'relative',
     },
-    tabChipActive: { backgroundColor: p.primary, borderColor: p.primary },
+    switchThumb: {
+      position: 'absolute',
+      top: 3, bottom: 3, left: 3,
+      borderRadius: radius.full,
+      backgroundColor: p.primary,
+      ...shadow.sm,
+    },
+    switchOption: { flex: 1, alignItems: 'center', justifyContent: 'center', zIndex: 1 },
     alertBanner: {
       backgroundColor: p.warningLight, paddingHorizontal: spacing[5], paddingVertical: spacing[2],
       borderBottomWidth: 1, borderBottomColor: p.warning,
@@ -1777,21 +1926,41 @@ function makeStyles(p: Palette) {
     statCol: { flex: 1, gap: 3 },
     statDivider: { width: 1, backgroundColor: p.border, marginHorizontal: spacing[4] },
     statValue: { fontFamily: FF.bold, fontSize: 18, color: p.textPrimary },
-    list: { paddingHorizontal: spacing[5], paddingBottom: spacing[10] },
+    // Horizontal inset now lives on listContainer's own margin below, not
+    // here — the FlatList's content spans the container's full width, with
+    // each row supplying its own horizontal padding instead.
+    list: { paddingBottom: spacing[10] },
+    // Same radius/border/surface language as statsCard and the search
+    // field above it — same radius.md token, not a one-off literal value.
+    listContainer: {
+      flex: 1,
+      marginHorizontal: spacing[5],
+      borderRadius: radius.md,
+      borderWidth: 1, borderColor: p.border,
+      backgroundColor: p.surface,
+      overflow: 'hidden',
+    },
     separator: { height: 0 },
     productRow: {
       flexDirection: 'row', alignItems: 'center',
-      paddingVertical: spacing[4],
+      paddingHorizontal: spacing[4], paddingVertical: spacing[4],
       borderBottomWidth: 1, borderBottomColor: p.border,
       backgroundColor: p.surface,
     },
+    // One neutral tile token for every product — no per-item hash color.
+    // Swap this for the real product photo once catalogue photos ship.
     productBadge: {
       width: 44, height: 44, borderRadius: radius.md,
       alignItems: 'center', justifyContent: 'center',
       marginRight: 0,
+      backgroundColor: p.background, borderWidth: 1, borderColor: p.border,
     },
-    productBadgeText: { fontFamily: FF.semibold, fontSize: 16 },
-    productCenter: { flex: 1, paddingLeft: 12, gap: 3 },
+    productBadgeText: { fontFamily: FF.semibold, fontSize: 16, color: p.textSecondary },
+    // minWidth: 0 lets this column actually shrink below its content's
+    // natural width — without it, a long product name can push the
+    // trailing price/chevron group past the row's edge instead of the
+    // name truncating.
+    productCenter: { flex: 1, minWidth: 0, paddingLeft: 12, gap: 3 },
     productName: { fontFamily: FF.semibold, fontSize: 16, color: p.textPrimary },
     productStockText: { fontFamily: FF.regular, fontSize: 13, color: p.textSecondary },
     productMeta: { flexDirection: 'row', gap: spacing[2], alignItems: 'center' },
@@ -1803,21 +1972,33 @@ function makeStyles(p: Palette) {
       backgroundColor: p.warningLight, borderRadius: radius.sm,
       paddingHorizontal: spacing[1.5], paddingVertical: 2, borderWidth: 1, borderColor: p.warning,
     },
-    productRight: { alignItems: 'flex-end' },
-    priceText: { fontFamily: FF.semibold, fontSize: 15, color: p.primary },
+    // flexShrink: 0 — the trailing price+chevron group never shrinks or
+    // wraps; productCenter's minWidth: 0 above is what gives it the room
+    // to hold its own full width by taking space from the name instead.
+    productRight: { alignItems: 'flex-end', flexShrink: 0 },
+    priceRow: { flexDirection: 'row', alignItems: 'center', gap: spacing[1] },
+    // Neutral, same weight as the product name — ordinary prices are not an
+    // accent moment. Tabular figures keep the column aligned as it scrolls.
+    priceText: {
+      fontFamily: FF.semibold, fontSize: 15, color: p.textPrimary,
+      fontVariant: ['tabular-nums'] as ['tabular-nums'],
+    },
     emptyState: { flex: 1, alignItems: 'center', justifyContent: 'center', padding: spacing[8], gap: spacing[3] },
     emptyDesc: { textAlign: 'center', maxWidth: 260 },
     // 194 was tuned against the old flush tab bar's flex space; the floating
     // pill no longer reserves that space, so the same clearance is added
     // here too to keep this FAB sitting exactly where it did before.
     fabContainer: { position: 'absolute', bottom: 194 + FLOATING_TAB_BAR_CLEARANCE, right: spacing[4], zIndex: 10 },
-    fab: {
-      width: 56, height: 56, borderRadius: radius.full,
-      backgroundColor: p.primary, alignItems: 'center', justifyContent: 'center',
+    // The floating "Ajouter un produit" pill — labeled instead of a bare
+    // icon, per the calm-catalogue redesign. Auto-width, floating bottom-right.
+    fabExtended: {
+      flexDirection: 'row', alignItems: 'center', gap: spacing[2],
+      height: 56, paddingHorizontal: spacing[5], borderRadius: radius.full,
+      backgroundColor: p.primary,
       shadowColor: p.textPrimary, shadowOffset: { width: 0, height: 4 },
       shadowOpacity: 0.18, shadowRadius: 8, elevation: 8,
     },
-    fabIcon: { fontSize: 28, lineHeight: 32, fontWeight: '300' as const, color: p.textInverse, marginTop: -2 },
+    fabExtendedLabel: { fontFamily: FF.semibold, fontSize: 15, color: p.textInverse },
 
     modalSafe: { flex: 1, backgroundColor: p.background },
     modalHeader: {

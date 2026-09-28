@@ -8,15 +8,17 @@ export interface Country {
 
 export const PINNED_CODES = ['GN', 'CI', 'SN', 'ML', 'BF', 'GH', 'NG', 'CM', 'FR', 'US'];
 
+// Was locale-based (Intl.DateTimeFormat's resolved region) — a real, recurring
+// bug: a device's *language* locale is not its region, and plenty of Android
+// phones sold in Guinea report a generic "en-US" system locale, so this
+// synchronous default kept landing on +1 instead of +224. The async IP-based
+// detectCountryCodeAsync() below is the real "smart" detection and stays
+// correct — but it silently falls back to this same function when the
+// network call fails, which is exactly the low-connectivity condition this
+// app is built around, so the wrong guess never actually self-corrected in
+// practice. Patron is a single-market (Guinea) app; defaulting straight to
+// 'GN' here removes the failure mode entirely instead of guessing worse.
 export function detectCountryCode(): string {
-  try {
-    const locale = Intl.DateTimeFormat().resolvedOptions().locale;
-    const parts = locale.split('-');
-    if (parts.length >= 2) {
-      const region = parts[parts.length - 1].toUpperCase();
-      if (region.length === 2) return region;
-    }
-  } catch {}
   return 'GN';
 }
 

@@ -1,5 +1,6 @@
 import { serve } from 'https://deno.land/std@0.177.0/http/server.ts';
 import { createClient } from 'https://esm.sh/@supabase/supabase-js@2';
+import { safeErrorResponse } from '../_shared/errors.ts';
 
 // Alpha: the AI business advisor (db/migration_v133.sql + migration_v134.sql
 // renamed it from "Mystic"). Called right after send_alpha_message() has
@@ -908,6 +909,13 @@ serve(async (req) => {
         headers: { ...corsHeaders, 'Content-Type': 'application/json' },
       });
     } catch (genErr) {
+      // Full detail (Groq/OpenAI status+body, tool-call failures, ...) goes
+      // server-side only — error_note (founder-visible via alpha_messages,
+      // same posture as generate-support-draft's failed drafts). The chat
+      // bubble the merchant actually sees is FALLBACK_MESSAGE, and
+      // stores/alpha.ts never reads this response's `error` field at all
+      // (confirmed: no reference to it anywhere in that file), so genericizing
+      // it here is a pure hygiene fix, not a behavior change.
       const msg = genErr instanceof Error ? genErr.message : 'Erreur inconnue';
       console.error('alpha-chat generation failure:', msg);
 
@@ -923,16 +931,11 @@ serve(async (req) => {
         .select()
         .single();
 
-      return new Response(JSON.stringify({ ok: false, message: failedRow ?? null, error: msg }), {
+      return new Response(JSON.stringify({ ok: false, message: failedRow ?? null, error: 'Génération impossible' }), {
         headers: { ...corsHeaders, 'Content-Type': 'application/json' },
       });
     }
   } catch (e) {
-    const msg = e instanceof Error ? e.message : 'Erreur inconnue';
-    console.error('alpha-chat crash:', msg);
-    return new Response(JSON.stringify({ error: msg }), {
-      status: 500,
-      headers: { ...corsHeaders, 'Content-Type': 'application/json' },
-    });
+    return safeErrorResponse(e, corsHeaders, 'alpha-chat');
   }
 });

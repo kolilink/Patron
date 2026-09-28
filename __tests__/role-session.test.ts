@@ -37,7 +37,7 @@ function makeBusiness(id: string, name: string): Business {
     subscription_status: 'trialing', trial_ends_at: null,
     stripe_customer_id: null, subscription_expires_at: null, phone: null,
     payment_provider: null, revenuecat_customer_id: null, bonus_access_until: null,
-    referred_by_business_id: null, referral_code: null,
+    referred_by_business_id: null, referral_code: null, first_run_hero_completed_at: null,
     created_at: '2026-01-01T00:00:00Z', updated_at: '2026-01-01T00:00:00Z', created_by: 'user-1',
   };
 }
@@ -60,7 +60,7 @@ beforeEach(() => {
     session: {
       user: {
         id: 'user-1', name: 'Nick', email: '', phone: null,
-        avatar_url: null, language: 'fr', recovery_email: null,
+        avatar_url: null, language: 'fr', recovery_email: null, notify_on_every_sale: true,
         created_at: '2026-01-01T00:00:00Z', updated_at: '2026-01-01T00:00:00Z',
       },
       memberships: [mem1, mem2],

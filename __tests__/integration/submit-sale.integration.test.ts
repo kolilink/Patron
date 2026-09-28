@@ -106,6 +106,28 @@ describe('submit_sale (real RPC)', () => {
     expect(error!.message).toMatch(/propres ventes/);
   });
 
+  it('recomputes total_amount from the cart server-side — a tampered p_total_amount is ignored (security audit 2026-09-27, migration_v182)', async () => {
+    const { client, userId } = await createTestUser('admin');
+    const businessId = await createTestBusiness(client, 'Boutique Test');
+    const productId = await createTestProduct(businessId, userId, { stock_qty: 10, sale_price: 1000, cost_price: 500 });
+
+    // Real cart is worth 3 x 1000 = 3000, but the caller asserts a wildly
+    // different total — as a modified/custom client talking to the RPC
+    // directly could, bypassing the app's own (correct) total computation.
+    const { data: orderId, error } = await client.rpc('submit_sale', {
+      p_business_id: businessId,
+      p_seller_id: userId,
+      p_cart: [{ product_id: productId, product_name: 'Produit test', qty: 3, unit_price: 1000 }],
+      p_total_amount: 1, // tampered
+      p_pay_method: 'especes',
+      p_pay_amount: 3000,
+    });
+
+    expect(error).toBeNull();
+    const { data: order } = await client.from('sale_orders').select('total_amount').eq('id', orderId).single();
+    expect(order!.total_amount).toBe(3000); // derived from the cart, not the tampered value
+  });
+
   it('rejects an investisseur (read-only role) from submitting a sale', async () => {
     const { client: adminC, userId: adminId } = await createTestUser('admin');
     const businessId = await createTestBusiness(adminC, 'Boutique Test');

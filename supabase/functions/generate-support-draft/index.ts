@@ -1,5 +1,6 @@
 import { serve } from 'https://deno.land/std@0.177.0/http/server.ts';
 import { createClient } from 'https://esm.sh/@supabase/supabase-js@2';
+import { safeErrorResponse } from '../_shared/errors.ts';
 
 // Generates a founder-only draft reply for a support conversation
 // (db/migration_v126.sql). Triggered fire-and-forget right after a merchant
@@ -193,6 +194,11 @@ serve(async (req) => {
         headers: { ...corsHeaders, 'Content-Type': 'application/json' },
       });
     } catch (genErr) {
+      // Real detail (Groq status/body, missing key, ...) goes in error_note —
+      // founder-only via RLS (support_ai_drafts, is_founder() SELECT). The
+      // HTTP response's own error field stays generic; the founder inbox's
+      // "La suggestion n'a pas pu être générée" copy doesn't read it anyway,
+      // and the merchant-triggered fire-and-forget caller never surfaces it.
       const msg = genErr instanceof Error ? genErr.message : 'Erreur inconnue';
       console.error('generate-support-draft generation failure:', msg);
       await supabase.from('support_ai_drafts').insert({
@@ -200,16 +206,11 @@ serve(async (req) => {
         status: 'failed',
         error_note: msg.slice(0, 500),
       });
-      return new Response(JSON.stringify({ ok: false, error: msg }), {
+      return new Response(JSON.stringify({ ok: false, error: 'Génération impossible' }), {
         headers: { ...corsHeaders, 'Content-Type': 'application/json' },
       });
     }
   } catch (e) {
-    const msg = e instanceof Error ? e.message : 'Erreur inconnue';
-    console.error('generate-support-draft crash:', msg);
-    return new Response(JSON.stringify({ error: msg }), {
-      status: 500,
-      headers: { ...corsHeaders, 'Content-Type': 'application/json' },
-    });
+    return safeErrorResponse(e, corsHeaders, 'generate-support-draft');
   }
 });

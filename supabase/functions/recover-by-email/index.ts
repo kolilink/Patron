@@ -1,12 +1,13 @@
 import { serve } from 'https://deno.land/std@0.177.0/http/server.ts';
 import { createClient } from 'https://esm.sh/@supabase/supabase-js@2';
+import { safeErrorResponse } from '../_shared/errors.ts';
 
 const corsHeaders = {
   'Access-Control-Allow-Origin': '*',
   'Access-Control-Allow-Headers': 'authorization, x-client-info, apikey, content-type',
 };
 
-const MAX_FAILED_ATTEMPTS = 5;
+const MAX_FAILED_ATTEMPTS = 3;
 
 // Constant-time comparison — prevents timing-based brute-force of the code.
 function timingSafeEqual(a: string, b: string): boolean {
@@ -19,6 +20,14 @@ function timingSafeEqual(a: string, b: string): boolean {
     diff |= (aBytes[i] ?? 0) ^ (bBytes[i] ?? 0);
   }
   return diff === 0;
+}
+
+// Matches send-email-otp's hashToken() exactly — email_verifications.token
+// stores a SHA-256 hex digest, never the raw code (security audit 2026-09-27).
+async function hashToken(token: string): Promise<string> {
+  const bytes = new TextEncoder().encode(token);
+  const digest = await crypto.subtle.digest('SHA-256', bytes);
+  return Array.from(new Uint8Array(digest)).map((b) => b.toString(16).padStart(2, '0')).join('');
 }
 
 serve(async (req) => {
@@ -91,7 +100,7 @@ serve(async (req) => {
       });
     }
 
-    if (!timingSafeEqual(verif.token, normalizedCode)) {
+    if (!timingSafeEqual(verif.token, await hashToken(normalizedCode))) {
       console.error('recover-by-email: token mismatch for verificationId=', verificationId);
       await serviceClient
         .from('email_verifications')
@@ -142,7 +151,8 @@ serve(async (req) => {
     });
 
     if (linkErr || !linkData?.properties?.hashed_token) {
-      throw new Error(linkErr?.message ?? 'Impossible de générer la session.');
+      console.error('recover-by-email: generateLink failed:', linkErr?.message);
+      throw new Error('Impossible de générer la session.');
     }
 
     return new Response(
@@ -150,10 +160,6 @@ serve(async (req) => {
       { headers: { ...corsHeaders, 'Content-Type': 'application/json' } },
     );
   } catch (err) {
-    const msg = err instanceof Error ? err.message : 'Erreur inconnue';
-    console.error('recover-by-email crash:', msg);
-    return new Response(JSON.stringify({ error: msg }), {
-      status: 500, headers: { ...corsHeaders, 'Content-Type': 'application/json' },
-    });
+    return safeErrorResponse(err, corsHeaders, 'recover-by-email');
   }
 });

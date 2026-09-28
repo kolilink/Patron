@@ -23,7 +23,7 @@ import { useSafeAreaInsets } from 'react-native-safe-area-context';
 import { router } from 'expo-router';
 import { Ionicons } from '@expo/vector-icons';
 import { Text } from '@/src/components/ui/Text';
-import { colors, useTheme, spacing, radius, BUSINESS_AVATAR_PALETTE } from '@/src/theme';
+import { useTheme, spacing, radius, fontFamily, BUSINESS_AVATAR_PALETTE } from '@/src/theme';
 import type { Palette } from '@/src/theme';
 import { useAuthStore } from '@/stores/auth';
 import { useSupportChatStore } from '@/stores/supportChat';
@@ -47,11 +47,14 @@ const DRAWER_AVATAR_PALETTE = BUSINESS_AVATAR_PALETTE;
 // to only one or two, so it's just clutter above a short, glance-able list.
 const SEARCH_MIN_BUSINESSES = 6;
 
+// Matches Équipe's own ROLE_LABELS exactly — this used to say "Manager" and
+// "Investisseur" here while Équipe said "Gérant" and "Observateur" for the
+// same two roles, a real cross-screen inconsistency, not a style choice.
 const ROLE_LABEL: Record<Role, string> = {
   administrateur: 'Gérant',
-  manager: 'Manager',
+  manager: 'Gérant',
   vendeur: 'Vendeur',
-  investisseur: 'Investisseur',
+  investisseur: 'Observateur',
 };
 
 function avatarColor(id: string) {
@@ -239,7 +242,7 @@ export function BusinessDrawer() {
               const name = biz?.name ?? m.business_id;
               const initial = name.charAt(0).toUpperCase();
               const isActive = m.business_id === activeBusiness?.id;
-              const color = avatarColor(m.business_id);
+              const { bg, text: avatarTextColor } = avatarColor(m.business_id);
 
               return (
                 <Pressable
@@ -251,8 +254,8 @@ export function BusinessDrawer() {
                     pressed && { opacity: 0.7 },
                   ]}
                 >
-                  <View style={[styles.avatar, { backgroundColor: color }]}>
-                    <Text allowFontScaling={false} style={styles.avatarText}>{initial}</Text>
+                  <View style={[styles.avatar, { backgroundColor: bg }]}>
+                    <Text allowFontScaling={false} style={[styles.avatarText, { color: avatarTextColor }]}>{initial}</Text>
                   </View>
                   <View style={{ flex: 1 }}>
                     <Text style={styles.bizName} numberOfLines={1}>{name}</Text>
@@ -278,7 +281,7 @@ export function BusinessDrawer() {
               <>
                 <Pressable onPress={handleSupportInbox} style={({ pressed }) => [styles.footerRow, pressed && { opacity: 0.6 }]}>
                   <View style={styles.footerIcon}>
-                    <Ionicons name="headset-outline" size={18} color={palette.primary} />
+                    <Ionicons name="headset-outline" size={18} color={palette.textSecondary} />
                   </View>
                   <Text style={[styles.footerLabel, { flex: 1 }]}>Service client</Text>
                   {founderUnreadTotal > 0 && <View style={styles.footerUnreadDot} />}
@@ -289,7 +292,7 @@ export function BusinessDrawer() {
                     "Service client" above. */}
                 <Pressable onPress={handleFounderKpi} style={({ pressed }) => [styles.footerRow, pressed && { opacity: 0.6 }]}>
                   <View style={styles.footerIcon}>
-                    <Ionicons name="stats-chart-outline" size={18} color={palette.primary} />
+                    <Ionicons name="stats-chart-outline" size={18} color={palette.textSecondary} />
                   </View>
                   <Text style={[styles.footerLabel, { flex: 1 }]}>KPI</Text>
                 </Pressable>
@@ -300,14 +303,14 @@ export function BusinessDrawer() {
               // founder), just moved into this lateral drawer.
               <Pressable onPress={handleSupport} style={({ pressed }) => [styles.footerRow, pressed && { opacity: 0.6 }]}>
                 <View style={styles.footerIcon}>
-                  <Ionicons name="headset-outline" size={18} color={palette.primary} />
+                  <Ionicons name="headset-outline" size={18} color={palette.textSecondary} />
                 </View>
                 <Text style={[styles.footerLabel, { flex: 1 }]}>Support</Text>
               </Pressable>
             )}
             <Pressable onPress={handleJoin} style={({ pressed }) => [styles.footerRow, pressed && { opacity: 0.6 }]}>
               <View style={styles.footerIcon}>
-                <Ionicons name="key-outline" size={18} color={palette.primary} />
+                <Ionicons name="key-outline" size={18} color={palette.textSecondary} />
               </View>
               <Text style={styles.footerLabel}>Rejoindre un commerce</Text>
             </Pressable>
@@ -316,7 +319,7 @@ export function BusinessDrawer() {
                 <View style={styles.footerIcon}>
                   <Ionicons name="add-circle-outline" size={18} color={palette.textSecondary} />
                 </View>
-                <Text style={[styles.footerLabel, { color: palette.textSecondary }]}>Créer un commerce</Text>
+                <Text style={styles.footerLabel}>Créer un commerce</Text>
               </Pressable>
             )}
           </View>
@@ -357,8 +360,8 @@ function makeStyles(p: Palette) {
       borderBottomColor: p.border,
     },
     headerTitle: {
+      fontFamily: fontFamily.bold,
       fontSize: 16,
-      fontWeight: '700',
       color: p.textPrimary,
     },
     searchRow: {
@@ -386,11 +389,10 @@ function makeStyles(p: Palette) {
       paddingHorizontal: spacing[4],
       paddingVertical: spacing[3],
     },
+    // Tint + checkmark alone say "selected" — the extra purple left-edge
+    // bar this used to have was a second, redundant selection signal.
     rowActive: {
       backgroundColor: p.primaryLight,
-      borderLeftWidth: 3,
-      borderLeftColor: p.primary,
-      paddingLeft: spacing[4] - 3,
     },
     avatar: {
       width: 40,
@@ -399,14 +401,15 @@ function makeStyles(p: Palette) {
       alignItems: 'center',
       justifyContent: 'center',
     },
+    // Color comes from the per-business pair at the call site now (a light
+    // bg needs a dark letter, not the white text a solid fill used to need).
     avatarText: {
+      fontFamily: fontFamily.bold,
       fontSize: 16,
-      fontWeight: '700',
-      color: colors.neutral[0],
     },
     bizName: {
+      fontFamily: fontFamily.semibold,
       fontSize: 14,
-      fontWeight: '600',
       color: p.textPrimary,
       marginBottom: 2,
     },
@@ -444,10 +447,13 @@ function makeStyles(p: Palette) {
       borderWidth: 1,
       borderColor: p.border,
     },
+    // Ink, not brand purple — these four rows are plain navigation, not a
+    // state or a selection; purple stays reserved for the checkmark above
+    // and the unread dot below, which are real signals.
     footerLabel: {
+      fontFamily: fontFamily.medium,
       fontSize: 14,
-      fontWeight: '500',
-      color: p.primary,
+      color: p.textPrimary,
     },
     footerUnreadDot: {
       width: 8,

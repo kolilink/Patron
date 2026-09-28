@@ -1,5 +1,6 @@
 import { serve } from 'https://deno.land/std@0.177.0/http/server.ts';
 import { createClient } from 'https://esm.sh/@supabase/supabase-js@2';
+import { safeErrorResponse } from '../_shared/errors.ts';
 
 const corsHeaders = {
   'Access-Control-Allow-Origin': '*',
@@ -113,8 +114,8 @@ serve(async (req) => {
     });
 
     if (linkErr || !linkData?.properties?.hashed_token) {
-      const errMsg = linkErr?.message ?? 'Impossible de générer le lien de connexion';
-      return new Response(JSON.stringify({ error: errMsg }), {
+      console.error('restore-phone-session: generateLink failed:', linkErr?.message);
+      return new Response(JSON.stringify({ error: 'Impossible de générer le lien de connexion' }), {
         status: 500, headers: { ...corsHeaders, 'Content-Type': 'application/json' },
       });
     }
@@ -124,10 +125,6 @@ serve(async (req) => {
       { headers: { ...corsHeaders, 'Content-Type': 'application/json' } },
     );
   } catch (err) {
-    const msg = err instanceof Error ? err.message : 'Erreur inconnue';
-    console.error('restore-phone-session crash:', msg);
-    return new Response(JSON.stringify({ error: msg }), {
-      status: 500, headers: { ...corsHeaders, 'Content-Type': 'application/json' },
-    });
+    return safeErrorResponse(err, corsHeaders, 'restore-phone-session');
   }
 });

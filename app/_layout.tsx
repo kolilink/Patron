@@ -13,6 +13,13 @@ import {
   DMSans_600SemiBold,
   DMSans_700Bold,
 } from '@expo-google-fonts/dm-sans';
+// Inter — scoped to Alpha's chat bubbles only (app/(app)/alpha/index.tsx), not
+// the app-wide typography tokens. Already an existing dependency (previously
+// unused) so this adds no new package.json entry.
+import {
+  Inter_400Regular,
+  Inter_700Bold,
+} from '@expo-google-fonts/inter';
 import { PostHogProvider } from 'posthog-react-native';
 import { useAuthStore } from '@/stores/auth';
 import { openDb } from '@/lib/db';
@@ -46,6 +53,8 @@ const ALL_FONTS = {
   DMSans_500Medium,
   DMSans_600SemiBold,
   DMSans_700Bold,
+  Inter_400Regular,
+  Inter_700Bold,
 };
 
 function RootLayout() {

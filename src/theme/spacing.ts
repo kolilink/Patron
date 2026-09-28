@@ -48,6 +48,12 @@ export const FLOATING_TAB_BAR_HEIGHT = 64;
 export const FLOATING_TAB_BAR_GAP = 12; // gap between the pill's bottom edge and the safe-area inset
 export const FLOATING_TAB_BAR_CLEARANCE = FLOATING_TAB_BAR_HEIGHT + FLOATING_TAB_BAR_GAP + 12; // + a little breathing room above the pill
 
+// Below this many items, a list is short enough to scan at a glance — the
+// search bar above it is just clutter, not a shortcut. Shared across every
+// searchable list screen (catalogue, clients, équipe, vendre) so they can't
+// silently drift to different thresholds.
+export const SEARCH_VISIBILITY_THRESHOLD = 8;
+
 export const shadow = {
   sm: {
     shadowColor: '#1E1B4B',  // deep indigo-dark — warmer than pure slate

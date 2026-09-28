@@ -73,13 +73,21 @@ export const useExpensesStore = create<ExpensesStore>((set, get) => ({
       const creatorIds = [...new Set(expenses.map(e => e.created_by))];
       let result: Expense[];
       if (creatorIds.length > 0) {
-        const { data: profiles } = await supabase
-          .from('profiles')
-          .select('id, name')
-          .in('id', creatorIds);
+        // Best-effort enrichment — a hang or failure here must never block
+        // the main list (which already fetched successfully) from ever
+        // clearing `loading`. See CLAUDE.md's "withTimeout() sweep" note.
+        let profiles: { id: string; name: string }[] | null = null;
+        try {
+          const res = await withTimeout(
+            supabase.from('profiles').select('id, name').in('id', creatorIds),
+          );
+          profiles = res.data as { id: string; name: string }[] | null;
+        } catch {
+          profiles = null;
+        }
 
         const pm: Record<string, string> = {};
-        for (const p of (profiles ?? [])) pm[(p as { id: string; name: string }).id] = (p as { id: string; name: string }).name;
+        for (const p of (profiles ?? [])) pm[p.id] = p.name;
 
         result = expenses.map(e => ({
           ...fromCents(e),

@@ -9,13 +9,17 @@ import { Text } from '@/src/components/ui/Text';
 import { Pill } from '@/src/components/ui/Pill';
 import { DatePickerField } from '@/src/components/ui/DatePickerField';
 import { YearHeatmap } from '@/src/components/ui/YearHeatmap';
-import { useTheme, spacing, radius } from '@/src/theme';
+import { useTheme, spacing, radius, fontFamily } from '@/src/theme';
 import type { Palette } from '@/src/theme';
 import { useAuthStore } from '@/stores/auth';
 import { useRapportsStore, type PeriodReport } from '@/stores/rapports';
 
 function fmt(n: number, cur: string) {
-  return `${Math.round(n).toLocaleString('fr-FR')} ${cur}`;
+  // `|| 0` normalizes a rounded negative zero (e.g. Math.round(-0.4) === -0)
+  // back to plain 0 — otherwise a value that nets out to just-below-zero
+  // could display as "-0 GNF", which reads as a real (wrong) negative amount.
+  const rounded = Math.round(n) || 0;
+  return `${rounded.toLocaleString('fr-FR')} ${cur}`;
 }
 
 // ── Calendar helpers ─────────────────────────────────────────────────────────
@@ -373,7 +377,7 @@ export default function RapportsScreen() {
             <Pressable onPress={() => setWeekAnchor(iso => isoOf(new Date(dayFromIso(iso).setDate(dayFromIso(iso).getDate() - 7))))}>
               <Text variant="h4" color="secondary">‹</Text>
             </Pressable>
-            <Text variant="body">{fmtDateFr(r.start)} au {fmtDateFr(r.end)}</Text>
+            <Text variant="body" style={{ fontVariant: ['tabular-nums'] }}>{fmtDateFr(r.start)} au {fmtDateFr(r.end)}</Text>
             {/* Hidden entirely (not just greyed) once the next step would
                 land in the future — there's nothing there to go see. */}
             <Pressable
@@ -525,7 +529,7 @@ export default function RapportsScreen() {
           <Pressable onPress={() => year > creationYear && setYear(y => y - 1)} hitSlop={12} disabled={year <= creationYear}>
             <Text variant="h4" color={year <= creationYear ? 'disabled' : 'secondary'}>‹</Text>
           </Pressable>
-          <Text variant="h3">{year}</Text>
+          <Text variant="h3" style={{ fontVariant: ['tabular-nums'] }}>{year}</Text>
           {/* Hidden entirely (not just greyed) once the next year would be
               in the future — there's nothing there to go see. */}
           <Pressable
@@ -575,11 +579,15 @@ export default function RapportsScreen() {
 
         {!isVendeur && (
           <View style={styles.gridRow}>
+            {/* Amber/attention family, not the count-purple used by Ventes/
+                Produits vendus below — cash-on-hand is a figure to keep an
+                eye on, not a count, and purple is reserved for interaction
+                and count highlights elsewhere on this screen. */}
             <StatCard
               label="Argent disponible" loading={yearReportLoading}
               value={fmt(cashOnHand, currency)}
-              accent={cashOnHand >= 0 ? palette.primary : palette.warning}
-              bg={cashOnHand >= 0 ? palette.primaryLight : palette.warningLight}
+              accent={palette.warning}
+              bg={palette.warningLight}
             />
           </View>
         )}
@@ -654,16 +662,20 @@ function makeStyles(p: Palette) {
   // Period / filter chips
   periodRow:         { flexDirection: 'row', flexWrap: 'wrap', gap: spacing[2], justifyContent: 'center' },
   periodChip:        { paddingVertical: spacing[2], paddingHorizontal: spacing[3], alignItems: 'center', borderRadius: radius.md, borderWidth: 1.5, borderColor: p.border, backgroundColor: p.surface },
-  periodActive:      { backgroundColor: p.textPrimary, borderColor: p.textPrimary },
-  periodLabel:       { fontSize: 13, fontWeight: '600' as const, color: p.textSecondary },
-  periodLabelActive: { color: p.background },
+  // Brand purple, not a neutral black/white pill — the active period tab is
+  // exactly the kind of "genuinely important state" this app's purple is
+  // reserved for, and a stark black fill reads as an unrelated, ad-hoc
+  // accent next to the purple used everywhere else (Ventes, Produits vendus).
+  periodActive:      { backgroundColor: p.primary, borderColor: p.primary },
+  periodLabel:       { fontFamily: fontFamily.semibold, fontSize: 13, color: p.textSecondary },
+  periodLabelActive: { color: p.textInverse },
   stepperRow:        { flexDirection: 'row', alignItems: 'center', justifyContent: 'space-between', paddingHorizontal: spacing[2] },
   customRow:         { flexDirection: 'row', gap: spacing[3] },
 
   // Hero card (investisseur ROI) — currently unused, kept for a future pass
   hero:        { gap: spacing[2], alignItems: 'center', paddingVertical: spacing[5], backgroundColor: p.surface },
-  heroCaption: { fontSize: 14, color: p.textSecondary, fontWeight: '500' as const, textAlign: 'center' as const },
-  heroAmount:  { fontSize: 34, fontWeight: '800' as const, color: p.textPrimary, letterSpacing: -0.5, lineHeight: 42 },
+  heroCaption: { fontFamily: fontFamily.medium, fontSize: 14, color: p.textSecondary, textAlign: 'center' as const },
+  heroAmount:  { fontFamily: fontFamily.bold, fontSize: 34, color: p.textPrimary, letterSpacing: -0.5, lineHeight: 42 },
   heroSub:     { fontSize: 13, color: p.textSecondary, textAlign: 'center' as const },
 
   // Profit hero — mirrors the dashboard's revenue-hero convention (left-
@@ -671,8 +683,8 @@ function makeStyles(p: Palette) {
   // hairline) so the two "hero number" moments in the app read as the same
   // pattern, not two different ones.
   profitHero:           { gap: spacing[2] },
-  profitHeroLabel:      { fontSize: 13, color: p.textSecondary, fontWeight: '500' as const },
-  profitHeroAmount:      { fontSize: 32, fontWeight: '800' as const, letterSpacing: -0.5, lineHeight: 38 },
+  profitHeroLabel:      { fontFamily: fontFamily.medium, fontSize: 13, color: p.textSecondary },
+  profitHeroAmount:      { fontFamily: fontFamily.bold, fontSize: 32, letterSpacing: -0.5, lineHeight: 38, fontVariant: ['tabular-nums'] as ['tabular-nums'] },
   profitHeroComparison: {
     flexDirection: 'row', alignItems: 'center',
     paddingTop: spacing[3], marginTop: spacing[1],
@@ -683,17 +695,17 @@ function makeStyles(p: Palette) {
   // 2-col grid
   gridRow:   { flexDirection: 'row', gap: spacing[4] },
   statCard:  { flex: 1, gap: spacing[1], minHeight: 90 },
-  statLabel: { fontSize: 12, color: p.textSecondary, fontWeight: '500' as const },
-  statValue: { fontSize: 16, fontWeight: '700' as const, lineHeight: 22 },
+  statLabel: { fontFamily: fontFamily.medium, fontSize: 12, color: p.textSecondary },
+  statValue: { fontFamily: fontFamily.bold, fontSize: 16, lineHeight: 22, fontVariant: ['tabular-nums'] as ['tabular-nums'] },
   statNote:  { fontSize: 11, color: p.textSecondary },
 
   // Section title
-  sectionTitle: { fontSize: 14, fontWeight: '700' as const, color: p.textPrimary },
+  sectionTitle: { fontFamily: fontFamily.bold, fontSize: 14, color: p.textPrimary },
 
   // Section separator
   sectionSep:      { flexDirection: 'row' as const, alignItems: 'center' as const, gap: spacing[3] },
   sectionSepLine:  { flex: 1, height: StyleSheet.hairlineWidth, backgroundColor: p.border },
-  sectionSepLabel: { fontSize: 11, color: p.textSecondary, fontWeight: '600' as const, textTransform: 'uppercase' as const, letterSpacing: 0.8 },
+  sectionSepLabel: { fontFamily: fontFamily.semibold, fontSize: 11, color: p.textSecondary, textTransform: 'uppercase' as const, letterSpacing: 0.8, fontVariant: ['tabular-nums'] as ['tabular-nums'] },
 
   // Heatmap legend
   legendRow:    { flexDirection: 'row', alignItems: 'center', gap: spacing[1], alignSelf: 'flex-end' },

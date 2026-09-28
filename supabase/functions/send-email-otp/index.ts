@@ -1,5 +1,6 @@
 import { serve } from 'https://deno.land/std@0.177.0/http/server.ts';
 import { createClient } from 'https://esm.sh/@supabase/supabase-js@2';
+import { SafeError, safeErrorResponse } from '../_shared/errors.ts';
 
 const corsHeaders = {
   'Access-Control-Allow-Origin': '*',
@@ -24,6 +25,17 @@ function generateOtpCode(): string {
     r = buf[0];
   } while (r >= limit);
   return (100000 + (r % range)).toString();
+}
+
+// SHA-256 hex digest — stored in place of the raw code, same reasoning and
+// pattern as create-phone-verification's hashToken (security audit
+// 2026-09-27): a DB-level leak must not hand out a directly usable,
+// still-valid code. link-recovery-email and recover-by-email hash the
+// caller's guess the same way before comparing.
+async function hashToken(token: string): Promise<string> {
+  const bytes = new TextEncoder().encode(token);
+  const digest = await crypto.subtle.digest('SHA-256', bytes);
+  return Array.from(new Uint8Array(digest)).map((b) => b.toString(16).padStart(2, '0')).join('');
 }
 
 serve(async (req) => {
@@ -92,11 +104,13 @@ serve(async (req) => {
 
     const token = generateOtpCode();
 
+    // token column holds the SHA-256 hex digest — the plaintext `token` value
+    // below is only ever used to build the email body, never stored.
     const { data, error: insertErr } = await serviceClient
       .from('email_verifications')
       .insert({
         email: normalizedEmail,
-        token,
+        token: await hashToken(token),
         status: 'en_attente',
         expires_at: new Date(Date.now() + 30 * 60 * 1000).toISOString(),
       })
@@ -145,7 +159,10 @@ serve(async (req) => {
 
     if (!emailRes.ok) {
       const errBody = await emailRes.json().catch(() => ({})) as { message?: string };
-      throw new Error(errBody.message ?? 'Impossible d\'envoyer l\'email');
+      // Resend's own error text is logged for operators but never shown to
+      // the caller — it can describe Resend account/API internals.
+      console.error('send-email-otp: Resend send failed:', errBody);
+      throw new SafeError('Impossible d\'envoyer l\'email. Réessayez dans quelques instants.');
     }
 
     return new Response(
@@ -153,10 +170,6 @@ serve(async (req) => {
       { headers: { ...corsHeaders, 'Content-Type': 'application/json' } },
     );
   } catch (err) {
-    const msg = err instanceof Error ? err.message : 'Erreur inconnue';
-    console.error('send-email-otp crash:', msg);
-    return new Response(JSON.stringify({ error: msg }), {
-      status: 500, headers: { ...corsHeaders, 'Content-Type': 'application/json' },
-    });
+    return safeErrorResponse(err, corsHeaders, 'send-email-otp');
   }
 });

@@ -3,6 +3,7 @@ import { Alert, AppState, Pressable, View } from 'react-native';
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
 import { Redirect, Stack, router } from 'expo-router';
 import { BusinessDrawer } from '@/src/components/BusinessDrawer';
+import { FirstRunHeroOverlay } from '@/src/components/FirstRunHeroOverlay';
 import { TrialWelcomeOverlay } from '@/src/components/TrialWelcomeOverlay';
 import { ActivationForkOverlay } from '@/src/components/ActivationForkOverlay';
 import { NotificationPrimer } from '@/src/components/NotificationPrimer';
@@ -24,12 +25,13 @@ import { supabase } from '@/lib/supabase';
 import { PAYWALL_ENABLED } from '@/lib/purchases';
 import type { Role } from '@/src/types';
 
-// Re-lock (biometric or full OTP re-login, see verrouille.tsx) after the app
-// has been backgrounded this long. Was previously a separate AppLockOverlay
-// component with its own AppState listener; folded into the existing
-// foreground-sync listener below so backgrounding doesn't also trigger a
-// pointless realtime reconnect + drainQueue() right before the redirect.
-const BACKGROUND_MS = 3 * 60_000;
+// Re-lock (biometric or WhatsApp OTP re-login, see verrouille.tsx) after the
+// app has been backgrounded this long. Was previously a separate
+// AppLockOverlay component with its own AppState listener; folded into the
+// existing foreground-sync listener below so backgrounding doesn't also
+// trigger a pointless realtime reconnect + drainQueue() right before the
+// redirect. Single tunable constant, per the lock-screen redesign brief.
+const BACKGROUND_MS = 2 * 60_000;
 
 // debounceAppStateHandler() (guards against Android's rapid AppState
 // flapping — see its own doc comment in lib/sync.ts) now lives there
@@ -116,6 +118,53 @@ export default function AppLayout() {
   // why these two must never be visible at the same time.
   const [notifPrimerBlocking, setNotifPrimerBlocking] = useState(true);
 
+  // Which business (if any) should currently show FirstRunHeroOverlay —
+  // deliberately a LATCHED local id, not a live re-derivation of
+  // activeBusiness.first_run_hero_completed_at. First attempt at this got
+  // it wrong: adding a separate "dismissed" boolean alongside a condition
+  // that *also* still checked the live DB flag meant either one flipping
+  // could still close the overlay — and the flag flips the instant the
+  // FIRST save succeeds (it has to, for the payoff screen to be reachable
+  // at all), so the Modal was unmounting itself before "Noté ✓" was ever
+  // visible. Found on-device 2026-09-27. Fix: decide eligibility exactly
+  // once per business, latch it into local state, and only ever clear it
+  // on an explicit exit (Passer, or "Voir mon commerce"). The persisted
+  // flag still does its real job — preventing the gate from being eligible
+  // again on a future launch/business-switch — it just no longer has any
+  // power to close an already-open instance.
+  const [heroBusinessId, setHeroBusinessId] = useState<string | null>(null);
+  // The business id this latch has actually evaluated eligibility for —
+  // NOT the same thing as heroBusinessId itself (that one is null both
+  // "not yet checked" and "checked, not eligible"). See the render-time
+  // block below for why this exists.
+  const [heroCheckedBusinessId, setHeroCheckedBusinessId] = useState<string | null>(null);
+  const activeBusinessId = session?.activeBusiness?.id ?? null;
+  const activeBusinessForHero = session?.activeBusiness;
+  // Adjusting state during render — deliberately not a useEffect. An effect
+  // only runs *after* a frame has already committed, so switching to a
+  // brand-new business (freshly created, or just switched to) always
+  // painted one real, visible frame with heroBusinessId still holding
+  // whatever it was for the *previous* business, before the effect
+  // corrected it a moment later — "something flashes before the hero gate
+  // for a few ms," reported live 2026-09-28, right after creating a
+  // business. Computing eligibility directly in the render body instead —
+  // guarded by comparing against the last business id actually processed,
+  // so it only runs once per business change and can't loop — updates
+  // state synchronously before React paints anything, so the very first
+  // rendered frame for a new business already has the right value. Still
+  // deliberately keyed on the business id alone, exactly as before:
+  // re-running this because first_run_hero_completed_at itself changed
+  // (which happens mid-flow, from inside the overlay this gates) is
+  // exactly the bug the latch design above exists to avoid.
+  if (activeBusinessId !== heroCheckedBusinessId) {
+    setHeroCheckedBusinessId(activeBusinessId);
+    const eligible = !!activeBusinessId && !!activeBusinessForHero
+      && !(session?.isDemoMode ?? false)
+      && !activeBusinessForHero.first_run_hero_completed_at
+      && session?.activeMembership?.role === 'administrateur';
+    setHeroBusinessId(eligible ? activeBusinessId : null);
+  }
+
   const forkProducts = useProductStore(s => s.products);
   const forkSales = useVentesStore(s => s.sales);
   const forkRole = session?.activeMembership?.role;
@@ -137,7 +186,18 @@ export default function AppLayout() {
   const productsFetchedFor = useProductStore(s => s.productsFetchedFor);
   const salesFetchedFor = useVentesStore(s => s.salesFetchedFor);
   const forkDataReady = productsFetchedFor === forkBusinessId && salesFetchedFor === forkBusinessId;
-  const showFork = forkIsOwner && forkDataReady && !forkStep2Done && !forkStep3Done && forkAgeMs < 24 * 60 * 60 * 1000;
+  // Superseded by FirstRunHeroOverlay for any business that's already been
+  // through it, skip or save alike — found live 2026-09-27: skipping the
+  // (soft, real-exit) hero gate on an empty business left forkAgeMs < 24h
+  // and neither step done, so this hard, non-dismissible 3-button wall fired
+  // immediately behind it. That's a strictly worse experience than before
+  // the hero gate existed, and directly contradicts its whole "Passer is a
+  // real exit" design. A completed hero save already suppresses this
+  // naturally (forkStep3Done becomes true, since a debt is a credit sale) —
+  // this condition is what covers the skip path, where neither is true yet.
+  const showFork = forkIsOwner && forkDataReady && !forkStep2Done && !forkStep3Done
+    && forkAgeMs < 24 * 60 * 60 * 1000
+    && !session?.activeBusiness?.first_run_hero_completed_at;
 
   // forkAgeMs is a snapshot taken at render time, not a live clock — if
   // nothing else re-renders this component, it never re-evaluates on its
@@ -398,6 +458,15 @@ export default function AppLayout() {
 
   const activeBusiness = session.activeBusiness;
   const isDemoMode = session.isDemoMode ?? false;
+  // First-run hero action ("Qui vous doit de l'argent ?") — the very first
+  // thing a brand-new business should see, ahead of even NotificationPrimer.
+  // Eligibility (business flag unset, administrateur, not demo mode) was
+  // already decided once, above, into heroBusinessId the moment this
+  // business became active — this line only checks whether THIS render's
+  // active business is the one currently latched open, never re-derives
+  // eligibility from the live DB flag (see heroBusinessId's own comment for
+  // why that distinction is load-bearing).
+  const showFirstRunHero = !!activeBusiness && heroBusinessId === activeBusiness.id;
   // No paywall gating anywhere in the app anymore — the core app is free
   // forever, and only Alpha (has_ai_access(), db/migration_v133.sql) checks
   // subscription state, entirely within app/(app)/alpha/index.tsx itself.
@@ -407,55 +476,73 @@ export default function AppLayout() {
       <NotificationSetup />
       <DemoBanner />
       <SyncBanner />
-      <Stack screenOptions={{ headerShown: false, animation: 'slide_from_right' }}>
-        {/* Only reachable from ActivationForkOverlay's "Une vente" button —
-            unlike catalogue/vendre (tab routes, switched in place with no
-            stack transition), this is a genuine stack push, so the default
-            slide-in was visibly two stages: old screen slides away, new one
-            slides in, only then its content is settled. animation: 'none'
-            here removes that — the fork's own Modal already provides the
-            "you made a choice" motion, this arrival doesn't need a second one. */}
-        <Stack.Screen name="onboarding/vente-rapide" options={{ animation: 'none' }} />
-      </Stack>
+      <Stack screenOptions={{ headerShown: false, animation: 'slide_from_right' }} />
 
       <BusinessDrawer />
-      <NotificationPrimer
-        userId={session.user.id}
-        active={!!activeBusiness && !isDemoMode}
-        onBlockingChange={setNotifPrimerBlocking}
-      />
-      {PAYWALL_ENABLED && showTrialWelcome && activeBusiness && (
-        <TrialWelcomeOverlay
-          businessName={activeBusiness.name}
-          trialEndsAt={activeBusiness.trial_ends_at}
-          onStart={clearTrialWelcome}
-        />
-      )}
-      {/* !(PAYWALL_ENABLED && showTrialWelcome) — dead weight today since
-          PAYWALL_ENABLED is false (TrialWelcomeOverlay never renders), but
-          both overlays go true at the same instant right after business
-          creation, and letting two Modals race for the screen is the exact
-          bug already fixed twice elsewhere this session. Cheap insurance
-          against re-enabling the paywall silently reintroducing it.
-          !notifPrimerBlocking — same reasoning, for NotificationPrimer:
-          it's the first thing a brand-new business should see, and letting
-          the fork show underneath/alongside it is the same race. */}
-      {showFork && !forkNavigating && !suppressActivationFork && !notifPrimerBlocking && !(PAYWALL_ENABLED && showTrialWelcome) && activeBusiness && (
-        <ActivationForkOverlay
-          userName={session.user.name}
-          onSelectProduct={() => {
-            beginForkNavigation();
-            router.push({ pathname: '/(app)/(tabs)/catalogue', params: { openForm: '1' } });
-          }}
-          onSelectSale={() => {
-            beginForkNavigation();
-            router.push('/(app)/onboarding/vente-rapide');
-          }}
-          onSelectDebt={() => {
-            beginForkNavigation();
-            router.push({ pathname: '/(app)/(tabs)/vendre', params: { mode: 'credit' } });
+      {showFirstRunHero && activeBusiness ? (
+        // Blocks NotificationPrimer/TrialWelcome/ActivationFork entirely
+        // while showing — same "two Modals racing" hazard as the
+        // notifPrimerBlocking guards just below, and this one has to win
+        // priority since it's the very first thing a new business sees.
+        <FirstRunHeroOverlay
+          businessId={activeBusiness.id}
+          userId={session.user.id}
+          currency={activeBusiness.currency}
+          onDone={() => {
+            setHeroBusinessId(null);
+            useAuthStore.setState(s => ({ homeRefreshToken: s.homeRefreshToken + 1 }));
           }}
         />
+      ) : (
+        <>
+          <NotificationPrimer
+            userId={session.user.id}
+            active={!!activeBusiness && !isDemoMode}
+            onBlockingChange={setNotifPrimerBlocking}
+          />
+          {PAYWALL_ENABLED && showTrialWelcome && activeBusiness && (
+            <TrialWelcomeOverlay
+              businessName={activeBusiness.name}
+              trialEndsAt={activeBusiness.trial_ends_at}
+              onStart={clearTrialWelcome}
+            />
+          )}
+          {/* !(PAYWALL_ENABLED && showTrialWelcome) — dead weight today since
+              PAYWALL_ENABLED is false (TrialWelcomeOverlay never renders), but
+              both overlays go true at the same instant right after business
+              creation, and letting two Modals race for the screen is the exact
+              bug already fixed twice elsewhere this session. Cheap insurance
+              against re-enabling the paywall silently reintroducing it.
+              !notifPrimerBlocking — same reasoning, for NotificationPrimer:
+              it's the first thing a brand-new business should see, and letting
+              the fork show underneath/alongside it is the same race. */}
+          {showFork && !forkNavigating && !suppressActivationFork && !notifPrimerBlocking && !(PAYWALL_ENABLED && showTrialWelcome) && activeBusiness && (
+            <ActivationForkOverlay
+              userName={session.user.name}
+              onSelectProduct={() => {
+                beginForkNavigation();
+                router.push({ pathname: '/(app)/(tabs)/catalogue', params: { openForm: '1' } });
+              }}
+              onSelectSale={() => {
+                // No longer a dedicated screen (onboarding/vente-rapide.tsx,
+                // deleted) — the amount-only quick sale now lives as
+                // QuickCaptureSheet's own "Vente" mode, owned by Accueil's
+                // local state. Navigate there first (same reasoning as
+                // onSelectProduct/onSelectDebt below: land on the screen
+                // that will actually act on this before asking it to),
+                // then request the sheet open in Vente mode via the
+                // cross-cutting requestQuickCapture signal.
+                beginForkNavigation();
+                useAuthStore.setState({ requestQuickCapture: 'vente' });
+                router.push('/(app)/(tabs)/');
+              }}
+              onSelectDebt={() => {
+                beginForkNavigation();
+                router.push({ pathname: '/(app)/(tabs)/vendre', params: { mode: 'credit' } });
+              }}
+            />
+          )}
+        </>
       )}
       <AppToastContainer />
     </>
