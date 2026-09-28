@@ -15,6 +15,7 @@ export async function rescheduleOp(_id: number, _nextAttemptAt: string, _error: 
 export async function markOpPermanentlyFailed(_id: number, _error: string): Promise<void> {}
 export async function markOpCorrupt(_id: number, _error: string): Promise<void> {}
 export async function getPendingOpsForDrain(): Promise<never[]> { return []; }
+export async function getAllQueueItemsForOverlay(): Promise<{ ok: never[]; corrupt: never[] }> { return { ok: [], corrupt: [] }; }
 export async function saveDashboardKpiCache(_businessId: string, _kpis: unknown): Promise<void> {}
 export async function getDashboardKpiCache(_businessId: string): Promise<null> { return null; }
 export async function saveProductCache(_businessId: string, _products: unknown[]): Promise<void> {}
