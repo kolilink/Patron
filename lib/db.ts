@@ -759,6 +759,45 @@ export async function markOpCorrupt(id: number, error: string): Promise<void> {
   );
 }
 
+// Read side for the pending-overlay rebuild (lib/pendingOverlay.ts) — every
+// row still in the queue, decrypted where possible, regardless of status or
+// backoff timing (unlike getPendingOpsForDrain below, which is drain-only
+// and deliberately excludes anything not immediately due). A
+// failed_permanent row must still project into her sales list; only
+// failed_corrupt (or a row whose decrypt/parse fails right now, even if it
+// was never explicitly marked corrupt yet) is excluded from `ok` and
+// reported via `corrupt` instead, using only the plaintext QueuedOpMeta
+// columns — the same reasoning as getQueueSnapshot above.
+export async function getAllQueueItemsForOverlay(): Promise<{ ok: SyncQueueItem[]; corrupt: QueuedOpMeta[] }> {
+  const db = await openDb();
+  const rows = await db.getAllAsync<SyncQueueItem>('SELECT * FROM sync_queue ORDER BY id ASC');
+  const ok: SyncQueueItem[] = [];
+  const corrupt: QueuedOpMeta[] = [];
+  for (const row of rows) {
+    if (row.status === 'failed_corrupt') {
+      corrupt.push({
+        id: row.id, operation: row.operation, entity_type: row.entity_type,
+        idempotency_key: row.idempotency_key, status: row.status,
+        queued_at: row.queued_at, attempts: row.attempts, last_error: row.last_error,
+      });
+      continue;
+    }
+    try {
+      const payload = row.payload.startsWith('PLAIN:')
+        ? row.payload.slice(6)
+        : await decrypt(row.payload);
+      ok.push({ ...row, payload });
+    } catch {
+      corrupt.push({
+        id: row.id, operation: row.operation, entity_type: row.entity_type,
+        idempotency_key: row.idempotency_key, status: row.status,
+        queued_at: row.queued_at, attempts: row.attempts, last_error: row.last_error,
+      });
+    }
+  }
+  return { ok, corrupt };
+}
+
 // Replaces getPendingOps above once lib/sync.ts is switched over: selects
 // only 'pending' rows whose backoff has elapsed, with no attempts-count
 // cap at all — failed_permanent and failed_corrupt rows are excluded by
