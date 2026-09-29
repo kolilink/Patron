@@ -370,6 +370,32 @@ function extractBusinessId(payload: Record<string, unknown> | null): string | nu
   return typeof v === 'string' ? v : null;
 }
 
+// §9b: fire-and-forget, durable sync-lag telemetry (migration_v204's
+// log_sync_lag) — called once per item that just successfully synced.
+// Deliberately its own top-level function, not inlined at the call site:
+// wrapping the ENTIRE call (including the act of invoking supabase.rpc
+// itself, not just awaiting its result) in a synchronous try/catch is
+// what guarantees this can never throw into its caller, even if the call
+// itself throws synchronously rather than rejecting (see drainQueue's own
+// call site comment for the real bug this specific shape was fixing).
+function logSyncLag(operation: string, queuedAt: string | null, payload: Record<string, unknown>): void {
+  if (!queuedAt) return;
+  const businessId = extractBusinessId(payload);
+  if (!businessId) return;
+  try {
+    supabase.rpc('log_sync_lag', {
+      p_business_id: businessId,
+      p_operation: operation,
+      p_queued_at: queuedAt,
+    }).then(
+      ({ error }: { error: unknown }) => { if (error) console.error('[logSyncLag] rpc failed', error); },
+      (err: unknown) => console.error('[logSyncLag] rpc call rejected', err),
+    );
+  } catch (err) {
+    console.error('[logSyncLag] rpc call threw synchronously', err);
+  }
+}
+
 export async function drainQueue(): Promise<SyncResult> {
   if (_running) return { synced: 0, failed: 0, rejectedPayments: [], syncHealthEvents: [] };
   _running = true;
@@ -394,11 +420,13 @@ export async function drainQueue(): Promise<SyncResult> {
 
     for (const op of ops) {
       let payload: Record<string, unknown> | null = null;
+      let justSynced = false;
       try {
         payload = JSON.parse(op.payload) as Record<string, unknown>;
         await executeOp(op.operation, payload);
         await deleteQueueItem(op.id);
         result.synced++;
+        justSynced = true;
       } catch (e) {
         if (payload === null) {
           // Decrypted cleanly (it wasn't in `corrupt` above) but the
@@ -436,6 +464,22 @@ export async function drainQueue(): Promise<SyncResult> {
           result.rejectedPayments.push(msg);
         }
       }
+
+      // §9b: durable, server-side sync-lag observability (migration_v204's
+      // log_sync_lag) — deliberately OUTSIDE the try/catch above, not just
+      // wrapped in its own inner try. A first version had this inside that
+      // try block, right after result.synced++ — caught by the real jest
+      // suite, not reasoned about in advance: a synchronous throw here
+      // (e.g. calling .then on a value that isn't a real promise, which is
+      // exactly what happened against an exhausted test mock) landed in
+      // the SAME catch that classifies real sync failures, permanently
+      // mis-marking an item as both synced AND failed. Telemetry must be
+      // structurally incapable of reaching that classification logic, not
+      // just "unlikely to throw" — this is the fix, not a tighter local
+      // try/catch in the same spot. logSyncLag itself is fully self-
+      // contained (fire-and-forget, catches everything, including a
+      // synchronous throw from the call itself).
+      if (justSynced && payload) logSyncLag(op.operation, op.queued_at, payload);
     }
   } catch (err) {
     // drainQueue must never throw outward — it's now routinely invoked
