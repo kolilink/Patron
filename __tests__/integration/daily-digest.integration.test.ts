@@ -110,17 +110,17 @@ describe('learn_digest_send_hours (real RPC)', () => {
     expect(data!.digest_send_hour).toBe(16);
   });
 
-  it('clamps a very late last-sale pattern down to the 21:00 ceiling', async () => {
+  it('clamps a very late last-sale pattern down to the 20:00 ceiling', async () => {
     const { client, userId } = await createTestUser('digest-clamp-high');
     const businessId = await createTestBusiness(client, 'Boutique Digest Clamp High');
 
     for (let i = 0; i < 5; i++) {
-      await insertSale(businessId, userId, { saleDate: utcDateDaysAgo(i + 1), hourUtc: 23 }); // +1 = 24, clamps to 21
+      await insertSale(businessId, userId, { saleDate: utcDateDaysAgo(i + 1), hourUtc: 23 }); // +1 = 24, clamps to 20
     }
 
     await admin.rpc('learn_digest_send_hours');
     const { data } = await admin.from('businesses').select('digest_send_hour').eq('id', businessId).single();
-    expect(data!.digest_send_hour).toBe(21);
+    expect(data!.digest_send_hour).toBe(20);
   });
 
   it('ignores sales older than the trailing 14-day window', async () => {
