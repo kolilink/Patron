@@ -140,7 +140,7 @@ function CartRow({ line, currency, onInc, onDec, onRemove, onToggleBulk, onSetQt
         </View>
       </View>
       <View style={styles.qtyControl}>
-        <Pressable onPress={() => { haptics.selection(); onDec(); }} style={styles.qtyBtn}>
+        <Pressable onPress={() => { haptics.selection(); onDec(); }} style={styles.qtyBtn} hitSlop={10}>
           <Text variant="label" style={{ color: line.qty === 1 ? palette.danger : palette.textPrimary }}>−</Text>
         </Pressable>
         {editing ? (
@@ -166,6 +166,7 @@ function CartRow({ line, currency, onInc, onDec, onRemove, onToggleBulk, onSetQt
             <Pressable
               onPress={() => { if (atMax) return; haptics.selection(); onInc(); }}
               style={[styles.qtyBtn, atMax && { opacity: 0.3 }]}
+              hitSlop={10}
             >
               <Text variant="label" style={{ color: atMax ? palette.textDisabled : palette.primary }}>+</Text>
             </Pressable>
@@ -950,6 +951,7 @@ function VariantPickerSheet({ visible, product, variants, cartQtyByVariant, curr
                   <Pressable
                     onPress={() => { if (!outOfStock && qty > 0) { haptics.selection(); changeQty(v.id, -1, remaining); } }}
                     style={[styles.qtyBtn, (outOfStock || qty === 0) && { opacity: 0.3 }]}
+                    hitSlop={10}
                   >
                     <Text variant="label" style={{ color: qty === 0 ? palette.textDisabled : palette.danger }}>−</Text>
                   </Pressable>
@@ -976,6 +978,7 @@ function VariantPickerSheet({ visible, product, variants, cartQtyByVariant, curr
                   <Pressable
                     onPress={() => { if (!outOfStock && !atMax) { haptics.selection(); changeQty(v.id, 1, remaining); } }}
                     style={[styles.qtyBtn, (outOfStock || atMax) && { opacity: 0.3 }]}
+                    hitSlop={10}
                   >
                     <Text variant="label" style={{ color: (outOfStock || atMax) ? palette.textDisabled : palette.primary }}>+</Text>
                   </Pressable>

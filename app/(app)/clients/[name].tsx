@@ -720,7 +720,10 @@ function makeStyles(p: Palette) {
     bannerLabel: { fontSize: 14, color: p.textSecondary, textAlign: 'center', fontWeight: '400', marginBottom: 4 },
     bannerAmount: { fontSize: 40, fontWeight: '700', lineHeight: 52, color: p.textPrimary, textAlign: 'center' },
     bannerBtn: {
-      width: '100%', backgroundColor: p.primary, borderRadius: 12,
+      // Sunlight/one-handed audit: bumped to the app's 56dp primary-money-
+      // action floor (minHeight, not just padding — a highest-frequency
+      // action per CLAUDE.md's own thumb-zone priority list).
+      width: '100%', backgroundColor: p.primary, borderRadius: 12, minHeight: 56,
       paddingVertical: 14, alignItems: 'center', justifyContent: 'center', marginTop: 16,
     },
     bannerBtnText: { fontSize: 16, fontWeight: '600', color: p.textInverse },

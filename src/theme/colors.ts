@@ -129,9 +129,16 @@ export const paletteLight = {
   primaryLight:   colors.primary[50],
   primaryDark:    colors.primary[700],
 
-  success:        colors.success[600],
+  // Sunlight-readability audit (2026-09-28): success[600]/warning[600] only
+  // hit 3.3:1 / 3.2:1 on white — well under the 4.5:1 floor this token is
+  // used at (profit/margin figures on Accueil, Rapports, Ventes, Catalogue,
+  // Équipe render these as plain text color, not just icon/badge tints,
+  // often at hero size). Bumped one/two steps darker in the same ramp
+  // (success[700] = 5.0:1, warning[800] = 7.1:1) — dark mode already clears
+  // 10:1+ and is untouched.
+  success:        colors.success[700],
   successLight:   colors.success[50],
-  warning:        colors.warning[600],
+  warning:        colors.warning[800],
   warningLight:   colors.warning[50],
   danger:         colors.danger[600],
   dangerLight:    colors.danger[50],
