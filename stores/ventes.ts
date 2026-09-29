@@ -63,8 +63,13 @@ interface VentesStore {
   offlineSince: number | null;
   fetchSales: (businessId: string, sellerId?: string, since?: string) => Promise<void>;
   loadDetail: (saleId: string) => Promise<void>;
-  recordPayment: (saleId: string, amount: number, method: string, date: string) => Promise<{ ok: boolean; fullyPaid: boolean }>;
-  recordClientPayment: (customerName: string, businessId: string, amount: number, method: string, date: string) => Promise<{ ok: boolean; fullySettled: boolean }>;
+  recordPayment: (saleId: string, amount: number, method: string, date: string) => Promise<{ ok: boolean; fullyPaid: boolean; paymentId?: string }>;
+  recordClientPayment: (customerName: string, businessId: string, amount: number, method: string, date: string) => Promise<{ ok: boolean; fullySettled: boolean; paymentIds?: string[] }>;
+  // Reverses one or more payments rows created by recordPayment/recordClientPayment
+  // above, via the void_payment RPC (migration_v157.sql). Not offline-queued — a
+  // void is a correction that needs a live round trip, same posture as the rest
+  // of this app's "compensating action" undos (cancel_sale, archiveProduct).
+  voidPayments: (paymentIds: string[], businessId: string, reason?: string) => Promise<boolean>;
   cancelSale: (saleId: string, businessId: string, userId: string, reason: string) => Promise<boolean>;
   updateSaleClient: (saleId: string, customerName: string) => Promise<boolean>;
   clearError: () => void;
@@ -307,13 +312,17 @@ export const useVentesStore = create<VentesStore>((set, get) => ({
       const { data, error: rpcErr } = await supabase.rpc('record_payment', rpcPayload);
       if (rpcErr) throw rpcErr;
       applyOptimistic();
-      return { ok: true, fullyPaid: data as boolean };
+      const result = data as { fully_paid: boolean; payment_id: string };
+      return { ok: true, fullyPaid: result.fully_paid, paymentId: result.payment_id };
     } catch (err) {
       if (isNetworkError(err)) {
         await enqueue('record_payment', rpcPayload);
         const count = await getQueueCount();
         useSyncStore.setState({ pendingCount: count });
         applyOptimistic();
+        // Queued offline — the RPC hasn't actually run yet, so there is no
+        // real server-generated payment id to undo against yet. No `paymentId`
+        // returned here on purpose; callers must treat undo as unavailable.
         return { ok: true, fullyPaid };
       }
       set({ saving: false, error: translateError(err, 'Paiement impossible') });
@@ -374,6 +383,7 @@ export const useVentesStore = create<VentesStore>((set, get) => ({
     };
 
     let fullySettled = false;
+    let paymentIds: string[] | undefined;
     // Server-side atomic allocation with row locks prevents double-payment —
     // both online and queued-offline replay go through this same RPC, so a
     // second payment that arrives after the debt is already settled finds
@@ -389,7 +399,9 @@ export const useVentesStore = create<VentesStore>((set, get) => ({
       const { data: rpcData, error: rpcErr } = await supabase.rpc('record_client_payment', rpcPayload);
       if (rpcErr) throw rpcErr;
       applyOptimistic();
-      fullySettled = (rpcData as { fully_settled: boolean }).fully_settled;
+      const result = rpcData as { fully_settled: boolean; payment_ids: string[] };
+      fullySettled = result.fully_settled;
+      paymentIds = result.payment_ids;
     } catch (err) {
       if (isNetworkError(err)) {
         await enqueue('record_client_payment', rpcPayload);
@@ -399,6 +411,8 @@ export const useVentesStore = create<VentesStore>((set, get) => ({
         fullySettled = get().sales
           .filter(s => s.customer_name === customerName && s.business_id === businessId && s.status === 'credit')
           .reduce((sum, s) => sum + (s.total_amount - (s.discount_amount ?? 0) - (s.amount_paid ?? 0)), 0) < 0.01;
+        // Queued offline — same as recordPayment, no real payment id(s) exist
+        // yet, so paymentIds stays undefined and undo is unavailable.
       } else {
         set({ saving: false, error: translateError(err, 'Paiement impossible') });
         return { ok: false, fullySettled: false };
@@ -415,7 +429,31 @@ export const useVentesStore = create<VentesStore>((set, get) => ({
         targetRoles: ['administrateur', 'manager'],
       });
     }
-    return { ok: true, fullySettled };
+    return { ok: true, fullySettled, paymentIds };
+  },
+
+  voidPayments: async (paymentIds, businessId, reason) => {
+    set({ saving: true, error: null });
+    try {
+      for (const paymentId of paymentIds) {
+        const { error: rpcErr } = await supabase.rpc('void_payment', {
+          p_payment_id: paymentId,
+          p_business_id: businessId,
+          p_reason: reason ?? null,
+        });
+        if (rpcErr) throw rpcErr;
+      }
+      // Re-fetch rather than patch optimistically — a void can revert a
+      // sale's status (paye → credit) and affect any number of sales at
+      // once (FIFO repayments can span several), which is simpler and
+      // safer to just re-read than to reconstruct client-side.
+      await get().fetchSales(businessId);
+      set({ saving: false });
+      return true;
+    } catch (err) {
+      set({ saving: false, error: translateError(err, 'Annulation impossible') });
+      return false;
+    }
   },
 
   cancelSale: async (saleId, businessId, userId, reason) => {

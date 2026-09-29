@@ -89,7 +89,13 @@ interface FournisseursStore {
   fetchCommandes: (businessId: string) => Promise<void>;
   createCommande: (businessId: string, userId: string, input: CreateCommandeInput) => Promise<boolean>;
   loadCommandeLines: (commandeId: string) => Promise<void>;
-  recevoirCommande: (commandeId: string, businessId: string, userId: string, lines?: { id: string; qty: number }[], shippingCostCents?: number) => Promise<boolean>;
+  // batchId (from po_receipt_batches, migration_v158.sql) is undefined when
+  // ok is false, and also when the receipt succeeded via a queued offline
+  // retry — receive_purchase_order hasn't actually run in that case, so
+  // there's no real batch row yet and voidPurchaseOrderReceipt has nothing
+  // to reverse.
+  recevoirCommande: (commandeId: string, businessId: string, userId: string, lines?: { id: string; qty: number }[], shippingCostCents?: number) => Promise<{ ok: boolean; batchId?: string }>;
+  voidPurchaseOrderReceipt: (batchId: string, businessId: string, userId: string, reason?: string) => Promise<boolean>;
 
   fetchDebts: (businessId: string) => Promise<void>;
   createDebt: (businessId: string, userId: string, d: { supplierId: string; amount: number; description?: string | null; date: string }) => Promise<boolean>;
@@ -328,17 +334,18 @@ export const useFournisseursStore = create<FournisseursStore>((set, get) => ({
 
     const _commande = get().commandes.find(c => c.id === commandeId);
 
-    const { error } = await supabase.rpc('receive_purchase_order', {
+    const rpcPayload = {
       p_po_id: commandeId,
       p_business_id: businessId,
       p_line_ids: lines ? lines.map(l => l.id) : null,
       p_line_qtys: lines ? lines.map(l => l.qty) : null,
       p_shipping_cost_cents: shippingCostCents,
-    });
+    };
+    const { data, error } = await supabase.rpc('receive_purchase_order', rpcPayload);
 
     if (error) {
       set({ saving: false, error: translateError(error, 'Impossible de recevoir la commande') });
-      return false;
+      return { ok: false };
     }
 
     // Re-fetch to get accurate status (recu vs recu_partiel determined server-side)
@@ -359,6 +366,25 @@ export const useFournisseursStore = create<FournisseursStore>((set, get) => ({
       targetRoles: ['administrateur', 'manager', 'vendeur'],
     });
 
+    // receive_purchase_order (migration_v158.sql) now RETURNS uuid (the
+    // po_receipt_batches row it just logged) instead of void.
+    return { ok: true, batchId: data as string | undefined };
+  },
+
+  voidPurchaseOrderReceipt: async (batchId, businessId, userId, reason) => {
+    set({ saving: true, error: null });
+    const { error } = await supabase.rpc('void_purchase_order_receipt', {
+      p_batch_id: batchId,
+      p_business_id: businessId,
+      p_reason: reason ?? null,
+    });
+    if (error) {
+      set({ saving: false, error: translateError(error, 'Annulation impossible') });
+      return false;
+    }
+    await get().fetchCommandes(businessId);
+    void useProductStore.getState().fetchProducts(businessId, userId);
+    set({ saving: false });
     return true;
   },
 

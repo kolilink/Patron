@@ -15,6 +15,8 @@ import { useAuthStore } from '@/stores/auth';
 import { useVentesStore, type Vente } from '@/stores/ventes';
 import { supabase } from '@/lib/supabase';
 import { formatAmountInput, parseAmountInput } from '@/src/utils/format';
+import { useSaveConfirmationStore } from '@/stores/saveConfirmation';
+import { repaymentConfirmation } from '@/src/utils/saveConfirmationCopy';
 
 function fmt(n: number, cur: string) { return `${Math.round(n).toLocaleString('fr-FR')} ${cur}`; }
 
@@ -298,7 +300,7 @@ export default function ClientLedgerScreen() {
   const role = session?.activeMembership?.role;
   const canEdit = role === 'administrateur' || role === 'manager';
 
-  const { sales, loading, saving, fetchSales, recordPayment, recordClientPayment } = useVentesStore();
+  const { sales, loading, saving, fetchSales, recordPayment, recordClientPayment, voidPayments } = useVentesStore();
 
   // displayName is resolved after clientRecord loads when routing by UUID
   const [displayName, setDisplayName] = useState(isClientId ? '' : routeParam);
@@ -452,7 +454,7 @@ export default function ClientLedgerScreen() {
   });
 
   const handleRecord = useCallback(async (amount: number, method: string, date: string, specificSaleId?: string) => {
-    let result: { ok: boolean; fullyPaid?: boolean; fullySettled?: boolean };
+    let result: { ok: boolean; fullyPaid?: boolean; fullySettled?: boolean; paymentId?: string; paymentIds?: string[] };
     if (specificSaleId) {
       result = await recordPayment(specificSaleId, amount, method, date);
     } else {
@@ -464,8 +466,34 @@ export default function ClientLedgerScreen() {
       const paidInFull = specificSaleId ? result.fullyPaid : result.fullySettled;
       if (!paidInFull) setSuccessPayment({ amount });
       loadLedgerPayments();
+
+      // Remaining balance is read synchronously from the store's own
+      // post-write state — recordPayment/recordClientPayment already applied
+      // their optimistic update before resolving (see stores/ventes.ts), so
+      // no extra fetch is needed here.
+      const reste = useVentesStore.getState().sales
+        .filter(s => s.business_id === businessId && s.customer_name === displayName && s.status === 'credit')
+        .reduce((sum, s) => sum + (s.total_amount - (s.discount_amount ?? 0) - (s.amount_paid ?? 0)), 0);
+      const { text, settled } = repaymentConfirmation(displayName, Math.max(0, reste), currency);
+      // Undo via void_payment (migration_v157.sql), one call per payments
+      // row this write actually created — specificSaleId creates exactly
+      // one (paymentId), the FIFO client-wide path can fan out across
+      // several sale_orders at once (paymentIds). Neither is present when
+      // the write only got as far as the offline queue (record_payment/
+      // record_client_payment haven't actually run yet, so there's no real
+      // payment id to void) — undo is unavailable for that case.
+      const idsToVoid = specificSaleId
+        ? (result.paymentId ? [result.paymentId] : [])
+        : (result.paymentIds ?? []);
+      useSaveConfirmationStore.getState().show({
+        message: text,
+        tone: settled ? 'settled' : 'success',
+        undo: idsToVoid.length > 0
+          ? async () => { await useVentesStore.getState().voidPayments(idsToVoid, businessId, 'Annulée depuis la confirmation'); }
+          : undefined,
+      });
     }
-  }, [displayName, businessId, recordPayment, recordClientPayment]);
+  }, [displayName, businessId, currency, recordPayment, recordClientPayment]);
 
   const openMenu = useCallback(() => {
     if (!canEdit) return;
