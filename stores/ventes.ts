@@ -530,6 +530,16 @@ export const useVentesStore = create<VentesStore>((set, get) => ({
     }));
   },
 
+  // Local-write-first (§5, same shape as recordClientPayment/cancelSale
+  // below). record_payment now has a real idempotency key
+  // (migration_v197) — required before this could safely go local-write-
+  // first at all, same prerequisite migration_v195 established for
+  // recordClientPayment: without it, an outbox retry of the exact same
+  // payment (a drain retry after a partial network failure) could
+  // double-insert real money against the sale. Unlike recordClientPayment's
+  // FIFO fan-out, this always targets exactly one already-known sale_id —
+  // lib/pendingOverlay.ts's applyPatchOp handles it as a plain single-sale
+  // patch, not the allocateClientPayment loop.
   recordPayment: async (saleId, amount, method, date) => {
     set({ saving: true, error: null });
     const sale = get().sales.find(s => s.id === saleId);
@@ -540,16 +550,50 @@ export const useVentesStore = create<VentesStore>((set, get) => ({
     const remainingBefore = owed - alreadyPaid;
     const newAmountPaid = alreadyPaid + amount;
     const fullyPaid = newAmountPaid >= owed - 0.01;
-    const now = new Date().toISOString();
-    const paymentId = generateId();
     const amountCents = Math.round(amount * 100);
+    const idempotencyKey = generateId();
 
-    // credit_paid notification — mirrors recordClientPayment below. "total"
-    // states the debt that just got cleared (remainingBefore, not the
-    // original sale total, since prior installments may have already
-    // shrunk it); "partiel" states only the amount just paid. Falls back to
-    // a nameless phrasing when the sale has no customer_name.
-    const notifyCreditPayment = () => {
+    // record_payment() re-checks the real remaining balance server-side
+    // (at drain time now, not a live call) and rejects the insert if it
+    // would overpay — the on-device `owed`/`fullyPaid` figures above are
+    // only used for the optimistic UI, never trusted for the actual write.
+    const rpcPayload = {
+      p_sale_id:          saleId,
+      p_business_id:      sale.business_id,
+      p_amount:           amountCents,
+      p_method:           method,
+      p_date:             date,
+      p_idempotency_key:  idempotencyKey,
+    };
+
+    try {
+      await enqueue('record_payment', rpcPayload);
+    } catch (err) {
+      console.error('[recordPayment] local write failed', err);
+      set({ saving: false, error: "Impossible d'enregistrer sur cet appareil. Réessayez." });
+      return { ok: false, fullyPaid: false };
+    }
+
+    const count = await getQueueCount();
+    useSyncStore.setState({ pendingCount: count });
+    try {
+      await get().refreshPendingOverlay();
+    } catch (err) {
+      console.error('[recordPayment] refreshPendingOverlay failed (write already succeeded)', err);
+    }
+    set({ saving: false });
+    useSyncStore.getState().kick();
+
+    // credit_paid notification — fired unconditionally here, same
+    // optimistic posture as recordClientPayment below (a payment later
+    // rejected at drain time — §3, failed_permanent — may rarely have
+    // already notified for something that didn't ultimately apply; a
+    // pre-existing characteristic of this flow, not introduced by this
+    // conversion). "total" states the debt that just got cleared
+    // (remainingBefore, not the original sale total, since prior
+    // installments may have already shrunk it); "partiel" states only the
+    // amount just paid.
+    {
       const currency = useAuthStore.getState().session?.activeBusiness?.currency ?? 'GNF';
       notifyEvent({
         businessId: sale.business_id,
@@ -559,57 +603,9 @@ export const useVentesStore = create<VentesStore>((set, get) => ({
           : { customer: sale.customer_name ?? '', amount: formatAmount(amount, currency), status: 'partiel' },
         targetRoles: ['administrateur', 'manager'],
       });
-    };
-
-    const applyOptimistic = () => {
-      const newPaymentEntry: VentePayment = { id: paymentId, method, amount, date };
-      set(state => ({
-        sales: state.sales.map(s =>
-          s.id === saleId
-            ? {
-                ...s,
-                amount_paid: newAmountPaid,
-                status: fullyPaid ? 'paye' : s.status,
-                paid_at: fullyPaid ? now : s.paid_at,
-                payments: s.payments ? [...s.payments, newPaymentEntry] : undefined,
-              }
-            : s,
-        ),
-        saving: false,
-      }));
-    };
-
-    // record_payment() re-checks the real remaining balance server-side and
-    // rejects the insert if it would overpay — the on-device `owed`/`fullyPaid`
-    // figures above are only used for the optimistic UI update, never trusted
-    // for the actual write. This is what stops the same debt being settled
-    // twice by two payments that each looked valid on their own device.
-    const rpcPayload = {
-      p_sale_id:     saleId,
-      p_business_id: sale.business_id,
-      p_amount:      amountCents,
-      p_method:      method,
-      p_date:        date,
-    };
-
-    try {
-      const { data, error: rpcErr } = await supabase.rpc('record_payment', rpcPayload);
-      if (rpcErr) throw rpcErr;
-      applyOptimistic();
-      notifyCreditPayment();
-      return { ok: true, fullyPaid: data as boolean };
-    } catch (err) {
-      if (isNetworkError(err)) {
-        await enqueue('record_payment', rpcPayload);
-        const count = await getQueueCount();
-        useSyncStore.setState({ pendingCount: count });
-        applyOptimistic();
-        notifyCreditPayment();
-        return { ok: true, fullyPaid };
-      }
-      set({ saving: false, error: translateError(err, 'Paiement impossible') });
-      return { ok: false, fullyPaid: false };
     }
+
+    return { ok: true, fullyPaid };
   },
 
   // Local-write-first (§5, same shape as stores/sales.ts's three functions).
