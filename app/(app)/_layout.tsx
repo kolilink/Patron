@@ -21,8 +21,8 @@ import { useVentesStore } from '@/stores/ventes';
 import { useExpensesStore } from '@/stores/expenses';
 import { useSyncStore } from '@/stores/sync';
 import { toast } from '@/stores/toast';
-import { drainQueue, debounceAppStateHandler } from '@/lib/sync';
-import { getDeadOps, archiveDeadOps } from '@/lib/db';
+import { debounceAppStateHandler } from '@/lib/sync';
+import { SyncStatusLine } from '@/src/components/ui/SyncStatusLine';
 import { supabase } from '@/lib/supabase';
 import { PAYWALL_ENABLED } from '@/lib/purchases';
 import type { Role } from '@/src/types';
@@ -47,57 +47,12 @@ const FRESH_SESSION_BACKGROUND_MS = 10 * 60_000;
 // flapping — see its own doc comment in lib/sync.ts) now lives there
 // instead of here, so it's importable in isolation for unit tests.
 
-function SyncBanner() {
-  const { palette } = useTheme();
-  const insets = useSafeAreaInsets();
-  const pendingCount = useSyncStore(s => s.pendingCount);
-  const syncing = useSyncStore(s => s.syncing);
-  const sync = useSyncStore(s => s.sync);
-  // Mounted as a sibling of <Stack/> at the root layout, not inside a
-  // <Screen>/SafeAreaView — so unlike every real screen, it has no built-in
-  // top-inset awareness and was rendering flush against the physical top
-  // edge, bleeding behind the status bar/notch on every device. DemoBanner
-  // (mounted right above this one) already consumes insets.top when demo
-  // mode is on, so skip it here too or the two banners get a double gap —
-  // same rule Screen.tsx already follows for the same reason.
-  const isDemoMode = useAuthStore(s => s.session?.isDemoMode ?? false);
-
-  if (pendingCount === 0) return null;
-
-  const handleSync = async () => {
-    const result = await sync();
-    if (result.synced > 0) {
-      const s = useAuthStore.getState().session;
-      if (s?.activeBusiness?.id) {
-        const isVendeur = s.activeMembership?.role === 'vendeur';
-        useProductStore.getState().fetchProducts(s.activeBusiness.id, s.user.id, s.activeMembership?.id, s.activeMembership?.role);
-        useVentesStore.getState().fetchSales(s.activeBusiness.id, isVendeur ? s.user.id : undefined);
-      }
-    }
-  };
-
-  return (
-    <Pressable
-      style={{
-        backgroundColor: palette.warningLight,
-        flexDirection: 'row',
-        alignItems: 'center',
-        paddingHorizontal: spacing[5],
-        paddingTop: (isDemoMode ? 0 : insets.top) + spacing[2],
-        paddingBottom: spacing[2],
-        gap: spacing[3],
-      }}
-      onPress={syncing ? undefined : handleSync}
-    >
-      <Text variant="caption" style={{ color: palette.warning, flex: 1 }}>
-        {pendingCount} opération{pendingCount > 1 ? 's' : ''} à synchroniser
-      </Text>
-      <Text variant="caption" style={{ color: palette.warning, fontWeight: '700', opacity: syncing ? 0.5 : 1 }}>
-        {syncing ? 'Synchro…' : '↑ Sync'}
-      </Text>
-    </Pressable>
-  );
-}
+// §8: SyncBanner (amber "N opérations à synchroniser" + a tappable manual
+// "↑ Sync" action) is deleted, not just restyled — replaced by
+// SyncStatusLine (src/components/ui/SyncStatusLine.tsx), the single quiet
+// sync surface the approved spec calls for. No manual sync button: there is
+// nothing for the merchant to do here that kick() (every write) and the
+// foreground AppState listener below don't already do on their own.
 
 export default function AppLayout() {
   const session = useAuthStore(s => s.session);
@@ -366,8 +321,18 @@ export default function AppLayout() {
 
     const trySync = async () => {
       try {
-        const result = await drainQueue();
-        useSyncStore.getState().refreshCount();
+        // §8: routed through useSyncStore.sync() rather than calling
+        // drainQueue() directly — this is what fires the PostHog
+        // sync-health events (§3/§4's SyncHealthEvent wiring, done in
+        // stores/sync.ts specifically because lib/sync.ts itself can't
+        // safely import analytics) and updates lastSyncedAt (the quiet
+        // sync line's "Tout est synchronisé ✓ · HH:MM" timestamp, §8).
+        // Calling drainQueue() directly here — the pre-existing shape —
+        // meant every drain triggered by this foreground listener silently
+        // skipped both; only a kick()-triggered drain (from a write) ever
+        // went through the wrapper. sync() calls getQueueCount() itself,
+        // so the separate refreshCount() call this used to need is gone.
+        const result = await useSyncStore.getState().sync();
 
         // A queued payment can be correctly rejected (the debt it was paying
         // off was already settled by another payment before this one synced) —
@@ -396,29 +361,17 @@ export default function AppLayout() {
           }
         }
 
-        // Alert the merchant if any ops permanently failed (hit MAX_SYNC_ATTEMPTS).
-        // Archive them to dead_ops before purging from the queue.
-        const deadOps = await getDeadOps();
-        if (deadOps.length > 0) {
-          await archiveDeadOps();
-          useSyncStore.getState().refreshCount();
-
-          const salesCount = deadOps.filter(o => o.operation === 'submit_sale').length;
-          const expCount   = deadOps.filter(o => o.operation === 'create_expense').length;
-          const otherCount = deadOps.length - salesCount - expCount;
-
-          const parts: string[] = [];
-          if (salesCount > 0) parts.push(`${salesCount} vente${salesCount > 1 ? 's' : ''}`);
-          if (expCount > 0)   parts.push(`${expCount} dépense${expCount > 1 ? 's' : ''}`);
-          if (otherCount > 0) parts.push(`${otherCount} opération${otherCount > 1 ? 's' : ''}`);
-          const summary = parts.join(', ');
-
-          Alert.alert(
-            'Données non synchronisées',
-            `${summary} n'ont pas pu être envoyées après plusieurs tentatives et ont été archivées. Vérifiez votre connexion. Si le problème persiste, contactez le support.`,
-            [{ text: 'Compris' }],
-          );
-        }
+        // §8: the old "Données non synchronisées" Alert.alert (fired once an
+        // item hit MAX_SYNC_ATTEMPTS and was archived to dead_ops) is
+        // deleted, not just quieted — it was the exact "looks lost" failure
+        // the approved spec forbids, and under §3's new classification
+        // there's no attempts-cap event to alert on in the first place: a
+        // failed_permanent item is classified immediately (not after N
+        // retries) and stays fully visible in her own data (never archived
+        // away) — the quiet sync line (SyncStatusLine, §8) is the only
+        // sync-related UI now. A founder-facing surface for
+        // failed_permanent/failed_corrupt items is §9's job (the staleness
+        // proxy + a Paramètres line), not a merchant-facing alert.
       } catch (err) {
         console.warn('[sync] trySync error:', err);
       }
@@ -494,7 +447,7 @@ export default function AppLayout() {
     <>
       <NotificationSetup />
       <DemoBanner />
-      <SyncBanner />
+      <SyncStatusLine />
       <Stack screenOptions={{ headerShown: false, animation: 'slide_from_right' }} />
 
       <BusinessDrawer />

@@ -14,9 +14,7 @@ jest.mock('@/lib/supabase', () => ({
 }));
 
 jest.mock('@/lib/db', () => ({
-  getPendingOps: jest.fn().mockResolvedValue([]),
   deleteQueueItem: jest.fn(),
-  markAttemptFailed: jest.fn(),
 }));
 
 import { isNetworkError } from '@/lib/sync';

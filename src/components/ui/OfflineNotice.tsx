@@ -2,7 +2,6 @@ import { useEffect, useRef } from 'react';
 import { AppState, StyleSheet, View } from 'react-native';
 import { Text } from '@/src/components/ui/Text';
 import { useTheme, spacing } from '@/src/theme';
-import { useSyncStore } from '@/stores/sync';
 
 interface Props {
   offlineSince: number | null;
@@ -25,13 +24,25 @@ const RETRY_INTERVAL_MS = 15000;
 
 // offlineSince is intentionally unused in the label now (kept in the props
 // contract since every call site already passes it, and future callers may
-// still want it) — just "Hors ligne", nothing else. Also suppressed
-// whenever there are pending sync operations: the global SyncBanner
-// ((app)/_layout.tsx) is already on screen at that point and says the same
-// thing, so showing both stacked banners was redundant clutter.
+// still want it) — just "Hors ligne", nothing else.
+//
+// §8 of the offline-first rewrite: recolored from amber (palette.warning)
+// to the same quiet gray treatment as SyncStatusLine, and the old
+// suppress-while-SyncBanner-is-up condition (`if (pendingCount > 0) return
+// null`) is dropped. That condition relied on SyncBanner and this notice
+// being mutually exclusive by construction — SyncBanner only ever rendered
+// when pendingCount > 0, this only when pendingCount === 0 — which broke
+// the moment SyncStatusLine (SyncBanner's replacement) started rendering
+// in the CLEAN state too ("Tout est synchronisé ✓"), a state this notice
+// can legitimately coexist with: a screen's own read can be stale
+// (offline: true, this notice's actual trigger) while the write queue is
+// genuinely empty (pendingCount === 0, SyncStatusLine's clean state) — two
+// different, both-true signals, not a contradiction, once neither is
+// alarm-colored. Keeping the old suppression would have hidden a real,
+// separate signal (this screen's own data may be stale) for no reason
+// other than an accident of the old component's specific trigger shape.
 export function OfflineNotice({ offlineSince: _offlineSince, onRetry }: Props) {
   const { palette } = useTheme();
-  const pendingCount = useSyncStore(s => s.pendingCount);
   const onRetryRef = useRef(onRetry);
   onRetryRef.current = onRetry;
 
@@ -46,11 +57,9 @@ export function OfflineNotice({ offlineSince: _offlineSince, onRetry }: Props) {
     return () => clearInterval(id);
   }, []);
 
-  if (pendingCount > 0) return null;
-
   return (
-    <View style={[styles.bar, { backgroundColor: palette.warningLight }]}>
-      <Text variant="caption" style={{ color: palette.warning }}>Hors ligne</Text>
+    <View style={[styles.bar, { backgroundColor: palette.background }]}>
+      <Text variant="caption" style={{ color: palette.textSecondary }}>Hors ligne</Text>
     </View>
   );
 }

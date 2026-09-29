@@ -22,9 +22,7 @@ jest.mock('@/lib/supabase', () => ({
 }));
 
 jest.mock('@/lib/db', () => ({
-  getPendingOps: jest.fn(),
   deleteQueueItem: jest.fn(),
-  markAttemptFailed: jest.fn(),
   getQueueCount: jest.fn().mockResolvedValue(0),
 }));
 
