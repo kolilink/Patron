@@ -267,7 +267,7 @@ export const useSalesStore = create<SalesStore>((set, get) => ({
         ...(dueDate ? { p_due_date: dueDate } : {}),
       };
 
-      const { error: rpcErr } = await supabase.rpc('submit_sale', rpcPayload);
+      const { data: newSaleId, error: rpcErr } = await supabase.rpc('submit_sale', rpcPayload);
       if (rpcErr) throw rpcErr;
 
       // Notify managers/admins of the completed sale (online path only)
@@ -277,6 +277,10 @@ export const useSalesStore = create<SalesStore>((set, get) => ({
           businessId,
           eventType: 'sale_completed',
           payload: {
+            sale_id: newSaleId as string,
+            // seller/desc/amount kept for the notification_log audit trail —
+            // the edge function's registry strips all three before anything
+            // reaches a device (lock-screen rule: only sale_id survives).
             seller: _notifSession.user.name || 'Vendeur',
             desc: describeSaleForNotification(cartSnapshot),
             // Net of discount — totalAmount alone is the catalog total (see

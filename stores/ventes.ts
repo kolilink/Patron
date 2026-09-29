@@ -452,9 +452,12 @@ export const useVentesStore = create<VentesStore>((set, get) => ({
         notifyEvent({
           businessId,
           eventType: 'sale_cancelled',
-          payload: { amount: formatAmount(_cancelledSale.total_amount, currency), reason },
+          // amount/reason kept here for the notification_log audit trail —
+          // the edge function's registry strips both before anything reaches
+          // a device (lock-screen rule: only sale_id survives into the push).
+          payload: { amount: formatAmount(_cancelledSale.total_amount, currency), reason, sale_id: saleId },
           targetUserIds: targetUserIds.length > 0 ? targetUserIds : undefined,
-          targetRoles: ['administrateur'],
+          targetRoles: ['administrateur', 'manager'],
         });
       }
       return true;

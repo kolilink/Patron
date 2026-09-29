@@ -223,10 +223,7 @@ export const usePartnershipsStore = create<PartnershipsStore>((set, get) => ({
       notifyEvent({
         businessId: (partnership as { recipient_id: string }).recipient_id,
         eventType: 'partnership_request',
-        payload: {
-          sender_name: myBusinessName,
-          preview: `${myBusinessName} vous a envoyé une demande d'ami`,
-        },
+        payload: { business: myBusinessName },
         targetRoles: ['administrateur', 'manager'],
       });
     }
@@ -250,10 +247,7 @@ export const usePartnershipsStore = create<PartnershipsStore>((set, get) => ({
     notifyEvent({
       businessId: requesterBusinessId,
       eventType: 'partnership_accepted',
-      payload: {
-        acceptor_name: myBusinessName,
-        preview: `${myBusinessName} a accepté votre demande d'ami`,
-      },
+      payload: { business: myBusinessName },
       targetRoles: ['administrateur', 'manager'],
     });
   },
