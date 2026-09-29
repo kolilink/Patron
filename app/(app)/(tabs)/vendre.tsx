@@ -36,6 +36,9 @@ import { useAuthStore } from '@/stores/auth';
 import { useProductStore } from '@/stores/products';
 import type { CartLine, SalePayment } from '@/stores/sales';
 import { useSalesStore } from '@/stores/sales';
+import { useVentesStore } from '@/stores/ventes';
+import { useSaveConfirmationStore } from '@/stores/saveConfirmation';
+import { creditSaleConfirmation, cashSaleConfirmation } from '@/src/utils/saveConfirmationCopy';
 import { supabase } from '@/lib/supabase';
 import { haptics } from '@/lib/haptics';
 import { SkeletonList } from '@/src/components/ui/SkeletonPlaceholder';
@@ -1098,6 +1101,10 @@ export default function VendreScreen() {
   const [lastReceipt, setLastReceipt] = useState<ReceiptData | null>(null);
   const receiptViewRef = useRef<View>(null);
   const pendingReceiptRef = useRef<ReceiptData | null>(null);
+  // Holds the SaveConfirmation banner payload built in handleConfirmPayment —
+  // only raised once the full-screen receipt/share sheet closes, see the
+  // effect below and the comment at the call site.
+  const pendingSaveConfirmationRef = useRef<Parameters<ReturnType<typeof useSaveConfirmationStore.getState>['show']>[0] | null>(null);
   const cartScrollRef = useRef<ScrollView>(null);
   const cartRowOffsets = useRef<Record<string, number>>({});
 
@@ -1233,6 +1240,19 @@ export default function VendreScreen() {
     }
   }, [showConfirmSheet]);
 
+  // Raise the queued SaveConfirmation banner the instant the full-screen
+  // receipt/share sheet closes (share, "Ignorer", or backdrop/hardware-back
+  // dismiss) — never while it's still visible, so the vendor only ever sees
+  // one confirmation at a time.
+  const prevShowConfirmSheetRef = useRef(false);
+  useEffect(() => {
+    if (prevShowConfirmSheetRef.current && !showConfirmSheet && pendingSaveConfirmationRef.current) {
+      useSaveConfirmationStore.getState().show(pendingSaveConfirmationRef.current);
+      pendingSaveConfirmationRef.current = null;
+    }
+    prevShowConfirmSheetRef.current = showConfirmSheet;
+  }, [showConfirmSheet]);
+
   // Confirmation sheet: pre-computed breakdown for lastReceipt
   const confirmNet       = lastReceipt ? lastReceipt.total - (lastReceipt.discountAmount ?? 0) : 0;
   const confirmUpfront   = lastReceipt?.amountPaid ?? 0;
@@ -1328,6 +1348,40 @@ export default function VendreScreen() {
         if (!queued) fetchProducts(businessId, userId, membershipId, role);
         setConfirmQueued(queued);
         setShowConfirmSheet(true);
+
+        // Reusable named-result confirmation banner (SaveConfirmation) — states
+        // "[nom] vous doit" in words and offers Annuler, neither of which the
+        // receipt/share sheet does. Deliberately NOT shown at the same time as
+        // that full-screen sheet (one calm confirmation, not two stacked) —
+        // queued into pendingSaveConfirmationRef and only raised once the
+        // sheet is dismissed (share or "Ignorer"), via the effect below.
+        const saleId = useSalesStore.getState().lastSubmitSaleId;
+        const netAmount = effectiveTotal - (discountAmount ?? 0);
+        const confirmMessage = isCredit && customerName
+          ? creditSaleConfirmation(customerName, netAmount, currency)
+          : cashSaleConfirmation(netAmount, currency);
+        pendingSaveConfirmationRef.current = {
+          message: confirmMessage,
+          tone: 'success',
+          // Undo only for the online-synced path via the existing cancel_sale
+          // RPC (restores stock, marks annulé — see CLAUDE.md). The offline-
+          // queued path has no undo here: dropping it safely also needs
+          // removing the optimistic ventes-store row and the optimistic stock
+          // decrement (stores/sales.ts's two `void (async () => ...)` blocks)
+          // together, atomically — flagged as a follow-up rather than risking
+          // a half-reverted local state.
+          undo: !queued && saleId
+            ? async () => { await useVentesStore.getState().cancelSale(saleId, businessId, userId, 'Annulée depuis la confirmation'); }
+            : undefined,
+          // Post-window correction hand-off: deep-links into this sale's real
+          // detail modal in Ventes (?openSale=<id>, see app/(app)/ventes/
+          // index.tsx) rather than leaving "Modifier" a dead end. Only when
+          // there's a real sale id to open — the offline-queued path's id is
+          // just the idempotency key, not a row Ventes can look up yet.
+          onEdit: !queued && saleId
+            ? () => router.push({ pathname: '/(app)/ventes', params: { openSale: saleId } })
+            : undefined,
+        };
         // First value moment (or a later one, capped at twice) — offer the
         // notification permission-priming card. Covers both a regular sale
         // and a credit sale (payment === null here).

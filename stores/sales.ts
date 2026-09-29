@@ -37,6 +37,11 @@ interface SalesStore {
   submitting: boolean;
   error: string | null;
   lastSubmitQueued: boolean;
+  // Set on every successful submitSale so a caller can offer an immediate
+  // "Annuler" undo without a second round trip: the real DB id when synced
+  // online, or the idempotency key (== the optimistic local row id — see
+  // the offline branch below) when queued offline.
+  lastSubmitSaleId: string | null;
 
   addToCart: (product: Product, bulk?: boolean) => void;
   addToCartVariant: (product: Product, variant: ProductVariant, qty?: number) => void;
@@ -90,6 +95,7 @@ export const useSalesStore = create<SalesStore>((set, get) => ({
   submitting: false,
   error: null,
   lastSubmitQueued: false,
+  lastSubmitSaleId: null,
 
   addToCart: (product, bulk = false) => {
     const { cart } = get();
@@ -292,7 +298,7 @@ export const useSalesStore = create<SalesStore>((set, get) => ({
         });
       }
 
-      set({ cart: [], submitting: false, lastSubmitQueued: false });
+      set({ cart: [], submitting: false, lastSubmitQueued: false, lastSubmitSaleId: newSaleId as string });
       haptics.heavy();
       trackEvent('sale_submitted', businessId, userId, {
         is_credit:      isCredit,
@@ -345,7 +351,7 @@ export const useSalesStore = create<SalesStore>((set, get) => ({
         const count = await getQueueCount();
         useSyncStore.setState({ pendingCount: count });
 
-        set({ cart: [], submitting: false, lastSubmitQueued: true });
+        set({ cart: [], submitting: false, lastSubmitQueued: true, lastSubmitSaleId: idempotencyKey });
         haptics.success();
         trackEvent('sale_offline_queued', businessId, userId, {
           items_count: cartSnapshot.length,
@@ -437,11 +443,11 @@ export const useSalesStore = create<SalesStore>((set, get) => ({
       // so a genuine technical error never reaches the merchant untranslated.
       const friendly = translateError(err, raw);
       haptics.error();
-      set({ error: friendly, submitting: false, lastSubmitQueued: false });
+      set({ error: friendly, submitting: false, lastSubmitQueued: false, lastSubmitSaleId: null });
       return false;
     }
   },
 
   clearError: () => set({ error: null }),
-  reset: () => set({ cart: [], submitting: false, error: null, lastSubmitQueued: false }),
+  reset: () => set({ cart: [], submitting: false, error: null, lastSubmitQueued: false, lastSubmitSaleId: null }),
 }));

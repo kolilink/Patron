@@ -21,6 +21,8 @@ import { translateError } from '@/lib/errors';
 import { generateId } from '@/lib/id';
 import { supabase } from '@/lib/supabase';
 import { formatAmountInput, parseAmountInput } from '@/src/utils/format';
+import { useSaveConfirmationStore } from '@/stores/saveConfirmation';
+import { deliveryConfirmation, type DeliveryItem } from '@/src/utils/saveConfirmationCopy';
 
 function fmt(n: number, cur: string) { return `${Math.round(n).toLocaleString('fr-FR')} ${cur}`; }
 function todayISO() {
@@ -834,9 +836,47 @@ export default function FournisseursScreen() {
 
   const handleRecevoir = async (lines: { id: string; qty: number }[] | null, shippingCents: number) => {
     if (!detailCommande) return;
-    const ok = await recevoirCommande(detailCommande.id, businessId, userId, lines ?? undefined, shippingCents);
+    const { ok, batchId } = await recevoirCommande(detailCommande.id, businessId, userId, lines ?? undefined, shippingCents);
     if (ok) {
       haptics.success();
+
+      // Build the confirmation from the same data already in hand — no
+      // extra fetch: `lines` (partial receive) or detailCommande.lines
+      // (full receive) already carry product name/qty/unit_cost locally.
+      const receivedLines: DeliveryItem[] = lines
+        ? lines.map(l => {
+            const src = detailCommande.lines?.find(cl => cl.id === l.id);
+            return { qty: l.qty, productName: src?.product_name ?? '—' };
+          })
+        : (detailCommande.lines ?? []).map(cl => ({ qty: cl.qty_ordered, productName: cl.product_name }));
+      const amountPaid = lines
+        ? lines.reduce((s, l) => {
+            const src = detailCommande.lines?.find(cl => cl.id === l.id);
+            return s + l.qty * (src?.unit_cost ?? 0);
+          }, 0) + shippingCents / 100
+        : (detailCommande.lines ?? []).reduce((s, cl) => s + cl.qty_ordered * cl.unit_cost, 0) + shippingCents / 100;
+
+      useSaveConfirmationStore.getState().show({
+        message: deliveryConfirmation(receivedLines, amountPaid, currency),
+        tone: 'success',
+        // Undo via void_purchase_order_receipt (migration_v158.sql), only
+        // when we actually got a real batch id back — PO receipt still isn't
+        // offline-queued (no enqueue() in recevoirCommande, stores/
+        // fournisseurs.ts), so batchId is always present on success today,
+        // but guard anyway rather than assume.
+        undo: batchId
+          ? async () => { await useFournisseursStore.getState().voidPurchaseOrderReceipt(batchId, businessId, userId, 'Annulée depuis la confirmation'); }
+          : undefined,
+        // Post-window correction hand-off: reopens this same PO's detail
+        // modal (already the real, auditable place to see qty_received/
+        // status/lines — no separate screen needed since we're already on
+        // fournisseurs/index.tsx) rather than leaving "Modifier" a dead end.
+        onEdit: () => {
+          const c = useFournisseursStore.getState().commandes.find(x => x.id === detailCommande.id);
+          if (c) setDetailCommande(c);
+        },
+      });
+
       Alert.alert(lines !== null ? 'Réception partielle enregistrée.' : 'Commande reçue. Stock mis à jour.');
       setDetailCommande(null);
       fetchProducts(businessId, userId);

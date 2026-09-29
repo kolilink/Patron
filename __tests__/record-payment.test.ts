@@ -56,12 +56,17 @@ beforeEach(() => {
 });
 
 describe('recordPayment — online', () => {
-  it('on success, applies the optimistic update and returns fullyPaid from the server', async () => {
-    (supabase.rpc as jest.Mock).mockResolvedValueOnce({ data: true, error: null });
+  it('on success, applies the optimistic update and returns fullyPaid + the real payment_id from the server', async () => {
+    // As of migration_v157.sql, record_payment returns jsonb {fully_paid, payment_id}
+    // instead of a bare boolean, so void_payment has a real row id to reverse.
+    (supabase.rpc as jest.Mock).mockResolvedValueOnce({
+      data: { fully_paid: true, payment_id: 'pay-1' },
+      error: null,
+    });
 
     const result = await useVentesStore.getState().recordPayment('sale-1', 16500, 'especes', '2026-06-30');
 
-    expect(result).toEqual({ ok: true, fullyPaid: true });
+    expect(result).toEqual({ ok: true, fullyPaid: true, paymentId: 'pay-1' });
     expect(supabase.rpc).toHaveBeenCalledWith('record_payment', {
       p_sale_id: 'sale-1',
       p_business_id: 'biz-1',

@@ -4,6 +4,7 @@ import { Redirect, Stack, router } from 'expo-router';
 import { BusinessDrawer } from '@/src/components/BusinessDrawer';
 import { TrialWelcomeOverlay } from '@/src/components/TrialWelcomeOverlay';
 import { AppToastContainer } from '@/src/components/ui/AppToast';
+import { SaveConfirmation } from '@/src/components/ui/SaveConfirmation';
 import { DemoBanner } from '@/src/components/ui/DemoBanner';
 import { NotificationSetup } from '@/src/components/NotificationSetup';
 import { ActivationPrimingSheet } from '@/src/components/ActivationPrimingSheet';
@@ -315,6 +316,7 @@ export default function AppLayout() {
         />
       )}
       <AppToastContainer />
+      <SaveConfirmation />
       <ActivationPrimingSheet />
     </>
   );

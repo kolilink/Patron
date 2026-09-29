@@ -28,6 +28,8 @@ import type { Palette } from '@/src/theme';
 import type { Product, ProductVariant } from '@/src/types';
 import { useAuthStore } from '@/stores/auth';
 import { type CreateProductData, type DraftVariant, type ProductStats, useProductStore } from '@/stores/products';
+import { useSaveConfirmationStore } from '@/stores/saveConfirmation';
+import { productConfirmation } from '@/src/utils/saveConfirmationCopy';
 import { useFournisseursStore, type Fournisseur } from '@/stores/fournisseurs';
 import { haptics } from '@/lib/haptics';
 import { formatAmount, formatAmountInput, parseAmountInput } from '@/src/utils/format';
@@ -1213,6 +1215,7 @@ export default function CatalogueScreen() {
   const handleSave = useCallback(
     async (data: CreateProductData, hasVariants: boolean, variants: DraftVariant[]) => {
       let ok: boolean;
+      let createdProduct: Product | null = null;
       if (editingProduct) {
         ok = await updateProduct(businessId, userId, editingProduct.id, data);
         if (ok) {
@@ -1220,13 +1223,13 @@ export default function CatalogueScreen() {
         }
       } else {
         ok = await createProduct(businessId, userId, data);
-        if (ok && hasVariants && variants.length > 0) {
+        if (ok) {
           const nameLower = data.name.trim().toLowerCase();
-          const created = useProductStore.getState().products.find(
+          createdProduct = useProductStore.getState().products.find(
             p => p.name.trim().toLowerCase() === nameLower,
           ) ?? null;
-          if (created) {
-            await upsertVariants(businessId, created.id, userId, variants);
+          if (createdProduct && hasVariants && variants.length > 0) {
+            await upsertVariants(businessId, createdProduct.id, userId, variants);
           }
         }
       }
@@ -1235,13 +1238,31 @@ export default function CatalogueScreen() {
         setShowForm(false);
         const wasNewProduct = !editingProduct;
         setEditingProduct(null);
-        showSuccess(wasNewProduct ? 'Produit ajouté ✓' : 'Produit mis à jour ✓');
+        if (wasNewProduct) {
+          const savedProduct = createdProduct;
+          useSaveConfirmationStore.getState().show({
+            message: productConfirmation(data.name.trim()),
+            tone: 'success',
+            // Compensating action: a just-created product has no sales/stock
+            // history yet, so archiving it is safe regardless of whether the
+            // create already synced or is still queued offline (archiveProduct
+            // is a plain flag flip either way, not a delete — see stores/products.ts).
+            undo: savedProduct
+              ? () => archiveProduct(savedProduct.id, businessId)
+              : undefined,
+            onEdit: savedProduct
+              ? () => { setEditingProduct(savedProduct); setShowForm(true); }
+              : undefined,
+          });
+        } else {
+          showSuccess('Produit mis à jour ✓');
+        }
         // First value moment (or a later one, capped at twice) — only for a
         // genuinely new product, not an edit.
         if (wasNewProduct) activationPriming.maybeTrigger();
       }
     },
-    [editingProduct, businessId, userId, createProduct, updateProduct, upsertVariants, showSuccess],
+    [editingProduct, businessId, userId, createProduct, updateProduct, upsertVariants, showSuccess, archiveProduct],
   );
 
   const handleAdjust = useCallback(

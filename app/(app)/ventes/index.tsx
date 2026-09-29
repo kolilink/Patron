@@ -5,7 +5,7 @@ import * as Sharing from 'expo-sharing';
 import { SafeAreaView } from 'react-native-safe-area-context';
 import { Screen } from '@/src/components/ui/Screen';
 import { Ionicons } from '@expo/vector-icons';
-import { router, useFocusEffect } from 'expo-router';
+import { router, useFocusEffect, useLocalSearchParams } from 'expo-router';
 import { Card } from '@/src/components/ui/Card';
 import { Text } from '@/src/components/ui/Text';
 import { Button } from '@/src/components/ui/Button';
@@ -945,6 +945,21 @@ export default function VentesScreen() {
       if (updated) setSelected(updated);
     }
   }, [sales]);
+
+  // "Modifier" hand-off from the SaveConfirmation banner (vendre.tsx's cash/
+  // credit sale confirmations) — deep-links straight into this sale's detail
+  // modal via ?openSale=<id> once the list has actually loaded it, rather
+  // than requiring the merchant to find it themselves in the history.
+  const { openSale: openSaleParam } = useLocalSearchParams<{ openSale?: string }>();
+  const openedSaleRef = useRef<string | null>(null);
+  useEffect(() => {
+    if (!openSaleParam || openedSaleRef.current === openSaleParam) return;
+    const sale = sales.find(s => s.id === openSaleParam);
+    if (sale) {
+      openedSaleRef.current = openSaleParam;
+      open(sale);
+    }
+  }, [openSaleParam, sales]);
 
   const handleRecordPayment = async (amount: number, method: string, date: string): Promise<{ ok: boolean; fullyPaid: boolean }> => {
     if (!selected) return { ok: false, fullyPaid: false };
