@@ -1,5 +1,13 @@
 import { serve } from 'https://deno.land/std@0.177.0/http/server.ts';
 import { createClient } from 'https://esm.sh/@supabase/supabase-js@2';
+import {
+  EVENT_REGISTRY,
+  ORDINARY_CAP,
+  bypassesCap,
+  bypassesQuietHours,
+  isQuietHours,
+  sanitizeDataPayload,
+} from './registry.ts';
 
 const corsHeaders = {
   'Access-Control-Allow-Origin': '*',
@@ -8,135 +16,42 @@ const corsHeaders = {
 
 const EXPO_PUSH_URL = 'https://exp.host/--/api/v2/push/send';
 
-// ─── Deep-link routing ───────────────────────────────────────────────────────
-const ROUTE_MAP: Record<string, string> = {
-  sale_completed:    '/(app)/ventes',
-  sale_cancelled:    '/(app)/ventes',
-  credit_paid:       '/(app)/ventes',
-  expense_submitted: '/(app)/depenses',
-  expense_approved:  '/(app)/depenses',
-  expense_rejected:  '/(app)/depenses',
-  low_stock:         '/(app)/catalogue',
-  member_joined:     '/(app)/equipe',
-  role_changed:      '/(app)/equipe',
-  member_removed:    '/(app)/equipe',
-  chat_message:          '/(app)/discussions',
-  partnership_request:   '/(app)/discussions',
-  partnership_accepted:  '/(app)/discussions',
-  po_received:           '/(app)/fournisseurs',
-  support_message:       '/(app)/support-inbox',
-  support_reply:         '/(app)/support',
-  alpha_quota_reset:     '/(app)/alpha',
-  daily_digest:          '/(app)/rapports',
+// ─── Titles ───────────────────────────────────────────────────────────────
+// Every event's title is the business name, EXCEPT chat_message, where the
+// sender name IS the point (named exception to the lock-screen rule).
+const EVENT_TITLES: Record<string, string> = {
+  sale_completed:    '✅ Vente enregistrée',
+  sale_cancelled:    '⚠️ Vente annulée',
+  sale_edited:       '✏️ Vente modifiée',
+  low_stock:         '📦 Stock bas', // product name is appended, e.g. "📦 Stock bas : Riz"
+  partnership_request:  '🤝 Demande de partenariat',
+  partnership_accepted: '🤝 Partenariat accepté',
+  support_message:   '💬 Nouveau message',
+  support_reply:     '💬 Réponse du support',
+  alpha_quota_reset: '✨ Alpha',
+  daily_digest:      '🌙 Votre journée',
+  activation_nudge_1:      '💰 Un client vous doit de l\'argent ?',
+  activation_nudge_2:      '⏰ Une minute suffit',
+  // second_action_reminder's title is contextual (product/debt/sale) — see
+  // SECOND_ACTION_TITLES and buildTitle below, not this fixed map.
+  revenue_milestone: '🎉 Nouveau cap franchi',
+  debt_aging_reminder: '💰 Un crédit vieillit',
 };
 
-// ─── Three-line format ───────────────────────────────────────────────────────
-// Title   = business name  (set in message construction, not here)
-// Subtitle = event category in French (context — what kind of event)
-// Body     = the core fact (who/what + the key number + brief context)
-
-const SUBTITLE_MAP: Record<string, string | null> = {
-  sale_completed:    null, // body already says "a vendu" — a "Vente" subtitle was redundant
-  sale_cancelled:    'Vente annulée',
-  credit_paid:       'Crédit soldé',
-  expense_submitted: 'Dépense en attente',
-  expense_approved:  'Dépense validée',
-  expense_rejected:  'Dépense refusée',
-  low_stock:         'Stock critique',
-  member_joined:     'Équipe',
-  role_changed:      'Votre compte',
-  member_removed:    'Votre compte',
-  chat_message:          null, // sender name IS the context — no subtitle needed
-  partnership_request:   'Amis',
-  partnership_accepted:  'Amis',
-  po_received:           'Livraison',
-  support_message:       null, // body is a self-explanatory full sentence — no subtitle needed
-  support_reply:         null, // body is a self-explanatory full sentence — no subtitle needed
-  alpha_quota_reset:     null, // body is a self-explanatory full sentence — no subtitle needed
-  daily_digest:          null, // body is a self-explanatory full sentence — no subtitle needed
+const SECOND_ACTION_TITLES: Record<string, string> = {
+  product: '📦 Premier produit ajouté',
+  debt:    '💰 Première dette notée',
+  sale:    '✅ Première vente notée',
 };
 
-function buildBody(eventType: string, p: Record<string, string | number>): string {
-  switch (eventType) {
-    // Subtitle carries the "Vente" label — body is: seller a vendu {desc} pour {amount}
-    case 'sale_completed':
-      return `${p.seller} a vendu ${p.desc} pour ${p.amount}`;
-    // Subtitle carries "Vente annulée" — body is: amount and reason if any
-    case 'sale_cancelled':
-      return `${p.amount}${p.reason ? ` — ${p.reason}` : ''}`;
-    // Subtitle carries "Crédit soldé" — body: client and amount
-    case 'credit_paid':
-      return `${p.customer} — ${p.amount}`;
-    // Subtitle carries "Dépense en attente" — body: who · amount — description
-    case 'expense_submitted':
-      return `${p.name} · ${p.amount} — ${p.description}`;
-    // Subtitle carries result — body: amount and description
-    case 'expense_approved':
-    case 'expense_rejected':
-      return `${p.amount} — ${p.description}`;
-    // Subtitle carries "Stock critique" — body: flat, no pronoun, fast to scan
-    case 'low_stock':
-      return `Il reste ${p.qty} ${p.product} en stock`;
-    // Subtitle carries "Équipe" — body: name and role
-    case 'member_joined':
-      return `${p.name} · ${p.role}`;
-    // Subtitle carries "Votre compte" — body: direct statement
-    case 'role_changed':
-      return `Vous êtes maintenant ${p.role}`;
-    case 'member_removed':
-      return 'Vous avez été retiré';
-    // No subtitle — body carries everything: sender · preview
-    case 'chat_message':
-      return `${p.sender} · ${p.preview}`;
-    case 'partnership_request':
-      return `${p.sender_name} vous a envoyé une demande d'ami`;
-    case 'partnership_accepted':
-      return `${p.acceptor_name} a accepté votre demande`;
-    // Subtitle carries "Livraison" — body: count and supplier
-    case 'po_received':
-      return `${p.N} article${Number(p.N) > 1 ? 's' : ''} de ${p.supplier}`;
-    // No subtitle — generic full sentence (never the merchant's name or raw
-    // message text, same posture as support_reply below)
-    case 'support_message':
-    case 'support_reply':
-      return String(p.preview ?? '');
-    // No subtitle — full sentence, tier-specific ("Pro" only for paid)
-    case 'alpha_quota_reset':
-      return p.tier === 'paid'
-        ? 'Vous pouvez parler à Alpha Pro maintenant.'
-        : 'Vous pouvez parler à Alpha maintenant.';
-    // No subtitle — full sentence. "bonne" states the revenue; "calme" never
-    // reports a number at all, deliberately — see migration_v139.sql.
-    case 'daily_digest':
-      return p.tier === 'bonne'
-        ? `La journée est bonne, vous avez fait : ${p.amount}.`
-        : 'La journée était calme. On se retrouve demain.';
-    default:
-      return String(p.body ?? '');
+function buildTitle(eventType: string, bizName: string, p: Record<string, unknown>): string {
+  if (eventType === 'chat_message') return String(p.sender ?? bizName);
+  if (eventType === 'low_stock') return `📦 Stock bas : ${p.product ?? ''}`;
+  if (eventType === 'second_action_reminder') {
+    return SECOND_ACTION_TITLES[String(p.action_type)] ?? '✅ Première action notée';
   }
+  return EVENT_TITLES[eventType] ?? bizName;
 }
-
-// ─── Sound & urgency classification ─────────────────────────────────────────
-
-// Urgent sound (patron_urgent.wav) + time-sensitive interruption level
-// = breaks through Focus modes. Only for events that need eyes now.
-const URGENT_EVENTS = new Set([
-  'chat_message',
-  'low_stock',
-  'sale_cancelled',
-  'role_changed',
-  'member_removed',
-  'support_message',
-  'support_reply',
-]);
-
-// Time-sensitive interruption: also includes approved/rejected (person is waiting)
-// but with the default (softer) sound — important, not alarming
-const TIME_SENSITIVE_EVENTS = new Set([
-  ...URGENT_EVENTS,
-  'expense_approved',
-  'expense_rejected',
-]);
 
 // ─── iOS notification action categories ─────────────────────────────────────
 // categoryIdentifier must match what's registered in NotificationSetup.tsx
@@ -192,6 +107,25 @@ serve(async (req) => {
     if (!business_id || !event_type) {
       return new Response(JSON.stringify({ error: 'Paramètres manquants' }), {
         status: 400, headers: { ...corsHeaders, 'Content-Type': 'application/json' },
+      });
+    }
+
+    // Registry gate — an event_type not in EVENT_REGISTRY can never send,
+    // full stop. This is the audited allowlist: every push this function is
+    // capable of sending is named in registry.ts, with its audience,
+    // category (for cap/quiet-hours), and fixed lock-screen copy.
+    const eventDef = EVENT_REGISTRY[event_type];
+    if (!eventDef) {
+      return new Response(JSON.stringify({ error: `event_type non enregistré: ${event_type}` }), {
+        status: 400, headers: { ...corsHeaders, 'Content-Type': 'application/json' },
+      });
+    }
+    if (!eventDef.built) {
+      // Reserved slot — copy/route exist for when the engine ships, but
+      // nothing is ever sent. Logged as skipped, not an error, so a caller
+      // that doesn't yet know an event is dormant doesn't see a failure.
+      return new Response(JSON.stringify({ skipped: 'not_built' }), {
+        headers: { ...corsHeaders, 'Content-Type': 'application/json' },
       });
     }
 
@@ -342,6 +276,42 @@ serve(async (req) => {
       });
     }
 
+    // Quiet hours (21:00–07:00 UTC ≈ Guinea local — no DST): non-security,
+    // non-money events are dropped outright during this window rather than
+    // held for redelivery, since there is no deferred-delivery queue/cron
+    // built yet (see registry.ts's dormant engines). Security bypasses this
+    // entirely; money movement (a completed/cancelled/edited sale, a paid
+    // credit) is allowed through so it isn't silently lost.
+    if (!bypassesQuietHours(eventDef.category) && isQuietHours(new Date())) {
+      return new Response(JSON.stringify({ skipped: 'quiet_hours' }), {
+        headers: { ...corsHeaders, 'Content-Type': 'application/json' },
+      });
+    }
+
+    // Server-side cap: max ORDINARY_CAP ordinary/money pushes per recipient
+    // per rolling 24h. Security events always bypass it. Recipients already
+    // at their cap are dropped from this send (not the whole dispatch) —
+    // everyone else still gets notified.
+    if (!bypassesCap(eventDef.category)) {
+      const since = new Date(Date.now() - 24 * 60 * 60 * 1000).toISOString();
+      const { data: recentRows } = await supabase
+        .from('push_recipient_log')
+        .select('user_id')
+        .in('user_id', userIds)
+        .in('category', ['ordinary', 'money'])
+        .gte('sent_at', since);
+      const countByUser = new Map<string, number>();
+      for (const row of (recentRows ?? []) as { user_id: string }[]) {
+        countByUser.set(row.user_id, (countByUser.get(row.user_id) ?? 0) + 1);
+      }
+      userIds = userIds.filter(id => (countByUser.get(id) ?? 0) < ORDINARY_CAP);
+    }
+    if (userIds.length === 0) {
+      return new Response(JSON.stringify({ sent: 0, skipped: 'cap' }), {
+        headers: { ...corsHeaders, 'Content-Type': 'application/json' },
+      });
+    }
+
     // Fetch device tokens (with owning user_id — needed to stamp each push
     // with that user's own running unread count, not a shared value)
     const { data: tokenRows } = await supabase
@@ -370,15 +340,19 @@ serve(async (req) => {
         .map(r => [r.id, r.unread_notification_count]),
     );
 
-    // Build notification fields
-    const body            = buildBody(event_type, payload as Record<string, string | number>);
-    const subtitle        = SUBTITLE_MAP[event_type] ?? null;
-    const route           = ROUTE_MAP[event_type] ?? '/(app)';
-    const isUrgent        = URGENT_EVENTS.has(event_type);
-    const isTimeSensitive = TIME_SENSITIVE_EVENTS.has(event_type);
-    const soundFile       = isUrgent ? 'patron_urgent.wav' : 'patron_default.wav';
-    const channelId       = isUrgent ? 'patron_urgent' : 'patron_default';
-    const categoryId      = CATEGORY_MAP[event_type];
+    // Build notification fields — title/body/route/urgency all come from the
+    // registry's FIXED templates (lock-screen rule: no client name or amount
+    // ever leaves the server for these). `data` is whitelist-sanitized too —
+    // it is never just `...payload` anymore.
+    const title      = buildTitle(event_type, bizName, payload);
+    const subtitle   = eventDef.subtitle;
+    const body       = eventDef.body(payload);
+    const route      = eventDef.route(payload);
+    const safeData   = sanitizeDataPayload(event_type, payload);
+    const isUrgent   = eventDef.urgent;
+    const soundFile  = isUrgent ? 'patron_urgent.wav' : 'patron_default.wav';
+    const channelId  = isUrgent ? 'patron_urgent' : 'patron_default';
+    const categoryId = CATEGORY_MAP[event_type];
 
     const CHUNK = 100;
     const staleTokens: string[] = [];
@@ -387,15 +361,15 @@ serve(async (req) => {
       const chunk = tokens.slice(i, i + CHUNK);
       const messages = chunk.map(({ token: to, user_id }) => ({
         to,
-        title: bizName,                               // business name — always
-        ...(subtitle ? { subtitle } : {}),            // event category in French
-        body,                                         // the core fact
-        data: { route, event_type, business_id, ...payload },
+        title,
+        ...(subtitle ? { subtitle } : {}),
+        body,
+        data: { route, event_type, business_id, ...safeData },
         sound: soundFile,
         channelId,
         badge: badgeByUser.get(user_id) ?? 1,
         ...(categoryId ? { categoryIdentifier: categoryId } : {}),
-        ...(isTimeSensitive ? { _interruptionLevel: 'time-sensitive' } : {}),
+        ...(isUrgent ? { _interruptionLevel: 'time-sensitive' } : {}),
       }));
 
       const resp = await fetch(EXPO_PUSH_URL, {
@@ -421,6 +395,17 @@ serve(async (req) => {
     await supabase.from('notification_log').insert({
       business_id, event_type, payload, recipient_count: tokens.length,
     });
+
+    // Per-recipient rows feed the cap check above — only recorded for
+    // categories the cap actually applies to (ordinary/money); security
+    // bypasses the cap so there's nothing useful to log against it.
+    if (eventDef.category !== 'security') {
+      await supabase.from('push_recipient_log').insert(
+        [...new Set(tokens.map(t => t.user_id))].map(user_id => ({
+          user_id, event_type, category: eventDef.category,
+        })),
+      );
+    }
 
     return new Response(JSON.stringify({ sent: tokens.length }), {
       headers: { ...corsHeaders, 'Content-Type': 'application/json' },

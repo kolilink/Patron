@@ -277,7 +277,7 @@ export const useChatStore = create<ChatStore>((set, get) => ({
           eventType: 'chat_message',
           payload: {
             sender: senderName,
-            preview: content.slice(0, 60) + (content.length > 60 ? '…' : ''),
+            snippet: content.slice(0, 80) + (content.length > 80 ? '…' : ''),
           },
           targetRoles: ['administrateur', 'manager', 'vendeur', 'investisseur'],
           excludeUserId: senderId,

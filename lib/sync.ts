@@ -57,7 +57,7 @@ function describeQueuedCart(
 // entirely, so sales made offline (this app's core low-connectivity use
 // case) never generated the notification once synced. Best-effort: a lookup
 // failure here must never affect the sync result itself.
-async function notifyQueuedSaleSynced(payload: Record<string, unknown>): Promise<void> {
+async function notifyQueuedSaleSynced(payload: Record<string, unknown>, saleId: string | null): Promise<void> {
   try {
     const businessId = payload.p_business_id as string;
     const sellerId = payload.p_seller_id as string;
@@ -82,6 +82,7 @@ async function notifyQueuedSaleSynced(payload: Record<string, unknown>): Promise
       businessId,
       eventType: 'sale_completed',
       payload: {
+        sale_id: saleId,
         seller: sellerName,
         desc: describeQueuedCart(cart),
         amount: formatAmount(totalCents / 100, currency),
@@ -96,9 +97,9 @@ async function notifyQueuedSaleSynced(payload: Record<string, unknown>): Promise
 async function executeOp(operation: string, payload: Record<string, unknown>): Promise<void> {
   switch (operation) {
     case 'submit_sale': {
-      const { error } = await supabase.rpc('submit_sale', payload);
+      const { data: saleId, error } = await supabase.rpc('submit_sale', payload);
       if (error) throw error;
-      void notifyQueuedSaleSynced(payload);
+      void notifyQueuedSaleSynced(payload, (saleId as string) ?? null);
       break;
     }
     case 'create_expense': {
