@@ -33,6 +33,7 @@ import { haptics } from '@/lib/haptics';
 import { formatAmount, formatAmountInput, parseAmountInput } from '@/src/utils/format';
 import { OfflineNotice } from '@/src/components/ui/OfflineNotice';
 import { SkeletonList } from '@/src/components/ui/SkeletonPlaceholder';
+import { activationPriming } from '@/stores/activationPriming';
 
 // ─── Helpers ─────────────────────────────────────────────────────────────────
 
@@ -1232,8 +1233,12 @@ export default function CatalogueScreen() {
       if (ok) {
         haptics.success();
         setShowForm(false);
+        const wasNewProduct = !editingProduct;
         setEditingProduct(null);
-        showSuccess(editingProduct ? 'Produit mis à jour ✓' : 'Produit ajouté ✓');
+        showSuccess(wasNewProduct ? 'Produit ajouté ✓' : 'Produit mis à jour ✓');
+        // First value moment (or a later one, capped at twice) — only for a
+        // genuinely new product, not an edit.
+        if (wasNewProduct) activationPriming.maybeTrigger();
       }
     },
     [editingProduct, businessId, userId, createProduct, updateProduct, upsertVariants, showSuccess],

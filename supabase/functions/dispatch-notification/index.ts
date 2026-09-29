@@ -88,7 +88,10 @@ const FOUNDER_EVENTS = new Set(['support_reply']);
 // Events dispatched by a background job, not a logged-in user — there is no
 // session to hold a Bearer JWT, so these authenticate via a shared secret
 // instead (see send-alpha-quota-reminders and send-daily-digest).
-const CRON_EVENTS = new Set(['alpha_quota_reset', 'daily_digest']);
+const CRON_EVENTS = new Set([
+  'alpha_quota_reset', 'daily_digest',
+  'activation_nudge_1', 'activation_nudge_2', 'second_action_reminder',
+]);
 
 async function callerIsFounder(supabase: ReturnType<typeof createClient>, userId: string): Promise<boolean> {
   const { data: profile } = await supabase.from('profiles').select('phone').eq('id', userId).maybeSingle();
