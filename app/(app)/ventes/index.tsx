@@ -373,6 +373,15 @@ function DetailModal({ sale, currency, businessName, singleVendor, role, onClose
   const { palette } = useTheme();
   const styles = useMemo(() => makeStyles(palette), [palette]);
   const businessPhone = useAuthStore(s => s.session?.activeBusiness?.phone ?? null);
+  // §8 of the offline-first rewrite: edit_sale is deliberately NOT part of
+  // the local-write-first outbox (see CLAUDE.md's "Sale editing" section —
+  // its 48h window is checked against a live server clock, which a queued/
+  // replayed edit could silently fail against with no clear signal). That
+  // means it needs its own explicit offline handling here, rather than
+  // inheriting the "always succeeds locally" behavior every Phase-1 write
+  // path now has — an honest "connexion requise" hint when offline, not an
+  // obscure RPC failure after tapping through the whole edit form.
+  const offline = useVentesStore(s => s.offline);
   const [showPaymentSheet, setShowPaymentSheet] = useState(false);
   const [showReceipt, setShowReceipt] = useState(false);
   const [showCancelForm, setShowCancelForm] = useState(false);
@@ -579,13 +588,31 @@ function DetailModal({ sale, currency, businessName, singleVendor, role, onClose
     }
   };
 
+  const showOfflineEditHint = () => {
+    Alert.alert(
+      'Connexion requise',
+      'La modification d\'une vente nécessite une connexion. Reconnectez-vous et réessayez.',
+      [{ text: 'Compris' }],
+    );
+  };
+
   const showMenu = () => {
     const options: { text: string; onPress?: () => void; style?: 'cancel' | 'destructive' }[] = [];
     if (role === 'administrateur' || role === 'manager') {
-      options.push({ text: 'Modifier le client', onPress: () => setShowEditClient(true) });
+      // Offline: still shown (not hidden — the merchant should be able to
+      // see the option exists), but tapping it explains why it can't run
+      // right now instead of opening a form that would fail silently or
+      // confusingly against a dead network call.
+      options.push({
+        text: offline ? 'Modifier le client (connexion requise)' : 'Modifier le client',
+        onPress: offline ? showOfflineEditHint : () => setShowEditClient(true),
+      });
     }
     if (canEditSale) {
-      options.push({ text: 'Modifier la vente', onPress: openEditSale });
+      options.push({
+        text: offline ? 'Modifier la vente (connexion requise)' : 'Modifier la vente',
+        onPress: offline ? showOfflineEditHint : openEditSale,
+      });
     }
     if (canCancel) {
       options.push({ text: 'Annuler cette vente', onPress: () => setShowCancelForm(true), style: 'destructive' });

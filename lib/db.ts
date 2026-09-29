@@ -531,8 +531,6 @@ export interface SyncQueueItem {
   idempotency_key: string | null;
 }
 
-const MAX_SYNC_ATTEMPTS = 5;
-
 // Maps a queued RPC/operation name to a coarse, human-facing category,
 // stored in plaintext (see the v19 migration) so a corrupt payload can
 // still be described — "1 vente n'a pas pu être synchronisée" — without
@@ -598,85 +596,36 @@ export async function enqueue(operation: string, payload: object): Promise<void>
   );
 }
 
-export async function getPendingOps(): Promise<SyncQueueItem[]> {
-  const db = await openDb();
-  const rows = await db.getAllAsync<SyncQueueItem>(
-    'SELECT * FROM sync_queue WHERE attempts < ? ORDER BY id ASC',
-    [MAX_SYNC_ATTEMPTS],
-  );
-  const result: SyncQueueItem[] = [];
-  for (const row of rows) {
-    try {
-      const payload = row.payload.startsWith('PLAIN:')
-        ? row.payload.slice(6)
-        : await decrypt(row.payload);
-      result.push({ ...row, payload });
-    } catch {
-      // Decryption failed — exclude from this drain pass; item retried next foreground
-    }
-  }
-  return result;
-}
+// §8: getPendingOps/markAttemptFailed/getDeadCount/clearDeadOps/DeadOpItem/
+// getDeadOps/archiveDeadOps (the MAX_SYNC_ATTEMPTS-capped retry + dead_ops
+// graveyard machinery) are removed — lib/sync.ts's drainQueue switched over
+// to getPendingOpsForDrain/rescheduleOp/markOpPermanentlyFailed/
+// markOpCorrupt in §3, and app/(app)/_layout.tsx's dead-ops Alert.alert
+// (the exact "looks lost" failure the approved spec forbids — past 5
+// attempts, an item was archived and never retried again) was deleted in
+// the same §8 pass that removes this. Nothing calls any of these six names
+// anymore — confirmed via a full repo grep before removing them, not
+// assumed. The dead_ops TABLE itself is left in the schema (harmless,
+// unused, no migration needed to drop it) rather than risk a DROP TABLE
+// against real installed devices that may still have rows in it from
+// before this rework shipped.
 
 export async function deleteQueueItem(id: number): Promise<void> {
   const db = await openDb();
   await db.runAsync('DELETE FROM sync_queue WHERE id = ?', [id]);
 }
 
-export async function markAttemptFailed(id: number, error: string): Promise<void> {
-  const db = await openDb();
-  await db.runAsync(
-    'UPDATE sync_queue SET attempts = attempts + 1, last_error = ? WHERE id = ?',
-    [error, id],
-  );
-}
-
+// Counts only 'pending' rows — a failed_permanent or failed_corrupt item
+// is no longer actively retrying, so it shouldn't count toward "how many
+// things are still waiting to sync" (SyncStatusLine's own pendingCount
+// read, §8). Every pre-§3 caller of this function already treated its
+// result as exactly that meaning, so no call site needed to change.
 export async function getQueueCount(): Promise<number> {
   const db = await openDb();
   const row = await db.getFirstAsync<{ count: number }>(
-    'SELECT COUNT(*) as count FROM sync_queue WHERE attempts < ?',
-    [MAX_SYNC_ATTEMPTS],
+    `SELECT COUNT(*) as count FROM sync_queue WHERE status = 'pending'`,
   );
   return row?.count ?? 0;
-}
-
-export async function getDeadCount(): Promise<number> {
-  const db = await openDb();
-  const row = await db.getFirstAsync<{ count: number }>(
-    'SELECT COUNT(*) as count FROM sync_queue WHERE attempts >= ?',
-    [MAX_SYNC_ATTEMPTS],
-  );
-  return row?.count ?? 0;
-}
-
-export async function clearDeadOps(): Promise<void> {
-  const db = await openDb();
-  await db.runAsync('DELETE FROM sync_queue WHERE attempts >= ?', [MAX_SYNC_ATTEMPTS]);
-}
-
-export interface DeadOpItem {
-  id: number;
-  operation: string;
-  last_error: string | null;
-}
-
-export async function getDeadOps(): Promise<DeadOpItem[]> {
-  const db = await openDb();
-  return db.getAllAsync<DeadOpItem>(
-    'SELECT id, operation, last_error FROM sync_queue WHERE attempts >= ?',
-    [MAX_SYNC_ATTEMPTS],
-  );
-}
-
-// Move dead items to the graveyard table, then purge from sync_queue.
-export async function archiveDeadOps(): Promise<void> {
-  const db = await openDb();
-  await db.runAsync(
-    `INSERT INTO dead_ops (operation, payload, last_error)
-     SELECT operation, payload, last_error FROM sync_queue WHERE attempts >= ?`,
-    [MAX_SYNC_ATTEMPTS],
-  );
-  await db.runAsync('DELETE FROM sync_queue WHERE attempts >= ?', [MAX_SYNC_ATTEMPTS]);
 }
 
 // ─── Outbox rework (offline-first rewrite) ─────────────────────────────────────

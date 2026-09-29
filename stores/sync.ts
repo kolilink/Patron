@@ -14,6 +14,12 @@ interface SyncStore {
   pendingCount: number;
   syncing: boolean;
   lastResult: SyncResult | null;
+  // Set whenever a sync pass leaves the queue genuinely empty — drives the
+  // quiet sync line's "Tout est synchronisé ✓ · HH:MM" timestamp (§8).
+  // Never set on a pass that still leaves items pending, so it always
+  // reflects the last moment everything was actually confirmed synced,
+  // not just "the last time sync() happened to run."
+  lastSyncedAt: string | null;
   refreshCount: () => Promise<void>;
   sync: () => Promise<SyncResult>;
   // Fire-and-forget: tells the drainer "go now" without the caller
@@ -36,10 +42,12 @@ export const useSyncStore = create<SyncStore>((set, get) => ({
   pendingCount: 0,
   syncing: false,
   lastResult: null,
+  lastSyncedAt: null,
 
   refreshCount: async () => {
     const count = await getQueueCount();
     set({ pendingCount: count });
+    if (count === 0) set({ lastSyncedAt: new Date().toISOString() });
   },
 
   sync: async () => {
@@ -52,7 +60,12 @@ export const useSyncStore = create<SyncStore>((set, get) => ({
       trackEvent(event.name, event.businessId, null, event.metadata);
     }
     const count = await getQueueCount();
-    set({ syncing: false, lastResult: result, pendingCount: count });
+    set({
+      syncing: false,
+      lastResult: result,
+      pendingCount: count,
+      ...(count === 0 ? { lastSyncedAt: new Date().toISOString() } : {}),
+    });
     return result;
   },
 
@@ -67,5 +80,5 @@ export const useSyncStore = create<SyncStore>((set, get) => ({
     get().sync().catch(err => console.error('[useSyncStore.kick] sync() rejected', err));
   },
 
-  reset: () => set({ pendingCount: 0, syncing: false, lastResult: null }),
+  reset: () => set({ pendingCount: 0, syncing: false, lastResult: null, lastSyncedAt: null }),
 }));
