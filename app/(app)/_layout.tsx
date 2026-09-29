@@ -6,6 +6,7 @@ import { TrialWelcomeOverlay } from '@/src/components/TrialWelcomeOverlay';
 import { AppToastContainer } from '@/src/components/ui/AppToast';
 import { DemoBanner } from '@/src/components/ui/DemoBanner';
 import { NotificationSetup } from '@/src/components/NotificationSetup';
+import { ActivationPrimingSheet } from '@/src/components/ActivationPrimingSheet';
 import { Text } from '@/src/components/ui/Text';
 import { useTheme, spacing } from '@/src/theme';
 import { useAuthStore } from '@/stores/auth';
@@ -314,6 +315,7 @@ export default function AppLayout() {
         />
       )}
       <AppToastContainer />
+      <ActivationPrimingSheet />
     </>
   );
 }

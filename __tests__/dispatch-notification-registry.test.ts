@@ -31,12 +31,15 @@ describe('notification registry — allowlist', () => {
   });
 
   it('dormant engines (no schema/cron/UI at all) are marked built:false', () => {
-    const dormant = [
-      'sale_edited', 'alpha_quota_reset', 'activation_nudge_1',
-      'activation_nudge_2', 'second_action_reminder', 'revenue_milestone', 'debt_aging_reminder',
-    ];
+    const dormant = ['sale_edited', 'alpha_quota_reset', 'revenue_milestone', 'debt_aging_reminder'];
     for (const type of dormant) {
       expect(EVENT_REGISTRY[type].built).toBe(false);
+    }
+  });
+
+  it('activation_nudge_1/2 and second_action_reminder have a real engine (migration_v155.sql) — built:true', () => {
+    for (const type of ['activation_nudge_1', 'activation_nudge_2', 'second_action_reminder']) {
+      expect(EVENT_REGISTRY[type].built).toBe(true);
     }
   });
 
@@ -256,6 +259,13 @@ describe('deep-link route resolution — every push type lands on its exact scre
   it('activation nudges route to the exact capture screen named in their copy', () => {
     expect(EVENT_REGISTRY.activation_nudge_1.route({})).toBe('/(app)/(tabs)/vendre?mode=credit');
     expect(EVENT_REGISTRY.activation_nudge_2.route({})).toBe('/(app)/(tabs)/vendre');
+  });
+
+  it('second_action_reminder routes to vendre and its body/title vary by action_type without ever naming a client or amount', () => {
+    expect(EVENT_REGISTRY.second_action_reminder.route({})).toBe('/(app)/(tabs)/vendre');
+    expect(EVENT_REGISTRY.second_action_reminder.body({ action_type: 'product' })).toBe('Vous pouvez aussi noter vos ventes.');
+    expect(EVENT_REGISTRY.second_action_reminder.body({ action_type: 'debt' })).toBe('Vous pouvez aussi noter vos ventes.');
+    expect(EVENT_REGISTRY.second_action_reminder.body({ action_type: 'sale' })).toBe('Prêt pour la suivante ?');
   });
 
   it('partnership and support/chat route to their thread/screen', () => {

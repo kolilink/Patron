@@ -1,5 +1,5 @@
 import React, { useCallback, useEffect, useMemo, useRef, useState } from 'react';
-import { router, useFocusEffect } from 'expo-router';
+import { router, useFocusEffect, useLocalSearchParams } from 'expo-router';
 import {
   Alert,
   Animated,
@@ -40,6 +40,7 @@ import { supabase } from '@/lib/supabase';
 import { haptics } from '@/lib/haptics';
 import { SkeletonList } from '@/src/components/ui/SkeletonPlaceholder';
 import { trackEvent } from '@/lib/analytics';
+import { activationPriming } from '@/stores/activationPriming';
 
 function useCountUp(target: number, duration = 150): number {
   const [display, setDisplay] = useState(target);
@@ -1060,7 +1061,11 @@ export default function VendreScreen() {
   const { cart, submitting, error: saleError, addToCart, addToCartVariant, removeFromCart, setQty, toggleBulk, clearCart, submitSale, submitCarnetDebt, clearError } =
     useSalesStore();
 
-  const [mode, setMode] = useState<'vente' | 'credit'>('vente');
+  // activation_nudge_1's deep link (`/(app)/(tabs)/vendre?mode=credit`,
+  // db/migration_v155.sql) opens straight into the Crédit segment instead of
+  // landing on the generic Vente tab.
+  const { mode: modeParam } = useLocalSearchParams<{ mode?: string }>();
+  const [mode, setMode] = useState<'vente' | 'credit'>(modeParam === 'credit' ? 'credit' : 'vente');
   const [creditName, setCreditName] = useState('');
   const [creditPhone, setCreditPhone] = useState('');
   const [creditClientId, setCreditClientId] = useState<string | undefined>();
@@ -1320,6 +1325,10 @@ export default function VendreScreen() {
         if (!queued) fetchProducts(businessId, userId, membershipId, role);
         setConfirmQueued(queued);
         setShowConfirmSheet(true);
+        // First value moment (or a later one, capped at twice) — offer the
+        // notification permission-priming card. Covers both a regular sale
+        // and a credit sale (payment === null here).
+        activationPriming.maybeTrigger();
       } else {
         // Sale failed — show a blocking alert so the merchant knows the sale was NOT saved
         const errMsg = useSalesStore.getState().error ?? 'Une erreur est survenue. La vente n\'a pas été enregistrée.';

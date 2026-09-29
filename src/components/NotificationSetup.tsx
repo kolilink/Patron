@@ -77,6 +77,24 @@ async function registerCategories(N: typeof Notifications): Promise<void> {
   ]);
 }
 
+async function finishRegistration(N: typeof Notifications): Promise<void> {
+  await Promise.all([
+    ensureAndroidChannels(N),
+    registerCategories(N),
+  ]);
+
+  const tokenResult = await N.getExpoPushTokenAsync({ projectId: EAS_PROJECT_ID });
+  await registerDeviceToken(tokenResult.data, Platform.OS as 'ios' | 'android');
+}
+
+// Silent path — never shows the OS permission dialog. Only proceeds (channel
+// setup + token registration) if permission was already granted in a prior
+// session; otherwise no-ops. This runs unconditionally on mount/foreground so
+// an already-opted-in user's token stays fresh, without ever being the thing
+// that first triggers the native prompt — that's reserved for the in-app
+// permission-priming card (see ActivationPrimingSheet), which calls
+// requestNotificationPermissionAndRegister() below only after the merchant
+// taps "Continuer", following their first real value moment.
 async function setupAndRegister(): Promise<void> {
   const session = useAuthStore.getState().session;
   if (!session || session.isDemoMode) return;
@@ -89,18 +107,49 @@ async function setupAndRegister(): Promise<void> {
   // built before this dependency was linked) — one try/catch around the whole
   // flow so any of them failing never surfaces as an unhandled rejection.
   try {
-    const perms = await N.requestPermissionsAsync();
+    const perms = await N.getPermissionsAsync();
     if (!(perms as unknown as { granted?: boolean }).granted) return;
-
-    await Promise.all([
-      ensureAndroidChannels(N),
-      registerCategories(N),
-    ]);
-
-    const tokenResult = await N.getExpoPushTokenAsync({ projectId: EAS_PROJECT_ID });
-    await registerDeviceToken(tokenResult.data, Platform.OS as 'ios' | 'android');
+    await finishRegistration(N);
   } catch {
     // Silent — notification setup never surfaces to the user
+  }
+}
+
+// Read-only permission check — used by the priming card to decide whether
+// it's even worth showing (no point asking someone who already granted, or
+// already permanently denied, permission). Never shows any dialog.
+export async function getNotificationPermissionStatus(): Promise<'granted' | 'denied' | 'undetermined'> {
+  const N = getNotifications();
+  if (!N) return 'undetermined';
+  try {
+    const perms = await N.getPermissionsAsync();
+    const p = perms as unknown as { granted?: boolean; canAskAgain?: boolean };
+    if (p.granted) return 'granted';
+    if (p.canAskAgain === false) return 'denied';
+    return 'undetermined';
+  } catch {
+    return 'undetermined';
+  }
+}
+
+// The only path in this app that shows the native OS permission dialog.
+// Called exclusively from the permission-priming card's "Continuer" button —
+// never automatically, never at app open. Returns whether permission ended
+// up granted, so the card can decide whether to treat the tap as "opted in."
+export async function requestNotificationPermissionAndRegister(): Promise<boolean> {
+  const session = useAuthStore.getState().session;
+  if (!session || session.isDemoMode) return false;
+
+  const N = getNotifications();
+  if (!N) return false;
+
+  try {
+    const perms = await N.requestPermissionsAsync();
+    const granted = !!(perms as unknown as { granted?: boolean }).granted;
+    if (granted) await finishRegistration(N);
+    return granted;
+  } catch {
+    return false;
   }
 }
 

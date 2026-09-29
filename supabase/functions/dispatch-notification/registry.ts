@@ -140,7 +140,9 @@ export const EVENT_REGISTRY: Record<string, EventDef> = {
     allowedDataKeys: ['sender'],
   },
 
-  // ── 11-17 dormant — no engine exists yet, copy/route reserved ──────────
+  // ── 11-17 — activation_nudge_1/2 and second_action_reminder are now live
+  // (migration_v155.sql); alpha_quota_reset, revenue_milestone, and
+  // debt_aging_reminder remain dormant, no engine exists yet ─────────────
   alpha_quota_reset: {
     built: false,
     notBuiltReason: 'No schema/cron exists — alpha_quota tracking + reset detection never built.',
@@ -169,8 +171,9 @@ export const EVENT_REGISTRY: Record<string, EventDef> = {
     allowedDataKeys: [],
   },
   activation_nudge_1: {
-    built: false,
-    notBuiltReason: 'No signup-timestamp-driven activation engine/cron exists.',
+    // Engine: get_and_mark_activation_nudges() (migration_v155.sql),
+    // scheduled hourly via migration_v156.sql, send-activation-nudges.
+    built: true,
     category: 'ordinary',
     subtitle: null,
     body: generic('Notez-le, ça prend environ 30 secondes.'),
@@ -179,8 +182,8 @@ export const EVENT_REGISTRY: Record<string, EventDef> = {
     allowedDataKeys: [],
   },
   activation_nudge_2: {
-    built: false,
-    notBuiltReason: 'No signup-timestamp-driven activation engine/cron exists.',
+    // Same engine as activation_nudge_1 — see migration_v155.sql.
+    built: true,
     category: 'ordinary',
     subtitle: null,
     body: generic('Notez votre première vente — Patron s\'occupe du reste.'),
@@ -189,8 +192,10 @@ export const EVENT_REGISTRY: Record<string, EventDef> = {
     allowedDataKeys: [],
   },
   second_action_reminder: {
-    built: false,
-    notBuiltReason: 'No first-action classification engine exists.',
+    // action_type ('product' | 'debt' | 'sale') is classified server-side
+    // by get_and_mark_activation_nudges() (migration_v155.sql) from
+    // whichever capture actually came first for that business.
+    built: true,
     category: 'ordinary',
     subtitle: null,
     body: (p) => {
