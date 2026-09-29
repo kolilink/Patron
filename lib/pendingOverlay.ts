@@ -96,7 +96,7 @@ export interface OverlayContext {
 }
 
 const NEW_SALE_OPS = new Set(['submit_carnet_debt', 'submit_quick_sale', 'submit_sale']);
-const PATCH_OPS = new Set(['cancel_sale', 'record_client_payment']);
+const PATCH_OPS = new Set(['cancel_sale', 'record_client_payment', 'record_payment']);
 
 type RawCartLine = {
   product_id: string; product_name: string; qty: number; unit_price: number;
@@ -246,6 +246,28 @@ export function applyPatchOp(
     const customerName = String(payload.p_customer_name ?? '');
     const amount = Number(payload.p_amount ?? 0) / 100;
     return allocateClientPayment(sales, businessId, customerName, amount);
+  }
+
+  // record_payment (singular) — a payment against ONE already-known
+  // sale_id, unlike record_client_payment's FIFO fan-out across every
+  // credit sale for a customer name. No allocation logic needed: just add
+  // this payment's amount onto that one sale's amount_paid.
+  if (operation === 'record_payment') {
+    const saleId = String(payload.p_sale_id ?? '');
+    const amount = Number(payload.p_amount ?? 0) / 100;
+    const now = queuedAt ?? new Date().toISOString();
+    return sales.map(s => {
+      if (s.id !== saleId) return s;
+      const owed = s.total_amount - (s.discount_amount ?? 0);
+      const newAmountPaid = (s.amount_paid ?? 0) + amount;
+      const fullyPaid = newAmountPaid >= owed - 0.01;
+      return {
+        ...s,
+        amount_paid: newAmountPaid,
+        status: fullyPaid ? 'paye' : s.status,
+        paid_at: fullyPaid ? now : s.paid_at,
+      };
+    });
   }
 
   return sales;

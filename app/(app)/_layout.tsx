@@ -1,5 +1,7 @@
 import { useEffect, useRef, useState } from 'react';
 import { Alert, AppState, Pressable, View } from 'react-native';
+import NetInfo from '@react-native-community/netinfo';
+import { shouldKickOnConnectivityChange } from '@/lib/netInfoKick';
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
 import { Redirect, Stack, router } from 'expo-router';
 import { BusinessDrawer } from '@/src/components/BusinessDrawer';
@@ -422,6 +424,26 @@ export default function AppLayout() {
     const sub = AppState.addEventListener('change', debounced.onChange);
 
     return () => { clearInterval(chatInterval); sub.remove(); debounced.cancel(); };
+  }, [session?.user.id]);
+
+  // Kick the drainer the instant real connectivity returns, instead of
+  // waiting on the exponential backoff cadence (up to 30min once it's
+  // settled, per lib/sync.ts's rescheduleOp) or the next foreground/write
+  // event. NetInfo's isConnected can flap/false-positive on some Android
+  // devices (a captive portal reads as "connected" at the OS level), so
+  // this is a fast-path nudge on top of the existing retry loop, not a
+  // replacement for it — kick() is safe to call redundantly either way.
+  useEffect(() => {
+    if (!session?.user.id) return;
+    let wasConnected: boolean | null = null;
+    const sub = NetInfo.addEventListener(state => {
+      const isConnected = state.isConnected === true;
+      if (shouldKickOnConnectivityChange(wasConnected, isConnected)) {
+        useSyncStore.getState().kick();
+      }
+      wasConnected = isConnected;
+    });
+    return () => sub();
   }, [session?.user.id]);
 
   if (loading) return null;

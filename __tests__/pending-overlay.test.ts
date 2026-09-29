@@ -113,6 +113,32 @@ describe('applyPatchOp — cancel_sale', () => {
   });
 });
 
+describe('applyPatchOp — record_payment (single sale, not FIFO)', () => {
+  test('a full payment against one sale settles only that sale, leaves others untouched', () => {
+    const sales = [
+      baseSale({ id: 'a', total_amount: 10000, amount_paid: 0 }),
+      baseSale({ id: 'b', total_amount: 5000, amount_paid: 0 }),
+    ];
+    const patched = applyPatchOp(sales, 'record_payment', { p_sale_id: 'a', p_amount: 1000000 }, '2026-09-28T13:00:00.000Z', ctx);
+    expect(patched.find(s => s.id === 'a')!.amount_paid).toBe(10000);
+    expect(patched.find(s => s.id === 'a')!.status).toBe('paye');
+    expect(patched.find(s => s.id === 'b')!.amount_paid).toBe(0); // unrelated sale untouched
+  });
+
+  test('a partial payment stays credit, amount_paid increases by exactly the paid amount', () => {
+    const sales = [baseSale({ id: 'a', total_amount: 10000, amount_paid: 2000 })];
+    const patched = applyPatchOp(sales, 'record_payment', { p_sale_id: 'a', p_amount: 300000 }, null, ctx);
+    expect(patched[0].amount_paid).toBe(5000);
+    expect(patched[0].status).toBe('credit');
+  });
+
+  test('a sale id with no match is a no-op, not a crash', () => {
+    const sales = [baseSale({ id: 'a' })];
+    const patched = applyPatchOp(sales, 'record_payment', { p_sale_id: 'does-not-exist', p_amount: 100000 }, null, ctx);
+    expect(patched).toEqual(sales);
+  });
+});
+
 describe('allocateClientPayment — FIFO, the money-safety-critical path', () => {
   test('single sale, exact payment: fully settles', () => {
     const sales = [baseSale({ id: 'a', total_amount: 10000, amount_paid: 0 })];
