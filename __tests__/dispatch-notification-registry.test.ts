@@ -4,6 +4,7 @@ import {
   bypassesCap,
   bypassesQuietHours,
   isQuietHours,
+  localHour,
   sanitizeDataPayload,
 } from '@/supabase/functions/dispatch-notification/registry';
 
@@ -170,6 +171,40 @@ describe('quiet hours (21:00–07:00 UTC)', () => {
 
   it('midday UTC is not quiet hours', () => {
     expect(isQuietHours(new Date('2026-01-01T12:00:00Z'))).toBe(false);
+  });
+});
+
+describe('quiet hours — per-device timezone parameter (migration_v154.sql)', () => {
+  it('no timezone (null/undefined) reproduces the exact original UTC-only behavior', () => {
+    const t = new Date('2026-01-01T21:00:00Z'); // 21:00 UTC — quiet
+    expect(isQuietHours(t)).toBe(true);
+    expect(isQuietHours(t, null)).toBe(true);
+    expect(isQuietHours(t, undefined)).toBe(true);
+  });
+
+  it('same instant is quiet or not depending on the device timezone', () => {
+    // 21:00 UTC is quiet in UTC, but only 16:00 in America/New_York — not quiet there
+    const t = new Date('2026-01-01T21:00:00Z');
+    expect(isQuietHours(t, 'UTC')).toBe(true);
+    expect(isQuietHours(t, 'America/New_York')).toBe(false);
+  });
+
+  it('a vendor in Asia/Tokyo (UTC+9) hits quiet hours at a different UTC instant than a Guinea vendor', () => {
+    // 12:00 UTC = 21:00 in Tokyo (quiet there), but 12:00 UTC in Guinea (UTC+0) is not quiet
+    const t = new Date('2026-01-01T12:00:00Z');
+    expect(isQuietHours(t, 'Africa/Conakry')).toBe(false);
+    expect(isQuietHours(t, 'Asia/Tokyo')).toBe(true);
+  });
+
+  it('an invalid/garbage timezone string degrades to UTC instead of throwing', () => {
+    const t = new Date('2026-01-01T21:00:00Z');
+    expect(() => isQuietHours(t, 'Not/A_Real_Zone')).not.toThrow();
+    expect(isQuietHours(t, 'Not/A_Real_Zone')).toBe(true); // falls back to UTC hour (21) — still quiet
+  });
+
+  it('localHour resolves the correct hour for a known zone', () => {
+    expect(localHour(new Date('2026-01-01T21:00:00Z'), 'UTC')).toBe(21);
+    expect(localHour(new Date('2026-01-01T21:00:00Z'), 'America/New_York')).toBe(16);
   });
 });
 

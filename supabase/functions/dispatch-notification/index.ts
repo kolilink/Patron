@@ -276,18 +276,6 @@ serve(async (req) => {
       });
     }
 
-    // Quiet hours (21:00–07:00 UTC ≈ Guinea local — no DST): non-security,
-    // non-money events are dropped outright during this window rather than
-    // held for redelivery, since there is no deferred-delivery queue/cron
-    // built yet (see registry.ts's dormant engines). Security bypasses this
-    // entirely; money movement (a completed/cancelled/edited sale, a paid
-    // credit) is allowed through so it isn't silently lost.
-    if (!bypassesQuietHours(eventDef.category) && isQuietHours(new Date())) {
-      return new Response(JSON.stringify({ skipped: 'quiet_hours' }), {
-        headers: { ...corsHeaders, 'Content-Type': 'application/json' },
-      });
-    }
-
     // Server-side cap: max ORDINARY_CAP ordinary/money pushes per recipient
     // per rolling 24h. Security events always bypass it. Recipients already
     // at their cap are dropped from this send (not the whole dispatch) —
@@ -313,16 +301,33 @@ serve(async (req) => {
     }
 
     // Fetch device tokens (with owning user_id — needed to stamp each push
-    // with that user's own running unread count, not a shared value)
+    // with that user's own running unread count, not a shared value — and
+    // timezone, needed for the per-device quiet-hours check below)
     const { data: tokenRows } = await supabase
       .from('device_tokens')
-      .select('token, user_id')
+      .select('token, user_id, timezone')
       .in('user_id', userIds);
-    const tokens = (tokenRows ?? []) as { token: string; user_id: string }[];
+    let tokens = (tokenRows ?? []) as { token: string; user_id: string; timezone: string | null }[];
+
+    // Quiet hours (21:00–07:00 in the RECIPIENT'S OWN device timezone,
+    // falling back to UTC — a null timezone means the device predates
+    // migration_v154.sql and reproduces the exact original UTC-only
+    // behavior). Checked per-device, not once for the whole dispatch, since
+    // two recipients of the same push can be in different timezones.
+    // Non-security, non-money events are dropped outright for a device
+    // whose local time falls in the window, rather than held for
+    // redelivery — there is no deferred-delivery queue/cron built yet (see
+    // registry.ts's dormant engines). Security bypasses this entirely;
+    // money movement (a completed/cancelled/edited sale, a paid credit) is
+    // allowed through so it isn't silently lost.
+    if (!bypassesQuietHours(eventDef.category)) {
+      const now = new Date();
+      tokens = tokens.filter(t => !isQuietHours(now, t.timezone));
+    }
 
     if (tokens.length === 0) {
       await supabase.from('notification_log').insert({ business_id, event_type, payload, recipient_count: 0 });
-      return new Response(JSON.stringify({ sent: 0 }), {
+      return new Response(JSON.stringify({ sent: 0, skipped: 'quiet_hours' }), {
         headers: { ...corsHeaders, 'Content-Type': 'application/json' },
       });
     }
