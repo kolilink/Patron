@@ -1,4 +1,5 @@
 import { supabase } from '@/lib/supabase';
+import * as Localization from 'expo-localization';
 
 interface NotifyEventParams {
   businessId: string;
@@ -28,8 +29,18 @@ export async function registerDeviceToken(
   platform: 'ios' | 'android',
 ): Promise<void> {
   try {
+    // IANA zone (e.g. "Africa/Conakry") — feeds dispatch-notification's
+    // per-device quiet-hours check (migration_v154.sql). Best-effort: if
+    // expo-localization can't resolve one, the server just treats this
+    // device as UTC, same as before this existed.
+    let timezone: string | null = null;
+    try {
+      timezone = Localization.getCalendars()[0]?.timeZone ?? null;
+    } catch {
+      // leave null — server default (UTC) applies
+    }
     await supabase.functions.invoke('register-device-token', {
-      body: { token, platform },
+      body: { token, platform, timezone },
     });
   } catch {
     // Silent — notification registration never surfaces to the user

@@ -26,10 +26,11 @@ serve(async (req) => {
     const authHeader = req.headers.get('Authorization');
     if (!authHeader?.startsWith('Bearer ')) return err('Non authentifié', 401);
 
-    const { token, platform, action } = await req.json() as {
+    const { token, platform, action, timezone } = await req.json() as {
       token: string | null;
       platform: 'ios' | 'android';
       action?: 'delete';
+      timezone?: string | null;
     };
 
     // Silently succeed if the user denied permission (null token)
@@ -64,11 +65,15 @@ serve(async (req) => {
       return ok({ success: true });
     }
 
-    // Upsert — update updated_at on re-registration (token rotation)
+    // Upsert — update updated_at on re-registration (token rotation).
+    // timezone (IANA string, e.g. "Africa/Conakry") feeds dispatch-
+    // notification's per-device quiet-hours check (migration_v154.sql) —
+    // omitted/invalid client values just leave the column null, which
+    // dispatch-notification already treats as "assume UTC".
     const { error: upsertErr } = await serviceClient
       .from('device_tokens')
       .upsert(
-        { user_id: user.id, token, platform, updated_at: new Date().toISOString() },
+        { user_id: user.id, token, platform, timezone: timezone || null, updated_at: new Date().toISOString() },
         { onConflict: 'user_id,token' },
       );
 

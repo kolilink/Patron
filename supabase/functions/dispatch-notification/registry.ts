@@ -268,12 +268,44 @@ export const EVENT_REGISTRY: Record<string, EventDef> = {
 };
 
 export const ORDINARY_CAP = 3; // max ordinary/money pushes per user per rolling 24h
-export const QUIET_HOURS_START_UTC = 21; // Guinea has no DST — UTC doubles as local, established elsewhere in this codebase
-export const QUIET_HOURS_END_UTC = 7;
+export const QUIET_HOURS_START = 21; // local-hour window, 21:00-07:00
+export const QUIET_HOURS_END = 7;
+// Backward-compatible aliases — the window was originally documented as a
+// flat UTC constant (correct only because Guinea has no DST and is UTC+0).
+export const QUIET_HOURS_START_UTC = QUIET_HOURS_START;
+export const QUIET_HOURS_END_UTC = QUIET_HOURS_END;
 
-export function isQuietHours(date: Date): boolean {
-  const h = date.getUTCHours();
-  return h >= QUIET_HOURS_START_UTC || h < QUIET_HOURS_END_UTC;
+export const DEFAULT_TIMEZONE = 'UTC';
+
+// Returns the recipient's local hour (0-23) in `timezone`, falling back to
+// UTC when unknown/invalid — `timezone` is expected to be a device-reported
+// IANA zone (device_tokens.timezone, migration_v154.sql), null for any
+// token registered before that shipped. Never throws: an invalid zone
+// string (a device reporting garbage) degrades to UTC rather than crashing
+// the whole dispatch.
+export function localHour(date: Date, timezone?: string | null): number {
+  const tz = timezone || DEFAULT_TIMEZONE;
+  try {
+    const hourStr = new Intl.DateTimeFormat('en-US', {
+      timeZone: tz, hour: 'numeric', hour12: false,
+    }).format(date);
+    // Intl can format midnight as "24" in some environments — normalize.
+    return parseInt(hourStr, 10) % 24;
+  } catch {
+    return date.getUTCHours();
+  }
+}
+
+// Takes the recipient's device timezone (IANA string) as a parameter,
+// defaulting to UTC when unknown — this is what makes the 21:00-07:00
+// wind-down window mean the recipient's actual local night, not a flat UTC
+// window that's only correct for Guinea. Passing no timezone (or null,
+// the value every pre-migration_v154 device_tokens row has) reproduces the
+// exact original UTC-only behavior — no change for current users until
+// their device re-registers with a real zone.
+export function isQuietHours(date: Date, timezone?: string | null): boolean {
+  const h = localHour(date, timezone);
+  return h >= QUIET_HOURS_START || h < QUIET_HOURS_END;
 }
 
 // Security bypasses both the cap and quiet hours. Money movement is capped
