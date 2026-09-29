@@ -8,7 +8,12 @@ export function formatAmount(n: number, currency: string): string {
     const formatted = Math.round(n).toString().replace(/\B(?=(\d{3})+(?!\d))/g, ' ');
     return `${formatted} ${currency}`;
   }
-  const [intPart, decPart] = n.toFixed(2).split('.');
+  // A tiny negative remainder (e.g. -0.001 after a discount/refund calc)
+  // rounds to "-0.00" via toFixed, displaying a negative amount that isn't
+  // actually negative — strip a leading "-0.00" back to "0.00".
+  let fixed = n.toFixed(2);
+  if (fixed === '-0.00') fixed = '0.00';
+  const [intPart, decPart] = fixed.split('.');
   const formatted = intPart.replace(/\B(?=(\d{3})+(?!\d))/g, ' ');
   return `${formatted}.${decPart} ${currency}`;
 }

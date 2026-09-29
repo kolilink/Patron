@@ -536,7 +536,7 @@ export default function FournisseurProfile() {
                   <View key={p.id} style={[styles.chip, canUnlink && { paddingRight: 6 }]}>
                     <Text style={styles.chipText}>{p.name}</Text>
                     {canUnlink && (
-                      <Pressable onPress={() => { void unlinkProduct(p.id); }} hitSlop={4} style={{ marginLeft: 4 }}>
+                      <Pressable onPress={() => { void unlinkProduct(p.id); }} hitSlop={14} style={{ marginLeft: 4 }}>
                         <Text style={{ color: palette.primary, fontSize: 13, fontWeight: '700' }}>×</Text>
                       </Pressable>
                     )}
