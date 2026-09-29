@@ -161,11 +161,39 @@ describe('drainQueue', () => {
     const result = await drainQueue();
 
     expect(mockMarkOpCorrupt).toHaveBeenCalledWith(99, 'decrypt failed');
-    expect(supabase.rpc).toHaveBeenCalledTimes(1); // corrupt row never reached an RPC call
+    // Two calls total, not one: the corrupt row never reaches an RPC call
+    // at all (that's the real property under test), but the one genuine
+    // "ok" item both submits (submit_sale) AND fires §9b's fire-and-forget
+    // sync-lag telemetry (log_sync_lag) once it succeeds — a real, new,
+    // additional call, not a bug.
+    expect(supabase.rpc).toHaveBeenCalledTimes(2);
+    expect(supabase.rpc).toHaveBeenCalledWith('submit_sale', expect.anything());
+    expect(supabase.rpc).toHaveBeenCalledWith('log_sync_lag', expect.objectContaining({ p_operation: 'submit_sale' }));
     expect(result.synced).toBe(1); // the ok item still synced normally
     expect(result.syncHealthEvents).toContainEqual(expect.objectContaining({
       name: 'sync_op_failed_corrupt', metadata: expect.objectContaining({ stage: 'decrypt' }),
     }));
+  });
+
+  it('§9b regression: a synchronous throw from the fire-and-forget log_sync_lag call never affects the item\'s own classification', async () => {
+    // The real bug this guards: an earlier version placed the log_sync_lag
+    // call INSIDE the same try block that classifies real failures. A
+    // synchronous throw there (exactly what happens here — the mock has no
+    // queued return value left, so calling .then on the resulting
+    // undefined throws synchronously) landed in that same catch and
+    // permanently mis-marked an already-successful item as ALSO failed.
+    mockGetPendingOpsForDrain.mockResolvedValueOnce({ ok: [makeSaleOp(1)], corrupt: [] });
+    // Exactly one queued value, consumed by submit_sale — log_sync_lag's
+    // own call is guaranteed to find nothing queued and throw synchronously
+    // on `.then` of undefined, which is the precise condition under test.
+    (supabase.rpc as jest.Mock).mockResolvedValueOnce({ error: null });
+
+    const result = await drainQueue();
+
+    expect(result.synced).toBe(1);
+    expect(result.failed).toBe(0); // NOT 1 — this is what the bug got wrong
+    expect(mockDeleteQueueItem).toHaveBeenCalledWith(1);
+    expect(mockMarkOpPermanentlyFailed).not.toHaveBeenCalled();
   });
 
   it('a row that decrypts fine but is not valid JSON is classified corrupt (parse stage), not permanent', async () => {
