@@ -1,5 +1,6 @@
 import { serve } from 'https://deno.land/std@0.177.0/http/server.ts';
 import { createClient } from 'https://esm.sh/@supabase/supabase-js@2';
+import { renderOgImage, renderOrFallback } from './lib.ts';
 
 // ============================================================
 // invite — the consumer invite smart link (patron.kolilink.com/invite?t=…)
@@ -34,11 +35,18 @@ const PLAY_STORE_BASE = 'https://play.google.com/store/apps/details?id=com.awall
 const CUSTOM_SCHEME = 'patron://invite';
 
 // og:image is served from this same function; the crawler follows an
-// absolute URL, so we advertise the canonical hosted path.
+// absolute URL, so we advertise the canonical hosted path (with the token so
+// each link's image bakes in the inviter's display name).
 const OG_IMAGE_PATH = '/og.png';
 
-// WhatsApp preview cache is ~30 days: it is the inviter's code uniqueness
-// (each link is a fresh token) that defeats stale previews, not a cache-buster.
+// Aggressive per-token caching: the card is deterministic for a given token
+// (display name is snapshotted at link-generation time), so a generated image
+// is cached forever. WhatsApp's own ~30-day preview cache is beaten by token
+// uniqueness, not by a cache-buster.
+const ogImageCache = new Map<string, Uint8Array>();
+
+// Static branded fallback (og.png beside this file). Never served broken:
+// when dynamic generation fails we silently serve this instead (HTTP 200).
 let ogPngCache: Uint8Array | null = null;
 async function getOgPng(): Promise<Uint8Array | null> {
     if (ogPngCache) return ogPngCache;
@@ -48,6 +56,21 @@ async function getOgPng(): Promise<Uint8Array | null> {
     } catch {
         return null;
     }
+}
+
+async function getOgImage(token: string, name: string | null, valid: boolean): Promise<Uint8Array | null> {
+    // Dynamic image is only meaningful for a live invite (valid=true). For an
+    // invalid/unknown token there is no name to bake in — serve the static
+    // brand card directly (and cache it per token, as above).
+    if (!valid) return getOgPng();
+
+    if (ogImageCache.has(token)) return ogImageCache.get(token)!;
+    const png = await renderOrFallback(
+        () => renderOgImage(name, true),
+        await getOgPng(),
+    );
+    if (png) ogImageCache.set(token, png);
+    return png;
 }
 
 function baseUrl(req: Request): string {
@@ -244,13 +267,18 @@ ${headBlock(opts.title, opts.description, opts.imageUrl)}
 serve(async (req: Request) => {
     const url = new URL(req.url);
 
-    // Static og:image asset.
+    // Dynamic og:image asset, keyed by token. The display name (snapshotted
+    // onto the invite at link-generation time) is baked into the pixels. On
+    // any generation failure — or an invalid/unknown token — the static brand
+    // card is served instead (HTTP 200), never a broken image.
     if (url.pathname === OG_IMAGE_PATH || url.pathname === '/invite/og.png') {
-        const png = await getOgPng();
+        const token = tokenFrom(req);
+        const { valid, name } = token ? await resolveInviter(token) : { valid: false, name: null };
+        const png = await getOgImage(token, name, valid);
         if (!png) return new Response('Not found', { status: 404 });
         return new Response(png, {
             status: 200,
-            headers: { 'Content-Type': 'image/png', 'Cache-Control': 'public, max-age=86400' },
+            headers: { 'Content-Type': 'image/png', 'Cache-Control': 'public, max-age=31536000, immutable' },
         });
     }
 
@@ -263,7 +291,11 @@ serve(async (req: Request) => {
     const { valid, name } = await resolveInviter(token);
     const title = inviterTitle(valid, name);
     const description = TAGLINE;
-    const imageUrl = `${baseUrl(req)}${OG_IMAGE_PATH}`;
+    // The crawler follows this absolute URL, so include the token so the
+    // fetched image bakes in this inviter's name (same rule as the title).
+    const imageUrl = token
+        ? `${baseUrl(req)}${OG_IMAGE_PATH}?t=${encodeURIComponent(token)}`
+        : `${baseUrl(req)}${OG_IMAGE_PATH}`;
     const storeUrl = isAndroid(ua) && token ? playStoreUrl(token) : APP_STORE_URL;
     const openAppHref = token
         ? `${baseUrl(req)}/invite?t=${encodeURIComponent(token)}`

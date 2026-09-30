@@ -2,10 +2,20 @@
   "extends": "expo/tsconfig.base",
   "compilerOptions": {
     "strict": true,
+    // Deno edge functions import sibling modules with an explicit ".ts"
+    // extension; allow those imports to typecheck when tsc follows a unit
+    // test into supabase/functions/*/lib.ts. Requires noEmit (set by the
+    // expo base config).
+    "allowImportingTsExtensions": true,
     "baseUrl": ".",
     "paths": {
-      "@/*": ["./*"]
+      "@/*": [
+        "./*"
+      ]
     }
   },
-  "exclude": ["node_modules", "supabase/functions"]
+  "exclude": [
+    "node_modules",
+    "supabase/functions"
+  ]
 }
