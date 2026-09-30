@@ -258,8 +258,8 @@ export const useFournisseursStore = create<FournisseursStore>((set, get) => ({
     set({ saving: true, error: null });
     try {
       const { data, error } = await supabase.rpc('pay_supplier_debt', {
-        p_business_id:  businessId,
-        p_supplier_id:  supplierId,
+        p_business_id: businessId,
+        p_supplier_id: supplierId,
         p_amount_cents: Math.round(paymentAmount * 100),
       });
       if (error) {
@@ -397,7 +397,7 @@ export const useFournisseursStore = create<FournisseursStore>((set, get) => ({
 
       return data as string;
     } catch (err) {
-      set({ saving: false, error: isNetworkError(err) ? 'Vérifiez votre connexion' : translateError(err, 'Impossible d'enregistrer la réception') });
+      set({ saving: false, error: isNetworkError(err) ? 'Vérifiez votre connexion' : translateError(err, 'Impossible d\'enregistrer la réception') });
       return null;
     }
   },

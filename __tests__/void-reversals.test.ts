@@ -19,16 +19,16 @@ jest.mock('@/lib/supabase', () => ({
 }));
 
 jest.mock('@/lib/db', () => ({
-  enqueue:              jest.fn().mockResolvedValue(undefined),
-  getQueueCount:        jest.fn().mockResolvedValue(0),
-  openDb:               jest.fn(),
-  saveVentesCache:      jest.fn().mockResolvedValue(undefined),
-  getVentesCache:       jest.fn().mockResolvedValue(null),
-  getCacheTimestamp:    jest.fn().mockResolvedValue(null),
+  enqueue: jest.fn().mockResolvedValue(undefined),
+  getQueueCount: jest.fn().mockResolvedValue(0),
+  openDb: jest.fn(),
+  saveVentesCache: jest.fn().mockResolvedValue(undefined),
+  getVentesCache: jest.fn().mockResolvedValue(null),
+  getCacheTimestamp: jest.fn().mockResolvedValue(null),
   saveFournisseurCache: jest.fn().mockResolvedValue(undefined),
-  getFournisseurCache:  jest.fn().mockResolvedValue(null),
-  saveCommandeCache:    jest.fn().mockResolvedValue(undefined),
-  getCommandeCache:     jest.fn().mockResolvedValue(null),
+  getFournisseurCache: jest.fn().mockResolvedValue(null),
+  saveCommandeCache: jest.fn().mockResolvedValue(undefined),
+  getCommandeCache: jest.fn().mockResolvedValue(null),
 }));
 
 jest.mock('@/lib/analytics', () => ({ trackEvent: jest.fn() }));
@@ -73,6 +73,8 @@ const creditSale: Vente = {
   created_at: '2026-06-20T00:00:00Z',
   cancelled_at: null,
   cancellation_reason: null,
+  edit_count: 0,
+  last_edited_at: null,
   profit: null,
   amount_paid: 1650000,
 };
