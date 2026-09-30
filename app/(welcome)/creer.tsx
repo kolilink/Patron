@@ -18,6 +18,8 @@ import { BusinessDetailsStep } from '@/src/components/BusinessDetailsStep';
 import { useTheme, spacing, radius } from '@/src/theme';
 import type { Palette } from '@/src/theme';
 import { useAuthStore } from '@/stores/auth';
+import { useInviterStore } from '@/stores/inviter';
+import { getPendingInviteToken, clearPendingInviteToken } from '@/lib/inviteLink';
 import { trackEvent, classifyAuthError } from '@/lib/analytics';
 import { useCountdown } from '@/src/hooks/useCountdown';
 import { formatCountdown } from '@/src/utils/format';
@@ -45,7 +47,7 @@ export default function CreerScreen() {
   const [phone, setPhone] = useState('');
   const [phoneComplete, setPhoneComplete] = useState(false);
   const [resetKey, setResetKey] = useState(0);
-  const [otpKey, setOtpKey]     = useState(0);
+  const [otpKey, setOtpKey] = useState(0);
 
   const verificationIdRef = useRef('');
   const phoneRef = useRef('');
@@ -56,6 +58,20 @@ export default function CreerScreen() {
     clearError();
     await createBusiness({ name: data.name, currency: data.currency });
     if (!useAuthStore.getState().error) {
+      // Phase 5 — post-OTP arrival: if this device carried a pending invite
+      // token (universal link, install referrer, or clipboard handoff),
+      // redeem it now that the user is authenticated and has a business.
+      // On success land in Amis with the inviter listed; otherwise the
+      // generic Home is the safe fallback (never a dead end).
+      const token = await getPendingInviteToken();
+      if (token) {
+        const resolved = await useInviterStore.getState().resolveInvite(token, '');
+        if (resolved) {
+          await clearPendingInviteToken();
+          router.replace('/(app)/discussions?tab=amis');
+          return;
+        }
+      }
       router.replace('/(app)/(tabs)/');
     }
   };
@@ -243,15 +259,15 @@ export default function CreerScreen() {
 
 function makeStyles(p: Palette) {
   return StyleSheet.create({
-    safe:          { flex: 1, backgroundColor: p.background },
-    kav:           { flex: 1, backgroundColor: p.background },
+    safe: { flex: 1, backgroundColor: p.background },
+    kav: { flex: 1, backgroundColor: p.background },
     scrollContent: { flexGrow: 1 },
-    content:       { flex: 1, padding: spacing[6], gap: spacing[8], justifyContent: 'center' },
-    contentTop:    { justifyContent: 'flex-start', paddingBottom: spacing[10] },
-    header:        { gap: spacing[3] },
-    back:          { alignSelf: 'flex-start', marginBottom: spacing[1] },
-    progress:      { gap: spacing[2] },
-    progressBar:   { flexDirection: 'row', gap: spacing[1] },
+    content: { flex: 1, padding: spacing[6], gap: spacing[8], justifyContent: 'center' },
+    contentTop: { justifyContent: 'flex-start', paddingBottom: spacing[10] },
+    header: { gap: spacing[3] },
+    back: { alignSelf: 'flex-start', marginBottom: spacing[1] },
+    progress: { gap: spacing[2] },
+    progressBar: { flexDirection: 'row', gap: spacing[1] },
     progressSegment: {
       flex: 1,
       height: 4,
@@ -259,12 +275,12 @@ function makeStyles(p: Palette) {
       backgroundColor: p.border,
     },
     progressSegmentFilled: { backgroundColor: p.primary },
-    sub:           { lineHeight: 22 },
-    form:          { gap: spacing[4] },
-    formCentered:  { alignItems: 'center' },
-    infoBlock:     { gap: spacing[3] },
-    infoText:      { textAlign: 'center', lineHeight: 20 },
-    antiFraud:     { textAlign: 'center' },
+    sub: { lineHeight: 22 },
+    form: { gap: spacing[4] },
+    formCentered: { alignItems: 'center' },
+    infoBlock: { gap: spacing[3] },
+    infoText: { textAlign: 'center', lineHeight: 20 },
+    antiFraud: { textAlign: 'center' },
     whatsappCorner: {
       position: 'absolute',
       bottom: spacing[8],

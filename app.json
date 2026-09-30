@@ -21,6 +21,9 @@
     "ios": {
       "supportsTablet": false,
       "bundleIdentifier": "com.awall.patron",
+      "associatedDomains": [
+        "applinks:patron.kolilink.com"
+      ],
       "infoPlist": {
         "NSFaceIDUsageDescription": "Utilisé pour déverrouiller votre session en toute sécurité.",
         "NSMicrophoneUsageDescription": "Utilisé pour envoyer des messages vocaux à votre équipe.",
@@ -62,6 +65,23 @@
         "foregroundImage": "./assets/adaptive-icon.png",
         "backgroundColor": "#ffffff"
       },
+      "intentFilters": [
+        {
+          "action": "VIEW",
+          "autoVerify": true,
+          "data": [
+            {
+              "scheme": "https",
+              "host": "patron.kolilink.com",
+              "pathPrefix": "/invite"
+            }
+          ],
+          "category": [
+            "BROWSABLE",
+            "DEFAULT"
+          ]
+        }
+      ],
       "splash": {
         "image": "./assets/splash.png",
         "resizeMode": "cover",

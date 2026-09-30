@@ -1,0 +1,208 @@
+import { create } from 'zustand';
+import { supabase } from '@/lib/supabase';
+import { translateError } from '@/lib/errors';
+import { isNetworkError, withTimeout } from '@/lib/sync';
+
+// ─── "Inviter" — consumer invite-a-friend journey ───────────────────────────
+// Distinct from the team invite (stores/equipe.ts), the B2B partnership invite
+// (stores/partnerships.ts), and the business referral code (auth.createBusiness).
+// This one is person-to-person: an existing user shares a single-use 24h smart
+// link + fallback code; the invited friend lands in Amis with the inviter
+// already listed (Phase 5).
+//
+// Server invariants live in db/migration_v206.sql (HMAC-hashed token/code,
+// 24h expiry, atomic single-use, rate limit, one generic error, revoke).
+
+export interface ConsumerInvite {
+    id: string;
+    status: 'active' | 'used' | 'revoked';
+    created_at: string;
+    expires_at: string;
+    used_at: string | null;
+    used_by: string | null;
+    used_by_name: string | null;
+    revoked_at: string | null;
+}
+
+export interface ConsumerFriend {
+    id: string;
+    friend_id: string;
+    friend_name: string;
+    invited_at: string;
+}
+
+// The smart-link base. Served by the `invite` Supabase Edge Function through
+// a custom domain (patron.kolilink.com) — the repo's own patron.kolilink.com
+// is static GitHub Pages and cannot do dynamic og:title / OS routing.
+const INVITE_BASE_URL = 'https://patron.kolilink.com/invite';
+
+/** Build the unique per-invite smart link from its token. */
+export function buildInviteLink(token: string): string {
+    return `${INVITE_BASE_URL}?t=${encodeURIComponent(token)}`;
+}
+
+/** The prefilled, editable French "tu" share message (link first — only the first link unfurls). */
+export function buildInviteMessage(link: string, code: string): string {
+    return `Je note mes ventes et mes crédits avec Patron, même sans internet. C'est gratuit : ${link}\nCode : ${code}, au cas où.`;
+}
+
+interface InviterStore {
+    invites: ConsumerInvite[];
+    friends: ConsumerFriend[];
+    loading: boolean;
+    error: string | null;
+
+    createInvite: () => Promise<{ id: string; token: string; code: string; expires_at: string } | null>;
+    fetchMyInvites: () => Promise<void>;
+    fetchMyFriends: () => Promise<void>;
+    revokeInvite: (inviteId: string) => Promise<boolean>;
+    resolveInvite: (token: string, code: string) => Promise<{ inviter_id: string; inviter_name: string } | null>;
+    clearError: () => void;
+}
+
+export const useInviterStore = create<InviterStore>((set, get) => ({
+    invites: [],
+    friends: [],
+    loading: false,
+    error: null,
+
+    createInvite: async () => {
+        set({ loading: true, error: null });
+        try {
+            const { data, error } = await withTimeout(supabase.rpc('create_consumer_invite'));
+            if (error) {
+                set({ loading: false, error: translateError(error, "Impossible de créer l'invitation") });
+                return null;
+            }
+            const invite = data as { id: string; token: string; code: string; expires_at: string };
+            // Prepend to the hygiene list (Phase 6) without a refetch round-trip.
+            set(state => ({
+                loading: false,
+                invites: [
+                    {
+                        id: invite.id,
+                        status: 'active',
+                        created_at: new Date().toISOString(),
+                        expires_at: invite.expires_at,
+                        used_at: null,
+                        used_by: null,
+                        used_by_name: null,
+                        revoked_at: null,
+                    },
+                    ...state.invites,
+                ],
+            }));
+            return invite;
+        } catch (err) {
+            const msg = isNetworkError(err) ? 'Erreur de réseau. Vérifiez votre connexion.' : "Impossible de créer l'invitation";
+            set({ loading: false, error: msg });
+            return null;
+        }
+    },
+
+    fetchMyInvites: async () => {
+        set({ loading: true, error: null });
+        try {
+            const { data, error } = await withTimeout(supabase.rpc('list_my_consumer_invites'));
+            if (error) {
+                set({ loading: false, error: translateError(error, 'Impossible de charger vos invitations') });
+                return;
+            }
+            const rows = (data ?? []) as Array<{
+                id: string;
+                status: string;
+                created_at: string;
+                expires_at: string;
+                used_at: string | null;
+                used_by: string | null;
+                used_by_name: string | null;
+                revoked_at: string | null;
+            }>;
+            set({
+                loading: false,
+                invites: rows.map(r => ({
+                    id: r.id,
+                    status: r.status as ConsumerInvite['status'],
+                    created_at: r.created_at,
+                    expires_at: r.expires_at,
+                    used_at: r.used_at,
+                    used_by: r.used_by,
+                    used_by_name: r.used_by_name,
+                    revoked_at: r.revoked_at,
+                })),
+            });
+        } catch (err) {
+            set({ loading: false, error: isNetworkError(err) ? 'Erreur de réseau. Vérifiez votre connexion.' : 'Impossible de charger vos invitations' });
+        }
+    },
+
+    fetchMyFriends: async () => {
+        set({ error: null });
+        try {
+            const { data, error } = await supabase.rpc('list_my_consumer_friends');
+            if (error) {
+                set({ error: translateError(error, 'Impossible de charger vos amis') });
+                return;
+            }
+            const rows = (data ?? []) as Array<{
+                id: string;
+                friend_id: string;
+                friend_name: string;
+                invited_at: string;
+            }>;
+            set({
+                friends: rows.map(r => ({
+                    id: r.id,
+                    friend_id: r.friend_id,
+                    friend_name: r.friend_name,
+                    invited_at: r.invited_at,
+                })),
+            });
+        } catch (err) {
+            set({ error: isNetworkError(err) ? 'Erreur de réseau. Vérifiez votre connexion.' : 'Impossible de charger vos amis' });
+        }
+    },
+
+    revokeInvite: async (inviteId) => {
+        set({ error: null });
+        try {
+            const { data, error } = await supabase.rpc('revoke_consumer_invite', { p_invite_id: inviteId });
+            if (error) {
+                set({ error: translateError(error, "Impossible de révoquer l'invitation") });
+                return false;
+            }
+            const revoked = Boolean(data);
+            if (revoked) {
+                set(state => ({
+                    invites: state.invites.map(i => (i.id === inviteId ? { ...i, status: 'revoked', revoked_at: new Date().toISOString() } : i)),
+                }));
+            }
+            return revoked;
+        } catch (err) {
+            set({ error: isNetworkError(err) ? 'Erreur de réseau. Vérifiez votre connexion.' : "Impossible de révoquer l'invitation" });
+            return false;
+        }
+    },
+
+    resolveInvite: async (token, code) => {
+        set({ error: null });
+        try {
+            // Attempt logging is its own top-level RPC so a failed guess is
+            // actually rate-limited — a raise inside resolve_consumer_invite
+            // rolls back the whole call including any INSERT it made itself
+            // (see db/migration_v124.sql for the original bug this mirrors).
+            await supabase.rpc('record_invite_attempt');
+            const { data, error } = await supabase.rpc('resolve_consumer_invite', { p_token: token, p_code: code });
+            if (error) {
+                set({ error: translateError(error, 'Invitation invalide') });
+                return null;
+            }
+            return data as { inviter_id: string; inviter_name: string };
+        } catch (err) {
+            set({ error: isNetworkError(err) ? 'Erreur de réseau. Vérifiez votre connexion.' : 'Invitation invalide' });
+            return null;
+        }
+    },
+
+    clearError: () => set({ error: null }),
+}));

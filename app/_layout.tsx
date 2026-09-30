@@ -23,6 +23,7 @@ import {
 import { PostHogProvider } from 'posthog-react-native';
 import { useAuthStore } from '@/stores/auth';
 import { openDb } from '@/lib/db';
+import { capturePendingInviteToken } from '@/lib/inviteLink';
 import { ThemeProvider } from '@/src/theme';
 import { posthog } from '@/lib/posthog';
 import { identifyUser, resetAnalytics } from '@/lib/analytics';
@@ -108,7 +109,14 @@ function RootLayout() {
     Promise.all([
       withStartupTiming('auth_check', initialize()),
       withStartupTiming('db_open', openDb()),
-    ]).finally(() => {
+    ]).then(() => {
+      // Best-effort: capture a deferred invite token (install referrer /
+      // clipboard) now that the KV store is open. Never blocks startup —
+      // a missing token just means a normal sign-up, never a dead end.
+      return capturePendingInviteToken();
+    }).catch(() => {
+      /* non-fatal */
+    }).finally(() => {
       clearTimeout(timeout);
       SplashScreen.hideAsync();
       // A real cold start — one half of PaymentReminderAsker's "fresh
