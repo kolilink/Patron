@@ -39,7 +39,7 @@ CREATE OR REPLACE FUNCTION public.record_payment(
   p_date             date,
   p_idempotency_key  uuid DEFAULT NULL
 )
-RETURNS boolean
+RETURNS jsonb
 LANGUAGE plpgsql
 SECURITY DEFINER
 SET search_path = public
@@ -49,6 +49,7 @@ DECLARE
   v_already    numeric;
   v_owed       numeric;
   v_fully_paid boolean;
+  v_payment_id uuid;
 BEGIN
   IF get_role(p_business_id) NOT IN ('administrateur', 'manager', 'vendeur') THEN
     RAISE EXCEPTION 'Accès refusé' USING ERRCODE = 'P0001';
@@ -64,11 +65,15 @@ BEGIN
   -- report the sale's current paid state.
   IF p_idempotency_key IS NOT NULL THEN
     IF EXISTS (SELECT 1 FROM payments WHERE idempotency_key = p_idempotency_key) THEN
+      SELECT id INTO v_payment_id
+      FROM payments
+      WHERE idempotency_key = p_idempotency_key;
+
       SELECT status = 'paye' INTO v_fully_paid
       FROM sale_orders
       WHERE id = p_sale_id AND business_id = p_business_id;
 
-      RETURN COALESCE(v_fully_paid, false);
+      RETURN jsonb_build_object('fully_paid', COALESCE(v_fully_paid, false), 'payment_id', v_payment_id);
     END IF;
   END IF;
 
@@ -96,20 +101,26 @@ BEGIN
     RAISE EXCEPTION 'Le montant dépasse le solde restant dû' USING ERRCODE = 'P0001';
   END IF;
 
+  v_payment_id := gen_random_uuid();
+
   BEGIN
     INSERT INTO payments (id, order_id, customer_name, business_id, method, amount, date, idempotency_key)
     VALUES (
-      gen_random_uuid(), p_sale_id, v_sale.customer_name,
+      v_payment_id, p_sale_id, v_sale.customer_name,
       p_business_id, p_method, p_amount, p_date, p_idempotency_key
     );
   EXCEPTION WHEN unique_violation THEN
     -- A concurrent call with the same key won the race between our
     -- existence check above and this insert — resolve exactly like the
     -- pre-check branch above, never insert a second row.
+    SELECT id INTO v_payment_id
+    FROM payments
+    WHERE idempotency_key = p_idempotency_key;
+
     SELECT status = 'paye' INTO v_fully_paid
     FROM sale_orders
     WHERE id = p_sale_id AND business_id = p_business_id;
-    RETURN COALESCE(v_fully_paid, false);
+    RETURN jsonb_build_object('fully_paid', COALESCE(v_fully_paid, false), 'payment_id', v_payment_id);
   END;
 
   v_fully_paid := (v_already + p_amount) >= v_owed - 1;
@@ -118,7 +129,7 @@ BEGIN
     UPDATE sale_orders SET status = 'paye', paid_at = now() WHERE id = p_sale_id;
   END IF;
 
-  RETURN v_fully_paid;
+  RETURN jsonb_build_object('fully_paid', v_fully_paid, 'payment_id', v_payment_id);
 END;
 $$;
 

@@ -58,6 +58,8 @@ DECLARE
   v_new_paid      numeric;
   v_fully_settled boolean;
   v_already_claimed boolean := false;
+  v_payment_id    uuid;
+  v_payment_ids   uuid[] := '{}';
 BEGIN
   IF get_role(p_business_id) IS NULL OR get_role(p_business_id) NOT IN ('administrateur', 'manager', 'vendeur') THEN
     RAISE EXCEPTION 'Accès refusé' USING ERRCODE = 'P0001';
@@ -107,11 +109,15 @@ BEGIN
       v_allocated := LEAST(v_remaining, v_outstanding);
       v_new_paid  := v_sale.already_paid + v_allocated;
 
+      v_payment_id := gen_random_uuid();
+
       INSERT INTO payments (id, order_id, customer_name, business_id, method, amount, date)
       VALUES (
-        gen_random_uuid(), v_sale.id, p_customer_name,
+        v_payment_id, v_sale.id, p_customer_name,
         p_business_id, p_method, v_allocated, p_date
       );
+
+      v_payment_ids := array_append(v_payment_ids, v_payment_id);
 
       -- 1-cent tolerance for floating-point carry-over from older records
       IF v_new_paid >= v_sale.owed - 1 THEN
@@ -129,7 +135,7 @@ BEGIN
       AND status        = 'credit'
   ) INTO v_fully_settled;
 
-  RETURN jsonb_build_object('fully_settled', v_fully_settled);
+  RETURN jsonb_build_object('fully_settled', v_fully_settled, 'payment_ids', to_jsonb(v_payment_ids));
 END;
 $$;
 

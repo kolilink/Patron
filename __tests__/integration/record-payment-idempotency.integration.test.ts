@@ -57,13 +57,24 @@ describe('record_payment — idempotency (real RPC, migration_v205)', () => {
 
     const first = await client.rpc('record_payment', payload);
     expect(first.error).toBeNull();
-    expect(first.data).toBe(true);
+    const firstResult = first.data as { fully_paid: boolean; payment_id: string };
+    expect(firstResult.fully_paid).toBe(true);
+    expect(firstResult.payment_id).toBeTruthy();
+
+    // The returned payment_id must be the real server-side row id.
+    const admin = adminClient();
+    const { data: createdRows } = await admin.from('payments').select('id').eq('idempotency_key', idempotencyKey);
+    expect((createdRows ?? []).length).toBe(1);
+    expect(firstResult.payment_id).toBe(createdRows![0].id);
 
     // Exact replay — simulates the outbox retrying after the original
     // call's response never reached the device.
     const second = await client.rpc('record_payment', payload);
     expect(second.error).toBeNull();
-    expect(second.data).toBe(true);
+    const secondResult = second.data as { fully_paid: boolean; payment_id: string };
+    expect(secondResult.fully_paid).toBe(true);
+    // Replay returns the SAME id — the client can void it identically.
+    expect(secondResult.payment_id).toBe(firstResult.payment_id);
 
     const state = await saleState(orderId);
     expect(state.status).toBe('paye');
@@ -87,10 +98,11 @@ describe('record_payment — idempotency (real RPC, migration_v205)', () => {
       p_idempotency_key: idempotencyKey,
     };
 
-    await client.rpc('record_payment', payload);
+    const first = await client.rpc('record_payment', payload);
     const replay = await client.rpc('record_payment', payload);
     expect(replay.error).toBeNull();
-    expect(replay.data).toBe(false); // still owes 600000
+    expect((replay.data as { fully_paid: boolean; payment_id: string }).fully_paid).toBe(false); // still owes 600000
+    expect((replay.data as { fully_paid: boolean; payment_id: string }).payment_id).toBe((first.data as { fully_paid: boolean; payment_id: string }).payment_id);
 
     const state = await saleState(orderId);
     expect(state.status).toBe('credit');
@@ -130,7 +142,8 @@ describe('record_payment — idempotency (real RPC, migration_v205)', () => {
       p_method: 'especes', p_date: '2026-09-28',
     });
     expect(error).toBeNull();
-    expect(data).toBe(true);
+    expect((data as { fully_paid: boolean; payment_id: string }).fully_paid).toBe(true);
+    expect((data as { fully_paid: boolean; payment_id: string }).payment_id).toBeTruthy();
     expect((await saleState(orderId)).amountPaid).toBe(500000);
   });
 

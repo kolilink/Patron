@@ -558,10 +558,12 @@ export const useVentesStore = create<VentesStore>((set, get) => ({
     const amountCents = Math.round(amount * 100);
     const idempotencyKey = generateId();
 
-    // record_payment() re-checks the real remaining balance server-side
-    // (at drain time now, not a live call) and rejects the insert if it
-    // would overpay — the on-device `owed`/`fullyPaid` figures above are
-    // only used for the optimistic UI, never trusted for the actual write.
+    // record_payment() re-checks the real remaining balance server-side and
+    // rejects the insert if it would overpay — the on-device
+    // `owed`/`fullyPaid` figures above are only used for the optimistic UI,
+    // never trusted for the actual write. The live RPC returns the real
+    // server-side payment_id (migration_v205's jsonb contract, PR #41),
+    // which is what the SaveConfirmation undo voids.
     const rpcPayload = {
       p_sale_id: saleId,
       p_business_id: sale.business_id,
@@ -571,34 +573,14 @@ export const useVentesStore = create<VentesStore>((set, get) => ({
       p_idempotency_key: idempotencyKey,
     };
 
-    try {
-      await enqueue('record_payment', rpcPayload);
-    } catch (err) {
-      console.error('[recordPayment] local write failed', err);
-      set({ saving: false, error: "Impossible d'enregistrer sur cet appareil. Réessayez." });
-      return { ok: false, fullyPaid: false };
-    }
-
-    const count = await getQueueCount();
-    useSyncStore.setState({ pendingCount: count });
-    try {
-      await get().refreshPendingOverlay();
-    } catch (err) {
-      console.error('[recordPayment] refreshPendingOverlay failed (write already succeeded)', err);
-    }
-    set({ saving: false });
-    useSyncStore.getState().kick();
-
-    // credit_paid notification — fired unconditionally here, same
-    // optimistic posture as recordClientPayment below (a payment later
-    // rejected at drain time — §3, failed_permanent — may rarely have
-    // already notified for something that didn't ultimately apply; a
-    // pre-existing characteristic of this flow, not introduced by this
-    // conversion). "total" states the debt that just got cleared
-    // (remainingBefore, not the original sale total, since prior
-    // installments may have already shrunk it); "partiel" states only the
-    // amount just paid.
-    {
+    const notifyCreditPaid = () => {
+      // credit_paid notification — fired on both the live and offline
+      // fallback paths (same optimistic posture as recordClientPayment;
+      // a payment later rejected at drain time may rarely have already
+      // notified for something that didn't ultimately apply — a pre-existing
+      // characteristic of this flow). "total" states the debt that just got
+      // cleared (remainingBefore, not the original sale total); "partiel"
+      // states only the amount just paid.
       const currency = useAuthStore.getState().session?.activeBusiness?.currency ?? 'GNF';
       notifyEvent({
         businessId: sale.business_id,
@@ -608,9 +590,49 @@ export const useVentesStore = create<VentesStore>((set, get) => ({
           : { customer: sale.customer_name ?? '', amount: formatAmount(amount, currency), status: 'partiel' },
         targetRoles: ['administrateur', 'manager'],
       });
-    }
+    };
 
-    return { ok: true, fullyPaid };
+    let paymentId: string | undefined;
+
+    try {
+      const { data, error: rpcErr } = await supabase.rpc('record_payment', rpcPayload);
+      if (rpcErr) throw rpcErr;
+      const result = data as { fully_paid: boolean; payment_id: string };
+      paymentId = result.payment_id;
+      try {
+        await get().refreshPendingOverlay();
+      } catch (overlayErr) {
+        console.error('[recordPayment] refreshPendingOverlay failed (write already succeeded)', overlayErr);
+      }
+      set({ saving: false });
+      notifyCreditPaid();
+      return { ok: true, fullyPaid: result.fully_paid, paymentId };
+    } catch (err) {
+      if (isNetworkError(err)) {
+        try {
+          await enqueue('record_payment', rpcPayload);
+        } catch (enqErr) {
+          console.error('[recordPayment] local write failed', enqErr);
+          set({ saving: false, error: "Impossible d'enregistrer sur cet appareil. Réessayez." });
+          return { ok: false, fullyPaid: false };
+        }
+        const count = await getQueueCount();
+        useSyncStore.setState({ pendingCount: count });
+        try {
+          await get().refreshPendingOverlay();
+        } catch (overlayErr) {
+          console.error('[recordPayment] refreshPendingOverlay failed (write already succeeded)', overlayErr);
+        }
+        set({ saving: false });
+        useSyncStore.getState().kick();
+        notifyCreditPaid();
+        // No server row yet in the offline fallback — paymentId stays
+        // undefined until the queued RPC drains (undo unavailable until sync).
+        return { ok: true, fullyPaid };
+      }
+      set({ saving: false, error: translateError(err, 'Paiement impossible') });
+      return { ok: false, fullyPaid: false };
+    }
   },
 
   // Local-write-first (§5, same shape as stores/sales.ts's three functions).
@@ -646,10 +668,9 @@ export const useVentesStore = create<VentesStore>((set, get) => ({
 
     // v157 jsonb contract (PR #41): record_client_payment fans out into a
     // variable number of payments rows; the SaveConfirmation undo voids each
-    // returned id. Local-write-first has no synchronous server row yet, so
-    // paymentIds stays undefined until the queued RPC drains (undo unavailable
-    // until sync — the same documented tradeoff as the old offline branch).
+    // returned id. The live RPC returns those ids (migration_v203).
     let paymentIds: string[] | undefined;
+    let fullySettled = false;
     const idempotencyKey = generateId();
     const rpcPayload = {
       p_business_id: businessId,
@@ -660,42 +681,14 @@ export const useVentesStore = create<VentesStore>((set, get) => ({
       p_idempotency_key: idempotencyKey,
     };
 
-    try {
-      await enqueue('record_client_payment', rpcPayload);
-    } catch (err) {
-      console.error('[recordClientPayment] local write failed', err);
-      set({ saving: false, error: "Impossible d'enregistrer sur cet appareil. Réessayez." });
-      return { ok: false, fullySettled: false };
-    }
-
-    const count = await getQueueCount();
-    useSyncStore.setState({ pendingCount: count });
-    try {
-      await get().refreshPendingOverlay();
-    } catch (err) {
-      console.error('[recordClientPayment] refreshPendingOverlay failed (write already succeeded)', err);
-    }
-    set({ saving: false });
-    useSyncStore.getState().kick();
-
-    const fullySettled = get().sales
-      .filter(s => s.customer_name === customerName && s.business_id === businessId && s.status === 'credit')
-      .reduce((sum, s) => sum + (s.total_amount - (s.discount_amount ?? 0) - (s.amount_paid ?? 0)), 0) < 0.01;
-
-    trackEvent('debt_payment_recorded', businessId, null, { fully_settled: fullySettled });
-    // Fired unconditionally here (not from lib/sync.ts) — matches this
-    // function's own pre-existing behavior (it already notified on both
-    // the old live and offline-queued paths, unlike submit_sale, which
-    // needed its notify moved entirely into executeOp to avoid a double-
-    // fire). No double-notify risk here since lib/sync.ts's
-    // record_client_payment case never notifies. Optimistic like every
-    // other Phase-1 confirmation: if the RPC is later rejected (§3,
-    // failed_permanent — e.g. the debt was already settled by another
-    // device before this synced), a notification may rarely have already
-    // gone out for a payment that didn't ultimately apply. Pre-existing
-    // characteristic, not introduced by this rework — the old "offline"
-    // branch already notified before confirming sync.
-    {
+    const notifyCreditPaid = () => {
+      // Fired unconditionally here (not from lib/sync.ts) — matches this
+      // function's own pre-existing behavior. No double-notify risk since
+      // lib/sync.ts's record_client_payment case never notifies. Optimistic
+      // like every other confirmation: if the RPC is later rejected (§3,
+      // failed_permanent), a notification may rarely have already gone out
+      // for a payment that didn't ultimately apply. Pre-existing
+      // characteristic, not introduced by this rework.
       const currency = useAuthStore.getState().session?.activeBusiness?.currency ?? 'GNF';
       notifyEvent({
         businessId,
@@ -705,8 +698,53 @@ export const useVentesStore = create<VentesStore>((set, get) => ({
           : { customer: customerName, amount: formatAmount(amount, currency), status: 'partiel' },
         targetRoles: ['administrateur', 'manager'],
       });
+    };
+
+    try {
+      const { data: rpcData, error: rpcErr } = await supabase.rpc('record_client_payment', rpcPayload);
+      if (rpcErr) throw rpcErr;
+      const result = rpcData as { fully_settled: boolean; payment_ids: string[] };
+      fullySettled = result.fully_settled;
+      paymentIds = result.payment_ids;
+      try {
+        await get().refreshPendingOverlay();
+      } catch (overlayErr) {
+        console.error('[recordClientPayment] refreshPendingOverlay failed (write already succeeded)', overlayErr);
+      }
+      set({ saving: false });
+      trackEvent('debt_payment_recorded', businessId, null, { fully_settled: fullySettled });
+      notifyCreditPaid();
+      return { ok: true, fullySettled, paymentIds };
+    } catch (err) {
+      if (isNetworkError(err)) {
+        try {
+          await enqueue('record_client_payment', rpcPayload);
+        } catch (enqErr) {
+          console.error('[recordClientPayment] local write failed', enqErr);
+          set({ saving: false, error: "Impossible d'enregistrer sur cet appareil. Réessayez." });
+          return { ok: false, fullySettled: false };
+        }
+        const count = await getQueueCount();
+        useSyncStore.setState({ pendingCount: count });
+        try {
+          await get().refreshPendingOverlay();
+        } catch (overlayErr) {
+          console.error('[recordClientPayment] refreshPendingOverlay failed (write already succeeded)', overlayErr);
+        }
+        set({ saving: false });
+        useSyncStore.getState().kick();
+        // No server row yet in the offline fallback — paymentIds stays
+        // undefined until the queued RPC drains (undo unavailable until sync).
+        fullySettled = get().sales
+          .filter(s => s.customer_name === customerName && s.business_id === businessId && s.status === 'credit')
+          .reduce((sum, s) => sum + (s.total_amount - (s.discount_amount ?? 0) - (s.amount_paid ?? 0)), 0) < 0.01;
+        trackEvent('debt_payment_recorded', businessId, null, { fully_settled: fullySettled });
+        notifyCreditPaid();
+        return { ok: true, fullySettled, paymentIds };
+      }
+      set({ saving: false, error: translateError(err, 'Paiement impossible') });
+      return { ok: false, fullySettled: false };
     }
-    return { ok: true, fullySettled, paymentIds };
   },
 
   voidPayments: async (paymentIds, businessId, reason) => {

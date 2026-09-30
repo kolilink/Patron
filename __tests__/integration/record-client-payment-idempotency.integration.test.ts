@@ -52,13 +52,21 @@ describe('record_client_payment — idempotency (real RPC, migration_v203)', () 
 
     const first = await client.rpc('record_client_payment', payload);
     expect(first.error).toBeNull();
-    expect((first.data as { fully_settled: boolean }).fully_settled).toBe(true);
+    const firstResult = first.data as { fully_settled: boolean; payment_ids: string[] };
+    expect(firstResult.fully_settled).toBe(true);
+    expect(Array.isArray(firstResult.payment_ids)).toBe(true);
+    expect(firstResult.payment_ids.length).toBeGreaterThan(0);
+
+    // The returned payment_ids must match the real server-side rows created.
+    const admin = adminClient();
+    const { data: createdRows } = await admin.from('payments').select('id').eq('order_id', orderId);
+    expect((createdRows ?? []).map(r => r.id).sort()).toEqual([...firstResult.payment_ids].sort());
 
     // Exact replay — simulates the outbox retrying after the original call's
     // response never reached the device (network drop mid-response).
     const second = await client.rpc('record_client_payment', payload);
     expect(second.error).toBeNull();
-    expect((second.data as { fully_settled: boolean }).fully_settled).toBe(true);
+    expect((second.data as { fully_settled: boolean; payment_ids: string[] }).fully_settled).toBe(true);
 
     const state = await saleState(orderId);
     expect(state.status).toBe('paye');
