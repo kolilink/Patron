@@ -15,6 +15,8 @@ import {
     IMAGE_WIDTH,
     buildCardBitmap,
     encodePng,
+    layoutTitle,
+    measureText,
     renderOgImage,
     renderOrFallback,
     titleFor,
@@ -99,7 +101,7 @@ function glyphSet(ch: string): boolean[][] {
     );
 }
 
-function titlePixelMap(text: string, scale: number): Map<string, true> {
+function titleLinePixelMap(text: string, scale: number, y: number): Map<string, true> {
     const totalW = text.length * FONT_WIDTH * scale;
     const x0 = Math.round((IMAGE_WIDTH - totalW) / 2);
     const map = new Map<string, true>();
@@ -109,11 +111,36 @@ function titlePixelMap(text: string, scale: number): Map<string, true> {
             for (let col = 0; col < FONT_WIDTH; col++) {
                 if (!glyph[row][col]) continue;
                 const px = x0 + i * FONT_WIDTH * scale + col * scale;
-                const py = TITLE_Y + row * scale;
+                const py = y + row * scale;
                 for (let dy = 0; dy < scale; dy++) {
                     for (let dx = 0; dx < scale; dx++) {
                         map.set(`${px + dx},${py + dy}`, true);
                     }
+                }
+            }
+        }
+    }
+    return map;
+}
+
+function titlePixelMap(text: string, scale: number): Map<string, true> {
+    return titleLinePixelMap(text, scale, TITLE_Y);
+}
+
+// Pixels for a single character at index within a single-line title.
+function titleCharPixelMap(text: string, charIndex: number, scale: number, y: number): Map<string, true> {
+    const totalW = text.length * FONT_WIDTH * scale;
+    const x0 = Math.round((IMAGE_WIDTH - totalW) / 2);
+    const map = new Map<string, true>();
+    const glyph = glyphSet(text[charIndex]);
+    for (let row = 0; row < FONT_HEIGHT; row++) {
+        for (let col = 0; col < FONT_WIDTH; col++) {
+            if (!glyph[row][col]) continue;
+            const px = x0 + charIndex * FONT_WIDTH * scale + col * scale;
+            const py = y + row * scale;
+            for (let dy = 0; dy < scale; dy++) {
+                for (let dx = 0; dx < scale; dx++) {
+                    map.set(`${px + dx},${py + dy}`, true);
                 }
             }
         }
@@ -188,6 +215,92 @@ describe('dynamic OG image — name baked into the visual', () => {
         const png = await renderOgImage('Abdoulaye Mamadou Diarra', true);
         expect(png.length).toBeLessThan(300 * 1024);
         expect(decodePng(png).width).toBe(IMAGE_WIDTH);
+    });
+
+    it('renders every French accented character as non-empty pixels (never tofu)', async () => {
+        // "Sékou" and "Aïcha Cissé" exercise é, ï, ç — the requested coverage
+        // probe. The glyphs are non-empty AND distinct from the hollow
+        // FALLBACK_GLYPH (the tofu box), so an accent is never rendered as □.
+        const ACCENTED = new Set([
+            'é', 'è', 'ê', 'ë', 'à', 'â', 'ç', 'î', 'ï', 'ô', 'û', 'ù', 'ü', 'œ',
+            'É', 'È', 'Ê', 'Ë', 'À', 'Â', 'Ç', 'Î', 'Ï', 'Ô', 'Û', 'Ù', 'Ü',
+        ]);
+
+        for (const name of ['Sékou', 'Aïcha Cissé']) {
+            const title = titleFor(true, name);
+            const scale = expectedTitleScale(title);
+
+            // The layout must fit on one line: both titles are short enough.
+            expect(layoutTitle(true, name).lines).toEqual([title]);
+
+            const png = await renderOgImage(name, true);
+            expect(png.length).toBeLessThan(300 * 1024);
+            const { rgb, width } = decodePng(png);
+
+            const accented = [...title].filter(ch => ACCENTED.has(ch));
+            expect(accented.length).toBeGreaterThan(0);
+
+            for (const ch of accented) {
+                // Glyph itself is non-empty (has at least one lit pixel)…
+                const bits = glyphSet(ch);
+                expect(bits.some(row => row.some(Boolean))).toBe(true);
+                // …and is not the fallback box.
+                expect(FONT[ch]).not.toEqual(FONT['\uFFFD']);
+
+                // …and those pixels are actually white in the decoded image.
+                const idx = [...title].indexOf(ch);
+                const charMap = titleCharPixelMap(title, idx, scale, TITLE_Y);
+                expect(charMap.size).toBeGreaterThan(0);
+                for (const key of charMap.keys()) {
+                    const [x, y] = key.split(',').map(Number);
+                    expect(isWhite(rgb, width, x, y)).toBe(true);
+                }
+            }
+        }
+    });
+});
+
+describe('layoutTitle — long-name wrapping and clean truncation', () => {
+    it('wraps a long name onto two lines at a smaller scale', () => {
+        // 51-char title: does not fit one line even at minimum scale, so it
+        // must wrap to two lines at scale 5 (never overflow, never drop a word).
+        const layout = layoutTitle(true, 'Abdoulaye Mamadou Diarra Traoré');
+        expect(layout.scale).toBeLessThan(MAX_SCALE);
+        expect(layout.lines).toHaveLength(2);
+        expect(layout.lines.join(' ')).toBe(titleFor(true, 'Abdoulaye Mamadou Diarra Traoré'));
+        for (const line of layout.lines) {
+            expect(measureText(line, layout.scale)).toBeLessThanOrEqual(IMAGE_WIDTH - 80);
+        }
+    });
+
+    it('cleanly truncates an extremely long name with an ellipsis, never overflowing', () => {
+        const longName = 'X'.repeat(120) + ' Abdoulaye';
+        const layout = layoutTitle(true, longName);
+
+        // Two lines, minimum scale, each line within the canvas…
+        expect(layout.lines).toHaveLength(2);
+        expect(layout.scale).toBe(MIN_SCALE);
+        for (const line of layout.lines) {
+            expect(measureText(line, layout.scale)).toBeLessThanOrEqual(IMAGE_WIDTH - 80);
+        }
+
+        // …and the cut is visibly signalled with a real ellipsis (U+2026).
+        expect(layout.lines[1].endsWith('…')).toBe(true);
+
+        // The ellipsis is actually drawn (non-empty glyph, baked into pixels).
+        const png = renderOgImage(longName, true);
+        return png.then(bytes => {
+            expect(bytes.length).toBeLessThan(300 * 1024);
+            const { rgb, width } = decodePng(bytes);
+            const secondLineY = 170 + FONT_HEIGHT * layout.scale + 22;
+            const ellipsisIdx = layout.lines[1].length - 1;
+            const ellMap = titleCharPixelMap(layout.lines[1], ellipsisIdx, layout.scale, secondLineY);
+            expect(ellMap.size).toBeGreaterThan(0);
+            for (const key of ellMap.keys()) {
+                const [x, y] = key.split(',').map(Number);
+                expect(isWhite(rgb, width, x, y)).toBe(true);
+            }
+        });
     });
 });
 

@@ -108,7 +108,7 @@ function wrapWords(text: string, maxChars: number): string[] {
     return lines;
 }
 
-interface TitleLayout {
+export interface TitleLayout {
     lines: string[];
     scale: number;
 }
@@ -116,7 +116,7 @@ interface TitleLayout {
 // Layout the title so it fits the card: prefer one line at the largest scale,
 // otherwise wrap to at most two lines at a smaller scale, finally truncating
 // (never overflowing the canvas).
-function layoutTitle(valid: boolean, name: string | null): TitleLayout {
+export function layoutTitle(valid: boolean, name: string | null): TitleLayout {
     const title = titleFor(valid, name);
     const maxWidth = IMAGE_WIDTH - 80; // 40px side margins
     const maxScale = 6; // 48px glyphs
@@ -136,14 +136,17 @@ function layoutTitle(valid: boolean, name: string | null): TitleLayout {
         }
     }
 
-    // Extreme fallback: force two lines at the minimum scale, truncating the
-    // last line with an ellipsis so the card can never overflow.
+    // Extreme fallback: force two lines at the minimum scale, cleanly
+    // truncating the second line with an ellipsis (U+2026, present in the
+    // font) so the card can never overflow and the cut is always visibly
+    // signalled — never a hard, unmarked chop.
     const maxChars = Math.floor(maxWidth / (FONT_WIDTH * minScale));
-    const lines = wrapWords(title, maxChars).slice(0, 2);
-    if (lines.length === 2 && lines[1].length === maxChars) {
-        lines[1] = lines[1].slice(0, maxChars - 1) + '…';
-    }
-    return { lines, scale: minScale };
+    const all = wrapWords(title, maxChars);
+    const first = all[0] ?? '';
+    const secondRaw = all[1] ?? '';
+    // Make room for the ellipsis if the second line is already full.
+    const secondBody = secondRaw.length >= maxChars ? secondRaw.slice(0, maxChars - 1) : secondRaw;
+    return { lines: [first, `${secondBody}…`], scale: minScale };
 }
 
 // ─────────────────────────────────────────────────────────────────────────
