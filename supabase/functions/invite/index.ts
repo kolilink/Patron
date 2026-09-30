@@ -13,8 +13,9 @@ import { createClient } from 'https://esm.sh/@supabase/supabase-js@2';
 //   * WhatsApp in-app browser           → featherweight bridge (Phase 2)
 //   * normal browser                    → featherweight landing page (Phase 4)
 //
-// og:title is dynamic ("[Prénom] t'invite sur Patron") via the
-// preview_consumer_invite() RPC (never exposes anything but the first
+// og:title is dynamic ("[Nom] t'invite sur Patron", or "Ton ami t'invite
+// sur Patron" when the inviter has no personal name) via the
+// preview_consumer_invite() RPC (never exposes anything but the display
 // name, and only for a live, unexpired invite). og:image is a static
 // branded PNG (og.png beside this file) — the name travels in text,
 // per the spec's explicit fallback.
@@ -110,19 +111,26 @@ function htmlResponse(html: string, status = 200): Response {
 
 // ─── og:tag builder ─────────────────────────────────────────
 
-async function resolveInviter(token: string): Promise<{ valid: boolean; firstName: string | null }> {
-    if (!token || !SUPABASE_URL || !SUPABASE_ANON_KEY) return { valid: false, firstName: null };
+async function resolveInviter(token: string): Promise<{ valid: boolean; name: string | null }> {
+    if (!token || !SUPABASE_URL || !SUPABASE_ANON_KEY) return { valid: false, name: null };
     try {
         const client = createClient(SUPABASE_URL, SUPABASE_ANON_KEY);
         const { data, error } = await client.rpc('preview_consumer_invite', { p_token: token });
-        if (error || !data) return { valid: false, firstName: null };
+        if (error || !data) return { valid: false, name: null };
         return {
             valid: Boolean((data as { valid?: boolean }).valid),
-            firstName: (data as { first_name?: string | null }).first_name ?? null,
+            name: (data as { inviter_name?: string | null }).inviter_name ?? null,
         };
     } catch {
-        return { valid: false, firstName: null };
+        return { valid: false, name: null };
     }
+}
+
+// Display name is resolved at link-generation time (inviter_name snapshot).
+// Fallback "Ton ami" when no personal name; DEFAULT_TITLE only for invalid links.
+function inviterTitle(valid: boolean, name: string | null): string {
+    if (!valid) return DEFAULT_TITLE;
+    return `${name && name.trim() ? name.trim() : FALLBACK_NAME} t'invite sur Patron`;
 }
 
 function ogTags(opts: { title: string; description: string; imageUrl: string }): string {
@@ -139,6 +147,7 @@ function ogTags(opts: { title: string; description: string; imageUrl: string }):
 
 const TAGLINE = 'Tes ventes, tes crédits — même sans internet.';
 const DEFAULT_TITLE = "On t'invite sur Patron";
+const FALLBACK_NAME = 'Ton ami';
 
 // ─── Page builders ──────────────────────────────────────────
 
@@ -173,8 +182,8 @@ border-radius:10px;padding:12px 14px}
 .step{margin-bottom:6px}`;
 }
 
-function landingPage(opts: { title: string; description: string; imageUrl: string; storeUrl: string; openAppHref: string; firstName: string | null; token: string; isIOS: boolean; isAndroid: boolean }): string {
-    const heading = opts.firstName ? `${opts.firstName} t'invite sur Patron` : opts.title;
+function landingPage(opts: { title: string; description: string; imageUrl: string; storeUrl: string; openAppHref: string; token: string; isIOS: boolean; isAndroid: boolean }): string {
+    const heading = opts.title;
     return `<!doctype html>
 <html lang="fr">
 ${headBlock(heading, opts.description, opts.imageUrl)}
@@ -251,9 +260,9 @@ serve(async (req: Request) => {
 
     const ua = userAgent(req);
     const token = tokenFrom(req);
-    const { valid, firstName } = await resolveInviter(token);
-    const title = valid && firstName ? `${firstName} t'invite sur Patron` : DEFAULT_TITLE;
-    const description = valid ? TAGLINE : TAGLINE;
+    const { valid, name } = await resolveInviter(token);
+    const title = inviterTitle(valid, name);
+    const description = TAGLINE;
     const imageUrl = `${baseUrl(req)}${OG_IMAGE_PATH}`;
     const storeUrl = isAndroid(ua) && token ? playStoreUrl(token) : APP_STORE_URL;
     const openAppHref = token
@@ -274,7 +283,6 @@ serve(async (req: Request) => {
         imageUrl,
         storeUrl,
         openAppHref,
-        firstName,
         token,
         isIOS: isIOS(ua),
         isAndroid: isAndroid(ua),

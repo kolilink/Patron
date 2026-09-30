@@ -71,6 +71,11 @@ CREATE TABLE IF NOT EXISTS consumer_invites (
   created_at  timestamptz NOT NULL DEFAULT now()
 );
 
+-- Display name snapshot, resolved at link-generation time: the inviter's
+-- personal name (profiles.name) if set, NULL when unset. Every consumer
+-- (OG title, landing headline, friends list) falls back to "Ton ami".
+ALTER TABLE consumer_invites ADD COLUMN IF NOT EXISTS inviter_name text;
+
 CREATE INDEX IF NOT EXISTS consumer_invites_inviter_created
   ON consumer_invites (inviter_id, created_at DESC);
 
@@ -103,6 +108,7 @@ DECLARE
   v_token_hash text;
   v_code_hash  text;
   v_invite_id  uuid;
+  v_inviter_name text;
   v_active     int;
   v_expires    timestamptz := now() + interval '24 hours';
 BEGIN
@@ -141,9 +147,14 @@ BEGIN
   v_token_hash := encode(hmac(convert_to(v_token, 'utf8'), convert_to(v_key, 'utf8'), 'sha256'), 'hex');
   v_code_hash  := encode(hmac(convert_to(upper(v_code), 'utf8'), convert_to(v_key, 'utf8'), 'sha256'), 'hex');
 
+  -- Display name resolved at link-generation time (follow-up): the full
+  -- personal name, or NULL so consumers can fall back to "Ton ami".
+  SELECT NULLIF(btrim(COALESCE(name, '')), '') INTO v_inviter_name
+    FROM profiles WHERE id = v_uid;
+
   v_invite_id := gen_random_uuid();
-  INSERT INTO consumer_invites (id, inviter_id, token_hash, code_hash, status, expires_at)
-  VALUES (v_invite_id, v_uid, v_token_hash, v_code_hash, 'active', v_expires);
+  INSERT INTO consumer_invites (id, inviter_id, token_hash, code_hash, status, expires_at, inviter_name)
+  VALUES (v_invite_id, v_uid, v_token_hash, v_code_hash, 'active', v_expires, v_inviter_name);
 
   -- Raw secrets returned exactly once, to the creator only.
   RETURN jsonb_build_object(
@@ -232,8 +243,8 @@ BEGIN
     IF v_invite.used_by = v_uid THEN
       -- Already connected to this inviter — idempotent success for a
       -- re-fired deep link on the same device, not an error.
-      SELECT name INTO v_inviter_name FROM profiles WHERE id = v_invite.inviter_id;
-      RETURN jsonb_build_object('inviter_id', v_invite.inviter_id, 'inviter_name', COALESCE(v_inviter_name, ''));
+      v_inviter_name := COALESCE(NULLIF(v_invite.inviter_name, ''), 'Ton ami');
+      RETURN jsonb_build_object('inviter_id', v_invite.inviter_id, 'inviter_name', v_inviter_name);
     ELSE
       RAISE EXCEPTION 'Invitation invalide' USING ERRCODE = 'P0001';
     END IF;
@@ -252,16 +263,17 @@ BEGIN
     RAISE EXCEPTION 'Invitation invalide' USING ERRCODE = 'P0001';
   END IF;
 
-  SELECT name INTO v_inviter_name FROM profiles WHERE id = v_invite.inviter_id;
-  RETURN jsonb_build_object('inviter_id', v_invite.inviter_id, 'inviter_name', COALESCE(v_inviter_name, ''));
+  v_inviter_name := COALESCE(NULLIF(v_invite.inviter_name, ''), 'Ton ami');
+  RETURN jsonb_build_object('inviter_id', v_invite.inviter_id, 'inviter_name', v_inviter_name);
 END;
 $$;
 
 GRANT EXECUTE ON FUNCTION public.resolve_consumer_invite(text, text) TO authenticated;
 
 -- ─── 4. Preview (edge function — og:title / landing page) ───
--- Non-destructive. Returns the inviter's first name only when the
--- invite is live, otherwise a generic fallback. No sensitive data.
+-- Non-destructive. Returns the inviter's display name (the
+-- link-generation-time snapshot) only when the invite is live,
+-- otherwise a generic fallback. No sensitive data.
 
 CREATE OR REPLACE FUNCTION public.preview_consumer_invite(p_token text)
 RETURNS jsonb
@@ -273,35 +285,29 @@ DECLARE
   v_key        text;
   v_token_hash text;
   v_row        record;
-  v_first      text;
 BEGIN
   IF p_token IS NULL OR length(btrim(p_token)) = 0 THEN
-    RETURN jsonb_build_object('valid', false, 'first_name', null);
+    RETURN jsonb_build_object('valid', false, 'inviter_name', null);
   END IF;
 
   v_key := (SELECT value FROM app_secrets WHERE key = 'invite_hmac_key');
   IF v_key IS NULL THEN
-    RETURN jsonb_build_object('valid', false, 'first_name', null);
+    RETURN jsonb_build_object('valid', false, 'inviter_name', null);
   END IF;
 
   v_token_hash := encode(hmac(convert_to(btrim(p_token), 'utf8'), convert_to(v_key, 'utf8'), 'sha256'), 'hex');
 
-  SELECT status, expires_at, inviter_id INTO v_row
+  SELECT status, expires_at, inviter_name INTO v_row
     FROM consumer_invites
    WHERE token_hash = v_token_hash
    LIMIT 1;
 
   IF NOT FOUND OR v_row.status <> 'active' OR v_row.expires_at <= now() THEN
-    RETURN jsonb_build_object('valid', false, 'first_name', null);
+    RETURN jsonb_build_object('valid', false, 'inviter_name', null);
   END IF;
 
-  -- First name = everything before the first space (profiles.name is a
-  -- free-form display name; this keeps og:title short and personal).
-  SELECT split_part(COALESCE(name, ''), ' ', 1) INTO v_first
-    FROM profiles
-   WHERE id = v_row.inviter_id;
-
-  RETURN jsonb_build_object('valid', true, 'first_name', COALESCE(NULLIF(v_first, ''), NULL));
+  -- Full personal name snapshot; consumers fall back to "Ton ami".
+  RETURN jsonb_build_object('valid', true, 'inviter_name', COALESCE(NULLIF(v_row.inviter_name, ''), NULL));
 END;
 $$;
 
@@ -326,7 +332,7 @@ SET search_path = public
 STABLE
 AS $$
   SELECT ci.id, ci.status, ci.created_at, ci.expires_at, ci.used_at,
-         ci.used_by, p.name, ci.revoked_at
+         ci.used_by, COALESCE(NULLIF(p.name, ''), 'Ton ami'), ci.revoked_at
     FROM consumer_invites ci
     LEFT JOIN profiles p ON p.id = ci.used_by
    WHERE ci.inviter_id = auth.uid()
@@ -351,9 +357,11 @@ SECURITY DEFINER
 SET search_path = public
 STABLE
 AS $$
-  SELECT ci.id, ci.inviter_id, p.name, ci.used_at
+  -- Display name resolved at link-generation time (inviter_name snapshot)
+  -- with the "Ton ami" fallback for an unset personal name.
+  SELECT ci.id, ci.inviter_id,
+         COALESCE(NULLIF(ci.inviter_name, ''), 'Ton ami'), ci.used_at
     FROM consumer_invites ci
-    JOIN profiles p ON p.id = ci.inviter_id
    WHERE ci.used_by = auth.uid()
    ORDER BY ci.used_at DESC;
 $$;
