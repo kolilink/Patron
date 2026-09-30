@@ -27,5 +27,11 @@ jobs:
       - name: Run tests
         run: npm test
 
+      - name: Consistency checks (palette colors, <Screen> root, offline-fetch timeouts)
+        run: npm run check:consistency
+
+      - name: Lint (react-hooks/rules-of-hooks)
+        run: npm run lint
+
       - name: Dependency vulnerability scan
         run: npm audit --audit-level=high || true

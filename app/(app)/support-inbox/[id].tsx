@@ -127,7 +127,7 @@ export default function SupportInboxDetailScreen() {
   };
 
   return (
-    <KeyboardAvoidingView style={{ flex: 1, backgroundColor: palette.background }} behavior={Platform.OS === 'ios' ? 'padding' : 'height'}>
+    <KeyboardAvoidingView style={{ flex: 1, backgroundColor: palette.background }} behavior={Platform.OS === 'ios' ? 'padding' : undefined}>
       <Screen edges={['top']}>
         <View style={styles.header}>
           <Pressable onPress={() => router.back()}>
@@ -182,8 +182,13 @@ export default function SupportInboxDetailScreen() {
               <Ionicons name="sparkles-outline" size={14} color={palette.primary} />
               <Text variant="labelSmall" style={{ color: palette.primary }}>Suggestion IA</Text>
               <View style={{ flex: 1 }} />
-              <Pressable onPress={() => id && requestAiDraft(id)} hitSlop={8}>
+              <Pressable
+                onPress={() => id && requestAiDraft(id)}
+                hitSlop={8}
+                style={{ flexDirection: 'row', alignItems: 'center', gap: spacing[1] }}
+              >
                 <Ionicons name="refresh-outline" size={16} color={palette.textSecondary} />
+                <Text variant="caption" color="secondary">Régénérer</Text>
               </Pressable>
             </View>
             {founderDraft?.status === 'pending' ? (

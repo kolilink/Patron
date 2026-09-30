@@ -1,7 +1,8 @@
 import { useCallback, useEffect, useMemo, useState } from 'react';
-import { FlatList, Modal, Pressable, ScrollView, StyleSheet, TextInput, View } from 'react-native';
-import { SafeAreaView } from 'react-native-safe-area-context';
+import { FlatList, InputAccessoryView, Modal, Platform, Pressable, ScrollView, StyleSheet, TextInput, View } from 'react-native';
+import * as ImagePicker from 'expo-image-picker';
 import { Screen } from '@/src/components/ui/Screen';
+import { FormSheet } from '@/src/components/ui/FormSheet';
 import { router, useFocusEffect } from 'expo-router';
 import { Ionicons } from '@expo/vector-icons';
 import { Text } from '@/src/components/ui/Text';
@@ -9,7 +10,10 @@ import { Button } from '@/src/components/ui/Button';
 import { DatePickerField } from '@/src/components/ui/DatePickerField';
 import { SkeletonList } from '@/src/components/ui/SkeletonPlaceholder';
 import { OfflineNotice } from '@/src/components/ui/OfflineNotice';
-import { useTheme, spacing, radius } from '@/src/theme';
+import { ProofPhotoField, type PickedImage } from '@/src/components/ui/ProofPhotoField';
+import { ProofThumbnail } from '@/src/components/ui/ProofThumbnail';
+import { attachTransactionProof } from '@/lib/proofs';
+import { useTheme, spacing, radius, fontFamily } from '@/src/theme';
 import type { Palette } from '@/src/theme';
 import { formatAmount, formatAmountInput, parseAmountInput } from '@/src/utils/format';
 import { useAuthStore } from '@/stores/auth';
@@ -17,6 +21,11 @@ import { useEquipeStore, type Membre } from '@/stores/equipe';
 import { useAportsStore, type Apport } from '@/stores/apports';
 import { haptics } from '@/lib/haptics';
 import { toast } from '@/stores/toast';
+
+// iOS-only: suppresses the OS's auto-injected floating "Done" pill above
+// the numeric keyboard — this form already has a persistent, always-
+// visible footer button.
+const APPORT_FORM_SILENT_ACCESSORY_ID = 'apports-form-silent-accessory';
 
 function todayISO() {
   const d = new Date();
@@ -37,7 +46,7 @@ function scaledFontSize(str: string): number {
 }
 
 function displayName(a: Apport, currentUserId?: string, membres?: Membre[]): string {
-  if (currentUserId && a.injected_by_id === currentUserId) return 'Mon investissement';
+  if (currentUserId && a.injected_by_id === currentUserId) return 'Moi';
   const m = membres?.find(mb => mb.user_id === a.injected_by_id);
   if (m?.display_name) return m.display_name;
   return a.injected_by_name ?? a.source_name ?? 'Apport';
@@ -45,27 +54,32 @@ function displayName(a: Apport, currentUserId?: string, membres?: Membre[]): str
 
 // ─── Form sheet ───────────────────────────────────────────────────────────────
 
-type FormMode = 'add' | 'edit' | 'withdraw';
+// 'view' = an existing entry (typically a withdrawal, which can't be edited)
+// opened only to see it and attach a photo — money fields are read-only.
+type FormMode = 'add' | 'edit' | 'withdraw' | 'view';
 
 const FORM_TITLES: Record<FormMode, string> = {
   add: 'Nouvel apport',
   edit: 'Modifier l\'apport',
   withdraw: 'Retrait de capital',
+  view: 'Détails',
 };
 
 const FORM_SAVE_LABELS: Record<FormMode, string> = {
-  add: 'Enregistrer l\'apport',
-  edit: 'Enregistrer les modifications',
-  withdraw: 'Enregistrer le retrait',
+  add: 'Enregistrer',
+  edit: 'Enregistrer',
+  withdraw: 'Enregistrer',
+  view: 'Enregistrer',
 };
 
-interface FormSheetProps {
+interface ApportFormModalProps {
   visible: boolean;
   mode: FormMode;
   editing: Apport | null;
   businessId: string;
   currency: string;
   saving: boolean;
+  offline: boolean;
   onClose: () => void;
   onSave: (params: {
     amount: number;
@@ -73,10 +87,11 @@ interface FormSheetProps {
     sourceName: string | null;
     note: string | null;
     injectedAt: string;
+    photo: PickedImage | null;
   }) => void;
 }
 
-function FormSheet({ visible, mode, editing, businessId, currency, saving, onClose, onSave }: FormSheetProps) {
+function ApportFormModal({ visible, mode, editing, businessId, currency, saving, offline, onClose, onSave }: ApportFormModalProps) {
   const { palette } = useTheme();
   const styles = useMemo(() => makeStyles(palette), [palette]);
   const membres = useEquipeStore(s => s.membres);
@@ -88,6 +103,10 @@ function FormSheet({ visible, mode, editing, businessId, currency, saving, onClo
   const [note, setNote] = useState('');
   const [date, setDate] = useState(todayISO());
   const [showMemberPicker, setShowMemberPicker] = useState(false);
+  const [photo, setPhoto] = useState<PickedImage | null>(null);
+
+  const isViewMode = mode === 'view';
+  const existingProof = (mode === 'edit' || mode === 'view') ? editing?.proof_image_url ?? null : null;
 
   const reset = () => {
     setAmountStr('');
@@ -96,16 +115,18 @@ function FormSheet({ visible, mode, editing, businessId, currency, saving, onClo
     setNote('');
     setDate(todayISO());
     setShowMemberPicker(false);
+    setPhoto(null);
   };
 
-  // Prefill when opening in edit mode
+  // Prefill when opening on an existing entry (edit or view)
   useEffect(() => {
-    if (visible && mode === 'edit' && editing) {
-      setAmountStr(formatAmountInput(String(Math.abs(editing.amount)), currency));
+    if (visible && (mode === 'edit' || mode === 'view') && editing) {
+      setAmountStr(formatAmountInput(String(Math.round(Math.abs(editing.amount))), currency));
       setSelectedMemberId(editing.injected_by_id);
       setSourceName(editing.source_name ?? '');
       setNote(editing.note ?? '');
       setDate(editing.injected_at);
+      setPhoto(null);
     }
   }, [visible, mode, editing]);
 
@@ -128,79 +149,47 @@ function FormSheet({ visible, mode, editing, businessId, currency, saving, onClo
       sourceName: sourceName.trim() || null,
       note: note.trim() || null,
       injectedAt: date,
+      photo,
+    });
+  };
+
+  // Détails (view mode) has no footer button at all — picking a photo here
+  // attaches immediately instead of waiting on a separate "Enregistrer" tap,
+  // which is exactly the confusion a save button on a read-only screen caused.
+  const handleViewPickPhoto = async () => {
+    if (offline) { toast.warning('Indisponible hors ligne'); return; }
+    const { status } = await ImagePicker.requestMediaLibraryPermissionsAsync();
+    if (status !== 'granted') { toast.warning('Autorisez l\'accès aux photos'); return; }
+    const result = await ImagePicker.launchImageLibraryAsync({ mediaTypes: ['images'], quality: 1 });
+    if (result.canceled || !result.assets?.[0]) return;
+    const a = result.assets[0];
+    const picked: PickedImage = { uri: a.uri, width: a.width, height: a.height };
+    setPhoto(picked);
+    onSave({
+      amount: Math.abs(editing?.amount ?? 0),
+      injectedById: selectedMemberId,
+      sourceName: sourceName.trim() || null,
+      note: note.trim() || null,
+      injectedAt: date,
+      photo: picked,
     });
   };
 
   return (
-    <Modal visible={visible} animationType="slide" presentationStyle="formSheet" onRequestClose={handleClose}>
-      <SafeAreaView style={styles.modalSafe} edges={['bottom']}>
-        <View style={styles.modalHeader}>
-          <Pressable onPress={handleClose}>
-            <Text variant="body" color="secondary">Annuler</Text>
-          </Pressable>
-          <Text variant="h4">{FORM_TITLES[mode]}</Text>
-          <View style={{ width: 60 }} />
-        </View>
-
-        <ScrollView contentContainerStyle={styles.formContent} keyboardShouldPersistTaps="handled">
-          {/* Amount */}
-          <View style={{ gap: spacing[2] }}>
-            <Text variant="label">{mode === 'withdraw' ? 'Montant retiré' : 'Montant apporté'}</Text>
-            <View style={styles.amountRow}>
-              <TextInput
-                style={styles.amountInput}
-                value={amountStr}
-                onChangeText={v => setAmountStr(formatAmountInput(v, currency))}
-                keyboardType="numeric"
-                placeholder="0"
-                placeholderTextColor={palette.textDisabled}
-                selectTextOnFocus
-              />
-              <Text variant="label" style={{ color: palette.textSecondary }}>{currency}</Text>
-            </View>
-          </View>
-
-          {/* Contributor — only shown when there are multiple members */}
-          {multiMember && (
-            <View style={{ gap: spacing[2] }}>
-              <Text variant="label">{mode === 'withdraw' ? 'Retiré à' : 'De la part de'}</Text>
-              <Pressable
-                style={[styles.pickerBtn, { borderColor: palette.border }]}
-                onPress={() => setShowMemberPicker(true)}
-              >
-                <Ionicons name="person-outline" size={16} color={palette.textSecondary} />
-                <Text variant="body" style={{ flex: 1, color: contributorLabel ? palette.textPrimary : palette.textDisabled }}>
-                  {contributorLabel ?? (mode === 'withdraw' ? 'Optionnel — à qui a-t-on repris l\'argent ?' : 'Optionnel — qui a apporté ?')}
-                </Text>
-                <Ionicons name="chevron-down" size={16} color={palette.textSecondary} />
-              </Pressable>
-              {!selectedMemberId && (
-                <TextInput
-                  style={styles.textInput}
-                  value={sourceName}
-                  onChangeText={setSourceName}
-                  placeholder="Ou saisissez un nom libre…"
-                  placeholderTextColor={palette.textDisabled}
-                />
-              )}
-            </View>
-          )}
-
-          {/* Note */}
-          <View style={{ gap: spacing[2] }}>
-            <Text variant="label">Note <Text variant="caption" color="secondary">(optionnel)</Text></Text>
-            <TextInput
-              style={styles.textInput}
-              value={note}
-              onChangeText={setNote}
-              placeholder=""
-              placeholderTextColor={palette.textDisabled}
-            />
-          </View>
-
-          <DatePickerField label="Date" value={date} onChange={setDate} maxToday />
-        </ScrollView>
-
+    <>
+    <FormSheet
+      visible={visible}
+      onClose={handleClose}
+      title={FORM_TITLES[mode]}
+      cancelLabel={isViewMode ? 'Fermer' : 'Annuler'}
+      presentationStyle="formSheet"
+      contentContainerStyle={styles.formContent}
+      /* Détails (view mode) is read-only — there is no "Modifier" here
+         either, since a withdrawal (the only kind of entry ever opened in
+         this mode) has no edit RPC/flow anywhere in this app. No footer at
+         all, per the design brief, rather than a button with nowhere real
+         to go. */
+      footer={!isViewMode ? (
         <View style={styles.modalFooter}>
           <Button
             label={saving ? 'Enregistrement…' : FORM_SAVE_LABELS[mode]}
@@ -210,10 +199,159 @@ function FormSheet({ visible, mode, editing, businessId, currency, saving, onClo
             size="lg"
           />
         </View>
-      </SafeAreaView>
+      ) : undefined}
+      accessory={
+        Platform.OS === 'ios' ? (
+          <InputAccessoryView nativeID={APPORT_FORM_SILENT_ACCESSORY_ID}>
+            <View style={{ height: 0 }} />
+          </InputAccessoryView>
+        ) : undefined
+      }
+    >
+          {isViewMode ? (
+            /* An existing entry (usually a withdrawal, which can't be edited)
+               opened only to see it and attach a photo. Money is read-only.
+               Clean, spacious composition — the amount is the hero, everything
+               else is a quiet label/value pair. Order: amount, person, note,
+               date, photo last. */
+            <View style={styles.viewWrap}>
+              <View style={styles.viewHero}>
+                <Text style={styles.viewMicroLabel}>{(editing?.amount ?? 0) < 0 ? 'Montant retiré' : 'Montant apporté'}</Text>
+                {/* Same direction encoding as the list row — signed and
+                    colored, never a neutral unsigned amount. */}
+                <Text style={[styles.viewAmount, { color: (editing?.amount ?? 0) < 0 ? palette.apportsAmber : palette.apportsGreen }]}>
+                  {(editing?.amount ?? 0) < 0 ? '− ' : '+ '}{formatAmount(Math.abs(editing?.amount ?? 0), currency)}
+                </Text>
+              </View>
 
-      {/* Member picker overlay */}
-      <Modal visible={showMemberPicker} transparent animationType="fade" onRequestClose={() => setShowMemberPicker(false)}>
+              <View style={styles.viewDetails}>
+                {contributorLabel ? (
+                  <View style={styles.viewDetailRow}>
+                    <Text style={styles.viewMicroLabel}>{(editing?.amount ?? 0) < 0 ? 'Versé à' : 'Reçu de'}</Text>
+                    <Text style={styles.viewValue}>{contributorLabel}</Text>
+                  </View>
+                ) : null}
+                {note.trim() ? (
+                  <View style={styles.viewDetailRow}>
+                    <Text style={styles.viewMicroLabel}>Note</Text>
+                    <Text style={styles.viewValue}>{note}</Text>
+                  </View>
+                ) : null}
+                <View style={styles.viewDetailRow}>
+                  <Text style={styles.viewMicroLabel}>Date</Text>
+                  <Text style={styles.viewValue}>{fmtDate(date)}</Text>
+                </View>
+              </View>
+
+              {/* Photo — one compact row unless a photo exists, never the
+                  large add/edit dropzone; picking one here attaches
+                  immediately (see handleViewPickPhoto), no save step. */}
+              {existingProof ? (
+                <View style={styles.viewPhotoRow}>
+                  <ProofThumbnail url={existingProof} />
+                  <Text variant="body" style={{ color: palette.apportsSecondary }}>Photo</Text>
+                </View>
+              ) : photo ? (
+                <View style={styles.viewPhotoRow}>
+                  <ProofThumbnail url={photo.uri} />
+                  <Text variant="body" style={{ color: palette.apportsSecondary }}>Photo ajoutée</Text>
+                </View>
+              ) : (
+                <Pressable onPress={handleViewPickPhoto} style={styles.viewPhotoAddRow}>
+                  <Ionicons name="camera-outline" size={18} color={palette.apportsSecondary} />
+                  <Text variant="body" style={{ color: palette.apportsSecondary }}>Ajouter une photo (optionnel)</Text>
+                </Pressable>
+              )}
+            </View>
+          ) : (
+            <>
+              {/* Amount */}
+              <View style={{ gap: spacing[2] }}>
+                <Text variant="label">{mode === 'withdraw' ? 'Montant retiré' : 'Montant apporté'}</Text>
+                <View style={styles.amountRow}>
+                  <TextInput
+                    style={styles.amountInput}
+                    value={amountStr}
+                    onChangeText={v => setAmountStr(formatAmountInput(v, currency))}
+                    keyboardType="numeric"
+                    placeholder="0"
+                    placeholderTextColor={palette.textDisabled}
+                    selectTextOnFocus
+                    inputAccessoryViewID={Platform.OS === 'ios' ? APPORT_FORM_SILENT_ACCESSORY_ID : undefined}
+                  />
+                  <Text variant="label" style={{ color: palette.textSecondary }}>{currency}</Text>
+                </View>
+              </View>
+
+              {/* Contributor — only shown when there are multiple members */}
+              {multiMember && (
+                <View style={{ gap: spacing[2] }}>
+                  <Text variant="label">{mode === 'withdraw' ? 'Retiré à' : 'De la part de'}</Text>
+                  <Pressable
+                    style={[styles.pickerBtn, { borderColor: palette.border }]}
+                    onPress={() => setShowMemberPicker(true)}
+                  >
+                    <Ionicons name="person-outline" size={16} color={palette.textSecondary} />
+                    <Text variant="body" style={{ flex: 1, color: contributorLabel ? palette.textPrimary : palette.textDisabled }}>
+                      {contributorLabel ?? (mode === 'withdraw' ? 'Optionnel — à qui a-t-on repris l\'argent ?' : 'Optionnel — qui a apporté ?')}
+                    </Text>
+                    <Ionicons name="chevron-down" size={16} color={palette.textSecondary} />
+                  </Pressable>
+                  {!selectedMemberId && (
+                    <TextInput
+                      style={styles.textInput}
+                      value={sourceName}
+                      onChangeText={setSourceName}
+                      placeholder="Ou saisissez un nom libre…"
+                      placeholderTextColor={palette.textDisabled}
+                    />
+                  )}
+                </View>
+              )}
+
+              {/* Note */}
+              <View style={{ gap: spacing[2] }}>
+                <Text variant="label">Note <Text variant="caption" color="secondary">(optionnel)</Text></Text>
+                <TextInput
+                  style={styles.textInput}
+                  value={note}
+                  onChangeText={setNote}
+                  placeholder=""
+                  placeholderTextColor={palette.textDisabled}
+                />
+              </View>
+
+              <DatePickerField label="Date" value={date} onChange={setDate} maxToday />
+            </>
+          )}
+
+          {/* Photo well — the receipt as a natural field of the form. Not
+              rendered in view mode, which has its own compact photo row
+              above (inside the isViewMode branch). */}
+          {!isViewMode && (
+            <ProofPhotoField
+              existingUrl={existingProof}
+              existingWidth={editing?.proof_image_width}
+              existingHeight={editing?.proof_image_height}
+              value={photo}
+              onChange={setPhoto}
+              disabled={offline}
+            />
+          )}
+    </FormSheet>
+
+      {/* Member picker overlay — no keyboard field of its own, but shares
+          this component with one (the amount/source TextInputs above), so
+          it still gets statusBarTranslucent/navigationBarTranslucent for
+          consistency (see scripts/lib/consistency-checks.js). */}
+      <Modal
+        visible={showMemberPicker}
+        transparent
+        animationType="fade"
+        onRequestClose={() => setShowMemberPicker(false)}
+        statusBarTranslucent
+        navigationBarTranslucent
+      >
         <Pressable style={styles.pickerBackdrop} onPress={() => setShowMemberPicker(false)}>
           <View style={[styles.pickerPanel, { backgroundColor: palette.surface }]}>
             <Text variant="label" style={{ marginBottom: spacing[3] }}>
@@ -238,7 +376,7 @@ function FormSheet({ visible, mode, editing, businessId, currency, saving, onClo
           </View>
         </Pressable>
       </Modal>
-    </Modal>
+    </>
   );
 }
 
@@ -291,43 +429,77 @@ export default function AportsScreen() {
     sourceName: string | null;
     note: string | null;
     injectedAt: string;
+    photo: PickedImage | null;
   }) => {
+    const { photo, ...rest } = params;
     let ok = false;
+    let targetId: string | null = null;
     let message = '';
 
     if (formMode === 'add') {
-      ok = await addApport({ businessId, ...params });
+      targetId = await addApport({ businessId, ...rest });
+      ok = !!targetId;
       message = 'Apport enregistré';
     } else if (formMode === 'edit' && editingApport) {
-      ok = await editApport({ id: editingApport.id, businessId, ...params });
+      ok = await editApport({ id: editingApport.id, businessId, ...rest });
+      targetId = editingApport.id;
       message = 'Apport modifié';
     } else if (formMode === 'withdraw') {
-      ok = await recordWithdrawal({
+      targetId = await recordWithdrawal({
         businessId,
-        amount: params.amount,
-        injectedById: params.injectedById,
-        sourceName: params.sourceName,
-        note: params.note,
-        withdrawnAt: params.injectedAt,
+        amount: rest.amount,
+        injectedById: rest.injectedById,
+        sourceName: rest.sourceName,
+        note: rest.note,
+        withdrawnAt: rest.injectedAt,
       });
+      ok = !!targetId;
       message = 'Retrait enregistré';
+    } else if (formMode === 'view' && editingApport) {
+      ok = true;
+      targetId = editingApport.id;
+      message = 'Image ajoutée';
     }
 
-    if (ok) {
-      haptics.success();
-      setShowForm(false);
-      setEditingApport(null);
-      toast.success(message);
+    if (!ok) return;
+
+    // Attach a picked photo to the row (new or existing), only if it has none yet.
+    if (photo && targetId && !editingApport?.proof_image_url) {
+      try {
+        await attachTransactionProof({
+          kind: 'apport', id: targetId, businessId,
+          fileUri: photo.uri, sourceWidth: photo.width, sourceHeight: photo.height,
+        });
+        await fetchApports(businessId);
+      } catch {
+        toast.warning('Enregistré, mais l\'image n\'a pas pu être jointe');
+      }
     }
+
+    haptics.success();
+    setShowForm(false);
+    setEditingApport(null);
+    toast.success(message);
   };
 
   const openAdd = () => { setFormMode('add'); setEditingApport(null); setShowForm(true); setShowAddChooser(false); };
   const openWithdraw = () => { setFormMode('withdraw'); setEditingApport(null); setShowForm(true); setShowAddChooser(false); };
   const openEdit = (apport: Apport) => {
-    if (!canWrite || apport.amount < 0) return;
     setFormMode('edit');
     setEditingApport(apport);
     setShowForm(true);
+  };
+  const openView = (apport: Apport) => {
+    setFormMode('view');
+    setEditingApport(apport);
+    setShowForm(true);
+  };
+  // Tapping a row opens its record: injections are editable; withdrawals
+  // (which can't be edited) open read-only, only to attach/view a photo.
+  const openRow = (apport: Apport) => {
+    if (!canWrite) return;
+    if (apport.amount < 0) openView(apport);
+    else openEdit(apport);
   };
 
   // Unique contributors for filter chips
@@ -341,6 +513,9 @@ export default function AportsScreen() {
     });
   }, [apports]);
 
+  const filterContributor = contributors.find(c => c.injected_by_id === filterMemberId);
+  const filterMemberName = filterMemberId && filterContributor ? displayName(filterContributor, userId, membres) : null;
+
   return (
     <Screen>
       {/* Header — back + optional add */}
@@ -350,36 +525,45 @@ export default function AportsScreen() {
         </Pressable>
         {canWrite && (
           <Pressable onPress={() => setShowAddChooser(true)} hitSlop={8} style={styles.addBtn}>
-            <Ionicons name="add" size={24} color={palette.primary} />
+            <Ionicons name="add" size={20} color={palette.apportsPurple} />
+            <Text variant="label" style={{ color: palette.apportsPurple }}>Ajouter</Text>
           </Pressable>
         )}
       </View>
 
-      {offline && <OfflineNotice offlineSince={offlineSince} />}
+      {offline && (
+        <OfflineNotice offlineSince={offlineSince} onRetry={() => fetchApports(businessId)} />
+      )}
 
-      {/* Title + total */}
-      <View style={styles.headerMeta}>
-        <Text variant="caption" color="secondary" style={{ letterSpacing: 0.4 }}>Capital investi</Text>
-        {!loading && apports.length > 0 ? (
-          <>
-            <Text
-              style={[styles.totalText, { color: palette.success, fontSize: totalFontSize, lineHeight: totalFontSize + 8 }]}
-              numberOfLines={1}
-              adjustsFontSizeToFit
-              minimumFontScale={0.6}
-            >
-              {displayTotal}
-            </Text>
-            {filterMemberId && (
-              <Text variant="caption" color="secondary">
-                sur {formatAmount(total, currency)} au total
+      {/* Title + total — omitted entirely on the true-empty state (no apports
+          at all): a "—" placeholder for a total that doesn't exist yet is
+          just noise above the empty illustration below. The label itself
+          answers "whose money" together with the number — "Capital de
+          [nom]" once a person tab is active, not just the number alone. */}
+      {(loading || apports.length > 0) && (
+        <View style={styles.headerMeta}>
+          <Text variant="caption" style={{ color: palette.apportsSecondary, letterSpacing: 0.4 }}>
+            {filterMemberName ? `Capital de ${filterMemberName}` : 'Capital investi'}
+          </Text>
+          {!loading && apports.length > 0 && (
+            <>
+              <Text
+                style={[styles.totalText, { color: palette.apportsGreen, fontSize: totalFontSize, lineHeight: totalFontSize + 8 }]}
+                numberOfLines={1}
+                adjustsFontSizeToFit
+                minimumFontScale={0.6}
+              >
+                {displayTotal}
               </Text>
-            )}
-          </>
-        ) : !loading ? (
-          <Text style={[styles.totalText, { color: palette.textDisabled }]}>—</Text>
-        ) : null}
-      </View>
+              {filterMemberId && (
+                <Text variant="caption" style={{ color: palette.apportsSecondary }}>
+                  sur {formatAmount(total, currency)} au total
+                </Text>
+              )}
+            </>
+          )}
+        </View>
+      )}
 
       {loading && apports.length === 0 ? (
         <SkeletonList count={4} />
@@ -396,11 +580,14 @@ export default function AportsScreen() {
                   showsHorizontalScrollIndicator={false}
                   contentContainerStyle={styles.tabs}
                 >
+                  {/* Text stays ink/secondary regardless of selection — purple
+                      is reserved for the underline itself (and the + button
+                      above), never a second place on this screen. */}
                   <Pressable onPress={() => setFilterMemberId(null)} style={styles.tab}>
-                    <Text variant="label" style={{ color: !filterMemberId ? palette.primary : palette.textSecondary }}>
+                    <Text variant="label" numberOfLines={1} style={{ color: !filterMemberId ? palette.apportsInk : palette.apportsSecondary }}>
                       Tous
                     </Text>
-                    {!filterMemberId && <View style={[styles.tabBar, { backgroundColor: palette.primary }]} />}
+                    {!filterMemberId && <View style={[styles.tabBar, { backgroundColor: palette.apportsPurple }]} />}
                   </Pressable>
                   {contributors.map(a => {
                     const key = a.injected_by_id ?? a.source_name ?? a.id;
@@ -412,10 +599,10 @@ export default function AportsScreen() {
                         onPress={() => setFilterMemberId(active ? null : (a.injected_by_id ?? null))}
                         style={styles.tab}
                       >
-                        <Text variant="label" style={{ color: active ? palette.primary : palette.textSecondary }}>
+                        <Text variant="label" numberOfLines={1} style={{ color: active ? palette.apportsInk : palette.apportsSecondary }}>
                           {label}
                         </Text>
-                        {active && <View style={[styles.tabBar, { backgroundColor: palette.primary }]} />}
+                        {active && <View style={[styles.tabBar, { backgroundColor: palette.apportsPurple }]} />}
                       </Pressable>
                     );
                   })}
@@ -425,28 +612,45 @@ export default function AportsScreen() {
             </>
           )}
           ListEmptyComponent={(
-            <View style={styles.empty}>
-              <Text variant="body" color="secondary" style={{ textAlign: 'center' }}>
-                {apports.length === 0
-                  ? 'Aucun apport enregistré.\nAjoutez le capital de départ ou les mises de fonds.'
-                  : 'Aucun apport pour ce contributeur.'}
-              </Text>
-            </View>
+            apports.length === 0 ? (
+              <View style={styles.empty}>
+                <View style={[styles.emptyIconWrap, { backgroundColor: 'transparent', borderWidth: 1.5, borderColor: palette.border }]}>
+                  <Ionicons name="wallet-outline" size={32} color={palette.textSecondary} />
+                </View>
+                <Text variant="h4" style={styles.emptyTitle}>Aucun capital noté pour le moment.</Text>
+                <Text variant="body" color="secondary" style={{ textAlign: 'center', maxWidth: 300 }}>
+                  Notez l'argent que vous avez investi pour suivre votre commerce.
+                </Text>
+                {canWrite && (
+                  <Button
+                    label="+ Ajouter un capital"
+                    onPress={() => setShowAddChooser(true)}
+                    fullWidth
+                    size="lg"
+                    labelStyle={{ fontSize: 17 }}
+                    style={{ marginTop: spacing[6], alignSelf: 'stretch' }}
+                  />
+                )}
+              </View>
+            ) : (
+              <View style={styles.empty}>
+                <Text variant="body" color="secondary" style={{ textAlign: 'center' }}>
+                  Aucun apport pour ce contributeur.
+                </Text>
+              </View>
+            )
           )}
           renderItem={({ item }) => {
             const name = displayName(item, userId, membres);
             const isWithdrawal = item.amount < 0;
             const numericPart = formatAmount(Math.abs(item.amount), currency).replace(` ${currency}`, '').trim();
-            const metaParts = [fmtDate(item.injected_at), item.note];
-            if (isWithdrawal && item.created_by_name) metaParts.push(`retiré par ${item.created_by_name}`);
-            if (item.edited_at) metaParts.push(`modifié par ${item.edited_by_name ?? '?'}`);
-            const meta = metaParts.filter(Boolean).join(' · ');
-            const editable = canWrite && !isWithdrawal;
+            // Just the date in the list — note, contributor and edit history all
+            // live in the tap-in detail, so the row stays calm and scannable.
+            const meta = fmtDate(item.injected_at);
             return (
               <Pressable
                 style={styles.row}
-                onPress={editable ? () => openEdit(item) : undefined}
-                disabled={!editable}
+                onPress={canWrite ? () => openRow(item) : undefined}
               >
                 <View style={styles.rowLeft}>
                   <Text style={styles.rowName} numberOfLines={1}>
@@ -454,12 +658,13 @@ export default function AportsScreen() {
                   </Text>
                   <Text style={styles.rowMeta} numberOfLines={1}>{meta}</Text>
                 </View>
-                <Text style={styles.rowAmount} numberOfLines={1}>
-                  <Text style={isWithdrawal ? { color: palette.warning, fontWeight: '700' } : styles.rowPlus}>
-                    {isWithdrawal ? '− ' : '+ '}
-                  </Text>
+                <Text
+                  style={[styles.rowAmount, { color: isWithdrawal ? palette.apportsAmber : palette.apportsGreen }]}
+                  numberOfLines={1}
+                >
+                  {isWithdrawal ? '− ' : '+ '}
                   {numericPart}
-                  <Text style={styles.rowCurrency}> {currency}</Text>
+                  <Text style={[styles.rowCurrency, { color: isWithdrawal ? palette.apportsAmber : palette.apportsGreen }]}> {currency}</Text>
                 </Text>
               </Pressable>
             );
@@ -467,19 +672,27 @@ export default function AportsScreen() {
         />
       )}
 
-      <FormSheet
+      <ApportFormModal
         visible={showForm}
         mode={formMode}
         editing={editingApport}
         businessId={businessId}
         currency={currency}
         saving={saving}
+        offline={offline}
         onClose={() => { setShowForm(false); setEditingApport(null); }}
         onSave={handleSave}
       />
 
       {/* Add / withdraw chooser */}
-      <Modal visible={showAddChooser} transparent animationType="fade" onRequestClose={() => setShowAddChooser(false)}>
+      <Modal
+        visible={showAddChooser}
+        transparent
+        animationType="fade"
+        onRequestClose={() => setShowAddChooser(false)}
+        statusBarTranslucent
+        navigationBarTranslucent
+      >
         <Pressable style={styles.pickerBackdrop} onPress={() => setShowAddChooser(false)}>
           <View style={[styles.pickerPanel, { backgroundColor: palette.surface }]}>
             <Pressable
@@ -521,13 +734,13 @@ function makeStyles(p: Palette) {
       flexDirection: 'row', alignItems: 'center', justifyContent: 'space-between',
       paddingHorizontal: spacing[5], paddingTop: spacing[3], paddingBottom: spacing[1],
     },
-    addBtn: { padding: spacing[1] },
+    addBtn: { flexDirection: 'row', alignItems: 'center', gap: spacing[1], padding: spacing[1] },
     headerMeta: {
       paddingHorizontal: spacing[5], paddingTop: spacing[1], paddingBottom: 0,
       gap: spacing[1],
     },
     totalText: {
-      fontSize: 36, fontWeight: '700', letterSpacing: -0.5, lineHeight: 44,
+      fontFamily: fontFamily.bold, fontSize: 36, letterSpacing: -0.5, lineHeight: 44,
     },
 
     // Filter tabs
@@ -546,12 +759,14 @@ function makeStyles(p: Palette) {
       paddingHorizontal: spacing[5], paddingVertical: spacing[5],
     },
     rowLeft: { flex: 1, gap: 5, marginRight: spacing[4] },
-    rowName: { fontSize: 15, fontWeight: '600', color: p.textPrimary, letterSpacing: -0.2 },
-    rowMeta: { fontSize: 11, fontWeight: '400', color: p.textDisabled, letterSpacing: 0.8, textTransform: 'uppercase' },
-    rowAmount: { fontSize: 17, fontWeight: '700', color: p.textPrimary, letterSpacing: -0.4 },
-    rowPlus: { color: p.success, fontWeight: '700' },
-    rowCurrency: { fontSize: 12, fontWeight: '400', color: p.textSecondary },
+    rowRight: { flexDirection: 'row', alignItems: 'center', gap: spacing[3] },
+    rowName: { fontFamily: fontFamily.semibold, fontSize: 15, color: p.apportsInk, letterSpacing: -0.2 },
+    rowMeta: { fontSize: 12, color: p.apportsSecondary, letterSpacing: 0.1 },
+    rowAmount: { fontFamily: fontFamily.bold, fontSize: 17, letterSpacing: -0.4 },
+    rowCurrency: { fontSize: 12 },
     empty: { flex: 1, alignItems: 'center', justifyContent: 'center', paddingHorizontal: spacing[8], paddingVertical: spacing[10] },
+    emptyIconWrap: { width: 72, height: 72, borderRadius: 36, alignItems: 'center', justifyContent: 'center', marginBottom: spacing[4] },
+    emptyTitle: { textAlign: 'center' as const, marginBottom: spacing[2] },
 
     // Form modal
     modalSafe: { flex: 1, backgroundColor: p.background },
@@ -565,6 +780,23 @@ function makeStyles(p: Palette) {
       padding: spacing[5], borderTopWidth: 1, borderTopColor: p.border,
       backgroundColor: p.surface,
     },
+    // View mode (read-only entry + image) — Ive-clean: hero amount, quiet
+    // micro-labels, generous rhythm.
+    viewWrap:       { gap: spacing[7] },
+    viewHero:       { gap: spacing[2] },
+    // No lineHeight was set here before — it silently inherited the default
+    // Text variant's 24px line box on an 11px label, ~2x looser leading than
+    // intended, on top of fontWeight being a no-op. 16 matches this app's
+    // own `overline` variant (typography.ts), the closest existing style to
+    // this uppercase micro-label's actual size/intent.
+    viewMicroLabel: { fontFamily: fontFamily.semibold, fontSize: 11, lineHeight: 16, color: p.apportsSecondary, letterSpacing: 0.8, textTransform: 'uppercase' as const },
+    viewAmount:     { fontFamily: fontFamily.bold, fontSize: 36, color: p.apportsInk, letterSpacing: -0.5, lineHeight: 46 },
+    viewDetails:    { gap: spacing[5] },
+    viewDetailRow:  { gap: spacing[1] },
+    viewValue:      { fontFamily: fontFamily.medium, fontSize: 17, color: p.apportsInk, lineHeight: 24 },
+    viewPhotoRow:    { flexDirection: 'row', alignItems: 'center', gap: spacing[3] },
+    viewPhotoAddRow: { flexDirection: 'row', alignItems: 'center', gap: spacing[2], paddingVertical: spacing[1] },
+
     amountRow: { flexDirection: 'row', alignItems: 'center', gap: spacing[3] },
     amountInput: {
       flex: 1, paddingHorizontal: spacing[4], paddingVertical: spacing[3],

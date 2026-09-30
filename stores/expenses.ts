@@ -3,12 +3,17 @@ import { supabase } from '@/lib/supabase';
 import { translateError } from '@/lib/errors';
 import { generateId } from '@/lib/id';
 import { enqueue, getQueueCount, saveExpenseCache, getExpenseCache, getCacheTimestamp } from '@/lib/db';
-import { isNetworkError } from '@/lib/sync';
+import { isNetworkError, withTimeout, withNetworkRetry, reportOfflineFallback } from '@/lib/sync';
 import { useSyncStore } from '@/stores/sync';
 import { notifyEvent } from '@/src/utils/notifications';
 import { useAuthStore } from '@/stores/auth';
 import { formatAmount } from '@/src/utils/format';
 import type { Expense, ExpenseStatus } from '@/src/types';
+
+// See stores/products.ts for the full explanation.
+function isStaleBusiness(businessId: string): boolean {
+  return useAuthStore.getState().session?.activeBusiness?.id !== businessId;
+}
 
 export interface CreateExpenseData {
   amount: number;
@@ -29,7 +34,9 @@ interface ExpensesStore {
   offlineSince: number | null;
 
   fetchExpenses: (businessId: string) => Promise<void>;
-  createExpense: (businessId: string, userId: string, data: CreateExpenseData, isManager: boolean) => Promise<boolean>;
+  // Returns the new expense id (both online and offline-queued) so a photo
+  // picked during creation can be attached to it; null on hard failure.
+  createExpense: (businessId: string, userId: string, data: CreateExpenseData, isManager: boolean) => Promise<string | null>;
   updateExpense: (id: string, businessId: string, data: CreateExpenseData) => Promise<boolean>;
   approveExpense: (id: string, userId: string) => Promise<boolean>;
   rejectExpense: (id: string, userId: string) => Promise<boolean>;
@@ -48,14 +55,17 @@ export const useExpensesStore = create<ExpensesStore>((set, get) => ({
   fetchExpenses: async (businessId) => {
     set({ loading: true, error: null });
     try {
-      const { data, error } = await supabase
-        .from('expenses')
-        .select('*, product:products(name)')
-        .eq('business_id', businessId)
-        .order('date', { ascending: false })
-        .order('created_at', { ascending: false });
+      const { data, error } = await withNetworkRetry(() =>
+        supabase
+          .from('expenses')
+          .select('*, product:products(name)')
+          .eq('business_id', businessId)
+          .order('date', { ascending: false })
+          .order('created_at', { ascending: false }),
+      );
 
       if (error) throw error;
+      if (isStaleBusiness(businessId)) return;
 
       const expenses = (data ?? []) as Expense[];
       const fromCents = (e: Expense) => ({ ...e, amount: e.amount / 100 });
@@ -63,13 +73,21 @@ export const useExpensesStore = create<ExpensesStore>((set, get) => ({
       const creatorIds = [...new Set(expenses.map(e => e.created_by))];
       let result: Expense[];
       if (creatorIds.length > 0) {
-        const { data: profiles } = await supabase
-          .from('profiles')
-          .select('id, name')
-          .in('id', creatorIds);
+        // Best-effort enrichment — a hang or failure here must never block
+        // the main list (which already fetched successfully) from ever
+        // clearing `loading`. See CLAUDE.md's "withTimeout() sweep" note.
+        let profiles: { id: string; name: string }[] | null = null;
+        try {
+          const res = await withTimeout(
+            supabase.from('profiles').select('id, name').in('id', creatorIds),
+          );
+          profiles = res.data as { id: string; name: string }[] | null;
+        } catch {
+          profiles = null;
+        }
 
         const pm: Record<string, string> = {};
-        for (const p of (profiles ?? [])) pm[(p as { id: string; name: string }).id] = (p as { id: string; name: string }).name;
+        for (const p of (profiles ?? [])) pm[p.id] = p.name;
 
         result = expenses.map(e => ({
           ...fromCents(e),
@@ -83,12 +101,16 @@ export const useExpensesStore = create<ExpensesStore>((set, get) => ({
         }));
       }
       void saveExpenseCache(businessId, result as unknown[]);
+      if (isStaleBusiness(businessId)) return;
       set({ expenses: result, loading: false, offline: false, offlineSince: null });
     } catch (err) {
       if (isNetworkError(err)) {
+        reportOfflineFallback('expenses.fetchExpenses', err);
         const cached = await getExpenseCache(businessId) as Expense[] | null;
+        if (isStaleBusiness(businessId)) return;
         if (cached) {
           const ts = await getCacheTimestamp('expense_cache', businessId);
+          if (isStaleBusiness(businessId)) return;
           set({ expenses: cached, loading: false, offline: true, offlineSince: ts, error: null });
           return;
         }
@@ -99,6 +121,7 @@ export const useExpensesStore = create<ExpensesStore>((set, get) => ({
         });
         return;
       }
+      if (isStaleBusiness(businessId)) return;
       set({ error: translateError(err, 'Erreur de chargement'), loading: false });
     }
   },
@@ -142,17 +165,17 @@ export const useExpensesStore = create<ExpensesStore>((set, get) => ({
           });
         }
       }
-      return true;
+      return payload.id;
     } catch (err) {
       if (isNetworkError(err)) {
         await enqueue('create_expense', payload);
         const count = await getQueueCount();
         useSyncStore.setState({ pendingCount: count });
         set({ saving: false });
-        return true;
+        return payload.id;
       }
       set({ error: translateError(err, "Impossible d'enregistrer la dépense"), saving: false });
-      return false;
+      return null;
     }
   },
 

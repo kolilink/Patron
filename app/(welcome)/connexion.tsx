@@ -1,7 +1,6 @@
 import { useEffect, useMemo, useRef, useState } from 'react';
 import {
   KeyboardAvoidingView,
-  Linking,
   Platform,
   StyleSheet,
   View,
@@ -15,10 +14,11 @@ import { PhoneInput } from '@/src/components/ui/PhoneInput';
 import { useTheme, radius, spacing } from '@/src/theme';
 import type { Palette } from '@/src/theme';
 import { useAuthStore } from '@/stores/auth';
-import { trackEvent } from '@/lib/analytics';
+import { trackEvent, classifyAuthError } from '@/lib/analytics';
 import { useCountdown } from '@/src/hooks/useCountdown';
 import { formatCountdown } from '@/src/utils/format';
 import { getKV, setKV } from '@/lib/db';
+import { openWhatsApp } from '@/src/utils/whatsapp';
 
 const OTP_VALIDITY_SECONDS = 600;
 const RESEND_COOLDOWN_SECONDS = 60;
@@ -87,6 +87,10 @@ export default function ConnexionScreen() {
       otpValidity.start(OTP_VALIDITY_SECONDS);
       resendCooldown.start(RESEND_COOLDOWN_SECONDS);
       setKV(LAST_PHONE_KEY, normalized);
+    } else {
+      trackEvent('auth_phone_submit_failed', null, null, {
+        reason: classifyAuthError(useAuthStore.getState().error),
+      });
     }
   };
 
@@ -100,7 +104,9 @@ export default function ConnexionScreen() {
       trackEvent('auth_otp_verified', null, null);
       await restorePhoneSession(normalizedPhoneRef.current, verificationIdRef.current);
     } else {
-      trackEvent('auth_failed', null, null, { reason: 'invalid_otp' });
+      trackEvent('auth_failed', null, null, {
+        reason: classifyAuthError(useAuthStore.getState().error),
+      });
       setOtpKey(k => k + 1);
     }
   };
@@ -134,7 +140,7 @@ export default function ConnexionScreen() {
   return (
     <Screen>
       <KeyboardAvoidingView
-        behavior={Platform.OS === 'ios' ? 'padding' : 'height'}
+        behavior={Platform.OS === 'ios' ? 'padding' : undefined}
         style={styles.kav}
       >
         <View style={styles.content}>
@@ -152,7 +158,7 @@ export default function ConnexionScreen() {
               {step === 'phone'
                 ? 'Entrez votre numéro, on vous enverra un code'
                 : otpValidity.secondsLeft > 0
-                  ? `Votre code Patron a été envoyé par WhatsApp. Valable encore pour ${formatCountdown(otpValidity.secondsLeft)}`
+                  ? 'Votre code a été envoyé par WhatsApp.'
                   : 'Le code a expiré. Demandez-en un nouveau ci-dessous'}
             </Text>
           </View>
@@ -204,6 +210,7 @@ export default function ConnexionScreen() {
           ) : (
             <View style={[styles.form, styles.formCentered]}>
               <OtpInput key={otpKey} onComplete={handleOtpComplete} disabled={loading} autoFocus whatsappAutofill />
+              <Button label="Ouvrir WhatsApp" variant="ghost" onPress={openWhatsApp} />
               <Button
                 label={resendCooldown.isDone ? 'Renvoyer le code' : `Renvoyer le code (${formatCountdown(resendCooldown.secondsLeft)})`}
                 variant="ghost"
@@ -216,11 +223,6 @@ export default function ConnexionScreen() {
                 variant="ghost"
                 onPress={handleRetour}
               />
-              <Button
-                label="Besoin d'aide ? Contactez le support"
-                variant="ghost"
-                onPress={() => Linking.openURL('https://wa.me/16094454809')}
-              />
             </View>
           )}
         </View>
@@ -232,7 +234,7 @@ export default function ConnexionScreen() {
 function makeStyles(p: Palette) {
   return StyleSheet.create({
     safe: { flex: 1, backgroundColor: p.background },
-    kav: { flex: 1 },
+    kav: { flex: 1, backgroundColor: p.background },
     content: { flex: 1, padding: spacing[6], gap: spacing[8], justifyContent: 'center' },
     header: { gap: spacing[3] },
     back: { alignSelf: 'flex-start', marginBottom: spacing[1] },

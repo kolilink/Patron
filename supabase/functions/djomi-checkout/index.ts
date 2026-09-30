@@ -26,12 +26,6 @@ import {
 const PRICE_GNF = 24000;
 const PAID_DAILY_LIMIT = 100; // mirrors src/components/PaywallScreen.tsx
 
-const corsHeaders = {
-  'Access-Control-Allow-Origin': '*',
-  'Access-Control-Allow-Headers': 'content-type',
-  'Access-Control-Allow-Methods': 'GET, POST, OPTIONS',
-};
-
 // patron.kolilink.com is a static GitHub Pages site (see abonnement/
 // index.html at the repo root) that calls this function cross-origin
 // with its own branded UI, so the post-payment redirect can land back
@@ -39,8 +33,19 @@ const corsHeaders = {
 // URL. A fixed allowlist, not "trust whatever origin the client sends"
 // — this value only ever ends up as Djomi's returnUrl, and accepting
 // an arbitrary client-supplied origin there would be an open-redirect
-// hole in a payment flow.
+// hole in a payment flow. Also the one real browser origin this
+// function's own CORS header should allow (below) — everything else
+// that reaches this function (the mobile app, someone visiting the raw
+// *.supabase.co URL directly) never goes through a cross-origin
+// fetch(), so this list narrows who can script against it from a
+// third-party page without affecting either of those real paths.
 const ALLOWED_RETURN_ORIGINS = ['https://patron.kolilink.com'];
+
+const corsHeaders = {
+  'Access-Control-Allow-Origin': ALLOWED_RETURN_ORIGINS[0],
+  'Access-Control-Allow-Headers': 'content-type',
+  'Access-Control-Allow-Methods': 'GET, POST, OPTIONS',
+};
 
 // Client IP as seen by the edge (Supabase forwards this header). Used to
 // rate-limit payment creation — this is an unauthenticated public endpoint, so

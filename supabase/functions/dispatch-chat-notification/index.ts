@@ -1,5 +1,6 @@
 import { serve } from 'https://deno.land/std@0.177.0/http/server.ts';
 import { createClient } from 'https://esm.sh/@supabase/supabase-js@2';
+import { safeErrorResponse } from '../_shared/errors.ts';
 
 // Dedicated handler for the Supabase Database Webhook on chat_messages INSERT.
 // The webhook payload uses { type, table, record, old_record } format (not a client request).
@@ -7,6 +8,12 @@ import { createClient } from 'https://esm.sh/@supabase/supabase-js@2';
 //   Table: chat_messages | Event: INSERT
 //   URL: <project-url>/functions/v1/dispatch-chat-notification
 //   Authorization header with service_role key
+//
+// That header is now actually enforced below (it wasn't before — anyone with
+// the app's public anon key could POST an arbitrary { room_id, user_id,
+// sender_name, content } payload directly and spoof a push to every member
+// of that room's business). Same constant-time-compare pattern as
+// whatsapp-inbound-webhook's WHATSAPP_WEBHOOK_SECRET check.
 
 const EXPO_PUSH_URL = 'https://exp.host/--/api/v2/push/send';
 
@@ -14,6 +21,19 @@ const corsHeaders = {
   'Access-Control-Allow-Origin': '*',
   'Access-Control-Allow-Headers': 'authorization, x-client-info, apikey, content-type',
 };
+
+// Constant-time comparison — prevents timing-based brute-force of the service role key.
+function timingSafeEqual(a: string, b: string): boolean {
+  const enc = new TextEncoder();
+  const aBytes = enc.encode(a);
+  const bBytes = enc.encode(b);
+  const len = Math.max(aBytes.length, bBytes.length);
+  let diff = aBytes.length ^ bBytes.length;
+  for (let i = 0; i < len; i++) {
+    diff |= (aBytes[i] ?? 0) ^ (bBytes[i] ?? 0);
+  }
+  return diff === 0;
+}
 
 interface ChatMessageRecord {
   id: string;
@@ -32,6 +52,15 @@ serve(async (req) => {
   if (req.method === 'OPTIONS') return new Response('ok', { headers: corsHeaders });
 
   try {
+    const authHeader = req.headers.get('Authorization') ?? '';
+    const bearerToken = authHeader.replace(/^Bearer /, '');
+    const serviceKey = Deno.env.get('SUPABASE_SERVICE_ROLE_KEY') ?? '';
+    if (!serviceKey || !timingSafeEqual(bearerToken, serviceKey)) {
+      return new Response(JSON.stringify({ error: 'Non autorisé' }), {
+        status: 401, headers: { ...corsHeaders, 'Content-Type': 'application/json' },
+      });
+    }
+
     const webhook = await req.json() as { type: string; record: ChatMessageRecord };
 
     // Only handle INSERT events
@@ -143,11 +172,6 @@ serve(async (req) => {
       headers: { ...corsHeaders, 'Content-Type': 'application/json' },
     });
   } catch (e) {
-    const msg = e instanceof Error ? e.message : 'Erreur inconnue';
-    console.error('dispatch-chat-notification crash:', msg);
-    return new Response(JSON.stringify({ error: msg }), {
-      status: 500,
-      headers: { ...corsHeaders, 'Content-Type': 'application/json' },
-    });
+    return safeErrorResponse(e, corsHeaders, 'dispatch-chat-notification');
   }
 });

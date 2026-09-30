@@ -95,6 +95,60 @@ async function finishRegistration(N: typeof Notifications): Promise<void> {
 // permission-priming card (see ActivationPrimingSheet), which calls
 // requestNotificationPermissionAndRegister() below only after the merchant
 // taps "Continuer", following their first real value moment.
+
+// Non-invasive — reads current status only, never shows the OS dialog.
+// Used by NotificationPrimer to decide whether it's even worth showing
+// itself (already granted, or already hard-denied with no way to re-ask).
+export interface NotifPermState {
+  granted: boolean;
+  // false once the user has genuinely denied the real OS prompt (iOS) or
+  // Android has decided not to re-prompt — at that point the only path back
+  // is Settings, so NotificationPrimer must not show its "Activer" ask again.
+  canAskAgain: boolean;
+}
+
+export async function checkNotificationPermission(): Promise<NotifPermState | null> {
+  const N = getNotifications();
+  if (!N) return null;
+  try {
+    const perms = await N.getPermissionsAsync();
+    const p = perms as unknown as { granted?: boolean; canAskAgain?: boolean };
+    return { granted: !!p.granted, canAskAgain: p.canAskAgain !== false };
+  } catch {
+    return null;
+  }
+}
+
+// The only function in this file that actually shows the real OS permission
+// dialog. iOS only ever shows it once per install — a denial makes every
+// future call here resolve immediately with no UI, which is exactly why
+// this must only ever be invoked from a deliberate, primed moment
+// (NotificationPrimer's "Activer les notifications" button), never
+// automatically on mount/foreground. Returns whether it ended up granted.
+export async function requestNotificationPermission(): Promise<boolean> {
+  const N = getNotifications();
+  if (!N) return false;
+  try {
+    const perms = await N.requestPermissionsAsync();
+    if (!(perms as unknown as { granted?: boolean }).granted) return false;
+    await Promise.all([ensureAndroidChannels(N), registerCategories(N)]);
+    const tokenResult = await N.getExpoPushTokenAsync({ projectId: EAS_PROJECT_ID });
+    await registerDeviceToken(tokenResult.data, Platform.OS as 'ios' | 'android');
+    return true;
+  } catch {
+    return false;
+  }
+}
+
+// Mount + foreground refresh only — registers channels/categories/token for
+// a user who's ALREADY granted permission (e.g. a returning user, or right
+// after NotificationPrimer's own request succeeded and token needs
+// (re-)registering). Deliberately never calls requestPermissionsAsync()
+// itself anymore — that used to fire the raw OS dialog unconditionally the
+// instant this component mounted, which is the very first moment after
+// login, with zero context. NotificationPrimer (rendered from
+// app/(app)/_layout.tsx, after onboarding, with an explained reason) is now
+// the only place that ever asks.
 async function setupAndRegister(): Promise<void> {
   const session = useAuthStore.getState().session;
   if (!session || session.isDemoMode) return;
@@ -102,10 +156,6 @@ async function setupAndRegister(): Promise<void> {
   const N = getNotifications();
   if (!N) return;
 
-  // Every call below is backed by a native module that only exists in a real
-  // dev-client/production build (missing under Expo Go, or an older binary
-  // built before this dependency was linked) — one try/catch around the whole
-  // flow so any of them failing never surfaces as an unhandled rejection.
   try {
     const perms = await N.getPermissionsAsync();
     if (!(perms as unknown as { granted?: boolean }).granted) return;
@@ -153,6 +203,26 @@ export async function requestNotificationPermissionAndRegister(): Promise<boolea
   }
 }
 
+// Every push's data payload carries business_id (dispatch-notification always
+// stamps it — supabase/functions/dispatch-notification/index.ts) — the
+// business the notification is ABOUT, which isn't necessarily the caller's
+// currently active one for a multi-business user. Without this, tapping a
+// notification lands on the right screen while every store on it still
+// serves whichever business happened to be active before the tap. Same
+// selectBusiness() BusinessDrawer's manual switcher already uses
+// (stores/auth.ts) — just applied here too, once, ahead of every branch
+// below rather than duplicated per-branch. Silently no-ops if businessId
+// isn't one of the caller's own memberships (not a member, or a
+// founder-only event like support_message where there's nothing to switch
+// into — support-inbox isn't business-scoped anyway) — selectBusiness()
+// already guards that.
+function ensureActiveBusiness(businessId: string | undefined): void {
+  if (!businessId) return;
+  const { session, selectBusiness } = useAuthStore.getState();
+  if (!session || session.activeBusiness?.id === businessId) return;
+  selectBusiness(businessId);
+}
+
 // ─── Notification action handler ─────────────────────────────────────────────
 async function handleResponse(response: Notifications.NotificationResponse): Promise<void> {
   const N = getNotifications();
@@ -160,6 +230,7 @@ async function handleResponse(response: Notifications.NotificationResponse): Pro
 
   const { actionIdentifier, notification } = response;
   const data = notification.request.content.data as Record<string, unknown>;
+  ensureActiveBusiness(data?.business_id as string | undefined);
 
   // Default tap — navigate to the right screen
   if (actionIdentifier === N.DEFAULT_ACTION_IDENTIFIER) {
@@ -173,7 +244,7 @@ async function handleResponse(response: Notifications.NotificationResponse): Pro
   // ── Expense: Valider ────────────────────────────────────────────────────
   if (actionIdentifier === 'approve') {
     const expenseId = data.expense_id as string | undefined;
-    const session   = useAuthStore.getState().session;
+    const session = useAuthStore.getState().session;
     if (expenseId && session) {
       await useExpensesStore.getState().approveExpense(expenseId, session.user.id);
     }
@@ -184,7 +255,7 @@ async function handleResponse(response: Notifications.NotificationResponse): Pro
   // ── Expense: Refuser ────────────────────────────────────────────────────
   if (actionIdentifier === 'reject') {
     const expenseId = data.expense_id as string | undefined;
-    const session   = useAuthStore.getState().session;
+    const session = useAuthStore.getState().session;
     if (expenseId && session) {
       await useExpensesStore.getState().rejectExpense(expenseId, session.user.id);
     }
@@ -204,9 +275,9 @@ async function handleResponse(response: Notifications.NotificationResponse): Pro
     if (roomId && session) {
       void useChatStore.getState().sendMessage({
         roomId,
-        senderId:   session.user.id,
+        senderId: session.user.id,
         senderName: session.user.name || '',
-        content:    userText,
+        content: userText,
       });
     }
     // No navigation — user stayed on their lock screen, message was sent silently

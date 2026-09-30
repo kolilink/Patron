@@ -1,9 +1,10 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
-import { Alert, Animated, Easing, FlatList, Modal, Pressable, ScrollView, StyleSheet, TextInput, View } from 'react-native';
+import { ActivityIndicator, Alert, Animated, Easing, FlatList, InputAccessoryView, Modal, Platform, Pressable, RefreshControl, ScrollView, StyleSheet, TextInput, View } from 'react-native';
 import { captureRef } from 'react-native-view-shot';
 import * as Sharing from 'expo-sharing';
 import { SafeAreaView } from 'react-native-safe-area-context';
 import { Screen } from '@/src/components/ui/Screen';
+import { FormSheet } from '@/src/components/ui/FormSheet';
 import { Ionicons } from '@expo/vector-icons';
 import { router, useFocusEffect, useLocalSearchParams } from 'expo-router';
 import { Card } from '@/src/components/ui/Card';
@@ -15,11 +16,23 @@ import { useTheme, spacing, radius } from '@/src/theme';
 import type { Palette } from '@/src/theme';
 import { formatAmount, formatAmountInput, parseAmountInput } from '@/src/utils/format';
 import { useAuthStore } from '@/stores/auth';
-import { useVentesStore, type Vente } from '@/stores/ventes';
+import { useVentesStore, type Vente, type EditSaleParams, type SaleEdit } from '@/stores/ventes';
 import { SaleReceiptView, type ReceiptData, type ReceiptItem } from '@/src/components/ui/SaleReceiptView';
 import { haptics } from '@/lib/haptics';
 import { supabase } from '@/lib/supabase';
 import { SkeletonList } from '@/src/components/ui/SkeletonPlaceholder';
+import { EmptyState } from '@/src/components/ui/EmptyState';
+
+// iOS-only: suppresses the OS's auto-injected floating "Done" pill above
+// the numeric keyboard — PaymentSheet already has a persistent, always-
+// visible "Confirmer le paiement" footer button, so the pill is redundant.
+// Deliberately NOT applied to DetailModal's sale-edit fields (line prices,
+// discount, payment amounts) — that form's "Modifier" button is inline at
+// the bottom of a long scrollable card, not a sticky footer, so while
+// editing an earlier field the button genuinely isn't visible without
+// scrolling. The OS pill is the only reachable way to dismiss the keyboard
+// there, so removing it would be a real regression, not a cleanup.
+const PAYMENT_SHEET_SILENT_ACCESSORY_ID = 'ventes-payment-sheet-silent-accessory';
 
 function fmt(n: number, cur: string) { return formatAmount(n, cur); }
 
@@ -145,7 +158,7 @@ function buildSummaryLine(all: Vente[], filtered: Vente[], filter: string, curre
 // ─── Day-grouped list ──────────────────────────────────────────────────────────
 
 type ListItem =
-  | { type: 'header'; label: string; key: string; count: number; total: number; hasCredit: boolean }
+  | { type: 'header'; label: string; key: string; count: number; total: number; hasCredit: boolean; soloName?: string }
   | { type: 'sale'; sale: Vente; dateKey: string };
 
 // Build a YYYY-MM-DD key from LOCAL date components — avoids UTC offset shifting the day
@@ -161,7 +174,7 @@ function buildGroupedList(sales: Vente[], currency: string): ListItem[] {
   const currentYear = now.getFullYear();
 
   const dayOrder: string[] = [];
-  const dayStats = new Map<string, { label: string; count: number; total: number; hasCredit: boolean }>();
+  const dayStats = new Map<string, { label: string; count: number; total: number; hasCredit: boolean; soloName?: string }>();
   const daysSales = new Map<string, Vente[]>();
 
   for (const sale of sales) {
@@ -189,8 +202,11 @@ function buildGroupedList(sales: Vente[], currency: string): ListItem[] {
 
     const stats = dayStats.get(key)!;
     const ds = getSaleDisplayState(sale);
-    if (ds !== 'annule') stats.count++;
-    if (ds !== 'annule') stats.total += sale.total_amount - (sale.discount_amount ?? 0);
+    if (ds !== 'annule') {
+      stats.count++;
+      stats.total += sale.total_amount - (sale.discount_amount ?? 0);
+      stats.soloName = stats.count === 1 ? (sale.customer_name || undefined) : undefined;
+    }
     if (ds === 'credit' || ds === 'partiel') stats.hasCredit = true;
     daysSales.get(key)!.push(sale);
   }
@@ -247,19 +263,31 @@ function PaymentSheet({ visible, sale, currency, onClose, onConfirm, saving }: P
   const clientName = sale.customer_name ?? 'le client';
 
   return (
-    <Modal visible={visible} animationType="slide" presentationStyle="formSheet" onRequestClose={onClose}>
-      <SafeAreaView style={styles.modalSafe} edges={['bottom']}>
-        <View style={styles.sheetHeader}>
-          <Pressable onPress={onClose} style={{ minWidth: 60 }}>
-            <Text variant="body" color="secondary">Annuler</Text>
-          </Pressable>
-          <Text variant="h4" style={{ flex: 1, textAlign: 'center' }} numberOfLines={1}>
-            {clientName} a payé combien ?
-          </Text>
-          <View style={{ width: 60 }} />
+    <FormSheet
+      visible={visible}
+      onClose={onClose}
+      title={`${clientName} a payé combien ?`}
+      presentationStyle="formSheet"
+      contentContainerStyle={styles.sheetContent}
+      footer={
+        <View style={styles.sheetFooter}>
+          <Button
+            label={saving ? 'Enregistrement…' : 'Confirmer le paiement'}
+            onPress={handleConfirm}
+            loading={saving}
+            fullWidth
+            size="lg"
+          />
         </View>
-
-        <ScrollView style={{ flex: 1 }} contentContainerStyle={styles.sheetContent} keyboardShouldPersistTaps="handled">
+      }
+      accessory={
+        Platform.OS === 'ios' ? (
+          <InputAccessoryView nativeID={PAYMENT_SHEET_SILENT_ACCESSORY_ID}>
+            <View style={{ height: 0 }} />
+          </InputAccessoryView>
+        ) : undefined
+      }
+    >
           {/* Debt context card */}
           <Card style={[styles.contextCard, { borderLeftColor: palette.warning, borderLeftWidth: 3 }]}>
             <Text variant="caption" color="secondary">{clientName} vous doit</Text>
@@ -277,6 +305,7 @@ function PaymentSheet({ visible, sale, currency, onClose, onConfirm, saving }: P
                 keyboardType="numeric"
                 placeholderTextColor={palette.textSecondary}
                 selectTextOnFocus
+                inputAccessoryViewID={Platform.OS === 'ios' ? PAYMENT_SHEET_SILENT_ACCESSORY_ID : undefined}
               />
               <Pressable
                 style={styles.solderBtn}
@@ -303,19 +332,7 @@ function PaymentSheet({ visible, sale, currency, onClose, onConfirm, saving }: P
           </View>
 
           <DatePickerField label="Date" value={date} onChange={setDate} maxToday />
-        </ScrollView>
-
-        <View style={styles.sheetFooter}>
-          <Button
-            label={saving ? 'Enregistrement…' : 'Confirmer le paiement'}
-            onPress={handleConfirm}
-            loading={saving}
-            fullWidth
-            size="lg"
-          />
-        </View>
-      </SafeAreaView>
-    </Modal>
+    </FormSheet>
   );
 }
 
@@ -331,14 +348,42 @@ interface DetailModalProps {
   onRecordPayment: (amount: number, method: string, date: string) => Promise<{ ok: boolean; fullyPaid: boolean }>;
   onCancel: (reason: string) => void;
   onUpdateClient: (name: string) => void;
+  onEdit: (params: Omit<EditSaleParams, 'saleId' | 'businessId'>) => Promise<{ ok: boolean; error?: string }>;
   saving: boolean;
 }
 
-function DetailModal({ sale, currency, businessName, singleVendor, role, onClose, onRecordPayment, onCancel, onUpdateClient, saving }: DetailModalProps) {
+// Mirrors app_config's live 'sale_edit_max_count' / 'sale_edit_window_hours'
+// (migration_v159.sql) — only used here to hide/disable the entry point
+// early; edit_sale() itself is the real, authoritative check.
+const EDIT_MAX_COUNT = 2;
+const EDIT_WINDOW_HOURS = 48;
+
+function relativeTime(iso: string): string {
+  const diffMs = Date.now() - new Date(iso).getTime();
+  const mins = Math.round(diffMs / 60000);
+  if (mins < 1) return "à l'instant";
+  if (mins < 60) return `il y a ${mins} min`;
+  const hours = Math.round(mins / 60);
+  if (hours < 24) return `il y a ${hours}h`;
+  const days = Math.round(hours / 24);
+  return `il y a ${days}j`;
+}
+
+function DetailModal({ sale, currency, businessName, singleVendor, role, onClose, onRecordPayment, onCancel, onUpdateClient, onEdit, saving }: DetailModalProps) {
   const { palette } = useTheme();
   const styles = useMemo(() => makeStyles(palette), [palette]);
   const businessPhone = useAuthStore(s => s.session?.activeBusiness?.phone ?? null);
+  // §8 of the offline-first rewrite: edit_sale is deliberately NOT part of
+  // the local-write-first outbox (see CLAUDE.md's "Sale editing" section —
+  // its 48h window is checked against a live server clock, which a queued/
+  // replayed edit could silently fail against with no clear signal). That
+  // means it needs its own explicit offline handling here, rather than
+  // inheriting the "always succeeds locally" behavior every Phase-1 write
+  // path now has — an honest "connexion requise" hint when offline, not an
+  // obscure RPC failure after tapping through the whole edit form.
+  const offline = useVentesStore(s => s.offline);
   const [showPaymentSheet, setShowPaymentSheet] = useState(false);
+  const [showReceipt, setShowReceipt] = useState(false);
   const [showCancelForm, setShowCancelForm] = useState(false);
   const [showEditClient, setShowEditClient] = useState(false);
   const [editedClient, setEditedClient] = useState('');
@@ -346,10 +391,25 @@ function DetailModal({ sale, currency, businessName, singleVendor, role, onClose
   const [toast, setToast] = useState('');
   const receiptRef = useRef<View>(null);
 
+  // Sale-edit inline form + history — draft state is keyed by line/payment id
+  // so an arbitrary number of lines/payments each get their own input.
+  const [showEditSale, setShowEditSale] = useState(false);
+  const [showHistory, setShowHistory] = useState(false);
+  const [editSaving, setEditSaving] = useState(false);
+  const [editLinePrices, setEditLinePrices] = useState<Record<string, string>>({});
+  const [editPayments, setEditPayments] = useState<Record<string, { method: string; amountStr: string }>>({});
+  const [editDiscountStr, setEditDiscountStr] = useState('');
+  const [editSaleClient, setEditSaleClient] = useState('');
+  const [editReason, setEditReason] = useState('');
+
   const handleShareReceipt = async () => {
     if (!sale || !receiptRef.current) return;
     try {
+      // Capture while the receipt sheet is still mounted (in compositor bounds),
+      // then close it and let the sheet animation finish before the share dialog
+      // opens — see the SaleReceiptView note in CLAUDE.md.
       const uri = await captureRef(receiptRef, { format: 'png', quality: 1 });
+      setShowReceipt(false);
       await new Promise<void>(r => setTimeout(r, 350));
       await Sharing.shareAsync(uri, { mimeType: 'image/png', UTI: 'public.png', dialogTitle: 'Partager le reçu' });
     } catch {
@@ -385,6 +445,10 @@ function DetailModal({ sale, currency, businessName, singleVendor, role, onClose
       setShowEditClient(false);
       setCancelReason('');
       setShowPaymentSheet(false);
+      setShowReceipt(false);
+      setShowEditSale(false);
+      setShowHistory(false);
+      setEditReason('');
     }
   }, [sale?.id]);
 
@@ -441,12 +505,114 @@ function DetailModal({ sale, currency, businessName, singleVendor, role, onClose
   };
 
   const canCancel = displayState !== 'annule' && role !== 'investisseur';
+  const hoursSinceSale = (Date.now() - new Date(sale.created_at).getTime()) / 3_600_000;
+  const canEditSale = (role === 'administrateur' || role === 'manager')
+    && displayState !== 'annule'
+    && sale.edit_count < EDIT_MAX_COUNT
+    && hoursSinceSale <= EDIT_WINDOW_HOURS;
   const showMenuButton = role === 'administrateur' || role === 'manager' || canCancel;
+
+  const openEditSale = () => {
+    const prices: Record<string, string> = {};
+    for (const l of sale.lines ?? []) prices[l.id] = formatAmountInput(String(Math.round(l.unit_price)), currency);
+    setEditLinePrices(prices);
+
+    const pays: Record<string, { method: string; amountStr: string }> = {};
+    for (const p of realPayments) pays[p.id] = { method: p.method, amountStr: formatAmountInput(String(Math.round(p.amount)), currency) };
+    setEditPayments(pays);
+
+    setEditDiscountStr(formatAmountInput(String(Math.round(discount)), currency));
+    setEditSaleClient(sale.customer_name ?? '');
+    setEditReason('');
+    setShowEditSale(true);
+  };
+
+  const isCreditSale = sale.status === 'credit';
+
+  const handleEditSubmit = async () => {
+    const lineEdits = (sale.lines ?? [])
+      .map(l => ({ lineId: l.id, unitPrice: parseAmountInput(editLinePrices[l.id] ?? '', currency), original: l.unit_price }))
+      .filter(l => l.unitPrice !== l.original)
+      .map(({ lineId, unitPrice }) => ({ lineId, unitPrice }));
+
+    const paymentEdits = realPayments
+      .map(p => {
+        const draft = editPayments[p.id];
+        if (!draft) return null;
+        const amount = parseAmountInput(draft.amountStr, currency);
+        if (amount === p.amount && draft.method === p.method) return null;
+        return { paymentId: p.id, method: draft.method, amount, refExternal: null };
+      })
+      .filter((p): p is NonNullable<typeof p> => p !== null);
+
+    // A paye sale has no separate "discount" question for the merchant to
+    // answer — edit_sale() requires payé == total − remise exactly for a
+    // closed sale, so remise is just derived from what they say was actually
+    // paid. Credit sales keep an explicit input: paid < owed is normal there,
+    // so the two numbers are genuinely independent, not derivable from each other.
+    let discountAmount: number;
+    if (isCreditSale) {
+      discountAmount = parseAmountInput(editDiscountStr, currency);
+    } else {
+      const computedTotal = (sale.lines ?? []).reduce((sum, l) => {
+        const priceStr = editLinePrices[l.id];
+        const price = priceStr ? parseAmountInput(priceStr, currency) : l.unit_price;
+        return sum + price * l.qty;
+      }, 0);
+      const newPaidTotal = realPayments.reduce((sum, p) => {
+        const draft = editPayments[p.id];
+        return sum + (draft ? parseAmountInput(draft.amountStr, currency) : p.amount);
+      }, 0);
+      discountAmount = Math.max(0, computedTotal - newPaidTotal);
+    }
+
+    setEditSaving(true);
+    const result = await onEdit({
+      customerName: editSaleClient.trim() || null,
+      clientId: sale.client_id,
+      dueDate: sale.due_date ?? null,
+      discountAmount,
+      lineEdits,
+      paymentEdits,
+      reason: editReason.trim() || null,
+    });
+    setEditSaving(false);
+
+    if (result.ok) {
+      haptics.success();
+      setShowEditSale(false);
+      showToast('Vente modifiée ✓');
+    } else {
+      haptics.error();
+      Alert.alert(result.error ?? 'Modification impossible');
+    }
+  };
+
+  const showOfflineEditHint = () => {
+    Alert.alert(
+      'Connexion requise',
+      'La modification d\'une vente nécessite une connexion. Reconnectez-vous et réessayez.',
+      [{ text: 'Compris' }],
+    );
+  };
 
   const showMenu = () => {
     const options: { text: string; onPress?: () => void; style?: 'cancel' | 'destructive' }[] = [];
     if (role === 'administrateur' || role === 'manager') {
-      options.push({ text: 'Modifier le client', onPress: () => setShowEditClient(true) });
+      // Offline: still shown (not hidden — the merchant should be able to
+      // see the option exists), but tapping it explains why it can't run
+      // right now instead of opening a form that would fail silently or
+      // confusingly against a dead network call.
+      options.push({
+        text: offline ? 'Modifier le client (connexion requise)' : 'Modifier le client',
+        onPress: offline ? showOfflineEditHint : () => setShowEditClient(true),
+      });
+    }
+    if (canEditSale) {
+      options.push({
+        text: offline ? 'Modifier la vente (connexion requise)' : 'Modifier la vente',
+        onPress: offline ? showOfflineEditHint : openEditSale,
+      });
     }
     if (canCancel) {
       options.push({ text: 'Annuler cette vente', onPress: () => setShowCancelForm(true), style: 'destructive' });
@@ -457,30 +623,53 @@ function DetailModal({ sale, currency, businessName, singleVendor, role, onClose
 
   const realPayments = sale.payments?.filter(p => p.method !== 'credit') ?? [];
 
-  return (
-    <Modal visible animationType="slide" presentationStyle="pageSheet" onRequestClose={onClose}>
-      <SafeAreaView style={styles.modalSafe} edges={['bottom']}>
-        <View style={styles.modalHeader}>
-          <Pressable onPress={onClose}>
-            <Text variant="body" color="secondary">Fermer</Text>
-          </Pressable>
-          <Text variant="h4">Vente du {headerDate}</Text>
-          {showMenuButton ? (
-            <Pressable onPress={showMenu} style={{ minWidth: 40, alignItems: 'flex-end' }}>
-              <Text variant="body" color="secondary">⋯</Text>
-            </Pressable>
-          ) : (
-            <View style={{ minWidth: 40 }} />
-          )}
-        </View>
+  // Only the fields that actually changed in a given edit — a price-only
+  // correction shows one row, not the whole sale dumped out.
+  const diffFields = (edit: SaleEdit) => {
+    const rows: { label: string; from: string; to: string }[] = [];
+    if (edit.before.customer_name !== edit.after.customer_name) {
+      rows.push({ label: 'Client', from: edit.before.customer_name ?? '—', to: edit.after.customer_name ?? '—' });
+    }
+    if (edit.before.discount_amount !== edit.after.discount_amount) {
+      rows.push({ label: 'Rabais', from: fmt(edit.before.discount_amount, currency), to: fmt(edit.after.discount_amount, currency) });
+    }
+    for (const beforeLine of edit.before.lines) {
+      const afterLine = edit.after.lines.find(l => l.line_id === beforeLine.line_id);
+      if (afterLine && afterLine.unit_price !== beforeLine.unit_price) {
+        rows.push({ label: `Prix — ${beforeLine.product_name}`, from: fmt(beforeLine.unit_price, currency), to: fmt(afterLine.unit_price, currency) });
+      }
+    }
+    for (const beforePay of edit.before.payments) {
+      const afterPay = edit.after.payments.find(p => p.payment_id === beforePay.payment_id);
+      if (afterPay && afterPay.amount !== beforePay.amount) {
+        rows.push({ label: `Paiement (${methodLabel(beforePay.method)})`, from: fmt(beforePay.amount, currency), to: fmt(afterPay.amount, currency) });
+      }
+    }
+    return rows;
+  };
 
+  return (
+    <>
+    <FormSheet
+      visible
+      onClose={onClose}
+      title={`Vente du ${headerDate}`}
+      cancelLabel="Fermer"
+      contentContainerStyle={styles.pad}
+      headerRight={showMenuButton ? (
+        <Pressable onPress={showMenu} style={{ minWidth: 40, alignItems: 'flex-end' }}>
+          <Text variant="body" color="secondary">⋯</Text>
+        </Pressable>
+      ) : (
+        <View style={{ minWidth: 40 }} />
+      )}
+    >
         {toast ? (
           <View style={styles.toast}>
             <Text variant="label" style={{ color: palette.textInverse }}>{toast}</Text>
           </View>
         ) : null}
 
-        <ScrollView contentContainerStyle={styles.pad}>
           {/* Status banner */}
           {displayState === 'paye' && (
             <View style={[styles.banner, styles.bannerGreen]}>
@@ -526,8 +715,45 @@ function DetailModal({ sale, currency, businessName, singleVendor, role, onClose
             </View>
           )}
 
+          {sale.edit_count > 0 && sale.edits && sale.edits.length > 0 && (
+            <Pressable onPress={() => setShowHistory(v => !v)} style={[styles.banner, styles.bannerAmber]}>
+              <Text variant="label" style={{ color: palette.warning, flex: 1 }}>
+                {[
+                  '✎',
+                  `Modifiée par ${sale.edits[0].edited_by_name}`,
+                  relativeTime(sale.edits[0].edited_at),
+                  sale.edits[0].reason,
+                ].filter(Boolean).join(' · ')}
+              </Text>
+              <Text variant="caption" style={{ color: palette.warning }}>{showHistory ? '▲' : '▼'}</Text>
+            </Pressable>
+          )}
+
+          {showHistory && sale.edits && (
+            <Card style={{ gap: spacing[3] }}>
+              <Text variant="label" color="secondary">Historique des modifications</Text>
+              {sale.edits.map(edit => (
+                <View key={edit.id} style={{ gap: spacing[2] }}>
+                  <Text variant="caption" color="secondary">
+                    {edit.edited_by_name} · {relativeTime(edit.edited_at)}
+                  </Text>
+                  {diffFields(edit).map((row, i) => (
+                    <View key={i} style={styles.lineRow}>
+                      <Text variant="body" style={{ flex: 1 }}>{row.label}</Text>
+                      <Text variant="caption" color="secondary" style={styles.strikeThrough}>{row.from}</Text>
+                      <Text variant="label">→ {row.to}</Text>
+                    </View>
+                  ))}
+                  {edit.reason && (
+                    <Text variant="caption" color="secondary">Motif : {edit.reason}</Text>
+                  )}
+                </View>
+              ))}
+            </Card>
+          )}
+
           {!sale.lines ? <DetailSkeleton /> : (
-          <View style={displayState === 'annule' ? { opacity: 0.5 } : undefined}>
+          <View style={[{ gap: spacing[2] }, displayState === 'annule' && { opacity: 0.5 }]}>
             {/* Single unified card — articles, info, payments, profit */}
             <Card style={{ gap: 0, overflow: 'hidden', padding: 0 }}>
               {/* Articles */}
@@ -624,6 +850,94 @@ function DetailModal({ sale, currency, businessName, singleVendor, role, onClose
               </Card>
             )}
 
+            {/* Sale-edit inline form — triggered from the "⋯" menu, admin/manager only */}
+            {canEditSale && showEditSale && (
+              <Card style={{ gap: spacing[3] }}>
+                <Text variant="label">Modifier la vente</Text>
+
+                {(sale.lines ?? []).map(l => (
+                  <View key={l.id} style={{ gap: spacing[1] }}>
+                    <Text variant="caption" color="secondary">
+                      {l.product_name}{l.variant_name ? ` · ${l.variant_name}` : ''} — prix unitaire (×{l.qty})
+                    </Text>
+                    <TextInput
+                      style={styles.textInput}
+                      value={editLinePrices[l.id] ?? ''}
+                      onChangeText={v => setEditLinePrices(prev => ({ ...prev, [l.id]: formatAmountInput(v, currency) }))}
+                      keyboardType="numeric"
+                      placeholderTextColor={palette.textDisabled}
+                    />
+                    <Text variant="caption" color="secondary">
+                      Total : {fmt(parseAmountInput(editLinePrices[l.id] ?? '', currency) * l.qty, currency)}
+                    </Text>
+                  </View>
+                ))}
+
+                {isCreditSale && (
+                  <View style={{ gap: spacing[1] }}>
+                    <Text variant="caption" color="secondary">Rabais</Text>
+                    <TextInput
+                      style={styles.textInput}
+                      value={editDiscountStr}
+                      onChangeText={v => setEditDiscountStr(formatAmountInput(v, currency))}
+                      keyboardType="numeric"
+                      placeholderTextColor={palette.textDisabled}
+                    />
+                  </View>
+                )}
+
+                <View style={{ gap: spacing[1] }}>
+                  <Text variant="caption" color="secondary">Client</Text>
+                  <TextInput
+                    style={styles.textInput}
+                    value={editSaleClient}
+                    onChangeText={setEditSaleClient}
+                    placeholder="Nom du client"
+                    placeholderTextColor={palette.textDisabled}
+                  />
+                </View>
+
+                {realPayments.map(p => (
+                  <View key={p.id} style={{ gap: spacing[1] }}>
+                    <Text variant="caption" color="secondary">
+                      {isCreditSale
+                        ? `Paiement — ${methodLabel(p.method)}`
+                        : realPayments.length > 1 ? `Combien le client a payé — ${methodLabel(p.method)}` : 'Combien le client a payé'}
+                    </Text>
+                    <TextInput
+                      style={styles.textInput}
+                      value={editPayments[p.id]?.amountStr ?? ''}
+                      onChangeText={v => setEditPayments(prev => ({ ...prev, [p.id]: { ...prev[p.id], amountStr: formatAmountInput(v, currency) } }))}
+                      keyboardType="numeric"
+                      placeholderTextColor={palette.textDisabled}
+                    />
+                  </View>
+                ))}
+
+                <View style={{ gap: spacing[1] }}>
+                  <Text variant="caption" color="secondary">Motif (optionnel)</Text>
+                  <TextInput
+                    style={styles.textInput}
+                    value={editReason}
+                    onChangeText={setEditReason}
+                    placeholder="Ex. : prix mal saisi"
+                    placeholderTextColor={palette.textDisabled}
+                    multiline
+                  />
+                </View>
+
+                <View style={{ flexDirection: 'row', gap: spacing[2] }}>
+                  <Button label="Annuler" onPress={() => setShowEditSale(false)} variant="outline" style={{ flex: 1 }} />
+                  <Button
+                    label={editSaving ? 'Modification…' : 'Modifier'}
+                    onPress={handleEditSubmit}
+                    loading={editSaving}
+                    style={{ flex: 1 }}
+                  />
+                </View>
+              </Card>
+            )}
+
             {/* Cancel reason form — triggered from the "⋯" menu */}
             {canCancel && showCancelForm && (
               <Card style={{ gap: spacing[3], borderColor: palette.danger + '40', borderWidth: 1 }}>
@@ -653,30 +967,49 @@ function DetailModal({ sale, currency, businessName, singleVendor, role, onClose
           </View>
           )}
 
-          {/* Share receipt — only when lines are loaded */}
+          {/* Receipt lives behind this button — tapping it opens the preview
+              sheet the merchant shares from, instead of duplicating the sale
+              inline on this scroll. */}
           {receiptData && (
             <View style={styles.receiptSection}>
               <View style={styles.receiptDivider} />
-              <View ref={receiptRef} collapsable={false}>
-                <SaleReceiptView data={receiptData} />
-              </View>
               <View style={{ paddingHorizontal: spacing[5] }}>
-                <Button label="Partager le reçu" onPress={handleShareReceipt} fullWidth variant="outline" />
+                <Button label="Partager le reçu" onPress={() => setShowReceipt(true)} fullWidth variant="outline" />
               </View>
             </View>
           )}
-        </ScrollView>
+    </FormSheet>
 
-        <PaymentSheet
-          visible={showPaymentSheet}
-          sale={sale}
-          currency={currency}
-          onClose={() => setShowPaymentSheet(false)}
-          onConfirm={handlePaymentSubmit}
-          saving={saving}
-        />
-      </SafeAreaView>
-    </Modal>
+      <PaymentSheet
+        visible={showPaymentSheet}
+        sale={sale}
+        currency={currency}
+        onClose={() => setShowPaymentSheet(false)}
+        onConfirm={handlePaymentSubmit}
+        saving={saving}
+      />
+
+      {/* Receipt preview + share */}
+      <FormSheet
+        visible={showReceipt}
+        onClose={() => setShowReceipt(false)}
+        title="Reçu"
+        cancelLabel="Fermer"
+        headerRight={<View style={{ minWidth: 40 }} />}
+        contentContainerStyle={{ paddingVertical: spacing[4] }}
+        footer={
+          <View style={styles.sheetFooter}>
+            <Button label="Partager le reçu" onPress={handleShareReceipt} fullWidth size="lg" />
+          </View>
+        }
+      >
+        {receiptData && (
+          <View ref={receiptRef} collapsable={false}>
+            <SaleReceiptView data={receiptData} />
+          </View>
+        )}
+      </FormSheet>
+    </>
   );
 }
 
@@ -704,8 +1037,8 @@ function FilterSheet({ visible, availableProducts, loadingProducts, selectedProd
   const hasAny = selectedProducts.length > 0 || dateFrom !== '' || dateTo !== '';
 
   return (
-    <Modal visible={visible} animationType="slide" presentationStyle="formSheet" onRequestClose={onClose}>
-      <SafeAreaView style={styles.modalSafe} edges={['bottom']}>
+    <Modal visible={visible} animationType="slide" presentationStyle="formSheet" onRequestClose={onClose} statusBarTranslucent navigationBarTranslucent backdropColor={palette.background}>
+      <SafeAreaView style={styles.modalSafe} edges={Platform.OS === 'android' ? ['top', 'bottom'] : ['bottom']}>
         <View style={styles.sheetHeader}>
           <Pressable onPress={onClose} style={{ minWidth: 60 }}>
             <Text variant="body" color="secondary">Fermer</Text>
@@ -801,10 +1134,22 @@ export default function VentesScreen() {
     return () => loop.stop();
   }, []);
 
-  const { sales, loading, saving, error, offline, offlineSince, fetchSales, loadDetail, recordPayment, cancelSale, updateSaleClient } = useVentesStore();
+  const { sales, loading, saving, error, offline, offlineSince, fetchSales, loadDetail, recordPayment, cancelSale, updateSaleClient, editSale } = useVentesStore();
   const [selected, setSelected] = useState<Vente | null>(null);
   const [filter, setFilter] = useState<'all' | 'paye' | 'credit' | 'annule'>('all');
-  const [showAll, setShowAll] = useState(false);
+  const [refreshing, setRefreshing] = useState(false);
+
+  // Infinite scroll, replacing the old 90-day-default + "Voir tout
+  // l'historique" toggle: always shows everything, just loaded in growing
+  // batches instead of one unbounded query. fetchSales REPLACES `sales`
+  // wholesale on every call (never appends), so "load more" just re-asks
+  // for a bigger limit — simpler than keyset pagination, and correct here
+  // because a single business's sale history is nowhere near large enough
+  // for re-scanning from the start on every page to matter.
+  const PAGE_SIZE = 30;
+  const [limit, setLimit] = useState(PAGE_SIZE);
+  const [loadingMore, setLoadingMore] = useState(false);
+  const statusParam = filter === 'all' ? undefined : filter;
 
   // Advanced filter state
   const [showFilterSheet, setShowFilterSheet] = useState(false);
@@ -884,30 +1229,42 @@ export default function VentesScreen() {
     return next;
   });
 
-  const since90 = useMemo(() => {
-    const d = new Date();
-    d.setDate(d.getDate() - 90);
-    return d.toISOString().split('T')[0];
-  }, []);
-
   useFocusEffect(
     useCallback(() => {
-      if (businessId) fetchSales(businessId, isVendeur ? userId : undefined, showAll ? undefined : since90);
-    }, [businessId, isVendeur, userId, showAll]),
+      if (businessId) fetchSales(businessId, isVendeur ? userId : undefined, undefined, limit, statusParam);
+    }, [businessId, isVendeur, userId, limit, statusParam]),
   );
 
+  // Switching status tab always restarts pagination from the first page —
+  // keeping whatever limit a previous tab had scrolled to wouldn't mean
+  // anything for a differently-filtered set.
   useEffect(() => {
-    if (businessId) fetchSales(businessId, isVendeur ? userId : undefined, showAll ? undefined : since90);
-  }, [showAll]);
+    setLimit(PAGE_SIZE);
+  }, [filter]);
+
+  const handleLoadMore = useCallback(() => {
+    if (!businessId || loading || loadingMore) return;
+    if (sales.length < limit) return; // last fetch returned fewer than asked — the real end
+    setLoadingMore(true);
+    const nextLimit = limit + PAGE_SIZE;
+    setLimit(nextLimit);
+    fetchSales(businessId, isVendeur ? userId : undefined, undefined, nextLimit, statusParam)
+      .finally(() => setLoadingMore(false));
+  }, [businessId, isVendeur, userId, statusParam, limit, loading, loadingMore, sales.length]);
+
+  const onRefresh = useCallback(async () => {
+    if (!businessId) return;
+    setRefreshing(true);
+    setLimit(PAGE_SIZE);
+    await fetchSales(businessId, isVendeur ? userId : undefined, undefined, PAGE_SIZE, statusParam);
+    setRefreshing(false);
+  }, [businessId, isVendeur, userId, statusParam]);
 
   const filtered = useMemo(() => {
+    // Status is already filtered server-side by fetchSales's own `status`
+    // param (see statusParam above) — sales here already only contains rows
+    // matching the active tab, so no client-side re-filter needed.
     let result = sales;
-
-    if (filter !== 'all') {
-      result = filter === 'credit'
-        ? result.filter(s => s.status === 'credit')
-        : result.filter(s => s.status === filter);
-    }
 
     if (productMatchIds !== null) {
       result = result.filter(s => productMatchIds.has(s.id));
@@ -978,6 +1335,11 @@ export default function VentesScreen() {
     if (ok) setSelected(null);
   };
 
+  const handleEditSale: DetailModalProps['onEdit'] = async (params) => {
+    if (!selected) return { ok: false, error: 'Vente introuvable' };
+    return editSale({ ...params, saleId: selected.id, businessId });
+  };
+
   const summaryLine = useMemo(
     () => buildSummaryLine(sales, filtered, filter, currency),
     [sales, filtered, filter, currency],
@@ -988,7 +1350,12 @@ export default function VentesScreen() {
       <View style={styles.header}>
         <Pressable onPress={() => router.back()}><Text variant="body" color="secondary">‹ Retour</Text></Pressable>
         <Text variant="h4">Ventes</Text>
-        <Pressable onPress={openFilterSheet} style={styles.filterIconBtn}>
+        <Pressable
+          onPress={openFilterSheet}
+          style={styles.filterIconBtn}
+          accessibilityLabel="Filtrer les ventes"
+          accessibilityRole="button"
+        >
           <Ionicons name="funnel-outline" size={20} color={hasActiveFilter ? palette.primary : palette.textSecondary} />
           {hasActiveFilter && <View style={styles.filterDot} />}
         </Pressable>
@@ -1021,7 +1388,12 @@ export default function VentesScreen() {
         ))}
       </View>
 
-      {offline && <OfflineNotice offlineSince={offlineSince} />}
+      {offline && (
+        <OfflineNotice
+          offlineSince={offlineSince}
+          onRetry={() => fetchSales(businessId, isVendeur ? userId : undefined, undefined, limit, statusParam)}
+        />
+      )}
 
       {loading && sales.length === 0 ? (
         <SkeletonList count={7} />
@@ -1030,31 +1402,33 @@ export default function VentesScreen() {
           <Text variant="body" color="secondary" style={{ textAlign: 'center' }}>Données non disponibles hors ligne</Text>
         </View>
       ) : filtered.length === 0 ? (
-        <View style={styles.emptyState}>
-          <Text variant="body" color="secondary" style={{ textAlign: 'center' }}>
-            {sales.length === 0
-              ? 'Prêt pour la première vente ? Elle apparaîtra ici.'
-              : 'Pas de vente sur cette période.'}
-          </Text>
-          {sales.length > 0 && (
-            <Pressable onPress={() => setShowAll(v => !v)} style={{ marginTop: spacing[4] }}>
-              <Text variant="caption" style={{ color: palette.primary }}>
-                {showAll ? 'Voir les 90 derniers jours' : "Voir tout l'historique"}
-              </Text>
-            </Pressable>
-          )}
-        </View>
+        sales.length === 0 ? (
+          <EmptyState
+            icon="receipt-outline"
+            title="Aucune vente pour le moment."
+            subtitle="Vos ventes apparaîtront ici."
+          />
+        ) : (
+          <View style={styles.emptyState}>
+            <Text variant="body" color="secondary" style={{ textAlign: 'center' }}>
+              Aucune vente ne correspond à ce filtre.
+            </Text>
+          </View>
+        )
       ) : (
         <FlatList
           data={visibleItems}
           keyExtractor={item => item.type === 'header' ? `hdr-${item.key}` : item.sale.id}
           contentContainerStyle={styles.list}
+          refreshControl={
+            <RefreshControl refreshing={refreshing} onRefresh={onRefresh} tintColor={palette.primary} colors={[palette.primary]} />
+          }
+          onEndReached={handleLoadMore}
+          onEndReachedThreshold={0.5}
           ListFooterComponent={() => (
-            <Pressable onPress={() => setShowAll(v => !v)} style={styles.showAllBtn}>
-              <Text variant="caption" style={{ color: palette.primary }}>
-                {showAll ? 'Voir les 90 derniers jours' : "Voir tout l'historique"}
-              </Text>
-            </Pressable>
+            loadingMore ? (
+              <ActivityIndicator style={{ marginVertical: spacing[5] }} color={palette.primary} />
+            ) : null
           )}
           renderItem={({ item }) => {
             if (item.type === 'header') {
@@ -1067,8 +1441,9 @@ export default function VentesScreen() {
                   <View style={{ flex: 1 }}>
                     <Text variant="label" style={styles.dayLabel}>{item.label}</Text>
                     <Text variant="caption" color="secondary">
-                      {item.count} vente{item.count !== 1 ? 's' : ''} · {fmt(item.total, currency)}
-                      {item.hasCredit ? ' · crédit' : ''}
+                      {item.count === 1
+                        ? `${item.soloName ? `${item.soloName} · ` : ''}${fmt(item.total, currency)}`
+                        : `${item.count} ventes pour ${fmt(item.total, currency)}`}
                     </Text>
                   </View>
                   <Ionicons
@@ -1093,14 +1468,9 @@ export default function VentesScreen() {
               >
                 <View style={{ flex: 1, gap: 2 }}>
                   <View style={styles.saleTop}>
-                    {/* Hide "Client au comptant" label — only show real client names */}
-                    {sale.customer_name ? (
-                      <Text variant="label" numberOfLines={1} style={{ flex: 1 }}>
-                        {sale.customer_name}
-                      </Text>
-                    ) : (
-                      <View style={{ flex: 1 }} />
-                    )}
+                    <Text variant="label" numberOfLines={1} style={{ flex: 1, color: rowColor, opacity: 0.85 }}>
+                      {sale.customer_name}
+                    </Text>
                     <Text
                       variant="label"
                       style={{ color: rowColor }}
@@ -1110,13 +1480,11 @@ export default function VentesScreen() {
                       {isCredit ? `Reste ${fmt(remaining, currency)}` : fmt(sale.total_amount - (sale.discount_amount ?? 0), currency)}
                     </Text>
                   </View>
-                  <Text variant="caption" color="secondary">
-                    {isCredit
-                      ? `Crédit · sur ${fmt(sale.total_amount - (sale.discount_amount ?? 0), currency)}`
-                      : ds === 'annule'
-                      ? 'Annulé'
-                      : (sale.discount_amount ?? 0) > 0 ? 'Payé · rabais' : 'Payé'}
-                  </Text>
+                  <View style={{ flexDirection: 'row', justifyContent: 'flex-end' }}>
+                    <Text variant="caption" style={{ color: rowColor, opacity: 0.85 }} numberOfLines={1}>
+                      Vendeur : {sale.seller_id === userId ? 'Vous' : sale.seller_name}
+                    </Text>
+                  </View>
                 </View>
               </Pressable>
             );
@@ -1136,6 +1504,7 @@ export default function VentesScreen() {
           onRecordPayment={handleRecordPayment}
           onCancel={handleCancel}
           onUpdateClient={handleUpdateClient}
+          onEdit={handleEditSale}
           saving={saving}
         />
       )}
@@ -1160,11 +1529,12 @@ export default function VentesScreen() {
         <Animated.View style={[styles.fabContainer, { transform: [{ scale: fabScale }], opacity: fabOpacity }]}>
           <Pressable
             onPress={() => router.push('/(app)/(tabs)/vendre')}
-            style={({ pressed }) => [styles.fab, pressed && { opacity: 0.82 }]}
+            style={({ pressed }) => [styles.fabExtended, pressed && { opacity: 0.82 }]}
             accessibilityLabel="Nouvelle vente"
             accessibilityRole="button"
           >
-            <Text style={styles.fabIcon}>+</Text>
+            <Ionicons name="add" size={20} color={palette.textInverse} />
+            <Text style={styles.fabExtendedLabel}>Vente</Text>
           </Pressable>
         </Animated.View>
       )}
@@ -1199,17 +1569,16 @@ function makeStyles(p: Palette) {
   offlineBanner: { alignItems: 'center', justifyContent: 'center', paddingVertical: spacing[1], borderBottomWidth: StyleSheet.hairlineWidth, borderBottomColor: p.border },
   emptyState: { flex: 1, alignItems: 'center', justifyContent: 'center' },
   center: { textAlign: 'center', marginTop: spacing[10] },
-  showAllBtn: { alignItems: 'center', paddingVertical: spacing[5] },
   fabContainer: { position: 'absolute', bottom: 194, right: spacing[4], zIndex: 10 },
-  fab: {
-    width: 56, height: 56, borderRadius: radius.full,
+  fabExtended: {
+    flexDirection: 'row', alignItems: 'center', gap: spacing[2],
+    height: 56, paddingHorizontal: spacing[5], borderRadius: radius.full,
     backgroundColor: p.primary,
-    alignItems: 'center', justifyContent: 'center',
     shadowColor: p.textPrimary,
     shadowOffset: { width: 0, height: 4 }, shadowOpacity: 0.18, shadowRadius: 8,
     elevation: 8,
   },
-  fabIcon: { fontSize: 28, lineHeight: 32, fontWeight: '300', color: p.textInverse, marginTop: -2 },
+  fabExtendedLabel: { fontSize: 15, fontWeight: '600' as const, color: p.textInverse },
 
   // Detail modal
   modalSafe: { flex: 1, backgroundColor: p.background },
@@ -1228,6 +1597,7 @@ function makeStyles(p: Palette) {
   },
   bannerGreen: { backgroundColor: p.success + '20', borderWidth: 1, borderColor: p.success + '40' },
   bannerRed: { backgroundColor: p.danger + '15', borderWidth: 1, borderColor: p.danger + '40' },
+  bannerAmber: { backgroundColor: p.warning + '15', borderWidth: 1, borderColor: p.warning + '40' },
 
   heroCredit: {
     alignItems: 'center', gap: spacing[1], paddingVertical: spacing[3],
@@ -1243,6 +1613,7 @@ function makeStyles(p: Palette) {
 
   row: { flexDirection: 'row', alignItems: 'center', justifyContent: 'space-between' },
   lineRow: { flexDirection: 'row', alignItems: 'center', gap: spacing[3] },
+  strikeThrough: { textDecorationLine: 'line-through' },
   divider: { height: 1, backgroundColor: p.border, marginVertical: spacing[1] },
   cardSection: { padding: spacing[4] },
   cardSectionBorder: { borderTopWidth: 1, borderTopColor: p.border },

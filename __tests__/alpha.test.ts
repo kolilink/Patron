@@ -72,6 +72,13 @@ describe('sendMessage', () => {
     expect(useAlphaStore.getState().messages.some(m => m.id.startsWith('optimistic-'))).toBe(true);
 
     await sendPromise;
+    // sendMessage() resolves as soon as the user's own message is confirmed
+    // (see the comment in stores/alpha.ts) — the AI reply keeps fetching in
+    // a detached background call wrapped in withTimeout(), which now takes
+    // a couple of extra microtask hops (Promise.race) to settle even when
+    // the underlying mock resolves instantly. Flush the macrotask queue so
+    // that background call has actually finished before asserting on it.
+    await new Promise(resolve => setImmediate(resolve));
 
     const { messages, sending, error } = useAlphaStore.getState();
     expect(sending).toBe(false);

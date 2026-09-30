@@ -1,44 +1,48 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
-import { Alert, Animated, Linking, Modal, Pressable, ScrollView, StyleSheet, Text as RNText, TextInput, View } from 'react-native';
+import { Alert, Animated, InputAccessoryView, Linking, Platform, Pressable, ScrollView, StyleSheet, Text as RNText, TextInput, View } from 'react-native';
 import { Ionicons } from '@expo/vector-icons';
 import { haptics } from '@/lib/haptics';
-import { SafeAreaView } from 'react-native-safe-area-context';
 import { Screen } from '@/src/components/ui/Screen';
+import { FormSheet } from '@/src/components/ui/FormSheet';
 import { router, useLocalSearchParams } from 'expo-router';
-import { Card } from '@/src/components/ui/Card';
 import { Text } from '@/src/components/ui/Text';
 import { Button } from '@/src/components/ui/Button';
 import { Input } from '@/src/components/ui/Input';
-import { useTheme, spacing, radius } from '@/src/theme';
+import { useTheme, spacing, radius, fontFamily } from '@/src/theme';
 import type { Palette } from '@/src/theme';
 import { useAuthStore } from '@/stores/auth';
-import { useVentesStore, type Vente } from '@/stores/ventes';
+import { useVentesStore } from '@/stores/ventes';
+import { CreditRapideCapture } from '@/src/components/CreditRapideCapture';
 import { supabase } from '@/lib/supabase';
 import { formatAmountInput, parseAmountInput } from '@/src/utils/format';
 import { useSaveConfirmationStore } from '@/stores/saveConfirmation';
 import { repaymentConfirmation } from '@/src/utils/saveConfirmationCopy';
+import { saveClientLedgerCache, getClientLedgerCache } from '@/lib/db';
+import { isNetworkError, withTimeout } from '@/lib/sync';
+import { OfflineNotice } from '@/src/components/ui/OfflineNotice';
+import { buildDebtReminderMessage, formatDebtAge, debtAgeTier } from '@/src/utils/clientReminder';
+
+// iOS-only: suppresses the OS's auto-injected floating "Done" pill above
+// the numeric keyboard — the payment sheet already has a persistent,
+// always-visible "Confirmer le paiement" footer button.
+const PAYMENT_SHEET_SILENT_ACCESSORY_ID = 'client-ledger-payment-sheet-silent-accessory';
 
 function fmt(n: number, cur: string) { return `${Math.round(n).toLocaleString('fr-FR')} ${cur}`; }
+
+// Maps the shared age tier to this screen's actual palette tokens — kept
+// here rather than in clientReminder.ts since that file has no theme context.
+function debtAgeColor(days: number, palette: Palette): string {
+  const tier = debtAgeTier(days);
+  if (tier === 'urgent') return palette.recouvrementOwed;
+  if (tier === 'attention') return palette.recouvrementPending;
+  return palette.textSecondary;
+}
 
 function methodLabel(m: string) {
   if (m === 'especes') return 'Espèces';
   if (m === 'orange') return 'Orange Money';
   if (m === 'mtn' || m === 'moov') return 'Mobile Money';
   return 'Autre';
-}
-
-function dateLabel(iso: string) {
-  const d = iso.includes('T') ? new Date(iso) : new Date(iso + 'T00:00:00');
-  return d.toLocaleDateString('fr-FR', { day: 'numeric', month: 'short', year: 'numeric' });
-}
-
-function fmtDueDate(iso: string): string {
-  const d = new Date(iso + 'T00:00:00');
-  const diff = Math.round((d.getTime() - Date.now()) / 86400000);
-  if (diff < 0) return `En retard de ${Math.abs(diff)} j`;
-  if (diff === 0) return "Prévu aujourd'hui";
-  if (diff <= 3) return `Dans ${diff} jour${diff > 1 ? 's' : ''}`;
-  return `Prévu le ${d.toLocaleDateString('fr-FR', { day: 'numeric', month: 'short' })}`;
 }
 
 function todayISO() {
@@ -54,16 +58,28 @@ const PAY_METHODS = [
 ];
 
 interface ClientRecord { id: string; name: string; phone: string | null; notes: string | null; }
-interface LedgerPayment { id: string; order_id: string; method: string; amount: number; date: string; }
-interface DayGroup {
+interface LedgerPayment { id: string; order_id: string; method: string; amount: number; date: string; created_at: string; }
+
+// One line on the carnet page — a credit given ("Donné") or a payment
+// received ("Reçu"). Built fresh from clientSales + ledgerPayments below,
+// never persisted as its own shape.
+interface LedgerEntry {
+  key: string;
   dateKey: string;
-  label: string;
-  sales: Vente[];
-  payments: LedgerPayment[];
-  salesTotal: number;
-  paymentsTotal: number;
-  unpaidCount: number;
-  unpaidTotal: number;
+  createdAt: string;
+  kind: 'credit' | 'payment';
+  amount: number;
+  // Second gray line under "Donné" — the sale's real product label, or null
+  // for a bare carnet debt (submit_carnet_debt's hidden "Solde reporté"
+  // placeholder, which is never shown as if it were a real product).
+  saleLabel: string | null;
+  method: string | null;
+  // Running balance AFTER this entry, in true chronological (creation)
+  // order — see ledgerEntries' own comment for why this can't be computed
+  // from display order alone.
+  reste: number;
+  sourceType: 'sale' | 'payment';
+  sourceId: string;
 }
 
 // ─── Edit Client Modal ────────────────────────────────────────────────────────
@@ -106,103 +122,92 @@ function EditModal({
   };
 
   return (
-    <Modal visible={visible} animationType="slide" presentationStyle="formSheet" onRequestClose={onClose}>
-      <SafeAreaView style={styles.modalSafe}>
-        <View style={styles.hdr}>
-          <Pressable onPress={onClose}><Text variant="body" color="secondary">Annuler</Text></Pressable>
-          <Text variant="h4">Modifier client</Text>
-          <View style={{ width: 60 }} />
-        </View>
-        <ScrollView contentContainerStyle={styles.pad} keyboardShouldPersistTaps="handled">
-          <Text variant="label">{displayName}</Text>
-          <Input label="Téléphone" value={phone} onChangeText={setPhone}
-            placeholder="620 00 00 00" keyboardType="phone-pad" />
-          <Input label="Notes" value={notes} onChangeText={setNotes}
-            placeholder="Notes sur ce client" multiline />
-        </ScrollView>
+    <FormSheet
+      visible={visible}
+      onClose={onClose}
+      title="Modifier client"
+      presentationStyle="formSheet"
+      contentContainerStyle={styles.pad}
+      footer={
         <View style={styles.footer}>
           <Button label={saving ? 'Enregistrement…' : 'Enregistrer'}
             onPress={handleSave} loading={saving} fullWidth size="lg" />
         </View>
-      </SafeAreaView>
-    </Modal>
+      }
+    >
+      <Text variant="label">{displayName}</Text>
+      <Input label="Téléphone" value={phone} onChangeText={setPhone}
+        placeholder="620 00 00 00" keyboardType="phone-pad" />
+      <Input label="Notes" value={notes} onChangeText={setNotes}
+        placeholder="Notes sur ce client" multiline />
+    </FormSheet>
   );
 }
 
 // ─── Payment Modal ────────────────────────────────────────────────────────────
 
 function PayModal({
-  visible, displayName, totalOwed, creditSales, currency, saving,
+  visible, displayName, totalOwed, currency, saving,
   onClose, onRecord,
 }: {
   visible: boolean; displayName: string; totalOwed: number;
-  creditSales: Vente[]; currency: string; saving: boolean;
+  currency: string; saving: boolean;
   onClose: () => void;
-  onRecord: (amount: number, method: string, date: string, specificSaleId?: string) => void;
+  onRecord: (amount: number, method: string, date: string) => void;
 }) {
   const { palette } = useTheme();
   const styles = useMemo(() => makeStyles(palette), [palette]);
   const [amountStr, setAmountStr] = useState('');
   const [method, setMethod] = useState('especes');
   const [date, setDate] = useState(todayISO());
-  const [allocation, setAllocation] = useState<'fifo' | 'specific'>('fifo');
-  const [specificSaleId, setSpecificSaleId] = useState('');
 
+  // Starts empty, deliberately — "Tout régler" below is the explicit
+  // tap-to-fill shortcut for the common case; prefilling the full amount by
+  // default made every payment silently assume "paid in full" unless she
+  // noticed and edited it down.
   useEffect(() => {
     if (visible) {
-      setAmountStr(formatAmountInput(String(Math.round(totalOwed)), currency));
+      setAmountStr('');
       setMethod('especes');
       setDate(todayISO());
-      setAllocation('fifo');
-      setSpecificSaleId(creditSales[0]?.id ?? '');
     }
   }, [visible, totalOwed]);
 
   const amount = parseAmountInput(amountStr, currency);
-
-  const saleRemaining = (id: string) => {
-    const sale = creditSales.find(s => s.id === id);
-    if (!sale) return 0;
-    return sale.total_amount - (sale.discount_amount ?? 0) - (sale.amount_paid ?? 0);
-  };
+  const remaining = totalOwed - amount;
 
   const handleRecord = () => {
     if (amount <= 0) { Alert.alert('Vérifiez le montant :)'); return; }
-    if (allocation === 'fifo' && amount > totalOwed + 0.01) {
+    if (amount > totalOwed + 0.01) {
       Alert.alert('Le montant dépasse le total :)');
       return;
     }
-    if (allocation === 'specific') {
-      const max = saleRemaining(specificSaleId);
-      if (amount > max + 0.01) {
-        Alert.alert('Le montant dépasse le total :)');
-        return;
-      }
-      onRecord(amount, method, date, specificSaleId);
-    } else {
-      onRecord(amount, method, date);
-    }
+    onRecord(amount, method, date);
   };
 
   return (
-    <Modal visible={visible} animationType="slide" presentationStyle="formSheet" onRequestClose={onClose}>
-      <SafeAreaView style={styles.modalSafe}>
-        <View style={styles.hdr}>
-          <Pressable onPress={onClose} style={{ minWidth: 60 }}>
-            <Text variant="body" color="secondary">Annuler</Text>
-          </Pressable>
-          <Text variant="h4" style={{ flex: 1, textAlign: 'center' }} numberOfLines={1}>
-            {displayName} a payé combien ?
-          </Text>
-          <View style={{ width: 60 }} />
+    <FormSheet
+      visible={visible}
+      onClose={onClose}
+      title={`${displayName} vous doit ${fmt(totalOwed, currency)}`}
+      presentationStyle="formSheet"
+      contentContainerStyle={styles.pad}
+      footer={
+        <View style={styles.footer}>
+          <Button
+            label={saving ? 'Enregistrement…' : amount > 0 ? `Enregistrer : ${displayName} a payé ${fmt(amount, currency)}` : 'Confirmer le paiement'}
+            onPress={handleRecord} loading={saving} fullWidth size="lg" disabled={amount <= 0}
+          />
         </View>
-        <ScrollView contentContainerStyle={styles.pad} keyboardShouldPersistTaps="handled">
-          {/* Context */}
-          <Card style={[styles.contextCard, { borderLeftColor: palette.warning, borderLeftWidth: 3 }]}>
-            <Text variant="caption" color="secondary">{displayName} vous doit</Text>
-            <Text variant="amountLarge" style={{ color: palette.warning }}>{fmt(totalOwed, currency)}</Text>
-          </Card>
-
+      }
+      accessory={
+        Platform.OS === 'ios' ? (
+          <InputAccessoryView nativeID={PAYMENT_SHEET_SILENT_ACCESSORY_ID}>
+            <View style={{ height: 0 }} />
+          </InputAccessoryView>
+        ) : undefined
+      }
+    >
           {/* Amount */}
           <View style={{ gap: spacing[2] }}>
             <Text variant="label">Combien {displayName} vous donne ?</Text>
@@ -212,73 +217,45 @@ function PayModal({
                 value={amountStr}
                 onChangeText={v => setAmountStr(formatAmountInput(v, currency))}
                 keyboardType="numeric"
+                placeholder="0"
                 placeholderTextColor={palette.textDisabled}
                 selectTextOnFocus
+                autoFocus
+                inputAccessoryViewID={Platform.OS === 'ios' ? PAYMENT_SHEET_SILENT_ACCESSORY_ID : undefined}
               />
               <Pressable
                 style={styles.solderBtn}
                 onPress={() => setAmountStr(formatAmountInput(String(Math.round(totalOwed)), currency))}
               >
-                <Text variant="label" style={{ color: palette.primary }}>Tout régler</Text>
+                <Text variant="label" style={{ color: palette.primary }}>Tout régler : {fmt(totalOwed, currency)}</Text>
               </Pressable>
             </View>
-          </View>
-
-          {/* Method */}
-          <View style={{ gap: spacing[2] }}>
-            <Text variant="label">Payé par :</Text>
-            <View style={styles.chipRow}>
-              {PAY_METHODS.map(m => (
-                <Pressable key={m.key} onPress={() => setMethod(m.key)}
-                  style={[styles.chip, method === m.key && styles.chipActive]}>
-                  <Text variant="caption" style={{ color: method === m.key ? palette.textInverse : palette.textPrimary }}>
-                    {m.label}
-                  </Text>
-                </Pressable>
-              ))}
-            </View>
-          </View>
-
-          {/* Allocation */}
-          <View style={{ gap: spacing[2] }}>
-            <Text variant="label">Déduire de :</Text>
-            <View style={styles.chipRow}>
-              <Pressable style={[styles.chip, allocation === 'fifo' && styles.chipActive]}
-                onPress={() => setAllocation('fifo')}>
-                <Text variant="caption" style={{ color: allocation === 'fifo' ? palette.textInverse : palette.textPrimary }}>
-                  Dette la plus ancienne
-                </Text>
-              </Pressable>
-              <Pressable style={[styles.chip, allocation === 'specific' && styles.chipActive]}
-                onPress={() => setAllocation('specific')}>
-                <Text variant="caption" style={{ color: allocation === 'specific' ? palette.textInverse : palette.textPrimary }}>
-                  Choisir une dette
-                </Text>
-              </Pressable>
-            </View>
-            {allocation === 'specific' && creditSales.length > 0 && (
-              <View style={{ gap: spacing[1] }}>
-                {creditSales.map(s => {
-                  const rem = s.total_amount - (s.discount_amount ?? 0) - (s.amount_paid ?? 0);
-                  return (
-                    <Pressable key={s.id} onPress={() => setSpecificSaleId(s.id)}
-                      style={[styles.saleOption, specificSaleId === s.id && styles.saleOptionActive]}>
-                      <Text variant="caption" style={{ color: specificSaleId === s.id ? palette.textInverse : palette.textPrimary }}>
-                        {dateLabel(s.sale_date ?? s.created_at)} — {fmt(rem, currency)}
-                      </Text>
-                    </Pressable>
-                  );
-                })}
-              </View>
+            {amount > 0 && (
+              <Text variant="caption" style={{ color: remaining > 0 ? palette.recouvrementPending : remaining < 0 ? palette.recouvrementOwed : palette.recouvrementPaid }}>
+                {remaining > 0
+                  ? `Il restera ${fmt(remaining, currency)} à régler.`
+                  : remaining < 0
+                    ? `C'est ${fmt(-remaining, currency)} de plus que la dette.`
+                    : 'Tout sera réglé.'}
+              </Text>
             )}
           </View>
-        </ScrollView>
-        <View style={styles.footer}>
-          <Button label={saving ? 'Enregistrement…' : 'Confirmer le paiement'}
-            onPress={handleRecord} loading={saving} fullWidth size="lg" />
+
+      {/* Method */}
+      <View style={{ gap: spacing[2] }}>
+        <Text variant="label">Payé par :</Text>
+        <View style={styles.chipRow}>
+          {PAY_METHODS.map(m => (
+            <Pressable key={m.key} onPress={() => setMethod(m.key)}
+              style={[styles.chip, method === m.key && styles.chipActive]}>
+              <Text variant="caption" style={{ color: method === m.key ? palette.textInverse : palette.textPrimary }}>
+                {m.label}
+              </Text>
+            </Pressable>
+          ))}
         </View>
-      </SafeAreaView>
-    </Modal>
+      </View>
+    </FormSheet>
   );
 }
 
@@ -300,15 +277,27 @@ export default function ClientLedgerScreen() {
   const role = session?.activeMembership?.role;
   const canEdit = role === 'administrateur' || role === 'manager';
 
-  const { sales, loading, saving, fetchSales, recordPayment, recordClientPayment, voidPayments } = useVentesStore();
+  const { sales, loading, saving, offline, offlineSince, fetchSales, recordPayment, recordClientPayment, voidPayments } = useVentesStore();
+
+  // Shared key for this client's cached reads (payments + record) — prefixed by
+  // route type since routeParam can be either a client UUID or a raw name.
+  const clientKey = isClientId ? `id:${routeParam}` : `name:${routeParam}`;
 
   // displayName is resolved after clientRecord loads when routing by UUID
   const [displayName, setDisplayName] = useState(isClientId ? '' : routeParam);
   const [ledgerPayments, setLedgerPayments] = useState<LedgerPayment[]>([]);
+  // order_id -> real product label ('Riz, sac de 5kg'), or '' for a bare
+  // carnet debt (all lines are the "Solde reporté" placeholder). Absent key
+  // = not loaded yet, which the carnet renders identically to bare (no
+  // second line) until it resolves — same fail-open-then-self-correct
+  // posture this codebase already uses for variant stock/fork-data-ready.
+  const [ledgerLines, setLedgerLines] = useState<Record<string, string>>({});
   const [clientRecord, setClientRecord] = useState<ClientRecord | null>(null);
   const [loadingLocal, setLoadingLocal] = useState(true);
   const [showPayModal, setShowPayModal] = useState(false);
   const [showEditModal, setShowEditModal] = useState(false);
+  const [showNewCreditSheet, setShowNewCreditSheet] = useState(false);
+  const [detailEntry, setDetailEntry] = useState<LedgerEntry | null>(null);
   const [successPayment, setSuccessPayment] = useState<{ amount: number } | null>(null);
   const checkScale = useRef(new Animated.Value(0)).current;
 
@@ -326,23 +315,48 @@ export default function ClientLedgerScreen() {
     loadClientRecord();
   }, [businessId]);
 
-  // Reload ledger payments whenever sales change (catches new payments)
+  // Reload ledger payments + line labels whenever sales change (catches new
+  // credits/payments, including one just added via "+ Nouveau crédit").
   useEffect(() => {
     if (loading) return;
     loadLedgerPayments();
+    loadLedgerLines();
   }, [sales, loading, displayName]);
 
   const loadClientRecord = async () => {
+    const recordCacheKey = `${businessId}:record:${clientKey}`;
+
+    // Seed from cache immediately (mainly matters for the isClientId route,
+    // where displayName has nothing else to resolve from until this loads).
+    if (!clientRecord) {
+      const cached = await getClientLedgerCache(recordCacheKey) as ClientRecord | null;
+      if (cached) {
+        setClientRecord(cached);
+        if (isClientId) setDisplayName(cached.name);
+      }
+    }
+
     let query = supabase.from('clients').select('*').eq('business_id', businessId);
     if (isClientId) {
       query = query.eq('id', routeParam);
     } else {
       query = query.eq('name', routeParam);
     }
-    const { data } = await query.maybeSingle();
-    const record = data as ClientRecord | null;
-    setClientRecord(record);
-    if (isClientId && record) setDisplayName(record.name);
+    // A genuine timeout REJECTS (unlike a returned Supabase {error}) — must be
+    // caught here, not just checked, or it surfaces as an unhandled promise
+    // rejection (this is what Sentry's "Network timeout after 12000ms" reports
+    // on this screen were: this call had no try/catch and no .catch() at its
+    // fire-and-forget call site in the mount useEffect).
+    try {
+      const { data, error } = await withTimeout(query.maybeSingle());
+      if (error) return; // offline (or any other failure) — cached value above already applied
+      const record = data as ClientRecord | null;
+      setClientRecord(record);
+      if (isClientId && record) setDisplayName(record.name);
+      if (record) void saveClientLedgerCache(recordCacheKey, record);
+    } catch {
+      // timeout — cached value above already applied
+    }
   };
 
   const loadLedgerPayments = async () => {
@@ -352,15 +366,110 @@ export default function ClientLedgerScreen() {
       : sales.filter(s => s.customer_name === routeParam);
     if (clientSales.length === 0) { setLoadingLocal(false); return; }
 
+    const paymentsCacheKey = `${businessId}:payments:${clientKey}`;
+
+    // Seed from cache immediately so the ledger (and the real totalOwed it
+    // drives) is correct while the network call runs, not just once it
+    // resolves. §6 of the offline-first rewrite: unconditional now, not
+    // just "if nothing's loaded yet" — a refocus/refetch on an
+    // already-populated screen must still re-show the latest local truth
+    // before the network round trip starts, matching fetchSales's own
+    // hydration-order fix (stores/ventes.ts).
+    {
+      const cached = await getClientLedgerCache(paymentsCacheKey) as LedgerPayment[] | null;
+      if (cached) setLedgerPayments(cached);
+    }
+
     const saleIds = clientSales.map(s => s.id);
-    const { data, error } = await supabase
-      .from('payments')
-      .select('id, order_id, method, amount, date')
-      .in('order_id', saleIds)
-      .order('date', { ascending: true });
-    if (error) { setLoadingLocal(false); return; }
-    setLedgerPayments((data ?? []).map(p => ({ ...(p as object), amount: (p as { amount: number }).amount / 100 })) as LedgerPayment[]);
-    setLoadingLocal(false);
+    // Same reject-vs-return distinction as loadClientRecord above: a genuine
+    // timeout rejects withTimeout() rather than resolving with {error}, and
+    // this function is also called fire-and-forget from a useEffect, so an
+    // uncaught rejection here becomes an unhandled promise rejection.
+    try {
+      const { data, error } = await withTimeout(
+        supabase
+          .from('payments')
+          .select('id, order_id, method, amount, date, created_at')
+          .in('order_id', saleIds)
+          .order('date', { ascending: true }),
+      );
+      if (error) {
+        // Network failure: fall back to cache so a client's real debt (sales minus
+        // payments) doesn't silently inflate to their full lifetime sale total —
+        // this is what happened before this cache existed (payments = [] offline).
+        if (isNetworkError(error)) {
+          const cached = await getClientLedgerCache(paymentsCacheKey) as LedgerPayment[] | null;
+          if (cached) setLedgerPayments(cached);
+        }
+        setLoadingLocal(false);
+        return;
+      }
+      const payments = (data ?? []).map(p => ({ ...(p as object), amount: (p as { amount: number }).amount / 100 })) as LedgerPayment[];
+      setLedgerPayments(payments);
+      void saveClientLedgerCache(paymentsCacheKey, payments);
+      setLoadingLocal(false);
+    } catch {
+      // timeout — treat exactly like a returned network error above
+      const cached = await getClientLedgerCache(paymentsCacheKey) as LedgerPayment[] | null;
+      if (cached) setLedgerPayments(cached);
+      setLoadingLocal(false);
+    }
+  };
+
+  // Real product labels for credit sales, keyed by order_id — this is what
+  // lets the carnet show a second gray line ("Riz, sac de 5kg") for a real
+  // credit sale while showing nothing at all for a bare carnet debt.
+  // fetchSales() itself never populates Vente.lines (only loadDetail() does,
+  // on demand, for ventes/index.tsx's own detail modal) — so without this
+  // dedicated fetch every credit entry here would read as bare regardless of
+  // whether it actually came from a real cart sale. Same cache-fallback
+  // shape as loadLedgerPayments/loadClientRecord above, not a new pattern.
+  const loadLedgerLines = async () => {
+    const name = isClientId ? displayName : routeParam;
+    const creditSaleIds = sales
+      .filter(s =>
+        s.status === 'credit' &&
+        (isClientId
+          ? s.client_id === routeParam || (s.client_id == null && name && s.customer_name === name)
+          : s.customer_name === routeParam),
+      )
+      .map(s => s.id);
+    if (creditSaleIds.length === 0) return;
+
+    const linesCacheKey = `${businessId}:lines:${clientKey}`;
+
+    // Unconditional for the same reason as loadLedgerPayments above (§6).
+    {
+      const cached = await getClientLedgerCache(linesCacheKey) as Record<string, string> | null;
+      if (cached) setLedgerLines(cached);
+    }
+
+    try {
+      const { data, error } = await withTimeout(
+        supabase.from('so_lines').select('order_id, product_name').in('order_id', creditSaleIds),
+      );
+      if (error) return; // offline (or any other failure) — cached value above already applied
+
+      const byOrder = new Map<string, string[]>();
+      for (const l of (data ?? []) as { order_id: string; product_name: string | null }[]) {
+        const arr = byOrder.get(l.order_id) ?? [];
+        arr.push(l.product_name ?? '');
+        byOrder.set(l.order_id, arr);
+      }
+      const labels: Record<string, string> = {};
+      for (const [orderId, names] of byOrder) {
+        // A bare carnet debt is always exactly one line named "Solde
+        // reporté" (submit_carnet_debt's hidden is_system placeholder) —
+        // never shown as if it were a real product. Anything else (a real
+        // cart sale marked as credit) shows its real line names.
+        const isBare = names.length === 1 && names[0] === 'Solde reporté';
+        labels[orderId] = isBare ? '' : names.filter(Boolean).join(', ');
+      }
+      setLedgerLines(labels);
+      void saveClientLedgerCache(linesCacheKey, labels);
+    } catch {
+      // timeout — cached value above already applied
+    }
   };
 
   const clientSales = useMemo(() => {
@@ -384,74 +493,115 @@ export default function ClientLedgerScreen() {
     [clientSales],
   );
 
+  // Clamped to zero — see the identical fix + explanation in clients/index.tsx's
+  // getDaysAgo. Same root cause: a UTC-date-substring reconstructed as local
+  // midnight can land in the future relative to Date.now() on a device west
+  // of UTC, which otherwise produced a real, reported "-1 jour".
   const debtAge = useMemo(() => {
     if (creditSales.length === 0) return 0;
     const oldest = creditSales[0].sale_date ?? creditSales[0].created_at.split('T')[0];
-    return Math.floor((Date.now() - new Date(oldest + 'T00:00:00').getTime()) / 86400000);
+    return Math.max(0, Math.floor((Date.now() - new Date(oldest + 'T00:00:00').getTime()) / 86400000));
   }, [creditSales]);
 
   const totalSold = clientSales.reduce((s, v) => s + v.total_amount - (v.discount_amount ?? 0), 0);
+  // Known, disclosed Phase-1 limitation (offline-first rewrite, §6): unlike
+  // totalSold (derived from `sales`, which stores/ventes.ts's
+  // refreshPendingOverlay keeps correct for a still-pending credit debt),
+  // ledgerPayments is a separate read from the `payments` table with no
+  // equivalent pending-overlay mechanism yet — a payment recorded while
+  // offline does not reduce this total until it actually syncs. The error
+  // direction is the safe one (this screen temporarily OVERSTATES what's
+  // owed, never understates it — no risk of a merchant under-collecting),
+  // and it self-corrects automatically the moment the queued payment
+  // drains. Building a payments-specific pending overlay to close this
+  // display lag is real, separate scope, not attempted here — deliberately
+  // not risked as a quick patch to this money-display calculation without
+  // the ability to verify it on a real device in this environment.
   const totalPaid = ledgerPayments.reduce((s, p) => s + p.amount, 0);
   const totalOwed = Math.max(0, totalSold - totalPaid);
 
-  // Group all events by calendar day — newest day first
-  const dayGroups = useMemo<DayGroup[]>(() => {
+  // The carnet page — one row per real entry, newest first. Cash ('paye')
+  // sales are deliberately excluded entirely, not just hidden: a cash sale
+  // always creates its own atomic payment for the exact same amount at
+  // submit_sale() time (migration_v195+), so it nets to zero against
+  // totalOwed above and was never really a "carnet" event — showing it (or
+  // its own self-payment) as a bare "Reçu" line with no matching "Donné"
+  // would be both confusing and wrong for a screen that's supposed to
+  // mirror what she'd actually write on paper. Only sales with
+  // status='credit', and only payments whose order_id points at one of
+  // those credit sales, become lines here.
+  const ledgerEntries = useMemo<LedgerEntry[]>(() => {
+    const creditSalesForLedger = clientSales.filter(s => s.status === 'credit');
+    const creditSaleIds = new Set(creditSalesForLedger.map(s => s.id));
+
+    type RawEntry = Omit<LedgerEntry, 'reste'>;
+    const raw: RawEntry[] = [];
+
+    for (const s of creditSalesForLedger) {
+      raw.push({
+        key: `s-${s.id}`,
+        dateKey: s.sale_date ?? s.created_at.split('T')[0],
+        createdAt: s.created_at,
+        kind: 'credit',
+        amount: s.total_amount - (s.discount_amount ?? 0),
+        saleLabel: ledgerLines[s.id] || null,
+        method: null,
+        sourceType: 'sale',
+        sourceId: s.id,
+      });
+    }
+    for (const p of ledgerPayments) {
+      if (!creditSaleIds.has(p.order_id)) continue; // a cash sale's own self-payment, not a carnet event
+      raw.push({
+        key: `p-${p.id}`,
+        dateKey: p.date,
+        createdAt: p.created_at,
+        kind: 'payment',
+        amount: p.amount,
+        saleLabel: null,
+        method: p.method,
+        sourceType: 'payment',
+        sourceId: p.id,
+      });
+    }
+
+    // True chronological (creation) order, not the user-editable date field —
+    // "Reste" answers "where did we stand the moment this was recorded," and
+    // created_at can never be backdated the way a payment's own date can.
+    raw.sort((a, b) => new Date(a.createdAt).getTime() - new Date(b.createdAt).getTime());
+
+    let running = 0;
+    const withBalance: LedgerEntry[] = raw.map(e => {
+      running += e.kind === 'credit' ? e.amount : -e.amount;
+      // Clamped the same way totalOwed above is — guarantees the top line's
+      // Reste always exactly equals the header total, never off by a
+      // floating-point hair.
+      return { ...e, reste: Math.max(0, running) };
+    });
+
+    return withBalance.reverse(); // newest first — see the ORDER NOTE in the spec this implements
+  }, [clientSales, ledgerPayments, ledgerLines]);
+
+  // "Aujourd'hui" / "Hier" / "27 sept." — day-level only, never a timestamp.
+  // Deliberately shorter than the old day-group header's own date format
+  // (which spelled the month out in full) — a carnet line is compact by
+  // nature.
+  const entryDateLabel = useMemo(() => {
     const now = new Date();
     const pad = (n: number) => String(n).padStart(2, '0');
     const toKey = (d: Date) => `${d.getFullYear()}-${pad(d.getMonth() + 1)}-${pad(d.getDate())}`;
     const todayKey = toKey(now);
     const yest = new Date(now); yest.setDate(now.getDate() - 1);
     const yestKey = toKey(yest);
-
-    const getLabel = (key: string) => {
+    return (key: string) => {
       if (key === todayKey) return "Aujourd'hui";
       if (key === yestKey) return 'Hier';
       const d = new Date(key + 'T00:00:00');
-      const opts: Intl.DateTimeFormatOptions = { day: 'numeric', month: 'long' };
+      const opts: Intl.DateTimeFormatOptions = { day: 'numeric', month: 'short' };
       if (d.getFullYear() !== now.getFullYear()) opts.year = 'numeric';
-      const s = d.toLocaleDateString('fr-FR', opts);
-      return s.charAt(0).toUpperCase() + s.slice(1);
+      return d.toLocaleDateString('fr-FR', opts);
     };
-
-    const map = new Map<string, DayGroup>();
-    const ensure = (key: string) => {
-      if (!map.has(key)) map.set(key, { dateKey: key, label: getLabel(key), sales: [], payments: [], salesTotal: 0, paymentsTotal: 0, unpaidCount: 0, unpaidTotal: 0 });
-      return map.get(key)!;
-    };
-
-    for (const s of clientSales) {
-      const key = s.sale_date ?? s.created_at.split('T')[0];
-      const g = ensure(key);
-      g.sales.push(s);
-      const net = s.total_amount - (s.discount_amount ?? 0);
-      g.salesTotal += net;
-      if (s.status === 'credit') {
-        g.unpaidCount++;
-        g.unpaidTotal += net;
-      }
-    }
-    for (const p of ledgerPayments) {
-      const g = ensure(p.date);
-      g.payments.push(p);
-      g.paymentsTotal += p.amount;
-    }
-
-    return Array.from(map.values()).sort((a, b) => b.dateKey.localeCompare(a.dateKey));
-  }, [clientSales, ledgerPayments]);
-
-  // Auto-expand today + yesterday; user can toggle any day
-  const [expandedDays, setExpandedDays] = useState<Set<string>>(() => {
-    const n = new Date();
-    const pad = (x: number) => String(x).padStart(2, '0');
-    const today = `${n.getFullYear()}-${pad(n.getMonth() + 1)}-${pad(n.getDate())}`;
-    return new Set([today]);
-  });
-
-  const toggleDay = (key: string) => setExpandedDays(prev => {
-    const next = new Set(prev);
-    if (next.has(key)) next.delete(key); else next.add(key);
-    return next;
-  });
+  }, []);
 
   const handleRecord = useCallback(async (amount: number, method: string, date: string, specificSaleId?: string) => {
     let result: { ok: boolean; fullyPaid?: boolean; fullySettled?: boolean; paymentId?: string; paymentIds?: string[] };
@@ -463,8 +613,7 @@ export default function ClientLedgerScreen() {
     if (result.ok) {
       setShowPayModal(false);
       haptics.success();
-      const paidInFull = specificSaleId ? result.fullyPaid : result.fullySettled;
-      if (!paidInFull) setSuccessPayment({ amount });
+      if (!result.fullySettled) setSuccessPayment({ amount });
       loadLedgerPayments();
 
       // Remaining balance is read synchronously from the store's own
@@ -525,7 +674,7 @@ export default function ClientLedgerScreen() {
         <Pressable onPress={() => router.back()}><Text variant="body" color="secondary">‹ Retour</Text></Pressable>
         <Text variant="h4" style={{ flex: 1, textAlign: 'center' }} numberOfLines={1}>{displayName}</Text>
         {canEdit ? (
-          <Pressable onPress={openMenu} style={{ width: 60, alignItems: 'flex-end' }}>
+          <Pressable onPress={openMenu} style={{ width: 60, alignItems: 'flex-end' }} accessibilityLabel="Plus d'options" accessibilityRole="button">
             <Text variant="body" color="secondary">⋯</Text>
           </Pressable>
         ) : (
@@ -533,19 +682,28 @@ export default function ClientLedgerScreen() {
         )}
       </View>
 
+      {offline && (
+        <OfflineNotice
+          offlineSince={offlineSince}
+          onRetry={() => { fetchSales(businessId); void loadClientRecord(); }}
+        />
+      )}
+
       <ScrollView contentContainerStyle={styles.content} showsVerticalScrollIndicator={false}>
 
         {/* Status banner */}
         {totalOwed > 0 ? (
           <View style={styles.debtCard}>
             <Text style={styles.bannerLabel}>{displayName} vous doit</Text>
+            {/* Plain, calm foreground — this is her own receivable, not a
+                loss; color lives on the age line below, not the amount. */}
             <Text style={styles.bannerAmount}>{fmt(totalOwed, currency)}</Text>
-            <RNText style={[styles.bannerAge, debtAge >= 30 && { color: palette.warning }]}>
-              {debtAge === 0 ? "depuis aujourd'hui" : `depuis ${debtAge} jour${debtAge > 1 ? 's' : ''}`}
+            <RNText style={[styles.bannerAge, { color: debtAgeColor(debtAge, palette) }]}>
+              {formatDebtAge(debtAge)}
             </RNText>
             {totalPaid > 0 && (
               <RNText style={styles.repaidLine}>
-                {fmt(totalPaid, currency)} remboursé sur {fmt(totalSold, currency)}
+                {fmt(totalPaid, currency)} payé sur {fmt(totalSold, currency)}
               </RNText>
             )}
             <Pressable
@@ -556,132 +714,106 @@ export default function ClientLedgerScreen() {
             </Pressable>
           </View>
         ) : everHadCredit ? (
-          <View style={styles.bannerGreen}>
-            <Ionicons name="checkmark-circle" size={22} color={palette.success} />
-            <View style={{ flex: 1 }}>
-              <RNText style={{ fontSize: 14, fontWeight: '700', color: palette.success }}>{displayName} ne vous doit plus rien</RNText>
-              <RNText style={{ fontSize: 12, color: palette.success, marginTop: 2 }}>Compte soldé · tout est à jour</RNText>
+          // Same header shape as the non-zero case above (label/amount/
+          // sub-line), not a separate one-off banner — the carnet doesn't
+          // look fundamentally different at zero, it just says "0" and
+          // confirms the last entry settled it.
+          <View style={styles.debtCard}>
+            <Text style={styles.bannerLabel}>{displayName} vous doit</Text>
+            <Text style={styles.bannerAmount}>{fmt(0, currency)}</Text>
+            <View style={styles.regleRow}>
+              <Ionicons name="checkmark-circle" size={16} color={palette.recouvrementPaid} />
+              <RNText style={[styles.bannerAge, { color: palette.recouvrementPaid, fontFamily: fontFamily.bold, marginTop: 0, marginBottom: 0 }]}>
+                Réglé ✓
+              </RNText>
             </View>
           </View>
         ) : null}
 
-        {/* Contact row */}
+        {/* The carnet's other pen stroke — "Enregistrer un paiement" above
+            is "reçu"; this is "donné". Deliberately not gated on totalOwed:
+            a new credit can be the very next thing written on the page
+            regardless of the current balance, including right at 0. */}
+        <Pressable
+          onPress={() => setShowNewCreditSheet(true)}
+          style={({ pressed }) => [styles.newCreditBtn, { borderColor: palette.primary }, pressed && { opacity: 0.7 }]}
+        >
+          <Text variant="label" style={{ color: palette.primary }}>+ Crédit</Text>
+        </Pressable>
+
+        {/* Secondary contact row — Rappeler sur WhatsApp + Appeler. Only the
+            call half needs a real number on file; the WhatsApp reminder
+            still only makes sense while there's an actual debt to mention. */}
         {clientRecord?.phone && (
-          <Card style={styles.contactRow}>
-            <Text variant="body">{clientRecord.phone}</Text>
-            <Pressable onPress={() => Linking.openURL(`tel:${clientRecord.phone}`)}>
+          <View style={styles.contactRow}>
+            {totalOwed > 0 && (
+              <Pressable
+                onPress={() => {
+                  const msg = buildDebtReminderMessage(displayName, fmt(totalOwed, currency));
+                  // Generic wa.me link (no target number) — same pattern the
+                  // list row already uses reliably. Targeting this contact's
+                  // own number here previously failed to open WhatsApp at all.
+                  Linking.openURL(`https://wa.me/?text=${encodeURIComponent(msg)}`).catch(() => {});
+                }}
+                style={[styles.contactBtn, { borderColor: palette.border }]}
+              >
+                <Ionicons name="logo-whatsapp" size={16} color={palette.primary} />
+                <Text variant="label" style={{ color: palette.primary }}>Rappeler</Text>
+              </Pressable>
+            )}
+            <Pressable
+              onPress={() => Linking.openURL(`tel:${clientRecord.phone}`).catch(() => {})}
+              style={[styles.contactBtn, { borderColor: palette.border }]}
+            >
+              <Ionicons name="call-outline" size={16} color={palette.primary} />
               <Text variant="label" style={{ color: palette.primary }}>Appeler</Text>
             </Pressable>
-          </Card>
+          </View>
         )}
 
-        {/* Historique par jour */}
-        {dayGroups.length > 0 && (
-          <View style={{ gap: spacing[3] }}>
-            <Text variant="label" color="secondary">Historique</Text>
-            {dayGroups.map(group => {
-              const expanded = expandedDays.has(group.dateKey);
-              const total = group.sales.length + group.payments.length;
+        {/* The carnet page — one continuous list of lines, newest first.
+            No day-grouping, no collapsible sections, no summary rows: a
+            paper page never folds. Each line answers "where did we stand
+            here?" on its own — the whole point of a carnet. */}
+        {ledgerEntries.length > 0 && (
+          <View>
+            {ledgerEntries.map(entry => {
+              const isSettled = entry.reste === 0;
               return (
-                <View key={group.dateKey} style={styles.dayCard}>
-                  {/* Day header — tap to expand/collapse */}
-                  <Pressable
-                    style={styles.dayHeader}
-                    onPress={() => toggleDay(group.dateKey)}
-                  >
-                    <Text variant="label">{group.label}</Text>
-                    <Ionicons
-                      name={expanded ? 'chevron-up' : 'chevron-down'}
-                      size={16}
-                      color={palette.textSecondary}
-                    />
-                  </Pressable>
-
-                  {/* Day summary */}
-                  <View style={styles.daySummary}>
-                    {group.sales.length > 0 && (
-                      <View style={styles.summaryRow}>
-                        <View style={[styles.summaryIcon, { backgroundColor: palette.background }]}>
-                          <Ionicons name="cart-outline" size={12} color={palette.textSecondary} />
-                        </View>
-                        <Text style={[styles.summaryText, { color: palette.textSecondary }]}>
-                          {group.sales.length} vente{group.sales.length > 1 ? 's' : ''} · {fmt(group.salesTotal, currency)}
-                        </Text>
+                <Pressable
+                  key={entry.key}
+                  style={[styles.carnetRow, { borderBottomColor: palette.border }]}
+                  onPress={() => setDetailEntry(entry)}
+                >
+                  <Text variant="caption" color="secondary" style={styles.carnetDate}>
+                    {entryDateLabel(entry.dateKey)}
+                  </Text>
+                  <View style={styles.carnetMiddle}>
+                    <Text variant="body">{entry.kind === 'credit' ? 'Donné' : 'Reçu'}</Text>
+                    {entry.saleLabel ? (
+                      <Text variant="caption" color="secondary" numberOfLines={1}>{entry.saleLabel}</Text>
+                    ) : null}
+                  </View>
+                  <View style={styles.carnetAmountCol}>
+                    <RNText style={[styles.carnetAmount, { color: palette.textPrimary }]}>
+                      {fmt(entry.amount, currency)}
+                    </RNText>
+                    {isSettled ? (
+                      <View style={styles.regleTagRow}>
+                        <Text variant="caption" color="secondary">Reste : {fmt(0, currency)}</Text>
+                        <Text variant="caption" style={{ color: palette.recouvrementPaid, fontFamily: fontFamily.bold }}> · Réglé ✓</Text>
                       </View>
-                    )}
-                    {group.unpaidCount > 0 && (
-                      <View style={styles.summaryRow}>
-                        <View style={[styles.summaryIcon, { backgroundColor: palette.warningLight }]}>
-                          <Ionicons name="alert-circle-outline" size={12} color={palette.warning} />
-                        </View>
-                        <Text style={[styles.summaryText, { color: palette.warning }]}>
-                          {group.unpaidCount} impayé{group.unpaidCount > 1 ? 's' : ''} · {fmt(group.unpaidTotal, currency)}
-                        </Text>
-                      </View>
+                    ) : (
+                      <Text variant="caption" color="secondary">Reste : {fmt(entry.reste, currency)}</Text>
                     )}
                   </View>
-
-                  {/* "Voir le détail" toggle when collapsed */}
-                  {!expanded && total > 0 && (
-                    <Pressable style={styles.seeDetailBtn} onPress={() => toggleDay(group.dateKey)}>
-                      <Text style={styles.seeDetailText}>
-                        {total === 1 ? 'Voir la transaction ›' : `Voir les ${total} transactions ›`}
-                      </Text>
-                    </Pressable>
-                  )}
-
-                  {/* Expanded transaction rows */}
-                  {expanded && (
-                    <View style={styles.detailList}>
-                      {group.sales.map((s, idx) => {
-                        const isCredit = s.status === 'credit';
-                        const isLast = idx === group.sales.length - 1 && group.payments.length === 0;
-                        return (
-                          <View key={`s-${s.id}`} style={[styles.detailRow, !isLast && styles.detailBorder]}>
-                            <View style={[styles.rowIcon, { backgroundColor: isCredit ? palette.warningLight : palette.background }]}>
-                              <Ionicons name="cart-outline" size={14} color={isCredit ? palette.warning : palette.textDisabled} />
-                            </View>
-                            <View style={{ flex: 1 }}>
-                              <Text variant="body" numberOfLines={1} style={!isCredit && { textDecorationLine: 'line-through', color: palette.textSecondary }}>
-                                {s.lines?.map(l => l.product_name).join(', ') || 'Achat à crédit'}
-                              </Text>
-                              {isCredit && s.due_date ? (
-                                <Text variant="caption" style={{
-                                  color: new Date(s.due_date + 'T00:00:00') < new Date() ? palette.warning : palette.textSecondary,
-                                }}>
-                                  {fmtDueDate(s.due_date)}
-                                </Text>
-                              ) : null}
-                            </View>
-                            <Text variant="label" style={{ color: isCredit ? palette.warning : palette.textSecondary, ...((!isCredit) && { textDecorationLine: 'line-through' }) }}>
-                              {fmt(s.total_amount - (s.discount_amount ?? 0), currency)}
-                            </Text>
-                          </View>
-                        );
-                      })}
-                      {group.payments.map((p, idx) => {
-                        const isLast = idx === group.payments.length - 1;
-                        return (
-                          <View key={`p-${p.id}`} style={[styles.detailRow, !isLast && styles.detailBorder]}>
-                            <View style={[styles.rowIcon, { backgroundColor: palette.successLight }]}>
-                              <Ionicons name="arrow-down-circle-outline" size={14} color={palette.success} />
-                            </View>
-                            <View style={{ flex: 1 }}>
-                              <Text variant="body">{methodLabel(p.method)}</Text>
-                            </View>
-                            <Text variant="label" style={{ color: palette.success }}>+{fmt(p.amount, currency)}</Text>
-                          </View>
-                        );
-                      })}
-                    </View>
-                  )}
-                </View>
+                </Pressable>
               );
             })}
           </View>
         )}
 
-        {clientSales.length === 0 && (
+        {ledgerEntries.length === 0 && (
           <Text variant="body" color="secondary" style={{ textAlign: 'center', marginTop: spacing[6] }}>
             Aucune vente enregistrée.
           </Text>
@@ -692,7 +824,6 @@ export default function ClientLedgerScreen() {
         visible={showPayModal}
         displayName={displayName}
         totalOwed={totalOwed}
-        creditSales={creditSales}
         currency={currency}
         saving={saving}
         onClose={() => setShowPayModal(false)}
@@ -709,11 +840,67 @@ export default function ClientLedgerScreen() {
         onSaved={(r) => { setClientRecord(r); setShowEditModal(false); }}
       />
 
+      {/* "+ Nouveau crédit" — the carnet's "donné" stroke, opening the same
+          Crédit rapide capture Accueil's "+" and vendre.tsx's Crédit tab
+          use, pre-scoped to this one customer (no client grid, no way to
+          pick someone else). Keyed on visibility so it always starts fresh,
+          same convention QuickCaptureSheet's own children use. */}
+      <FormSheet
+        visible={showNewCreditSheet}
+        onClose={() => setShowNewCreditSheet(false)}
+        title="Crédit rapide"
+        contentContainerStyle={styles.pad}
+      >
+        {showNewCreditSheet && (
+          <CreditRapideCapture
+            key={String(showNewCreditSheet)}
+            businessId={businessId}
+            userId={userId}
+            currency={currency}
+            initialClient={{ id: clientRecord?.id, name: displayName }}
+            onDone={() => {
+              setShowNewCreditSheet(false);
+              // Ledger data doesn't refresh itself — fetchSales() re-running
+              // is what re-triggers loadLedgerPayments/loadLedgerLines above.
+              fetchSales(businessId);
+            }}
+          />
+        )}
+      </FormSheet>
+
+      {/* Tap a carnet line to see its source — read-only, no edit/cancel
+          actions (those belong to ventes/index.tsx's own detail modal, a
+          different surface with a different job). Just enough to answer
+          "what was this line," which is all a paper carnet page could ever
+          show anyway. */}
+      <FormSheet
+        visible={!!detailEntry}
+        onClose={() => setDetailEntry(null)}
+        title={detailEntry?.kind === 'credit' ? 'Donné' : 'Reçu'}
+        contentContainerStyle={styles.pad}
+      >
+        {detailEntry && (
+          <View style={{ gap: spacing[3] }}>
+            <Text variant="label" color="secondary">{entryDateLabel(detailEntry.dateKey)}</Text>
+            <Text variant="h2">{fmt(detailEntry.amount, currency)}</Text>
+            {detailEntry.saleLabel ? (
+              <Text variant="body" color="secondary">{detailEntry.saleLabel}</Text>
+            ) : null}
+            {detailEntry.method ? (
+              <Text variant="body" color="secondary">{methodLabel(detailEntry.method)}</Text>
+            ) : null}
+            <Text variant="caption" color="secondary">
+              Reste après cette ligne : {fmt(detailEntry.reste, currency)}
+            </Text>
+          </View>
+        )}
+      </FormSheet>
+
       {/* Payment success overlay */}
       {successPayment && (
         <View style={styles.successOverlay}>
           <Animated.View style={[styles.successBadge, { transform: [{ scale: checkScale }] }]}>
-            <Ionicons name="checkmark" size={44} color={palette.success} />
+            <Ionicons name="checkmark" size={44} color={palette.textPrimary} />
           </Animated.View>
           <Text style={styles.successHeadline}>C'est réglé !</Text>
           <Text style={styles.successSubtitle}>
@@ -755,55 +942,48 @@ function makeStyles(p: Palette) {
       paddingVertical: 14, alignItems: 'center', justifyContent: 'center', marginTop: 16,
     },
     bannerBtnText: { fontSize: 16, fontWeight: '600', color: p.textInverse },
-    bannerGreen: {
-      backgroundColor: p.successLight, borderRadius: radius.lg,
-      borderWidth: 1, borderColor: p.success,
-      padding: spacing[4], flexDirection: 'row', alignItems: 'center', justifyContent: 'flex-start', gap: 8,
-    },
     bannerAge: { fontSize: 12, color: p.textSecondary, textAlign: 'center', marginTop: 4, marginBottom: 8 },
     repaidLine: { fontSize: 13, color: p.textSecondary, textAlign: 'center', marginBottom: 4 },
-    rowIcon: { width: 28, height: 28, borderRadius: 8, alignItems: 'center', justifyContent: 'center' },
-    contactRow: { flexDirection: 'row', alignItems: 'center', justifyContent: 'space-between' },
+    // Zero-balance header's "Réglé ✓" sub-line — same slot bannerAge fills
+    // for the non-zero case, just an icon+label row instead of plain text.
+    regleRow: { flexDirection: 'row', alignItems: 'center', gap: 4, marginTop: 4, marginBottom: 8 },
+    newCreditBtn: {
+      alignSelf: 'center', borderWidth: 1, borderRadius: radius.md,
+      paddingVertical: spacing[2], paddingHorizontal: spacing[4],
+    },
+    contactRow: { flexDirection: 'row', gap: spacing[2] },
+    contactBtn: {
+      flex: 1, flexDirection: 'row', alignItems: 'center', justifyContent: 'center', gap: spacing[1],
+      borderWidth: 1, borderRadius: radius.md, paddingVertical: spacing[3], paddingHorizontal: spacing[3],
+    },
 
-    // Day-grouped history
-    dayCard: {
-      backgroundColor: p.surface, borderRadius: radius.lg,
-      borderWidth: 1, borderColor: p.border, overflow: 'hidden',
+    // Carnet — one continuous list of lines, no cards, no grouping. A thin
+    // bottom hairline between rows is the only structure, same as a ruled
+    // paper page.
+    carnetRow: {
+      flexDirection: 'row', alignItems: 'flex-start', gap: spacing[3],
+      paddingVertical: spacing[3], borderBottomWidth: StyleSheet.hairlineWidth,
     },
-    dayHeader: {
-      flexDirection: 'row', alignItems: 'center', justifyContent: 'space-between',
-      paddingHorizontal: spacing[4], paddingVertical: spacing[3],
-      borderBottomWidth: 1, borderBottomColor: p.border,
-    },
-    daySummary: {
-      paddingHorizontal: spacing[4], paddingVertical: spacing[3], gap: spacing[2],
-    },
-    summaryRow: { flexDirection: 'row', alignItems: 'center', gap: spacing[2] },
-    summaryIcon: { width: 22, height: 22, borderRadius: 6, alignItems: 'center', justifyContent: 'center' },
-    summaryText: { fontSize: 13, fontWeight: '500' },
-    seeDetailBtn: {
-      paddingHorizontal: spacing[4], paddingBottom: spacing[3],
-    },
-    seeDetailText: { fontSize: 13, color: p.primary, fontWeight: '500' },
-    detailList: { borderTopWidth: 1, borderTopColor: p.border },
-    detailRow: {
-      flexDirection: 'row', alignItems: 'center', gap: spacing[3],
-      paddingHorizontal: spacing[4], paddingVertical: spacing[3],
-    },
-    detailBorder: { borderBottomWidth: 1, borderBottomColor: p.border },
+    carnetDate: { width: 68 },
+    carnetMiddle: { flex: 1, gap: 2 },
+    carnetAmountCol: { alignItems: 'flex-end', gap: 2 },
+    carnetAmount: { fontSize: 16, fontFamily: fontFamily.semibold, fontVariant: ['tabular-nums'] },
+    regleTagRow: { flexDirection: 'row', alignItems: 'center' },
 
     // Modals
     modalSafe: { flex: 1, backgroundColor: p.background },
     pad: { padding: spacing[5], gap: spacing[4], paddingBottom: spacing[10] },
-    footer: { padding: spacing[5], borderTopWidth: 1, borderTopColor: p.border, backgroundColor: p.surface },
+    footer: { padding: spacing[5], backgroundColor: p.background },
 
-    contextCard: { gap: spacing[1] },
     amountRow: { flexDirection: 'row', gap: spacing[3], alignItems: 'center' },
     amountInput: {
       flex: 1, paddingHorizontal: spacing[4], paddingVertical: spacing[3],
       borderRadius: radius.md, borderWidth: 1, borderColor: p.border,
       backgroundColor: p.surface, color: p.textPrimary,
-      fontSize: 28, fontWeight: '700',
+      // Custom fontSize needs an explicit lineHeight or the glyph clips at
+      // the top (RN default line-height is too tight at this size) — see
+      // feedback_text_variant_over_custom_style memory.
+      fontSize: 28, lineHeight: 34, fontWeight: '700',
     },
     solderBtn: {
       paddingHorizontal: spacing[3], paddingVertical: spacing[3],
@@ -826,12 +1006,15 @@ function makeStyles(p: Palette) {
     },
     successBadge: {
       width: 80, height: 80, borderRadius: 40,
-      backgroundColor: p.successLight,
+      // Neutral, not green — this overlay fires for a partial payment, and
+      // green on these screens is reserved for the one "Tout est réglé ✓"
+      // zero state, nowhere else.
+      backgroundColor: p.border + '55',
       alignItems: 'center', justifyContent: 'center',
       marginBottom: 24,
     },
     successHeadline: {
-      fontSize: 28, fontWeight: '700', lineHeight: 40, color: p.success,
+      fontSize: 28, fontWeight: '700', lineHeight: 40, color: p.textPrimary,
       textAlign: 'center', marginBottom: 8,
     },
     successSubtitle: {
@@ -843,11 +1026,5 @@ function makeStyles(p: Palette) {
       paddingVertical: 16, alignItems: 'center',
     },
     successBtnText: { fontSize: 16, fontWeight: '600', color: p.textInverse },
-    saleOption: {
-      paddingHorizontal: spacing[3], paddingVertical: spacing[2],
-      borderRadius: radius.md, borderWidth: 1, borderColor: p.border,
-      backgroundColor: p.surface,
-    },
-    saleOptionActive: { backgroundColor: p.primary, borderColor: p.primary },
   });
 }

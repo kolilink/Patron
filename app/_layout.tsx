@@ -1,5 +1,7 @@
+import '@/lib/startupTiming';
 import * as Sentry from '@sentry/react-native';
 import { useEffect, useRef } from 'react';
+import { View } from 'react-native';
 import { GestureHandlerRootView } from 'react-native-gesture-handler';
 import { Stack, usePathname, useGlobalSearchParams } from 'expo-router';
 import * as SplashScreen from 'expo-splash-screen';
@@ -11,6 +13,13 @@ import {
   DMSans_600SemiBold,
   DMSans_700Bold,
 } from '@expo-google-fonts/dm-sans';
+// Inter — scoped to Alpha's chat bubbles only (app/(app)/alpha/index.tsx), not
+// the app-wide typography tokens. Already an existing dependency (previously
+// unused) so this adds no new package.json entry.
+import {
+  Inter_400Regular,
+  Inter_700Bold,
+} from '@expo-google-fonts/inter';
 import { PostHogProvider } from 'posthog-react-native';
 import { useAuthStore } from '@/stores/auth';
 import { openDb } from '@/lib/db';
@@ -18,6 +27,7 @@ import { ThemeProvider } from '@/src/theme';
 import { posthog } from '@/lib/posthog';
 import { identifyUser, resetAnalytics } from '@/lib/analytics';
 import { configurePurchases } from '@/lib/purchases';
+import { withStartupTiming, reportFirstScreenRender, reportFirstInteraction } from '@/lib/startupTiming';
 
 // Only active when EXPO_PUBLIC_SENTRY_DSN is set (no-op in local dev without it)
 if (process.env.EXPO_PUBLIC_SENTRY_DSN) {
@@ -43,6 +53,8 @@ const ALL_FONTS = {
   DMSans_500Medium,
   DMSans_600SemiBold,
   DMSans_700Bold,
+  Inter_400Regular,
+  Inter_700Bold,
 };
 
 function RootLayout() {
@@ -60,19 +72,32 @@ function RootLayout() {
         previous_screen: previousPathname.current ?? null,
         ...params,
       });
+      if (previousPathname.current === undefined) {
+        reportFirstScreenRender();
+      }
       previousPathname.current = pathname;
     }
   }, [pathname, params]);
 
   // Keep Sentry + PostHog user context in sync with the active session.
+  // Sentry.* calls are guarded by the same DSN check as Sentry.init() above —
+  // calling into the native Sentry SDK when it was never initialized is the
+  // same class of risk as the RevenueCat/expo-notifications native calls
+  // removed elsewhere during the 2026-07-17 logout-crash investigation (see
+  // CLAUDE.md): a native module call with no guarantee it's safe to invoke
+  // pre-init, un-catchable by JS try/catch if it throws.
   useEffect(() => {
     if (session) {
-      Sentry.setUser({ id: session.user.id });
-      Sentry.setTag('business_id', session.activeBusiness?.id ?? 'none');
-      Sentry.setTag('role', session.activeMembership?.role ?? 'none');
+      if (process.env.EXPO_PUBLIC_SENTRY_DSN) {
+        Sentry.setUser({ id: session.user.id });
+        Sentry.setTag('business_id', session.activeBusiness?.id ?? 'none');
+        Sentry.setTag('role', session.activeMembership?.role ?? 'none');
+      }
       identifyUser(session);
     } else {
-      Sentry.setUser(null);
+      if (process.env.EXPO_PUBLIC_SENTRY_DSN) {
+        Sentry.setUser(null);
+      }
       resetAnalytics();
     }
   }, [session]);
@@ -80,19 +105,37 @@ function RootLayout() {
   useEffect(() => {
     if (!fontsLoaded) return;
     const timeout = setTimeout(() => SplashScreen.hideAsync(), 2000);
-    Promise.all([initialize(), openDb()]).finally(() => {
+    Promise.all([
+      withStartupTiming('auth_check', initialize()),
+      withStartupTiming('db_open', openDb()),
+    ]).finally(() => {
       clearTimeout(timeout);
       SplashScreen.hideAsync();
+      // A real cold start — one half of PaymentReminderAsker's "fresh
+      // session" trigger condition (the other half is a 10+min-backgrounded
+      // return, bumped from app/(app)/_layout.tsx's own AppState handler).
+      useAuthStore.setState(s => ({ freshSessionToken: s.freshSessionToken + 1 }));
     });
   }, [fontsLoaded]);
 
   return (
     <GestureHandlerRootView style={{ flex: 1 }}>
-      <PostHogProvider client={posthog} autocapture>
-        <ThemeProvider>
-          <Stack screenOptions={{ headerShown: false, animation: 'fade' }} />
-        </ThemeProvider>
-      </PostHogProvider>
+      {/* Observes the first touch anywhere in the app (capture phase, returns
+          false) purely to time it — never claims the responder, so it can't
+          change what actually handles the tap. See reportFirstInteraction. */}
+      <View
+        style={{ flex: 1 }}
+        onStartShouldSetResponderCapture={() => {
+          reportFirstInteraction();
+          return false;
+        }}
+      >
+        <PostHogProvider client={posthog} autocapture>
+          <ThemeProvider>
+            <Stack screenOptions={{ headerShown: false, animation: 'fade' }} />
+          </ThemeProvider>
+        </PostHogProvider>
+      </View>
     </GestureHandlerRootView>
   );
 }

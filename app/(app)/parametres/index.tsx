@@ -1,8 +1,10 @@
-import { useEffect, useMemo, useRef, useState } from 'react';
-import { Alert, Animated, KeyboardAvoidingView, Linking, Platform, Pressable, ScrollView, Share, StyleSheet, TextInput, View } from 'react-native';
+import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
+import { Alert, Animated, KeyboardAvoidingView, Linking, Platform, Pressable, ScrollView, Share, StyleSheet, Switch, TextInput, View } from 'react-native';
 import * as Clipboard from 'expo-clipboard';
+import * as Application from 'expo-application';
+import * as Updates from 'expo-updates';
 import { Screen } from '@/src/components/ui/Screen';
-import { router } from 'expo-router';
+import { router, useFocusEffect } from 'expo-router';
 import { Ionicons } from '@expo/vector-icons';
 import { Card } from '@/src/components/ui/Card';
 import { Input } from '@/src/components/ui/Input';
@@ -14,8 +16,10 @@ import type { Palette } from '@/src/theme';
 import { useAuthStore } from '@/stores/auth';
 import { generateFallbackName } from '@/lib/id';
 import { supabase } from '@/lib/supabase';
+import { translateError } from '@/lib/errors';
 import { haptics } from '@/lib/haptics';
 import { toast } from '@/stores/toast';
+import { checkNotificationPermission, requestNotificationPermission } from '@/src/components/NotificationSetup';
 import { toUnicodeBold } from '@/src/utils/format';
 import type { Business } from '@/src/types';
 
@@ -36,10 +40,46 @@ const CURRENCY_NAMES: Record<string, string> = {
 // "Inviter un ami" turned off for now — flip back to true to re-enable.
 const SHOW_REFERRAL = false;
 
+// supabase.functions.invoke's error carries the function's actual JSON body
+// (e.g. { error: "..." }) inside err.context — same extraction stores/auth.ts
+// uses for the same two edge functions in the real login flow. That body's
+// `error` is always one of the edge function's own French strings — safe to
+// show as-is. The one case with no French text to fall back on is a genuine
+// network-level failure that never reached the function at all — that must
+// never surface fnErr.message directly (raw, English, e.g. "Network request
+// failed"), only a safe generic French line.
+async function extractFnError(fnErr: unknown): Promise<string | null> {
+  if (!fnErr) return null;
+  try {
+    const body = await (fnErr as { context?: { json?: () => Promise<{ error?: string }> } }).context?.json?.();
+    if (body?.error) return body.error;
+  } catch { /* fall through to generic message below */ }
+  return 'Erreur de réseau. Vérifiez votre connexion.';
+}
+
+// A Supabase/Postgres error is either one of our own deliberate RAISE
+// EXCEPTION messages (French, always raised with ERRCODE P0001 — e.g. "X a
+// d'autres membres actifs...") meant to be shown to the user verbatim, or a
+// raw infrastructure error (permission denied, a missing function, a network
+// failure) that must never reach the user in English. Never render
+// error.message directly — always go through this first, per CLAUDE.md's
+// "never show raw Supabase error messages in the UI" rule.
+function rpcErrorMessage(error: { code?: string; message?: string } | null, fallback: string): string {
+  if (error?.code === 'P0001' && error.message) return error.message;
+  return translateError(error, fallback);
+}
+
+// Bump by 1 on every OTA-only publish (eas update). Updates.updateId is a
+// UUID — not something a merchant or support agent can compare at a glance —
+// so this gives a simple, human-readable "which OTA is this" number instead.
+// Purely a display label; has no effect on update delivery/fingerprint.
+const OTA_BUILD_NUMBER = 1;
+
 export default function ParametresScreen() {
   const { palette, colorScheme, setColorScheme } = useTheme();
   const styles = useMemo(() => makeStyles(palette), [palette]);
-  const { session, sendEmailOtp, linkRecoveryEmail, emailOtpLoading, error: authError, clearError, lock } = useAuthStore();
+  const { session, sendEmailOtp, linkRecoveryEmail, emailOtpLoading, error: authError, clearError, revokeOtherSessions } = useAuthStore();
+  const [revokingSessions, setRevokingSessions] = useState(false);
   const business = session?.activeBusiness;
   const userId   = session?.user.id ?? '';
   const role     = session?.activeMembership?.role;
@@ -61,6 +101,52 @@ export default function ParametresScreen() {
   const [userName, setUserName] = useState(session?.user.name ?? '');
   const [saving,   setSaving]   = useState(false);
   const [hasSales, setHasSales] = useState<boolean | null>(null);
+
+  // Per-sale push opt-out — see migration_v184.sql. Optimistic toggle with
+  // rollback on failure, same shape as every other one-tap preference in
+  // this screen; the underlying update is a plain profiles row update,
+  // already permitted by the existing "Modifier son profil" RLS policy
+  // (auth.uid() = id) — no RPC needed, same as resetUnreadBadge.
+  const [notifyEverySale, setNotifyEverySale] = useState(session?.user.notify_on_every_sale ?? true);
+  const handleToggleNotifyEverySale = async (value: boolean) => {
+    setNotifyEverySale(value);
+    const { error } = await supabase.from('profiles').update({ notify_on_every_sale: value }).eq('id', userId);
+    if (error) {
+      setNotifyEverySale(!value);
+      toast.warning('Vérifiez votre connexion et réessayez.');
+      return;
+    }
+    useAuthStore.setState(state =>
+      state.session ? { session: { ...state.session, user: { ...state.session.user, notify_on_every_sale: value } } } : {},
+    );
+  };
+
+  // "Rappels de paiement" — unlike the boolean above, this toggle is a
+  // live reflection of the OS notification-permission state, not its own
+  // stored preference: there's no app-level "on/off" for a permission the
+  // OS itself owns. Not-determined → the toggle fires the real system
+  // prompt; denied → deep-links to OS settings (the only way back once
+  // denied); granted → reflects on, and tapping it again is a no-op (you
+  // can't programmatically revoke what the OS granted). Re-checked on every
+  // focus so coming back from a Settings visit updates it immediately.
+  const [paymentRemindersGranted, setPaymentRemindersGranted] = useState(false);
+  const [paymentRemindersCanAsk, setPaymentRemindersCanAsk] = useState(true);
+  const refreshPaymentReminderPerm = useCallback(async () => {
+    const perm = await checkNotificationPermission();
+    setPaymentRemindersGranted(!!perm?.granted);
+    setPaymentRemindersCanAsk(perm?.canAskAgain !== false);
+  }, []);
+  useFocusEffect(useCallback(() => { void refreshPaymentReminderPerm(); }, [refreshPaymentReminderPerm]));
+  const handleTogglePaymentReminders = async (value: boolean) => {
+    if (!value || paymentRemindersGranted) return; // no real "off" action to take
+    if (!paymentRemindersCanAsk) {
+      Linking.openSettings().catch(() => {});
+      return;
+    }
+    const granted = await requestNotificationPermission();
+    setPaymentRemindersGranted(granted);
+    if (granted) toast.success('Rappels activés ✓');
+  };
 
   // Email recovery linking
   const [emailStep, setEmailStep]     = useState<'idle' | 'input' | 'otp'>('idle');
@@ -116,9 +202,23 @@ export default function ParametresScreen() {
     return () => { loopRef.current?.stop(); };
   }, [isDirty]);
 
-  const [showDeleteConfirm, setShowDeleteConfirm] = useState(false);
-  const [deleteInput,       setDeleteInput]       = useState('');
-  const [deleting,          setDeleting]          = useState(false);
+  const [deleteTarget, setDeleteTarget] = useState<'account' | 'business' | null>(null);
+  const [deleteInput,  setDeleteInput]  = useState('');
+  const [deleting,     setDeleting]     = useState(false);
+
+  // Account deletion only: re-verify the phone on file before scheduling.
+  const [deleteAccountStep,   setDeleteAccountStep]   = useState<'confirm' | 'otp'>('confirm');
+  const [deleteVerificationId, setDeleteVerificationId] = useState('');
+  const [deleteOtpKey,        setDeleteOtpKey]        = useState(0);
+  const [deleteOtpError,      setDeleteOtpError]      = useState<string | null>(null);
+
+  const resetDeleteFlow = () => {
+    setDeleteTarget(null);
+    setDeleteInput('');
+    setDeleteAccountStep('confirm');
+    setDeleteVerificationId('');
+    setDeleteOtpError(null);
+  };
 
   const handleSendEmailCode = async () => {
     clearError();
@@ -213,7 +313,7 @@ export default function ParametresScreen() {
             const memId = session?.activeMembership?.id;
             if (!memId) return;
             const { error } = await supabase.from('memberships').delete().eq('id', memId);
-            if (error) { Alert.alert('Erreur', error.message); return; }
+            if (error) { Alert.alert('Erreur', rpcErrorMessage(error, "Ça n'a pas fonctionné. Écrivez-nous si ça continue :)")); return; }
 
             const remaining = (session?.memberships ?? []).filter(m => m.id !== memId);
             if (remaining.length > 0) {
@@ -243,38 +343,225 @@ export default function ParametresScreen() {
     );
   };
 
+  // The single "Quitter" row's tap handler. Checks who else is in this
+  // business FIRST, so the app can say one plain, true thing instead of
+  // hedging with "if you're alone, X — if not, Y" in the confirmation box:
+  // either there's nobody to protect (open the real delete confirmation),
+  // or there's a real reason to stop (say it immediately, no typing needed).
+  const handleRevokeOtherSessions = () => {
+    Alert.alert(
+      'Déconnecter tous les autres appareils',
+      "Tous les autres appareils connectés à votre compte seront déconnectés. Cet appareil-ci restera connecté.",
+      [
+        { text: 'Annuler', style: 'cancel' },
+        {
+          text: 'Déconnecter',
+          style: 'destructive',
+          onPress: async () => {
+            setRevokingSessions(true);
+            const ok = await revokeOtherSessions();
+            setRevokingSessions(false);
+            if (ok) {
+              haptics.success();
+              toast.success('Les autres appareils ont été déconnectés');
+            } else {
+              toast.warning('Vérifiez votre connexion et réessayez.');
+            }
+          },
+        },
+      ],
+    );
+  };
+
+  const handleQuitterPress = async () => {
+    if (!isAdmin) { handleLeave(); return; }
+    if (!business?.id) return;
+
+    const { data: others, error } = await supabase
+      .from('memberships').select('id')
+      .eq('business_id', business.id).neq('user_id', userId);
+
+    if (error) {
+      toast.warning('Vérifiez votre connexion et réessayez.');
+      return;
+    }
+
+    if (others && others.length > 0) {
+      Alert.alert('Suppression impossible', `${business.name} a d'autres membres. Retirez-les avant de quitter.`);
+      return;
+    }
+
+    resetDeleteFlow();
+    setDeleteTarget('business');
+  };
+
+  // Step 1 of account deletion: the admin/other-members precheck (unchanged),
+  // then send a fresh phone verification code — proving the caller still
+  // controls the phone on file before we schedule anything. Deliberately NOT
+  // useAuthStore's loginWithPhone/verifyPhoneCode: those call
+  // supabase.auth.signInAnonymously() and flip the global `loading` flag,
+  // both fine for the pre-login screens they were built for but destructive
+  // to an already-authenticated in-app session (see CLAUDE.md's "Critical:
+  // auth store loading flag" note) — invoking the same two edge functions
+  // directly, under the current real session, has neither side effect.
   const handleDeleteAccount = async () => {
     if (deleteInput !== 'SUPPRIMER') return;
     haptics.error();
     setDeleting(true);
 
-    const memberships    = session?.memberships ?? [];
-    const adminBizIds    = memberships.filter(m => m.role === 'administrateur').map(m => m.business_id);
+    try {
+      const adminMemberships = (session?.memberships ?? []).filter(m => m.role === 'administrateur');
 
-    if (adminBizIds.length > 0) {
-      const { data: others } = await supabase
-        .from('memberships').select('business_id')
-        .in('business_id', adminBizIds).neq('user_id', userId);
+      if (adminMemberships.length > 0) {
+        const { data: others } = await supabase
+          .from('memberships').select('business_id')
+          .in('business_id', adminMemberships.map(m => m.business_id)).neq('user_id', userId);
 
-      if (others && others.length > 0) {
+        const blockingIds = new Set((others ?? []).map(o => o.business_id));
+        if (blockingIds.size > 0) {
+          const names = adminMemberships
+            .filter(m => blockingIds.has(m.business_id))
+            .map(m => m.business?.name ?? 'un commerce')
+            .join(', ');
+          setDeleting(false);
+          resetDeleteFlow();
+          Alert.alert(
+            'Suppression impossible',
+            `Vous êtes gérant de : ${names}.\n\nRetirez tous les autres membres de ces commerces, ou quittez-les depuis cet écran, avant de supprimer votre compte.`,
+          );
+          return;
+        }
+      }
+
+      const phone = session?.user.phone;
+      if (!phone) {
         setDeleting(false);
-        setShowDeleteConfirm(false);
-        setDeleteInput('');
-        Alert.alert(
-          'Suppression impossible',
-          "Vous êtes gérant d'un commerce avec des membres actifs.\n\nRetirez tous les membres avant de supprimer votre compte.",
-        );
+        toast.warning('Numéro introuvable. Contactez le support.');
         return;
       }
-    }
 
-    const { error } = await supabase.rpc('delete_my_account');
+      const { data, error: fnErr } = await supabase.functions.invoke('create-phone-verification', {
+        body: { phone, login: true },
+      });
+      const sendErr = await extractFnError(fnErr) ?? data?.error;
+      if (sendErr || !data?.verificationId) {
+        setDeleting(false);
+        toast.warning("Impossible d'envoyer le code. Réessayez.");
+        return;
+      }
+
+      setDeleteVerificationId(data.verificationId);
+      setDeleting(false);
+      setDeleteAccountStep('otp');
+    } catch {
+      // A thrown exception (e.g. a network timeout) here must never leave
+      // `deleting` stuck true with no feedback — same posture as every other
+      // bare-await-in-an-action-flow fix (see CLAUDE.md's withTimeout() sweep).
+      setDeleting(false);
+      toast.warning('Vérifiez votre connexion et réessayez.');
+    }
+  };
+
+  // Step 2: the code just sent is verified, then (only then) delete_my_account
+  // is called — which, as of migration_v178, no longer deletes immediately.
+  // It schedules deletion 30 days out; the user is signed out right after, and
+  // logging back in at any point before then (stores/auth.ts's loadSession)
+  // cancels the request automatically.
+  const handleDeleteAccountOtpComplete = async (code: string) => {
+    setDeleteOtpError(null);
+    const phone = session?.user.phone ?? '';
+
+    try {
+      const { data, error: fnErr } = await supabase.functions.invoke('verify-phone-code', {
+        body: { phone, code, verificationId: deleteVerificationId },
+      });
+      const verifyErr = await extractFnError(fnErr) ?? data?.error;
+      if (verifyErr || !data?.verified) {
+        setDeleteOtpError(verifyErr || 'Code incorrect. Vérifiez et réessayez.');
+        setDeleteOtpKey(k => k + 1);
+        return;
+      }
+
+      setDeleting(true);
+      const { error } = await supabase.rpc('delete_my_account');
+      setDeleting(false);
+      if (error) {
+        // The RPC's own block message (a real, named-business error, same
+        // shape as leave_or_delete_business's) is shown as-is if that's what
+        // this is — the client precheck above only catches this ahead of time
+        // on the common path, not a race where membership changed in between.
+        // Anything else (a raw infrastructure error) is translated, never shown raw.
+        resetDeleteFlow();
+        Alert.alert('Suppression impossible', rpcErrorMessage(error, "Ça n'a pas fonctionné. Écrivez-nous si ça continue :)"));
+        return;
+      }
+
+      Alert.alert(
+        'Compte programmé pour suppression',
+        'Votre compte sera définitivement supprimé dans 30 jours.\n\nReconnectez-vous à tout moment avant cette date pour annuler.',
+        [{ text: 'OK', onPress: async () => { await useAuthStore.getState().logout(); } }],
+      );
+    } catch {
+      // A thrown exception (e.g. a network timeout, whether during the OTP
+      // check or the delete RPC itself) must never leave `deleting` stuck
+      // true nor the OTP screen silent with no feedback.
+      setDeleting(false);
+      setDeleteOtpError('Vérifiez votre connexion et réessayez.');
+      setDeleteOtpKey(k => k + 1);
+    }
+  };
+
+  // One RPC handles the whole "Quitter" button for an admin: it decides for
+  // itself whether this is a harmless leave or a real deletion. Non-admin
+  // taps never reach here at all — they go through the plain handleLeave
+  // Alert above, since leaving is never destructive for them regardless of
+  // how many other members exist. No client-side precheck query: the RPC is
+  // the single source of truth, and its own exception message already names
+  // the business, so it's shown as-is rather than re-derived here.
+  const handleLeaveOrDeleteBusiness = async () => {
+    if (deleteInput !== 'SUPPRIMER' || !business?.id) return;
+    haptics.error();
+    setDeleting(true);
+
+    let error: { code?: string; message?: string } | null;
+    try {
+      ({ error } = await supabase.rpc('leave_or_delete_business', { p_business_id: business.id }));
+    } catch (err) {
+      // A thrown exception (e.g. a network timeout) must be treated the
+      // same as a returned {error} — otherwise `deleting` is left stuck
+      // true forever with no message shown, on a genuinely destructive flow.
+      error = err instanceof Error ? { message: err.message } : { message: String(err) };
+    }
     if (error) {
       setDeleting(false);
-      toast.warning('Ça n\'a pas fonctionné. Écrivez-nous si ça continue :)');
+      resetDeleteFlow();
+      Alert.alert('Suppression impossible', rpcErrorMessage(error, "Ça n'a pas fonctionné. Écrivez-nous si ça continue :)"));
       return;
     }
-    await useAuthStore.getState().logout();
+
+    const remaining = (session?.memberships ?? []).filter(m => m.business_id !== business.id);
+    if (remaining.length > 0) {
+      const first = remaining[0];
+      useAuthStore.setState(state => {
+        if (!state.session) return state;
+        return {
+          session: {
+            ...state.session,
+            memberships: remaining,
+            activeBusiness: (first.business as Business) ?? null,
+            activeMembership: first,
+          },
+        };
+      });
+      toast.success('Commerce supprimé');
+      router.replace('/(app)/(tabs)/');
+    } else {
+      useAuthStore.setState(state => {
+        if (!state.session) return state;
+        return { session: { ...state.session, memberships: [], activeBusiness: null, activeMembership: null } };
+      });
+      router.replace('/(welcome)/');
+    }
   };
 
   return (
@@ -295,7 +582,7 @@ export default function ParametresScreen() {
         </Animated.View>
       </View>
 
-      <KeyboardAvoidingView behavior={Platform.OS === 'ios' ? 'padding' : 'height'} style={{ flex: 1 }}>
+      <KeyboardAvoidingView behavior={Platform.OS === 'ios' ? 'padding' : undefined} style={{ flex: 1, backgroundColor: palette.background }}>
         <ScrollView contentContainerStyle={styles.content} keyboardShouldPersistTaps="handled">
 
           {/* Commerce — admin only */}
@@ -498,28 +785,60 @@ export default function ParametresScreen() {
             )}
           </Card>
 
-          {/* Sécurité */}
+
+          {/* Notifications */}
+          <Card style={styles.section}>
+            <Text variant="label" color="secondary">Notifications</Text>
+            <View style={styles.linkRow}>
+              <View style={{ flex: 1, marginRight: spacing[3] }}>
+                <Text variant="body">Une notification à chaque vente</Text>
+                <Text variant="caption" color="secondary">
+                  Reçue pour chaque vente faite par vous ou votre équipe
+                </Text>
+              </View>
+              <Switch
+                value={notifyEverySale}
+                onValueChange={handleToggleNotifyEverySale}
+                trackColor={{ false: palette.border, true: palette.primary }}
+                thumbColor={palette.surface}
+              />
+            </View>
+            <View style={[styles.linkRow, { marginTop: spacing[3] }]}>
+              <View style={{ flex: 1, marginRight: spacing[3] }}>
+                <Text variant="body">Rappels de paiement</Text>
+                <Text variant="caption" color="secondary">
+                  Un rappel quand un client vous doit de l'argent depuis 7 jours
+                </Text>
+              </View>
+              <Switch
+                value={paymentRemindersGranted}
+                onValueChange={handleTogglePaymentReminders}
+                trackColor={{ false: palette.border, true: palette.primary }}
+                thumbColor={palette.surface}
+              />
+            </View>
+          </Card>
+
+          {/* À propos */}
+          {/* Sécurité — lost/stolen-phone flow (security audit 2026-09-27,
+              checklist 1.15). Server-side via GoTrue's `others` scope
+              (stores/auth.ts's revokeOtherSessions) — kills every other
+              refresh token immediately without touching this device's own
+              session. Deliberately just this one button, no per-device list:
+              at this app's current scale nobody runs multiple simultaneous
+              devices as a normal pattern, so "kill everything else" matches
+              what a worried vendor actually wants to tap, not a session
+              picker they'd have to reason about first. */}
           <Card style={styles.section}>
             <Text variant="label" color="secondary">Sécurité</Text>
-            <Pressable
-              onPress={() => {
-                Alert.alert(
-                  'Verrouiller Patron ?',
-                  'Vous pourrez revenir avec Face ID / Touch ID, sans nouveau code WhatsApp.',
-                  [
-                    { text: 'Annuler', style: 'cancel' },
-                    { text: 'Verrouiller', onPress: () => { void lock(); } },
-                  ],
-                );
-              }}
-              style={styles.linkRow}
-            >
-              <Text variant="body">Verrouiller</Text>
+            <Pressable onPress={handleRevokeOtherSessions} disabled={revokingSessions} style={styles.linkRow}>
+              <Text variant="body">
+                {revokingSessions ? 'Déconnexion en cours…' : 'Déconnecter tous les autres appareils'}
+              </Text>
               <Text variant="caption" color="secondary">›</Text>
             </Pressable>
           </Card>
 
-          {/* À propos */}
           <Card style={styles.section}>
             <Text variant="label" color="secondary">À propos</Text>
             <Pressable onPress={() => Linking.openURL('https://patron.kolilink.com/privacy.html')} style={styles.linkRow}>
@@ -530,10 +849,19 @@ export default function ParametresScreen() {
               <Text variant="body">Conditions d'utilisation</Text>
               <Text variant="caption" color="secondary">›</Text>
             </Pressable>
-            <Pressable onPress={() => Linking.openURL('https://wa.me/16094454809')} style={styles.linkRow}>
-              <Text variant="body">Contacter le support</Text>
-              <Text variant="caption" color="secondary">›</Text>
-            </Pressable>
+            <View style={styles.linkRow}>
+              <Text variant="body">Version</Text>
+              <Text variant="caption" color="secondary" selectable>
+                {(() => {
+                  const fullVersion = Application.nativeApplicationVersion ?? '?';
+                  const parts = fullVersion.split('.');
+                  const appVersion = parts.length > 1 && parts[0].length >= 2 && parseInt(parts[0]) >= 50
+                    ? parts.slice(1).join('.')
+                    : fullVersion;
+                  return `${appVersion}${Updates.isEmbeddedLaunch ? '' : ` (${OTA_BUILD_NUMBER})`}`;
+                })()}
+              </Text>
+            </View>
           </Card>
 
           {/* Apparence */}
@@ -557,25 +885,62 @@ export default function ParametresScreen() {
             </View>
           </Card>
 
-          {/* Danger — plain section, no loud box, at the very bottom */}
+          {/* Danger — plain section, no loud box, at the very bottom.
+              One "Quitter" row for everyone, admin or not — the app decides
+              what quitting means. Non-admins always just leave (never
+              destructive, so a plain native Alert is enough). An admin's tap
+              opens the same typed-SUPPRIMER box account deletion uses below,
+              since for them quitting can mean permanently deleting the
+              business (when they're the last one left) — leave_or_delete_
+              business itself is the one place that actually decides which. */}
           <Card style={styles.section}>
-            {!isAdmin && (
-              <Pressable onPress={handleLeave} style={styles.dangerRow}>
-                <Text style={styles.dangerText}>Quitter ce commerce</Text>
+            {deleteTarget !== 'business' && (
+              <Pressable onPress={handleQuitterPress} style={styles.dangerRow}>
+                <Text style={styles.dangerText}>Quitter {business?.name ?? 'ce commerce'}</Text>
               </Pressable>
             )}
 
-            {!showDeleteConfirm ? (
-              <Pressable onPress={() => { setShowDeleteConfirm(true); setDeleteInput(''); }} style={styles.dangerRow}>
+            {deleteTarget === null ? (
+              <Pressable onPress={() => { resetDeleteFlow(); setDeleteTarget('account'); }} style={styles.dangerRow}>
                 <Text style={styles.dangerText}>Supprimer mon compte</Text>
               </Pressable>
+            ) : deleteTarget === 'account' && deleteAccountStep === 'otp' ? (
+              <View style={styles.deleteConfirmBox}>
+                <Text variant="label" style={{ color: palette.danger }}>Entrez le code reçu</Text>
+                <Text variant="bodySmall" color="secondary">
+                  Envoyé à {session?.user.phone} — confirme que c'est bien vous avant de programmer la suppression.
+                </Text>
+                {deleteOtpError ? (
+                  <Text variant="caption" style={{ color: palette.danger }}>{deleteOtpError}</Text>
+                ) : null}
+                <OtpInput key={deleteOtpKey} onComplete={handleDeleteAccountOtpComplete} disabled={deleting} autoFocus whatsappAutofill />
+                <View style={{ flexDirection: 'row', gap: spacing[3] }}>
+                  <Pressable
+                    onPress={resetDeleteFlow}
+                    style={{ flex: 1, alignItems: 'center', paddingVertical: spacing[2] }}
+                  >
+                    <Text variant="label" color="secondary">Annuler</Text>
+                  </Pressable>
+                  <Pressable
+                    onPress={handleDeleteAccount}
+                    disabled={deleting}
+                    style={{ flex: 1, alignItems: 'center', paddingVertical: spacing[2], opacity: deleting ? 0.4 : 1 }}
+                  >
+                    <Text variant="label" style={{ color: palette.primary }}>
+                      {deleting ? 'Envoi…' : 'Renvoyer le code'}
+                    </Text>
+                  </Pressable>
+                </View>
+              </View>
             ) : (
               <View style={styles.deleteConfirmBox}>
                 <Text variant="label" style={{ color: palette.danger }}>Supprimer définitivement ?</Text>
                 <Text variant="bodySmall" color="secondary">
-                  {isAdmin
-                    ? "Votre compte et votre commerce (produits, ventes, dépenses) seront définitivement supprimés."
-                    : "Votre compte sera supprimé. Les ventes que vous avez enregistrées restent dans le commerce."}
+                  {deleteTarget === 'business'
+                    ? `${business?.name ?? 'Ce commerce'} et toutes ses données seront supprimés pour toujours.`
+                    : isAdmin
+                      ? "Un code de vérification vous sera envoyé par WhatsApp. Votre compte et les commerces dont vous êtes seul membre seront définitivement supprimés dans 30 jours — reconnectez-vous avant cette date pour annuler."
+                      : "Un code de vérification vous sera envoyé par WhatsApp. Votre compte sera supprimé dans 30 jours — reconnectez-vous avant cette date pour annuler."}
                   {'\n\n'}Tapez SUPPRIMER pour confirmer.
                 </Text>
                 <TextInput
@@ -588,19 +953,21 @@ export default function ParametresScreen() {
                 />
                 <View style={{ flexDirection: 'row', gap: spacing[3] }}>
                   <Pressable
-                    onPress={() => { setShowDeleteConfirm(false); setDeleteInput(''); }}
+                    onPress={resetDeleteFlow}
                     style={{ flex: 1, alignItems: 'center', paddingVertical: spacing[2] }}
                   >
                     <Text variant="label" color="secondary">Annuler</Text>
                   </Pressable>
                   <Pressable
-                    onPress={handleDeleteAccount}
+                    onPress={deleteTarget === 'business' ? handleLeaveOrDeleteBusiness : handleDeleteAccount}
                     disabled={deleteInput !== 'SUPPRIMER' || deleting}
                     style={{ flex: 1, alignItems: 'center', paddingVertical: spacing[2],
                       opacity: deleteInput !== 'SUPPRIMER' || deleting ? 0.4 : 1 }}
                   >
                     <Text variant="label" style={{ color: palette.danger }}>
-                      {deleting ? 'Suppression…' : 'Confirmer'}
+                      {deleting
+                        ? (deleteTarget === 'business' ? 'Suppression…' : 'Envoi du code…')
+                        : 'Confirmer'}
                     </Text>
                   </Pressable>
                 </View>

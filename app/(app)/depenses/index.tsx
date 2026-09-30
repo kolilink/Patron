@@ -1,8 +1,8 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
-import { Alert, Animated, Easing, Modal, Pressable, ScrollView, StyleSheet, View } from 'react-native';
+import { Alert, Animated, Easing, InputAccessoryView, Platform, Pressable, ScrollView, StyleSheet, View } from 'react-native';
 import { Ionicons } from '@expo/vector-icons';
-import { SafeAreaView } from 'react-native-safe-area-context';
 import { Screen } from '@/src/components/ui/Screen';
+import { FormSheet } from '@/src/components/ui/FormSheet';
 import { router } from 'expo-router';
 import { Button } from '@/src/components/ui/Button';
 import { Card } from '@/src/components/ui/Card';
@@ -19,6 +19,10 @@ import type { Expense } from '@/src/types';
 import { haptics } from '@/lib/haptics';
 import { toast } from '@/stores/toast';
 import { SkeletonList } from '@/src/components/ui/SkeletonPlaceholder';
+import { ProofControl } from '@/src/components/ui/ProofControl';
+import { ProofPhotoField, type PickedImage } from '@/src/components/ui/ProofPhotoField';
+import { EmptyState } from '@/src/components/ui/EmptyState';
+import { attachTransactionProof } from '@/lib/proofs';
 import { formatAmountInput, parseAmountInput } from '@/src/utils/format';
 
 function fmt(n: number, cur: string) { return `${n.toLocaleString('fr-FR')} ${cur}`; }
@@ -32,20 +36,26 @@ function yesterdayIso() {
   return `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, '0')}-${String(d.getDate()).padStart(2, '0')}`;
 }
 
+// iOS-only: suppresses the OS's auto-injected floating "Done" pill above
+// the numeric keyboard — this form already has a persistent, always-
+// visible footer button.
+const EXPENSE_FORM_SILENT_ACCESSORY_ID = 'depenses-form-silent-accessory';
+
 // ─── Expense Form ─────────────────────────────────────────────────────────────
 
 interface ExpenseFormProps {
   visible: boolean;
   editing: Expense | null;
   onClose: () => void;
-  onSave: (data: CreateExpenseData) => Promise<void>;
+  onSave: (data: CreateExpenseData, photo: PickedImage | null) => Promise<void>;
   saving: boolean;
   currency: string;
   businessId: string;
   userId: string;
+  offline: boolean;
 }
 
-function ExpenseFormModal({ visible, editing, onClose, onSave, saving, currency, businessId, userId }: ExpenseFormProps) {
+function ExpenseFormModal({ visible, editing, onClose, onSave, saving, currency, businessId, userId, offline }: ExpenseFormProps) {
   const { palette } = useTheme();
   const styles = useMemo(() => makeStyles(palette), [palette]);
   const [amount, setAmount] = useState('');
@@ -53,6 +63,7 @@ function ExpenseFormModal({ visible, editing, onClose, onSave, saving, currency,
   const [date, setDate] = useState(todayIso());
   const [dateMode, setDateMode] = useState<'hier' | 'aujourdhui' | 'autre'>('aujourdhui');
   const [selectedProductId, setSelectedProductId] = useState<string | null>(null);
+  const [photo, setPhoto] = useState<PickedImage | null>(null);
 
   const { products, fetchProducts } = useProductStore();
   const activeProducts = useMemo(
@@ -68,9 +79,10 @@ function ExpenseFormModal({ visible, editing, onClose, onSave, saving, currency,
 
   useEffect(() => {
     if (visible) {
-      setAmount(editing ? formatAmountInput(String(editing.amount), currency) : '');
+      setAmount(editing ? formatAmountInput(String(Math.round(editing.amount)), currency) : '');
       setDescription(editing?.description ?? '');
       setSelectedProductId(editing?.product_id ?? null);
+      setPhoto(null);
       const today = todayIso();
       const yesterday = yesterdayIso();
       const d = editing?.date ?? today;
@@ -83,26 +95,42 @@ function ExpenseFormModal({ visible, editing, onClose, onSave, saving, currency,
     const amt = parseAmountInput(amount, currency);
     if (!description.trim()) { Alert.alert('Écrivez un petit mot :)'); return; }
     if (!amt || amt <= 0) { Alert.alert('Vérifiez le montant :)'); return; }
-    await onSave({ amount: amt, description, category: null, date, due_date: null, note: null, product_id: selectedProductId });
+    await onSave({ amount: amt, description, category: null, date, due_date: null, note: null, product_id: selectedProductId }, photo);
   };
 
   const isEdit = !!editing;
 
   return (
-    <Modal visible={visible} animationType="slide" presentationStyle="pageSheet" onRequestClose={onClose}>
-      <SafeAreaView style={styles.modalSafe}>
-        <View style={styles.modalHeader}>
-          <Pressable onPress={onClose}><Text variant="body" color="secondary">Annuler</Text></Pressable>
-          <Text variant="h4">{isEdit ? 'Modifier la dépense' : 'Nouvelle dépense'}</Text>
-          <View style={{ width: 64 }} />
+    <FormSheet
+      visible={visible}
+      onClose={onClose}
+      title={isEdit ? 'Modifier la dépense' : 'Nouvelle dépense'}
+      contentContainerStyle={styles.modalContent}
+      footer={
+        <View style={styles.modalFooter}>
+          <Button
+            label={saving ? 'Enregistrement…' : (isEdit ? 'Enregistrer les modifications' : 'Enregistrer')}
+            onPress={handleSave}
+            loading={saving}
+            fullWidth
+            size="lg"
+          />
         </View>
-
-        <ScrollView contentContainerStyle={styles.modalContent} keyboardShouldPersistTaps="handled">
+      }
+      accessory={
+        Platform.OS === 'ios' ? (
+          <InputAccessoryView nativeID={EXPENSE_FORM_SILENT_ACCESSORY_ID}>
+            <View style={{ height: 0 }} />
+          </InputAccessoryView>
+        ) : undefined
+      }
+    >
           <Input
             label={`Montant (${currency})`}
             value={amount}
             onChangeText={v => setAmount(formatAmountInput(v, currency))}
             keyboardType="decimal-pad"
+            inputAccessoryViewID={Platform.OS === 'ios' ? EXPENSE_FORM_SILENT_ACCESSORY_ID : undefined}
           />
 
           <Input
@@ -161,19 +189,17 @@ function ExpenseFormModal({ visible, editing, onClose, onSave, saving, currency,
               <DatePickerField value={date} onChange={setDate} maxToday />
             )}
           </View>
-        </ScrollView>
 
-        <View style={styles.modalFooter}>
-          <Button
-            label={saving ? 'Enregistrement…' : (isEdit ? 'Enregistrer les modifications' : 'Enregistrer')}
-            onPress={handleSave}
-            loading={saving}
-            fullWidth
-            size="lg"
+          {/* Image well — attach a receipt while recording the expense */}
+          <ProofPhotoField
+            existingUrl={editing?.proof_image_url}
+            existingWidth={editing?.proof_image_width}
+            existingHeight={editing?.proof_image_height}
+            value={photo}
+            onChange={setPhoto}
+            disabled={offline}
           />
-        </View>
-      </SafeAreaView>
-    </Modal>
+    </FormSheet>
   );
 }
 
@@ -184,16 +210,23 @@ interface ExpenseCardProps {
   currency: string;
   isManager: boolean;
   canEdit: boolean;
+  businessId: string;
+  userId: string;
+  offline: boolean;
   onApprove: () => void;
   onReject: () => void;
   onEdit: () => void;
+  onProofAttached: () => void;
 }
 
-function ExpenseCard({ expense, currency, isManager, canEdit, onApprove, onReject, onEdit }: ExpenseCardProps) {
+function ExpenseCard({ expense, currency, isManager, canEdit, businessId, userId, offline, onApprove, onReject, onEdit, onProofAttached }: ExpenseCardProps) {
   const { palette } = useTheme();
   const styles = useMemo(() => makeStyles(palette), [palette]);
   const isPending = expense.status === 'en_attente';
   const [confirmAction, setConfirmAction] = useState<'approve' | 'reject' | null>(null);
+  // Matches attach_transaction_proof's gate: admin/manager anytime, or the
+  // creator while the expense is still pending (the vendeur with the receipt).
+  const canAttachProof = isManager || (expense.created_by === userId && expense.status === 'en_attente');
 
   const handleConfirm = () => {
     if (confirmAction === 'approve') onApprove();
@@ -210,7 +243,7 @@ function ExpenseCard({ expense, currency, isManager, canEdit, onApprove, onRejec
             <View style={[styles.productTag, { backgroundColor: INFO_TAG.bg, flexDirection: 'row', alignItems: 'center', gap: 4 }]}>
               <Ionicons name="cube-outline" size={11} color={INFO_TAG.text} />
               <Text variant="caption" style={{ color: INFO_TAG.text }}>
-                {expense.product_name ? `Fret · ${expense.product_name}` : 'Fret'}
+                {expense.product_name ? `Transport · ${expense.product_name}` : 'Transport'}
               </Text>
             </View>
           ) : expense.product_name ? (
@@ -257,6 +290,22 @@ function ExpenseCard({ expense, currency, isManager, canEdit, onApprove, onRejec
           </View>
         )
       )}
+
+      <ProofControl
+        variant="row"
+        kind="expense"
+        id={expense.id}
+        businessId={businessId}
+        imageUrl={expense.proof_image_url}
+        imageWidth={expense.proof_image_width}
+        imageHeight={expense.proof_image_height}
+        attachedBy={expense.proof_attached_by}
+        attachedAt={expense.proof_attached_at}
+        canAttach={canAttachProof}
+        offline={offline}
+        onAttached={onProofAttached}
+        onDeleted={onProofAttached}
+      />
     </Card>
   );
 }
@@ -270,13 +319,16 @@ interface MonthGroupProps {
   currency: string;
   isManager: boolean;
   userId: string;
+  businessId: string;
+  offline: boolean;
   onApprove: (id: string) => void;
   onReject: (id: string) => void;
   onEdit: (e: Expense) => void;
+  onProofAttached: () => void;
   defaultOpen: boolean;
 }
 
-function MonthGroup({ label, total, items, currency, isManager, userId, onApprove, onReject, onEdit, defaultOpen }: MonthGroupProps) {
+function MonthGroup({ label, total, items, currency, isManager, userId, businessId, offline, onApprove, onReject, onEdit, onProofAttached, defaultOpen }: MonthGroupProps) {
   const { palette } = useTheme();
   const styles = useMemo(() => makeStyles(palette), [palette]);
   const [open, setOpen] = useState(defaultOpen);
@@ -304,9 +356,13 @@ function MonthGroup({ label, total, items, currency, isManager, userId, onApprov
               currency={currency}
               isManager={isManager}
               canEdit={e.status === 'en_attente' && e.created_by === userId}
+              businessId={businessId}
+              userId={userId}
+              offline={offline}
               onApprove={() => onApprove(e.id)}
               onReject={() => onReject(e.id)}
               onEdit={() => onEdit(e)}
+              onProofAttached={onProofAttached}
             />
           ))}
         </View>
@@ -380,17 +436,34 @@ export default function DepensesScreen() {
       .map(([key, g]) => ({ key, ...g }));
   }, [expenses]);
 
-  const handleSave = useCallback(async (data: CreateExpenseData) => {
-    let ok: boolean;
+  const handleSave = useCallback(async (data: CreateExpenseData, photo: PickedImage | null) => {
+    let expenseId: string | null;
     if (editingExpense) {
-      ok = await updateExpense(editingExpense.id, businessId, data);
+      const ok = await updateExpense(editingExpense.id, businessId, data);
+      expenseId = ok ? editingExpense.id : null;
     } else {
-      ok = await createExpense(businessId, userId, data, isManager);
+      expenseId = await createExpense(businessId, userId, data, isManager);
     }
-    if (!ok) {
+    if (!expenseId) {
       Alert.alert('La dépense n\'est pas passée :)');
       return;
     }
+
+    // Attach a picked image to the just-saved expense (best-effort; needs a
+    // live connection, so an offline-created expense gets its image later from
+    // the card). Skip if the expense already has one — it's immutable.
+    if (photo && !editingExpense?.proof_image_url) {
+      try {
+        await attachTransactionProof({
+          kind: 'expense', id: expenseId, businessId,
+          fileUri: photo.uri, sourceWidth: photo.width, sourceHeight: photo.height,
+        });
+        await fetchExpenses(businessId);
+      } catch {
+        toast.info('Dépense enregistrée — ajoutez l\'image plus tard');
+      }
+    }
+
     setShowForm(false);
     setEditingExpense(null);
     if (editingExpense) {
@@ -400,7 +473,7 @@ export default function DepensesScreen() {
     } else {
       haptics.success();
     }
-  }, [editingExpense, businessId, userId, isManager, updateExpense, createExpense]);
+  }, [editingExpense, businessId, userId, isManager, updateExpense, createExpense, fetchExpenses]);
 
   const handleEdit = (expense: Expense) => { setEditingExpense(expense); setShowForm(true); };
   const handleAdd = () => { setEditingExpense(null); setShowForm(true); };
@@ -425,7 +498,9 @@ export default function DepensesScreen() {
         <View style={{ width: 64 }} />
       </View>
 
-      {offline && <OfflineNotice offlineSince={offlineSince} />}
+      {offline && (
+        <OfflineNotice offlineSince={offlineSince} onRetry={() => fetchExpenses(businessId)} />
+      )}
 
       {loading && isEmpty ? (
         <SkeletonList count={6} />
@@ -434,10 +509,13 @@ export default function DepensesScreen() {
           <Text variant="body" color="secondary" style={{ textAlign: 'center' }}>Données non disponibles hors ligne</Text>
         </View>
       ) : isEmpty ? (
-        <View style={styles.empty}>
-          <Text variant="body" color="secondary" style={{ textAlign: 'center', fontWeight: '600' }}>Aucune dépense ce mois — c'est bon signe.</Text>
-          <Text variant="caption" color="secondary" style={{ textAlign: 'center' }}>Ajoutez-en une dès qu'elle se présente.</Text>
-        </View>
+        <EmptyState
+          icon="wallet-outline"
+          title="Aucune dépense pour le moment."
+          subtitle="Notez l'argent qui sort de votre commerce."
+          actionLabel="+ Ajouter une dépense"
+          onAction={handleAdd}
+        />
       ) : (
         <ScrollView contentContainerStyle={styles.list} showsVerticalScrollIndicator={false}>
           {pendingExpenses.length > 0 && (
@@ -454,9 +532,13 @@ export default function DepensesScreen() {
                   currency={currency}
                   isManager={isManager}
                   canEdit={e.created_by === userId}
+                  businessId={businessId}
+                  userId={userId}
+                  offline={offline}
                   onApprove={() => handleApprove(e.id)}
                   onReject={() => handleReject(e.id)}
                   onEdit={() => handleEdit(e)}
+                  onProofAttached={() => fetchExpenses(businessId)}
                 />
               ))}
             </View>
@@ -471,9 +553,12 @@ export default function DepensesScreen() {
               currency={currency}
               isManager={isManager}
               userId={userId}
+              businessId={businessId}
+              offline={offline}
               onApprove={handleApprove}
               onReject={handleReject}
               onEdit={handleEdit}
+              onProofAttached={() => fetchExpenses(businessId)}
               defaultOpen={false}
             />
           ))}
@@ -489,18 +574,22 @@ export default function DepensesScreen() {
         currency={currency}
         businessId={businessId}
         userId={userId}
+        offline={offline}
       />
 
-      <Animated.View style={[styles.fabContainer, { opacity: fabOpacity, transform: [{ scale: fabScale }] }]}>
-        <Pressable
-          onPress={handleAdd}
-          style={({ pressed }) => [styles.fab, pressed && { opacity: 0.82 }]}
-          accessibilityLabel="Ajouter une dépense"
-          accessibilityRole="button"
-        >
-          <Text style={styles.fabIcon}>+</Text>
-        </Pressable>
-      </Animated.View>
+      {!isEmpty && (
+        <Animated.View style={[styles.fabContainer, { opacity: fabOpacity, transform: [{ scale: fabScale }] }]}>
+          <Pressable
+            onPress={handleAdd}
+            style={({ pressed }) => [styles.fabExtended, pressed && { opacity: 0.82 }]}
+            accessibilityLabel="Ajouter une dépense"
+            accessibilityRole="button"
+          >
+            <Ionicons name="add" size={20} color={palette.textInverse} />
+            <Text style={styles.fabExtendedLabel}>Dépense</Text>
+          </Pressable>
+        </Animated.View>
+      )}
     </Screen>
   );
 }
@@ -583,15 +672,17 @@ function makeStyles(p: Palette) {
   },
   datePillActive: { backgroundColor: p.primary, borderColor: p.primary },
 
-  // FAB
+  // FAB — extended (icon + label), never a bare "+": an icon-only action
+  // button can't be recognized by name, only by shape.
   fabContainer: { position: 'absolute', bottom: 194, right: spacing[4], zIndex: 10 },
-  fab: {
-    width: 56, height: 56, borderRadius: radius.full,
-    backgroundColor: p.primary, alignItems: 'center', justifyContent: 'center',
+  fabExtended: {
+    flexDirection: 'row', alignItems: 'center', gap: spacing[2],
+    height: 56, paddingHorizontal: spacing[5], borderRadius: radius.full,
+    backgroundColor: p.primary,
     shadowColor: p.textPrimary, shadowOffset: { width: 0, height: 4 },
     shadowOpacity: 0.18, shadowRadius: 8, elevation: 8,
   },
-  fabIcon: { fontSize: 28, lineHeight: 32, fontWeight: '300' as const, color: p.textInverse, marginTop: -2 },
+  fabExtendedLabel: { fontSize: 15, fontWeight: '600' as const, color: p.textInverse },
 
   // Form modal
   modalSafe: { flex: 1, backgroundColor: p.background },

@@ -34,6 +34,19 @@ jest.mock('@/lib/supabase', () => ({
 jest.mock('@/lib/analytics', () => ({ trackEvent: jest.fn() }));
 jest.mock('@/lib/haptics',   () => ({ haptics: { success: jest.fn(), error: jest.fn(), tap: jest.fn() } }));
 
+// fetchProducts() now guards every set() with isStaleBusiness(businessId), which
+// reads useAuthStore.getState().session.activeBusiness.id — real fix for a real
+// bug (a slow fetch resolving after the user switches businesses must not
+// overwrite the new business's state with the old one's data). Without this
+// mock, the real (unmocked) auth store's initial session is null, so every
+// fetch in this file would look "stale" and every assertion below would
+// silently fail against untouched initial state. Business id must match
+// BUSINESS_ID below — can't reference the const directly, jest.mock is hoisted
+// above it.
+jest.mock('@/stores/auth', () => ({
+  useAuthStore: { getState: () => ({ session: { activeBusiness: { id: 'biz-offline-test' } } }) },
+}));
+
 import { isNetworkError } from '@/lib/sync';
 import { useProductStore } from '@/stores/products';
 import { supabase } from '@/lib/supabase';
@@ -62,11 +75,18 @@ const AFTER_TRANSFORM = {
 };
 
 // A chain mock that resolves the final .order() call
+// products.fetchProducts now goes through withNetworkRetry (see lib/sync.ts),
+// not a bare withTimeout — a resolved { error } that looks network-shaped is
+// confirmed with one quick retry before the store trusts it and falls back
+// to cache. mockResolvedValue (not "Once") so a genuine-failure test case,
+// which needs the SAME result on both the first attempt and the confirm
+// retry, doesn't run out of queued responses and get an undefined chain
+// call on the second invocation.
 function makeFromChain(result: { data: unknown; error: unknown }) {
   const chain = {
     select: jest.fn().mockReturnThis(),
     eq:     jest.fn().mockReturnThis(),
-    order:  jest.fn().mockResolvedValueOnce(result),
+    order:  jest.fn().mockResolvedValue(result),
   };
   return chain;
 }
@@ -137,7 +157,11 @@ describe('products store — offline cache fallback (Fix 2)', () => {
   });
 
   it('falls back to cache and sets offline:true when network fails', async () => {
-    (supabase.from as jest.Mock).mockReturnValueOnce(
+    // mockReturnValue (not "Once") — a confirmed/genuine failure means both
+    // the first attempt AND withNetworkRetry's confirm-retry hit the same
+    // network error, so supabase.from() needs to keep returning a failing
+    // chain across both calls, not just the first.
+    (supabase.from as jest.Mock).mockReturnValue(
       makeFromChain({ data: null, error: { message: 'Network request failed' } }),
     );
     // First call: preload before Supabase fetch (products empty after reset)
@@ -155,7 +179,7 @@ describe('products store — offline cache fallback (Fix 2)', () => {
   });
 
   it('sets offline + error when network fails and no cache exists (cold start)', async () => {
-    (supabase.from as jest.Mock).mockReturnValueOnce(
+    (supabase.from as jest.Mock).mockReturnValue(
       makeFromChain({ data: null, error: { message: 'Network request failed' } }),
     );
     mockGetProductCache.mockResolvedValueOnce(null);

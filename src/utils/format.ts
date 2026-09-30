@@ -15,6 +15,7 @@ export function formatAmount(n: number, currency: string): string {
   if (fixed === '-0.00') fixed = '0.00';
   const [intPart, decPart] = fixed.split('.');
   const formatted = intPart.replace(/\B(?=(\d{3})+(?!\d))/g, ' ');
+  if (decPart === '00') return `${formatted} ${currency}`;
   return `${formatted}.${decPart} ${currency}`;
 }
 

@@ -1,5 +1,6 @@
 import { serve } from 'https://deno.land/std@0.177.0/http/server.ts';
 import { createClient } from 'https://esm.sh/@supabase/supabase-js@2';
+import { safeErrorResponse } from '../_shared/errors.ts';
 
 // Generates a founder-only draft reply for a support conversation
 // (db/migration_v126.sql). Triggered fire-and-forget right after a merchant
@@ -12,17 +13,33 @@ import { createClient } from 'https://esm.sh/@supabase/supabase-js@2';
 // a merchant is send_founder_support_reply(), a SECURITY DEFINER RPC
 // callable only from a real founder session. See migration_v126.sql.
 //
-// Uses Groq (free tier, open-weight Llama 3.3 70B) rather than a paid model —
-// acceptable here because the founder reviews/edits every draft before
-// anything is sent. Request-building is isolated in callGroq() so swapping
-// providers later only touches this one function.
-
+// Uses Groq (free tier, open-weight) rather than a paid model — acceptable
+// here because the founder reviews/edits every draft before anything is
+// sent. Request-building is isolated in callGroq() so swapping providers
+// later only touches this one function.
+//
+// Model fixed 2026-09-05: llama-3.3-70b-versatile was silently retired from
+// Groq's catalog (confirmed live: GET /v1/models no longer lists any Llama
+// chat model at all, and calling it 404s as model_not_found even with a
+// valid key) — every draft had been failing closed to a 'failed' row since
+// whenever that retirement happened, with nothing in this function's own
+// error handling loud enough to surface it (by design: a merchant's message
+// send must never be blocked by a draft failure). Found while fixing the
+// same root cause in the sibling Orny app's factory-chat, which had no
+// fallback either and so failed loudly instead. Switched to
+// openai/gpt-oss-20b — the same model alpha-chat already uses (see its own
+// switch note, 2026-07-16), for consistency rather than picking a third
+// model in the same codebase. max_tokens raised 400→1000 to match: gpt-oss
+// is a reasoning model, so part of the token budget goes to an internal
+// `reasoning` field before the real answer starts, and 400 was tuned for a
+// non-reasoning model — verified live that 400 truncates a real draft
+// mid-sentence (finish_reason: 'length') for anything beyond a trivial reply.
 const corsHeaders = {
   'Access-Control-Allow-Origin': '*',
   'Access-Control-Allow-Headers': 'authorization, x-client-info, apikey, content-type',
 };
 
-const GROQ_MODEL = 'llama-3.3-70b-versatile';
+const GROQ_MODEL = 'openai/gpt-oss-20b';
 
 const SYSTEM_PROMPT = `Tu rédiges un brouillon de réponse pour Sebastiao, le fondateur de Patron (une application de gestion commerciale pour petits commerces). Ce brouillon est relu, corrigé si besoin, puis envoyé par Sebastiao lui-même — il n'est JAMAIS envoyé directement au marchand tel quel.
 
@@ -50,7 +67,7 @@ async function callGroq(apiKey: string, turns: { role: string; content: string }
       model: GROQ_MODEL,
       messages: [{ role: 'system', content: SYSTEM_PROMPT }, ...turns],
       temperature: 0.6,
-      max_tokens: 400,
+      max_tokens: 1000,
     }),
   });
   if (!resp.ok) {
@@ -177,6 +194,11 @@ serve(async (req) => {
         headers: { ...corsHeaders, 'Content-Type': 'application/json' },
       });
     } catch (genErr) {
+      // Real detail (Groq status/body, missing key, ...) goes in error_note —
+      // founder-only via RLS (support_ai_drafts, is_founder() SELECT). The
+      // HTTP response's own error field stays generic; the founder inbox's
+      // "La suggestion n'a pas pu être générée" copy doesn't read it anyway,
+      // and the merchant-triggered fire-and-forget caller never surfaces it.
       const msg = genErr instanceof Error ? genErr.message : 'Erreur inconnue';
       console.error('generate-support-draft generation failure:', msg);
       await supabase.from('support_ai_drafts').insert({
@@ -184,16 +206,11 @@ serve(async (req) => {
         status: 'failed',
         error_note: msg.slice(0, 500),
       });
-      return new Response(JSON.stringify({ ok: false, error: msg }), {
+      return new Response(JSON.stringify({ ok: false, error: 'Génération impossible' }), {
         headers: { ...corsHeaders, 'Content-Type': 'application/json' },
       });
     }
   } catch (e) {
-    const msg = e instanceof Error ? e.message : 'Erreur inconnue';
-    console.error('generate-support-draft crash:', msg);
-    return new Response(JSON.stringify({ error: msg }), {
-      status: 500,
-      headers: { ...corsHeaders, 'Content-Type': 'application/json' },
-    });
+    return safeErrorResponse(e, corsHeaders, 'generate-support-draft');
   }
 });

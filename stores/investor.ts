@@ -3,7 +3,7 @@ import { supabase } from '@/lib/supabase';
 import { translateError } from '@/lib/errors';
 import { generateFallbackName } from '@/lib/id';
 import { saveInvestorCache, getInvestorCache, getCacheTimestamp } from '@/lib/db';
-import { isNetworkError } from '@/lib/sync';
+import { isNetworkError, withNetworkRetry, reportOfflineFallback } from '@/lib/sync';
 
 export interface InvestorPayout {
   id: string;
@@ -52,15 +52,18 @@ export const useInvestorStore = create<InvestorStore>((set, get) => ({
 
   fetchBalance: async (businessId, investorId) => {
     set({ loading: true, error: null });
-    const { data, error } = await supabase
-      .from('investor_balance')
-      .select('balance')
-      .eq('business_id', businessId)
-      .eq('investor_id', investorId)
-      .maybeSingle();
+    const { data, error } = await withNetworkRetry(() =>
+      supabase
+        .from('investor_balance')
+        .select('balance')
+        .eq('business_id', businessId)
+        .eq('investor_id', investorId)
+        .maybeSingle(),
+    ).catch(err => ({ data: null, error: err }));
 
     if (error) {
       if (isNetworkError(error)) {
+        reportOfflineFallback('investor.fetchBalance', error);
         const key = balanceCacheKey(businessId, investorId);
         const cached = await getInvestorCache(key);
         if (cached != null) {
@@ -92,10 +95,11 @@ export const useInvestorStore = create<InvestorStore>((set, get) => ({
       query = query.eq('investor_id', investorId);
     }
 
-    const { data, error } = await query;
+    const { data, error } = await withNetworkRetry(() => query).catch(err => ({ data: null, error: err }));
 
     if (error) {
       if (isNetworkError(error)) {
+        reportOfflineFallback('investor.fetchPayouts', error);
         const key = payoutsCacheKey(businessId, investorId);
         const cached = await getInvestorCache(key);
         if (cached) {
@@ -133,31 +137,41 @@ export const useInvestorStore = create<InvestorStore>((set, get) => ({
 
   requestPayout: async (businessId, amountCents) => {
     set({ saving: true, error: null });
-    const { error } = await supabase.rpc('request_payout', {
-      p_business_id: businessId,
-      p_amount: Number(amountCents),
-    });
-    if (error) {
-      set({ saving: false, error: translateError(error, 'Impossible de soumettre la demande') });
+    try {
+      const { error } = await supabase.rpc('request_payout', {
+        p_business_id: businessId,
+        p_amount: Number(amountCents),
+      });
+      if (error) {
+        set({ saving: false, error: translateError(error, 'Impossible de soumettre la demande') });
+        return false;
+      }
+      set({ saving: false });
+      await get().fetchPayouts(businessId);
+      return true;
+    } catch (err) {
+      set({ saving: false, error: isNetworkError(err) ? 'Vérifiez votre connexion' : translateError(err, 'Impossible de soumettre la demande') });
       return false;
     }
-    set({ saving: false });
-    await get().fetchPayouts(businessId);
-    return true;
   },
 
   confirmPayout: async (payoutId, paidAmountCents) => {
     set({ saving: true, error: null });
-    const { error } = await supabase.rpc('confirm_payout', {
-      p_payout_id: payoutId,
-      p_paid_amount: Number(paidAmountCents),
-    });
-    if (error) {
-      set({ saving: false, error: translateError(error, 'Impossible de confirmer le paiement') });
+    try {
+      const { error } = await supabase.rpc('confirm_payout', {
+        p_payout_id: payoutId,
+        p_paid_amount: Number(paidAmountCents),
+      });
+      if (error) {
+        set({ saving: false, error: translateError(error, 'Impossible de confirmer le paiement') });
+        return false;
+      }
+      set({ saving: false });
+      return true;
+    } catch (err) {
+      set({ saving: false, error: isNetworkError(err) ? 'Vérifiez votre connexion' : translateError(err, 'Impossible de confirmer le paiement') });
       return false;
     }
-    set({ saving: false });
-    return true;
   },
 
   reset: () => set({ balance: null, payouts: [], loading: false, saving: false, error: null, offline: false, offlineSince: null }),

@@ -8,7 +8,10 @@ import { translateError } from '@/lib/errors';
 import { generateId } from '@/lib/id';
 import { syncKnownBusinesses } from '@/lib/knownBusinesses';
 import { getKV, setKV } from '@/lib/db';
+import { toast } from './toast';
 import { isLocked, setLocked } from '@/lib/lock';
+import { withTimeout, withNetworkRetry, reportOfflineFallback } from '@/lib/sync';
+import { isFounderPhone } from '@/src/utils/founder';
 import type { AppSession, Business, Membership, Role, User } from '@/src/types';
 import { useProductStore } from './products';
 import { useVentesStore } from './ventes';
@@ -24,13 +27,14 @@ import { useAportsStore } from './apports';
 import { useInvestorStore } from './investor';
 import { usePartnershipsStore } from './partnerships';
 import { trackEvent, identifyUser, resetAnalytics } from '@/lib/analytics';
-import { loginPurchases, logoutPurchases } from '@/lib/purchases';
-import { notifyEvent, deleteDeviceToken } from '@/src/utils/notifications';
+import { loginPurchases } from '@/lib/purchases';
+import { notifyEvent } from '@/src/utils/notifications';
 
 // ─── Last phone + biometric refresh token (quick-login) ──────────────────────
 
 const LAST_PHONE_KEY      = 'patron_last_phone';
 const BIO_REFRESH_KEY     = 'patron_bio_refresh_token';
+const LAST_BUSINESS_NAME_KEY = 'patron_last_business_name';
 
 async function saveLastPhone(phone: string): Promise<void> {
   try { await SecureStore.setItemAsync(LAST_PHONE_KEY, phone); } catch {}
@@ -38,6 +42,20 @@ async function saveLastPhone(phone: string): Promise<void> {
 
 export async function getLastPhone(): Promise<string | null> {
   try { return await SecureStore.getItemAsync(LAST_PHONE_KEY); } catch { return null; }
+}
+
+// The lock screen (app/(auth)/verrouille.tsx) has no live session to read
+// activeBusiness from — lock() clears it. Cached here on every session
+// establishment (loadSession() below is the one choke point that already
+// covers cold start, login, and biometric restore) the same way
+// getLastPhone already solves the identical "screen has no session yet"
+// problem for the WhatsApp re-login fallback.
+async function saveLastBusinessName(name: string): Promise<void> {
+  try { await SecureStore.setItemAsync(LAST_BUSINESS_NAME_KEY, name); } catch {}
+}
+
+export async function getLastBusinessName(): Promise<string | null> {
+  try { return await SecureStore.getItemAsync(LAST_BUSINESS_NAME_KEY); } catch { return null; }
 }
 
 async function saveBioRefreshToken(token: string): Promise<void> {
@@ -176,9 +194,13 @@ interface AuthStore {
   login: (email: string, password: string) => Promise<void>;
   register: (name: string, email: string, password: string) => Promise<void>;
   logout: () => Promise<void>;
+  revokeOtherSessions: () => Promise<boolean>;
   selectBusiness: (businessId: string) => void;
   createBusiness: (data: { name: string; type?: string; currency: string; referralCode?: string }) => Promise<void>;
+  markFirstRunHeroCompleted: (businessId: string) => Promise<void>;
   joinBusiness: (code: string) => Promise<void>;
+  // Founder-only testing tool — see delete_business(), db/migration_v165.sql.
+  deleteBusiness: (businessId: string) => Promise<boolean>;
   loginWithBiometric: () => Promise<boolean>;
   lock: () => Promise<void>;
   // 'retryable' covers cancels/interruptions (worth an immediate re-prompt);
@@ -197,6 +219,83 @@ interface AuthStore {
   businessDrawerOpen: boolean;
   openBusinessDrawer: () => void;
   closeBusinessDrawer: () => void;
+  // businessDrawerOpen flips false the instant close is *requested*, but
+  // BusinessDrawer's own slide-out animation (~300ms) means its Modal stays
+  // genuinely visible for a moment after that. Anything that wants to show
+  // its own Modal only once the drawer is truly gone (ActivationForkOverlay)
+  // needs this instead — two RN Modals visible at once is unreliable,
+  // especially on Android, and gating on the raw open/close intent alone
+  // left a real window where the fork's Modal turned visible=true while the
+  // drawer's Modal was still mid-close, silently swallowing touches with
+  // neither one clearly rendering. Starts true (nothing open, nothing to
+  // wait for); set false the instant an open is requested, set back to true
+  // only from BusinessDrawer's own animation-finished callback.
+  businessDrawerFullyClosed: boolean;
+  markBusinessDrawerFullyClosed: () => void;
+  // Set by catalogue.tsx while its add-product FormSheet is open. The
+  // activation fork is evaluated globally (app/(app)/_layout.tsx) so it can
+  // show on top of whatever screen is active, not just Accueil — but the
+  // add-product form is itself a real <Modal> (via FormSheet), and letting
+  // the fork's own Modal try to show at the same time reintroduces the
+  // exact "two Modals visible at once" bug already fixed twice elsewhere.
+  // No dedicated action — a plain field consumers set directly via
+  // .setState(), same lightweight pattern already used for one-off flags
+  // elsewhere in this codebase.
+  suppressActivationFork: boolean;
+
+  // Bumped by app/(app)/_layout.tsx when FirstRunHeroOverlay closes, so
+  // Accueil's own local KPI state (credit_count/credit_total, driving the
+  // "N clients vous doivent" card) refreshes immediately. useFocusEffect
+  // alone doesn't catch this: the overlay is a plain <Modal> rendered
+  // outside the tab navigator, so react-navigation never actually
+  // unfocuses/refocuses Accueil while it's open — a real business switch
+  // "fixed" the staleness only because that's a much bigger state change,
+  // not because focus itself changed. Same setState-directly pattern as
+  // suppressActivationFork above, not a dedicated action.
+  homeRefreshToken: number;
+
+  // In-progress FirstRunHeroOverlay state (which phase, the typed name/
+  // amount, the running total, the last saved entry), mirrored here so it
+  // survives a lock/unlock cycle. The app-lock re-entry path is a real
+  // navigation (app/(app)/_layout.tsx returns <Redirect href="/(auth)/
+  // verrouille" />), not an overlay on top of the current screen — so
+  // FirstRunHeroOverlay's own local component state would otherwise be
+  // destroyed the moment someone locks mid-form and rebuilt from scratch on
+  // unlock, silently dropping whatever they'd typed. Keyed on businessId so
+  // a stale draft from a different (or since-completed) business is never
+  // mistakenly rehydrated; cleared on exit (Passer / "Voir mon commerce").
+  // Same setState-directly pattern as the two fields above — the component
+  // owns reading/writing this, no dedicated action.
+  heroDraft: {
+    businessId: string;
+    phase: 'ask' | 'payoff';
+    name: string;
+    amount: string;
+    totalCents: number;
+    lastEntry: { name: string; amountCents: number } | null;
+  } | null;
+
+  // Cross-component open request for Accueil's QuickCaptureSheet, set by
+  // ActivationForkOverlay's "Une vente" button (app/(app)/_layout.tsx) —
+  // the fork itself is evaluated at the root layout, above the tab
+  // navigator, with no direct reference to Accueil's own local sheet-open
+  // state, so this is the same lightweight cross-cutting signal pattern as
+  // suppressActivationFork/homeRefreshToken above, not a dedicated action.
+  // Accueil watches it, opens the sheet in that mode, then clears it back
+  // to null.
+  requestQuickCapture: 'credit' | 'vente' | null;
+
+  // Bumped exactly twice: once on a real cold start (app/_layout.tsx, right
+  // after initialize() resolves) and once when the app returns to the
+  // foreground after being backgrounded 10+ minutes (app/(app)/_layout.tsx's
+  // existing AppState handler). PaymentReminderAsker (mounted in Accueil)
+  // watches this — it's the "fresh session" half of that sheet's trigger
+  // conditions, same setState-directly/no-dedicated-action pattern as
+  // homeRefreshToken above. A plain foreground return under 10 minutes
+  // (switching tabs in the OS app switcher, a quick glance at another app)
+  // deliberately does NOT bump this — the asker must never interrupt
+  // someone who was just actively using the app a moment ago.
+  freshSessionToken: number;
 
   sendEmailOtp: (email: string) => Promise<{ verificationId: string } | null>;
   recoverByEmail: (email: string, code: string, verificationId: string) => Promise<void>;
@@ -220,19 +319,31 @@ interface AuthStore {
 }
 
 async function loadSession(userId: string, authPhone?: string | null, skipCache = false): Promise<AppSession> {
-  const [profileRes, membershipsRes] = await Promise.all([
+  const [profileRes, membershipsRes] = await withTimeout(Promise.all([
     supabase.from('profiles').select('*').eq('id', userId).single(),
     supabase
       .from('memberships')
       .select('*, business:businesses(*)')
       .eq('user_id', userId),
-  ]);
+  ]));
 
   if (profileRes.error) throw profileRes.error;
   if (membershipsRes.error) throw membershipsRes.error;
 
   const p = profileRes.data;
   const memberships = membershipsRes.data as Membership[];
+
+  // A pending account-deletion request (delete_my_account — migration_v178)
+  // is cancelled the instant its owner establishes a real session again —
+  // this is that single choke point, run by every session-establishing path
+  // (cold start, phone OTP login, biometric restore, email recovery). Best-
+  // effort: a failure here must never block loading the session itself.
+  if (p.pending_deletion_at) {
+    (async () => {
+      const { error } = await supabase.from('profiles').update({ pending_deletion_at: null }).eq('id', userId);
+      if (!error) toast.success('Bon retour ! La suppression de votre compte a été annulée.');
+    })().catch(() => {});
+  }
 
   const user: User = {
     id: userId,
@@ -242,6 +353,7 @@ async function loadSession(userId: string, authPhone?: string | null, skipCache 
     avatar_url: p.avatar_url ?? null,
     language: p.language ?? 'fr',
     recovery_email: p.recovery_email ?? null,
+    notify_on_every_sale: p.notify_on_every_sale ?? true,
     created_at: p.created_at,
     updated_at: p.updated_at,
   };
@@ -250,6 +362,7 @@ async function loadSession(userId: string, authPhone?: string | null, skipCache 
   const preferred = lastBusinessId ? memberships.find(m => m.business_id === lastBusinessId) : null;
   const activeMembership = preferred ?? (memberships.length >= 1 ? memberships[0] : null);
   const activeBusiness = (activeMembership?.business as Business) ?? null;
+  if (activeBusiness?.name) void saveLastBusinessName(activeBusiness.name);
 
   const session: AppSession = { user, memberships, activeBusiness, activeMembership };
   if (!skipCache) void persistSessionCache(session);
@@ -269,6 +382,12 @@ export const useAuthStore = create<AuthStore>((set, get) => ({
   dismissedFromBusiness: null,
   showTrialWelcome: false,
   businessDrawerOpen: false,
+  businessDrawerFullyClosed: true,
+  suppressActivationFork: false,
+  homeRefreshToken: 0,
+  heroDraft: null,
+  requestQuickCapture: null,
+  freshSessionToken: 0,
 
   initialize: async () => {
     // Register BEFORE getSession() so we never miss a TOKEN_REFRESHED event.
@@ -319,7 +438,12 @@ export const useAuthStore = create<AuthStore>((set, get) => ({
     }
 
     try {
-      const { data: { session }, error: sessionError } = await supabase.auth.getSession();
+      // withTimeout here matters most for a device with no cachedSession
+      // above (fresh install, or cache cleared) — that's the one path where
+      // `loading` is still `true` at this point, so a hang below would blank
+      // the entire app forever ((app)/_layout.tsx renders null while
+      // loading, see CLAUDE.md's "Critical: auth store loading flag").
+      const { data: { session }, error: sessionError } = await withNetworkRetry(() => supabase.auth.getSession());
       _currentAccessToken = session?.access_token ?? _currentAccessToken;
 
       // Retry any server-side sign-out that couldn't reach the network last
@@ -335,7 +459,15 @@ export const useAuthStore = create<AuthStore>((set, get) => ({
         // valid server-side — a stale cached session must not keep being
         // trusted indefinitely just because it happens to exist locally.
         if (sessionError && isAuthRetryableFetchError(sessionError)) {
-          // Offline — cached session (if any) already rendered above.
+          // Offline — cached session (if any) already rendered above. Still
+          // must clear `loading` even when there's NO cache to fall back to
+          // (fresh install, or a cleared cache) — otherwise this branch
+          // returns having never set loading:false, and (app)/_layout.tsx
+          // renders null forever, since nothing else in this function will
+          // ever touch `loading` again for this call. See CLAUDE.md's
+          // "Critical: auth store loading flag."
+          reportOfflineFallback('auth.initialize', sessionError);
+          set({ loading: false });
         } else {
           set({ session: null, loading: false });
         }
@@ -457,6 +589,7 @@ export const useAuthStore = create<AuthStore>((set, get) => ({
         avatar_url: null,
         language: 'fr',
         recovery_email: null,
+        notify_on_every_sale: true,
         created_at: new Date().toISOString(),
         updated_at: new Date().toISOString(),
       };
@@ -476,7 +609,18 @@ export const useAuthStore = create<AuthStore>((set, get) => ({
     const accessTokenToRevoke = _currentAccessToken;
     trackEvent('user_logged_out', session?.activeBusiness?.id ?? null, userId ?? null);
     resetAnalytics();
-    void logoutPurchases();
+    // Deliberately NOT calling RevenueCat's logOut()/isAnonymous() here — both
+    // are native calls that can throw an uncaught NSException on the
+    // com.meta.react.turbomodulemanager.queue, which surfaces as a native
+    // SIGABRT (not a catchable JS promise rejection) and aborts the whole
+    // app. A prior fix tried guarding logOut() with an isAnonymous() check
+    // first, but isAnonymous() goes through the exact same crash-prone
+    // native bridge path, so it just moved the crash one call earlier
+    // instead of preventing it (confirmed via a real TestFlight .ips crash
+    // log still showing this exact signature after that fix shipped).
+    // loginPurchases(businessId) already runs unconditionally on every
+    // subsequent login/session-restore and RevenueCat's logIn() safely
+    // switches identity on its own — no explicit logOut() is needed first.
 
     // Logging out is a local, instant action — it must never wait on the
     // network. supabase.auth.signOut() calls the server *before* it clears
@@ -512,16 +656,34 @@ export const useAuthStore = create<AuthStore>((set, get) => ({
       _explicitLogout = false;
     })();
 
-    // Remove push token fire-and-forget — must not block or crash the logout.
-    if (!session?.isDemoMode) {
-      void (async () => {
-        try {
-          const { getExpoPushTokenAsync } = await import('expo-notifications');
-          const tokenResult = await getExpoPushTokenAsync({ projectId: '9cd0ec2b-0dc9-49f3-ba97-999bb31a0252' });
-          const { Platform } = await import('react-native');
-          await deleteDeviceToken(tokenResult.data, Platform.OS as 'ios' | 'android');
-        } catch {}
-      })();
+    // Deliberately NOT calling getExpoPushTokenAsync()/deleteDeviceToken() here
+    // anymore — same class of risk as the RevenueCat calls removed above:
+    // getExpoPushTokenAsync() is a native module call that can throw an
+    // uncaught native exception un-catchable by JS try/catch, and it wasn't
+    // load-bearing (worst case without it: a logged-out device keeps its old
+    // push token registered server-side until the next login re-registers a
+    // fresh one, or it naturally goes stale — not a crash-worthy tradeoff).
+  },
+
+  // Lost/stolen-phone flow (security audit 2026-09-27, 1.15) — a real,
+  // server-side revocation via GoTrue's own `others` scope: kills every
+  // *other* refresh token for this user immediately, no new table, no
+  // in-app cooperation required from the other device. Deliberately not
+  // "global" — the device tapping this button must stay logged in (that's
+  // the whole point: fix the problem from the phone you're holding without
+  // also locking yourself out). GoTrue fires no SIGNED_OUT event for this
+  // scope, so the current session's own auth-state listener is untouched.
+  // A currently-open session on another device keeps its already-issued
+  // access token valid until it naturally expires (up to 1h, per this
+  // project's confirmed JWT lifetime) — revoking the refresh token stops it
+  // from ever getting a new one, it doesn't retroactively kill the current
+  // one, since that's not something JWTs support.
+  revokeOtherSessions: async () => {
+    try {
+      const { error } = await supabase.auth.signOut({ scope: 'others' });
+      return !error;
+    } catch {
+      return false;
     }
   },
 
@@ -551,7 +713,13 @@ export const useAuthStore = create<AuthStore>((set, get) => ({
     const { session } = get();
     if (!session) return;
 
-    const alreadyOwns = session.memberships.some(m => m.role === 'administrateur');
+    // The founder is exempt from the 1-business-per-admin limit — he needs
+    // to create and delete many throwaway test businesses while iterating
+    // on onboarding. Mirrors the server-side bypass in
+    // create_business_with_membership (db/migration_v165.sql); this
+    // client-side check is defense-in-depth only, same posture as every
+    // other isFounderPhone gate in the app.
+    const alreadyOwns = !isFounderPhone(session.user.phone) && session.memberships.some(m => m.role === 'administrateur');
     if (alreadyOwns) {
       set({ error: 'Vous avez déjà un commerce actif. Bientôt, vous pourrez en gérer plusieurs.', loading: false });
       return;
@@ -562,68 +730,141 @@ export const useAuthStore = create<AuthStore>((set, get) => ({
 
     const businessId = generateId();
 
-    // create_business_with_membership: SECURITY DEFINER RPC — inserts the
-    // business, lets the on_business_created trigger create the admin
-    // membership in the same transaction, then returns both atomically.
-    // Replaces a separate insert + up-to-5x poll loop (previously up to ~3s
-    // on a slow connection) with a single round trip.
-    const { data: membership, error: rpcErr } = await supabase.rpc('create_business_with_membership', {
-      p_id: businessId,
-      p_name: name,
-      p_type: type ?? null,
-      p_currency: currency,
-      p_phone: session.user.phone ?? null,
-    });
-    if (rpcErr || !membership) {
-      set({ error: translateError(rpcErr, 'Impossible de créer le commerce'), loading: false });
-      return;
-    }
-
-    const m = membership as Membership;
-
-    // Referral code ("Inviter un ami" in Paramètres) is optional and
-    // best-effort — a bad/expired code should never block business
-    // creation. resolve_referral_code is SECURITY DEFINER because this
-    // brand-new user isn't a member of the referrer's business yet, so the
-    // normal is_member(id) SELECT policy on businesses would otherwise
-    // block the lookup. The actual write below is a plain client update,
-    // allowed by the "Administrateurs: modifier leur commerce" policy
-    // since this user is now that business's own admin.
-    if (referralCode?.trim()) {
-      try {
-        const { data: referrerId } = await supabase.rpc('resolve_referral_code', { p_code: referralCode.trim() });
-        if (referrerId && referrerId !== businessId) {
-          await supabase.from('businesses').update({ referred_by_business_id: referrerId }).eq('id', businessId);
-          if (m.business) (m.business as Business).referred_by_business_id = referrerId as string;
-        }
-      } catch (err) {
-        console.warn('[createBusiness] referral code lookup failed:', err);
+    // Wrapped in try/catch (unlike an earlier version of this function) —
+    // the bare RPC call below has no offline queue or retry of its own, so
+    // a network failure has to surface as a translated error and reset
+    // `loading`, not disappear. lib/supabase.ts's global fetchWithTimeout
+    // aborts any hung request after 15s, but an abort is a THROWN rejection,
+    // not a returned `{data,error}` pair — with no catch here, that
+    // rejection had nowhere to go: `loading` stayed true forever and the
+    // "Créer mon commerce" button was left permanently spinning with no
+    // error shown, on literally the last step of onboarding. Same bug class
+    // already found and fixed in stores/investor.ts and stores/sales.ts's
+    // submitCarnetDebt — see "Offline queue" in CLAUDE.md.
+    try {
+      // create_business_with_membership: SECURITY DEFINER RPC — inserts the
+      // business, lets the on_business_created trigger create the admin
+      // membership in the same transaction, then returns both atomically.
+      // Replaces a separate insert + up-to-5x poll loop (previously up to ~3s
+      // on a slow connection) with a single round trip.
+      const { data: membership, error: rpcErr } = await supabase.rpc('create_business_with_membership', {
+        p_id: businessId,
+        p_name: name,
+        p_type: type ?? null,
+        p_currency: currency,
+        p_phone: session.user.phone ?? null,
+      });
+      if (rpcErr || !membership) {
+        set({ error: translateError(rpcErr, 'Impossible de créer le commerce'), loading: false });
+        return;
       }
+
+      const m = membership as Membership;
+
+      // Referral code ("Inviter un ami" in Paramètres) is optional and
+      // best-effort — a bad/expired code should never block business
+      // creation. resolve_referral_code is SECURITY DEFINER because this
+      // brand-new user isn't a member of the referrer's business yet, so the
+      // normal is_member(id) SELECT policy on businesses would otherwise
+      // block the lookup. The actual write below is a plain client update,
+      // allowed by the "Administrateurs: modifier leur commerce" policy
+      // since this user is now that business's own admin.
+      if (referralCode?.trim()) {
+        try {
+          const { data: referrerId } = await supabase.rpc('resolve_referral_code', { p_code: referralCode.trim() });
+          if (referrerId && referrerId !== businessId) {
+            await supabase.from('businesses').update({ referred_by_business_id: referrerId }).eq('id', businessId);
+            if (m.business) (m.business as Business).referred_by_business_id = referrerId as string;
+          }
+        } catch (err) {
+          console.warn('[createBusiness] referral code lookup failed:', err);
+        }
+      }
+
+      const newMemberships = [...session.memberships, m];
+      // Persist so next cold start lands on the newly created business
+      setKV(`last_business_${session.user.id}`, businessId).catch(() => {});
+      void loginPurchases(businessId);
+      // Seed the cache so first-reload removal detection works immediately
+      syncKnownBusinesses(session.user.id, newMemberships).catch(() => {});
+      resetAllStores();
+      const nextSession: AppSession = {
+        ...session,
+        memberships: newMemberships,
+        activeBusiness: m.business as Business,
+        activeMembership: m,
+      };
+      // Keep the offline session cache in sync — otherwise a cold start that
+      // lands offline right after creating a business would restore a session
+      // that predates it (missing membership, wrong/no active business).
+      void persistSessionCache(nextSession);
+      set({
+        session: nextSession,
+        showTrialWelcome: true,
+        loading: false,
+      });
+      trackEvent('business_created', businessId, session.user.id, { currency, business_type: type ?? null });
+    } catch (err) {
+      set({ error: translateError(err, 'Impossible de créer le commerce'), loading: false });
+    }
+  },
+
+  // Marks the first-run hero gate ("Qui vous doit de l'argent ?") done for
+  // this business — via Passer, or the first successful save. Same plain
+  // client-update pattern createBusiness already uses for
+  // referred_by_business_id above: allowed by the existing "Administrateurs:
+  // modifier leur commerce" RLS policy, no RPC needed. A joined (non-owner)
+  // member never reaches this at all — join_business() (migration_v197.sql)
+  // stamps the business the instant anyone joins it, before a manager or
+  // vendeur's own session could ever render this gate. Best-effort: a
+  // failed write here just means the gate might show once more on a later
+  // launch, never a blocking error worth surfacing to the merchant.
+  markFirstRunHeroCompleted: async (businessId) => {
+    const { session } = get();
+    if (!session) return;
+    const stampedAt = new Date().toISOString();
+    if (session.activeBusiness?.id === businessId) {
+      set({
+        session: {
+          ...session,
+          activeBusiness: { ...session.activeBusiness, first_run_hero_completed_at: stampedAt },
+        },
+      });
+    }
+    try {
+      await supabase.from('businesses').update({ first_run_hero_completed_at: stampedAt }).eq('id', businessId);
+    } catch (err) {
+      console.warn('[markFirstRunHeroCompleted]', err);
+    }
+  },
+
+  deleteBusiness: async (businessId) => {
+    const { session } = get();
+    if (!session) return false;
+
+    const { error } = await supabase.rpc('delete_business', { p_business_id: businessId });
+    if (error) {
+      set({ error: translateError(error, 'Impossible de supprimer ce commerce') });
+      return false;
     }
 
-    const newMemberships = [...session.memberships, m];
-    // Persist so next cold start lands on the newly created business
-    setKV(`last_business_${session.user.id}`, businessId).catch(() => {});
-    void loginPurchases(businessId);
-    // Seed the cache so first-reload removal detection works immediately
-    syncKnownBusinesses(session.user.id, newMemberships).catch(() => {});
-    resetAllStores();
+    const remaining = session.memberships.filter(m => m.business_id !== businessId);
+    const wasActive = session.activeBusiness?.id === businessId;
+    const fallback = wasActive ? remaining[0] : undefined;
+
+    if (wasActive) resetAllStores();
+    setKV(`last_business_${session.user.id}`, fallback?.business_id ?? '').catch(() => {});
+
     const nextSession: AppSession = {
       ...session,
-      memberships: newMemberships,
-      activeBusiness: m.business as Business,
-      activeMembership: m,
+      memberships: remaining,
+      activeBusiness: wasActive ? ((fallback?.business as Business) ?? null) : session.activeBusiness,
+      activeMembership: wasActive ? (fallback ?? null) : session.activeMembership,
     };
-    // Keep the offline session cache in sync — otherwise a cold start that
-    // lands offline right after creating a business would restore a session
-    // that predates it (missing membership, wrong/no active business).
     void persistSessionCache(nextSession);
-    set({
-      session: nextSession,
-      showTrialWelcome: true,
-      loading: false,
-    });
-    trackEvent('business_created', businessId, session.user.id, { currency, business_type: type ?? null });
+    set({ session: nextSession, error: null });
+    trackEvent('business_deleted', businessId, session.user.id, {});
+    return true;
   },
 
   joinBusiness: async (code) => {
@@ -776,9 +1017,28 @@ export const useAuthStore = create<AuthStore>((set, get) => ({
       let result;
       try {
         result = await LocalAuthentication.authenticateAsync({
-          promptMessage: 'Confirmez votre identité pour continuer',
+          promptMessage: 'Déverrouiller Patron',
           cancelLabel: 'Annuler',
-          disableDeviceFallback: true, // true biometric only — no OS passcode escape hatch
+          // Reversed 2026-09-26 (was `true`, "no OS passcode escape hatch" —
+          // see the still-accurate reasoning further up this function for
+          // why biometric-vs-device-passcode was ever a distinction worth
+          // making). This screen re-locks after just 2 minutes backgrounded
+          // (BACKGROUND_MS, app/(app)/_layout.tsx) — routing every routine
+          // Face ID miss (sunglasses, bad angle, a hand in the way) through
+          // a full WhatsApp OTP re-login is disproportionate friction for
+          // that short a gap, and a real, recurring WhatsApp/Twilio send
+          // cost for something this frequent. `false` lets iOS/Android
+          // offer their own native "Enter Passcode" option inside the same
+          // sheet — free, instant, hardware-backed, no extra code needed
+          // here since a passcode success still flows through the exact
+          // same result.success branch below as a real biometric match.
+          // Deliberate tradeoff, not an oversight: anyone who knows the
+          // device's own screen-lock code can now unlock Patron too, not
+          // just whoever the device's biometrics are enrolled to — on a
+          // device shared between staff, that's a real, narrower security
+          // boundary than before. Accepted for the routine short-lock case;
+          // revisit if that boundary ever needs to be stricter again.
+          disableDeviceFallback: false,
         });
       } catch (err) {
         Sentry.captureMessage('biometric_authenticate_threw', { extra: { err: String(err) } });
@@ -1222,6 +1482,7 @@ export const useAuthStore = create<AuthStore>((set, get) => ({
   clearRemovedBusinessesOnLogin: () => set({ removedBusinessesOnLogin: null }),
   clearDismissedFromBusiness: () => set({ dismissedFromBusiness: null }),
 
-  openBusinessDrawer: () => set({ businessDrawerOpen: true }),
+  openBusinessDrawer: () => set({ businessDrawerOpen: true, businessDrawerFullyClosed: false }),
   closeBusinessDrawer: () => set({ businessDrawerOpen: false }),
+  markBusinessDrawerFullyClosed: () => set({ businessDrawerFullyClosed: true }),
 }));

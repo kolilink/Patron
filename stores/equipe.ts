@@ -1,11 +1,18 @@
 import { create } from 'zustand';
+import { getRandomValues } from 'expo-crypto';
 import { supabase } from '@/lib/supabase';
 import { generateId, generateFallbackName } from '@/lib/id';
 import { translateError } from '@/lib/errors';
 import { notifyEvent } from '@/src/utils/notifications';
 import { saveEquipeCache, getEquipeCache, getCacheTimestamp } from '@/lib/db';
-import { isNetworkError } from '@/lib/sync';
+import { isNetworkError, withTimeout, withNetworkRetry, reportOfflineFallback } from '@/lib/sync';
+import { useAuthStore } from '@/stores/auth';
 import type { Role, MemberProductStake } from '@/src/types';
+
+// See stores/products.ts for the full explanation.
+function isStaleBusiness(businessId: string): boolean {
+  return useAuthStore.getState().session?.activeBusiness?.id !== businessId;
+}
 
 const ROLE_LABELS: Record<string, string> = {
   administrateur: 'Administrateur',
@@ -17,8 +24,19 @@ const ROLE_LABELS: Record<string, string> = {
 // 32-char alphabet (removes ambiguous O, I, L, U) — ~40 bits of entropy per 8-char code
 const CODE_ALPHABET = '0123456789ABCDEFGHJKMNPQRSTVWXYZ';
 
+// Was Math.random() — not a CSPRNG, and this codebase's own CLAUDE.md used to
+// justify that as "crypto.getRandomValues() isn't available in Hermes." That
+// reasoning was about the global Web Crypto API; expo-crypto's own
+// getRandomValues (a native-backed CSPRNG, already used the same way by
+// lib/encryption.ts for the SQLite cache key) has been a dependency of this
+// project the whole time and works fine here. 32 is a power of two, so
+// `byte % 32` on a uniform random byte carries no modulo bias — no rejection
+// sampling needed (unlike the OTP's 900000-wide range in
+// create-phone-verification, which isn't a power of two).
 function generateCode(): string {
-  return Array.from({ length: 8 }, () => CODE_ALPHABET[Math.floor(Math.random() * 32)]).join('');
+  const bytes = new Uint8Array(8);
+  getRandomValues(bytes);
+  return Array.from(bytes, (b) => CODE_ALPHABET[b % 32]).join('');
 }
 
 export interface Membre {
@@ -42,11 +60,19 @@ export interface CodeInvitation {
   max_uses: number | null;
   uses: number;
   created_at: string;
+  redeemed_by: string | null;
+  redeemed_at: string | null;
+  redeemed_by_name?: string | null;
 }
 
 interface EquipeStore {
   membres: Membre[];
   codes: CodeInvitation[];
+  // Consumed codes (uses >= max_uses) — kept, with redeemer name/date
+  // resolved client-side, instead of being deleted like before (see
+  // fetchCodes()). This is the actual point of the feature: an admin's own
+  // audit trail of who joined via which code and when.
+  redeemedCodes: CodeInvitation[];
   loading: boolean;
   saving: boolean;
   error: string | null;
@@ -72,6 +98,7 @@ interface EquipeStore {
 export const useEquipeStore = create<EquipeStore>((set, get) => ({
   membres: [],
   codes: [],
+  redeemedCodes: [],
   loading: false,
   saving: false,
   error: null,
@@ -82,17 +109,23 @@ export const useEquipeStore = create<EquipeStore>((set, get) => ({
   fetchMembres: async (businessId) => {
     set({ loading: true });
 
-    const { data: mData, error: mErr } = await supabase
-      .from('memberships')
-      .select('id, user_id, business_id, role, joined_at, display_name, scope_all_products')
-      .eq('business_id', businessId)
-      .order('joined_at');
+    const { data: mData, error: mErr } = await withNetworkRetry(() =>
+      supabase
+        .from('memberships')
+        .select('id, user_id, business_id, role, joined_at, display_name, scope_all_products')
+        .eq('business_id', businessId)
+        .order('joined_at'),
+    ).catch(err => ({ data: null, error: err }));
 
+    if (isStaleBusiness(businessId)) return;
     if (mErr) {
       if (isNetworkError(mErr)) {
+        reportOfflineFallback('equipe.fetchMembres', mErr);
         const cached = await getEquipeCache(businessId);
+        if (isStaleBusiness(businessId)) return;
         if (cached) {
           const ts = await getCacheTimestamp('equipe_cache', businessId);
+          if (isStaleBusiness(businessId)) return;
           set({ membres: cached as Membre[], loading: false, hasFetched: true, offline: true, offlineSince: ts });
           return;
         }
@@ -109,13 +142,19 @@ export const useEquipeStore = create<EquipeStore>((set, get) => ({
 
     const profilesMap: Record<string, { name: string; email: string; phone: string | null }> = {};
     if (userIds.length > 0) {
-      const { data: pData, error: pErr } = await supabase
-        .from('profiles')
-        .select('id, name, email, phone')
-        .in('id', userIds);
-      if (pErr) console.error('[fetchMembres profiles]', pErr instanceof Error ? pErr.message : (pErr as { message?: string })?.message ?? JSON.stringify(pErr));
-      for (const p of pData ?? []) {
-        profilesMap[p.id] = { name: p.name || null, email: p.email ?? '—', phone: p.phone ?? null };
+      // Best-effort enrichment — a hang or failure here must never block the
+      // membership list (which already fetched successfully) from ever
+      // clearing `loading`. See CLAUDE.md's "withTimeout() sweep" note.
+      try {
+        const { data: pData, error: pErr } = await withTimeout(
+          supabase.from('profiles').select('id, name, email, phone').in('id', userIds),
+        );
+        if (pErr) console.error('[fetchMembres profiles]', pErr instanceof Error ? pErr.message : (pErr as { message?: string })?.message ?? JSON.stringify(pErr));
+        for (const p of pData ?? []) {
+          profilesMap[p.id] = { name: p.name || null, email: p.email ?? '—', phone: p.phone ?? null };
+        }
+      } catch (err) {
+        console.error('[fetchMembres profiles]', err instanceof Error ? err.message : String(err));
       }
     }
 
@@ -132,6 +171,7 @@ export const useEquipeStore = create<EquipeStore>((set, get) => ({
       scope_all_products: (m.scope_all_products as boolean) ?? true,
     }));
     void saveEquipeCache(businessId, membres);
+    if (isStaleBusiness(businessId)) return;
     set({
       membres,
       loading: false,
@@ -152,23 +192,46 @@ export const useEquipeStore = create<EquipeStore>((set, get) => ({
 
     const all = (data ?? []) as CodeInvitation[];
     const now = new Date();
+    const isConsumed = (c: CodeInvitation) => c.max_uses != null && c.uses >= c.max_uses;
+    const isExpired = (c: CodeInvitation) => c.expires_at != null && new Date(c.expires_at) <= now;
 
-    // Delete consumed and expired codes — they can't be used and shouldn't show
-    const staleIds = all
-      .filter(c =>
-        (c.max_uses != null && c.uses >= c.max_uses) ||
-        (c.expires_at != null && new Date(c.expires_at) <= now)
-      )
-      .map(c => c.id);
+    // Only delete codes that expired WITHOUT ever being used — genuinely
+    // dead, nothing to preserve. A consumed code is kept from here on (see
+    // redeemedCodes below) — it's the admin's own record of who joined and
+    // when, so deleting it the moment they open this screen (the previous
+    // behavior) would erase that history before it could ever be seen.
+    const staleIds = all.filter(c => isExpired(c) && !isConsumed(c)).map(c => c.id);
     if (staleIds.length > 0) {
       await supabase.from('invite_codes').delete().in('id', staleIds);
     }
 
+    const active = all.filter(c => !isConsumed(c) && !isExpired(c));
+    const redeemed = all.filter(isConsumed);
+
+    // Resolve redeemer names — same lookup-map pattern fetchMembres already
+    // uses. Best-effort: a failure here still shows the redeemed codes,
+    // just with a fallback name instead of blocking the whole screen.
+    const redeemerIds = [...new Set(redeemed.map(c => c.redeemed_by).filter((id): id is string => !!id))];
+    const namesById: Record<string, string> = {};
+    if (redeemerIds.length > 0) {
+      try {
+        const { data: pData } = await withTimeout(
+          supabase.from('profiles').select('id, name').in('id', redeemerIds),
+        );
+        for (const p of pData ?? []) {
+          namesById[p.id as string] = (p.name as string) || generateFallbackName(p.id as string);
+        }
+      } catch (err) {
+        console.error('[fetchCodes redeemers]', err instanceof Error ? err.message : String(err));
+      }
+    }
+
     set({
-      codes: all.filter(c =>
-        (c.max_uses == null || c.uses < c.max_uses) &&
-        (c.expires_at == null || new Date(c.expires_at) > now)
-      ),
+      codes: active,
+      redeemedCodes: redeemed.map(c => ({
+        ...c,
+        redeemed_by_name: c.redeemed_by ? (namesById[c.redeemed_by] ?? generateFallbackName(c.redeemed_by)) : null,
+      })),
       loading: false,
     });
   },
@@ -322,5 +385,5 @@ export const useEquipeStore = create<EquipeStore>((set, get) => ({
   },
 
   clearError: () => set({ error: null }),
-  reset: () => set({ membres: [], codes: [], loading: false, saving: false, error: null, hasFetched: false, offline: false, offlineSince: null }),
+  reset: () => set({ membres: [], codes: [], redeemedCodes: [], loading: false, saving: false, error: null, hasFetched: false, offline: false, offlineSince: null }),
 }));

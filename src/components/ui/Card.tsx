@@ -19,6 +19,7 @@ export function Card({ onPress, padded = true, elevated = false, style, children
       style={[
         styles.card,
         padded && styles.padded,
+        elevated && styles.elevated,
         elevated && shadow.md,
         style,
       ]}
@@ -49,6 +50,9 @@ function makeStyles(p: Palette) {
       borderRadius: radius.card,
       borderWidth: 1,
       borderColor: p.border,
+    },
+    elevated: {
+      backgroundColor: p.surfaceElevated,
     },
     padded: {
       padding: spacing[5],

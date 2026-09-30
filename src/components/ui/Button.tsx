@@ -6,6 +6,7 @@ import {
   PressableStateCallbackType,
   StyleProp,
   StyleSheet,
+  TextStyle,
   View,
   ViewStyle,
 } from 'react-native';
@@ -25,6 +26,12 @@ interface ButtonProps extends Omit<PressableProps, 'style'> {
   icon?: React.ReactNode;
   fullWidth?: boolean;
   style?: StyleProp<ViewStyle>;
+  /** Overrides the label's own text style (e.g. a larger fontSize for a
+   *  screen's single most important action) without touching every other
+   *  Button in the app — the button box itself sizes off `size`/padding,
+   *  not off this, so a bigger label just uses more of the existing
+   *  minHeight budget rather than growing the button to match. */
+  labelStyle?: StyleProp<TextStyle>;
 }
 
 export function Button({
@@ -36,6 +43,7 @@ export function Button({
   fullWidth = false,
   disabled,
   style,
+  labelStyle,
   ...props
 }: ButtonProps) {
   const { palette } = useTheme();
@@ -75,6 +83,7 @@ export function Button({
               typography.labelLarge,
               { color: textColor },
               variant === 'danger' && { color: palette.textInverse },
+              labelStyle,
             ]}
           >
             {label}

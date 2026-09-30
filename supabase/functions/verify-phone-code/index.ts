@@ -1,5 +1,6 @@
 import { serve } from 'https://deno.land/std@0.177.0/http/server.ts';
 import { createClient } from 'https://esm.sh/@supabase/supabase-js@2';
+import { safeErrorResponse } from '../_shared/errors.ts';
 
 const corsHeaders = {
   'Access-Control-Allow-Origin': '*',
@@ -13,7 +14,7 @@ function err(msg: string, status = 400) {
   });
 }
 
-const MAX_FAILED_ATTEMPTS = 5;
+const MAX_FAILED_ATTEMPTS = 3;
 
 // Constant-time comparison — prevents timing-based brute-force of the code.
 function timingSafeEqual(a: string, b: string): boolean {
@@ -26,6 +27,15 @@ function timingSafeEqual(a: string, b: string): boolean {
     diff |= (aBytes[i] ?? 0) ^ (bBytes[i] ?? 0);
   }
   return diff === 0;
+}
+
+// Matches create-phone-verification's hashToken() exactly — phone_verifications.token
+// stores a SHA-256 hex digest, never the raw code, so the comparison here is
+// digest-to-digest, not digest-to-plaintext.
+async function hashToken(token: string): Promise<string> {
+  const bytes = new TextEncoder().encode(token);
+  const digest = await crypto.subtle.digest('SHA-256', bytes);
+  return Array.from(new Uint8Array(digest)).map((b) => b.toString(16).padStart(2, '0')).join('');
 }
 
 serve(async (req) => {
@@ -63,8 +73,9 @@ serve(async (req) => {
       return err('Trop de tentatives incorrectes. Demandez un nouveau code.');
     }
 
-    // Check code against stored token (constant-time to avoid leaking match position)
-    if (!timingSafeEqual(verif.token, code.trim())) {
+    // Check the caller's guess against the stored hash (constant-time to avoid
+    // leaking match position via timing).
+    if (!timingSafeEqual(verif.token, await hashToken(code.trim()))) {
       await serviceClient
         .from('phone_verifications')
         .update({ failed_attempts: verif.failed_attempts + 1 })
@@ -82,10 +93,6 @@ serve(async (req) => {
       headers: { ...corsHeaders, 'Content-Type': 'application/json' },
     });
   } catch (e) {
-    const msg = e instanceof Error ? e.message : 'Erreur inconnue';
-    return new Response(JSON.stringify({ error: msg }), {
-      status: 500,
-      headers: { ...corsHeaders, 'Content-Type': 'application/json' },
-    });
+    return safeErrorResponse(e, corsHeaders, 'verify-phone-code');
   }
 });

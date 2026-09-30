@@ -1,35 +1,90 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
-import { Animated, Easing, Pressable, ScrollView, StyleSheet, View } from 'react-native';
+import { Animated, Easing, LayoutAnimation, Platform, Pressable, ScrollView, StyleSheet, UIManager, View } from 'react-native';
 import { Screen } from '@/src/components/ui/Screen';
 import { router, useFocusEffect } from 'expo-router';
 import { Card } from '@/src/components/ui/Card';
 import { SkeletonKpiGrid } from '@/src/components/ui/SkeletonPlaceholder';
 import { OfflineNotice } from '@/src/components/ui/OfflineNotice';
 import { Text } from '@/src/components/ui/Text';
-import { useTheme, spacing, radius } from '@/src/theme';
+import { Pill } from '@/src/components/ui/Pill';
+import { DatePickerField } from '@/src/components/ui/DatePickerField';
+import { YearHeatmap } from '@/src/components/ui/YearHeatmap';
+import { useTheme, spacing, radius, fontFamily } from '@/src/theme';
 import type { Palette } from '@/src/theme';
 import { useAuthStore } from '@/stores/auth';
-import { useRapportsStore } from '@/stores/rapports';
+import { useRapportsStore, type PeriodReport } from '@/stores/rapports';
 
 function fmt(n: number, cur: string) {
-  return `${Math.round(n).toLocaleString('fr-FR')} ${cur}`;
+  // `|| 0` normalizes a rounded negative zero (e.g. Math.round(-0.4) === -0)
+  // back to plain 0 — otherwise a value that nets out to just-below-zero
+  // could display as "-0 GNF", which reads as a real (wrong) negative amount.
+  const rounded = Math.round(n) || 0;
+  return `${rounded.toLocaleString('fr-FR')} ${cur}`;
 }
 
-type Period = 'semaine' | 'mois' | 'trimestre';
-const PERIOD_DAYS: Record<Period, number> = { semaine: 7, mois: 30, trimestre: 90 };
+// ── Calendar helpers ─────────────────────────────────────────────────────────
+// All calendar-anchored, matching get_period_report's contract — a "year" is
+// just the widest possible [period_start, period_end], no special-cased path.
 
-const PERIOD_SENTENCE: Record<Period, string> = {
-  semaine:   'Cette semaine, votre bénéfice est de',
-  mois:      'Ce mois, votre bénéfice est de',
-  trimestre: 'Ce trimestre, votre bénéfice est de',
-};
-const PERIOD_SELLER: Record<Period, string> = { semaine: 'de la semaine', mois: 'du mois', trimestre: 'du trimestre' };
-const PERIOD_BOUTIQUE: Record<Period, string> = { semaine: 'cette semaine', mois: 'ce mois', trimestre: 'ce trimestre' };
-const PERIOD_VENDEUR_SENTENCE: Record<Period, string> = {
-  semaine:   'Cette semaine, vous avez vendu pour',
-  mois:      'Ce mois, vous avez vendu pour',
-  trimestre: 'Ce trimestre, vous avez vendu pour',
-};
+function todayIso(): string {
+  return new Date().toISOString().split('T')[0];
+}
+
+function isoOf(d: Date): string {
+  return `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, '0')}-${String(d.getDate()).padStart(2, '0')}`;
+}
+
+function dayFromIso(iso: string): Date {
+  const [y, m, d] = iso.split('-').map(Number);
+  return new Date(y, (m ?? 1) - 1, d ?? 1);
+}
+
+// No year in either of these — the year selector above is already on
+// screen showing which year is being browsed, so repeating "2026" on
+// every sub-label read as redundant noise rather than useful context.
+function fmtDateFr(iso: string): string {
+  return dayFromIso(iso).toLocaleDateString('fr-FR', { day: 'numeric', month: 'short' });
+}
+
+function weekRange(anchor: Date): { start: string; end: string } {
+  const dow = (anchor.getDay() + 6) % 7; // 0=Mon
+  const start = new Date(anchor); start.setDate(anchor.getDate() - dow);
+  const end = new Date(start); end.setDate(start.getDate() + 6);
+  return { start: isoOf(start), end: isoOf(end) };
+}
+
+function monthRange(anchor: Date): { start: string; end: string } {
+  const start = new Date(anchor.getFullYear(), anchor.getMonth(), 1);
+  const end = new Date(anchor.getFullYear(), anchor.getMonth() + 1, 0);
+  return { start: isoOf(start), end: isoOf(end) };
+}
+
+function fmtMonthFr(iso: string): string {
+  const label = dayFromIso(iso).toLocaleDateString('fr-FR', { month: 'long' });
+  return label.charAt(0).toUpperCase() + label.slice(1);
+}
+
+// Guarantees a valid, non-future, non-inverted [start,end] regardless of how
+// the caller computed it — a fully-future month (e.g. viewing December while
+// it's still July) would otherwise send start > end to the RPC, which
+// rejects that outright. Collapsing to a same-day "today" range is a rare,
+// harmless degenerate case rather than a crash.
+function clampToToday(r: { start: string; end: string }): { start: string; end: string } {
+  const today = todayIso();
+  const end = r.end > today ? today : r.end;
+  const start = r.start > end ? end : r.start;
+  return { start, end };
+}
+
+// No "Année"/"Jour" chip — the plain heatmap+headline (no filter selected)
+// already is the year view, and a single day is read straight off the
+// heatmap via its own tap-tooltip (see YearHeatmap), not a separate filter.
+type FilterType = 'semaine' | 'mois' | 'personnalise';
+const FILTER_CHIPS: { key: FilterType; label: string }[] = [
+  { key: 'semaine',      label: 'Semaine' },
+  { key: 'mois',         label: 'Mois' },
+  { key: 'personnalise', label: 'Personnalisé' },
+];
 
 // ── Pulse skeleton ─────────────────────────────────────────────────────────────
 
@@ -73,23 +128,6 @@ function StatCard({
   );
 }
 
-// ── Days badge ─────────────────────────────────────────────────────────────────
-
-function DaysBadge({ days }: { days: number | null }) {
-  const { palette } = useTheme();
-  if (days === null) return null;
-  const isRupture = days <= 0;
-  const isCritique = days > 0 && days <= 7;
-  const bg    = isRupture || isCritique ? palette.warningLight : palette.successLight;
-  const color = isRupture || isCritique ? palette.warning : palette.success;
-  const label = isRupture ? 'Épuisé' : days === 1 ? '~1 jour' : `~${days}j`;
-  return (
-    <View style={{ paddingHorizontal: 8, paddingVertical: 3, borderRadius: 6, backgroundColor: bg }}>
-      <Text style={{ fontSize: 12, fontWeight: '700' as const, color }}>{label}</Text>
-    </View>
-  );
-}
-
 // ── Section separator ──────────────────────────────────────────────────────────
 
 function SectionSep({ label }: { label: string }) {
@@ -111,177 +149,348 @@ export default function RapportsScreen() {
   const styles = useMemo(() => makeStyles(palette), [palette]);
   const session      = useAuthStore(s => s.session);
   const businessId   = session?.activeBusiness?.id ?? '';
-  const businessName = session?.activeBusiness?.name ?? 'La boutique';
   const userId       = session?.user.id ?? '';
   const currency     = session?.activeBusiness?.currency ?? 'GNF';
   const role           = session?.activeMembership?.role;
-  const isInvestisseur = role === 'investisseur';
   const isVendeur      = role === 'vendeur';
+  // Title reflects scope, not what's shown: admin/manager run the whole shop
+  // → "Les chiffres"; vendeur (own sales) and investisseur (their stake) → "Mes chiffres".
+  const seesWholeBusiness = role === 'administrateur' || role === 'manager';
 
   const {
-    snapshot, snapshotLoading, offline, offlineSince,
-    stockVelocity,
-    fetchReportsSnapshot, fetchStockVelocity,
+    yearReport, yearReportLoading,
+    previousYearReport, previousYearReportLoading, fetchPreviousYearReport,
+    filterReport, filterReportLoading,
+    periodOffline, periodOfflineSince,
+    fetchYearReport, fetchFilterReport, clearFilterReport,
   } = useRapportsStore();
 
-  const [period, setPeriod] = useState<Period>('mois');
+  const currentYear = new Date().getFullYear();
+  // "The first year is the year they started" — never let the year selector
+  // go back before the business existed; there's structurally no data there.
+  const creationYear = session?.activeBusiness?.created_at
+    ? new Date(session.activeBusiness.created_at).getFullYear()
+    : currentYear;
+  const [year, setYear] = useState(currentYear);
+  const isCurrentYear = year === currentYear;
+  // Whether a genuine, fully-past previous year exists to compare against —
+  // a business created this year has no "l'an dernier" baseline, so the
+  // profit hero shows a plain "first year" caption instead of a delta.
+  const hasPreviousYear = year - 1 >= creationYear;
+
+  const [filterType, setFilterType] = useState<FilterType | null>(null);
+  const [weekAnchor, setWeekAnchor] = useState(todayIso);
+  const [monthAnchor, setMonthAnchor] = useState(todayIso);
+  const [customStart, setCustomStart] = useState('');
+  const [customEnd, setCustomEnd]     = useState('');
+
+  // Picking a chip (or stepping/typing a new range) makes a sub-control
+  // and/or the detail panel appear or change shape below the chips row.
+  // Two complementary motions handle this, not one:
+  //  1. A native ease-in-ease-out LayoutAnimation (fade + reflow) smooths
+  //     the content that's already on screen changing shape — no hard cut.
+  //  2. A hand-driven, calm scroll (below) nudges the viewport when the
+  //     new/changed content would otherwise land off-screen — LayoutAnimation
+  //     alone never moves the scroll position, so without this, content
+  //     appearing below the fold is invisible until the user finds it
+  //     themselves.
+  useEffect(() => {
+    if (Platform.OS === 'android') UIManager.setLayoutAnimationEnabledExperimental?.(true);
+  }, []);
+  const animateFilterChange = () => {
+    LayoutAnimation.configureNext(
+      LayoutAnimation.create(280, LayoutAnimation.Types.easeInEaseOut, LayoutAnimation.Properties.opacity),
+    );
+  };
+
+  const scrollRef = useRef<ScrollView>(null);
+  const filterSectionY = useRef(0);
+  const currentScrollY = useRef(0);
+  const scrollAnimFrame = useRef<number | null>(null);
+
+  // RN's ScrollView.scrollTo({animated:true}) has no duration knob — its
+  // native animation is a fixed, fairly quick easing curve, closer to a
+  // flick than the calm/unhurried feel this screen wants. Driven by hand
+  // instead: sample eased intermediate offsets over `duration` via rAF,
+  // applied with animated:false (each frame is already the eased position,
+  // native animation on top would fight it). Sine ease-in-out — a smooth,
+  // continuous half-cosine with no sharp acceleration anywhere in the
+  // curve — is the gentlest of the common easings, the same "don't demand
+  // attention" motion quality as this app's breathing CTA pulse (see
+  // PaywallScreen's BREATH_HALF_CYCLE_MS).
+  const easeInOutSine = (t: number) => -(Math.cos(Math.PI * t) - 1) / 2;
+  const smoothScrollTo = useCallback((targetY: number, duration = 1500) => {
+    if (scrollAnimFrame.current != null) cancelAnimationFrame(scrollAnimFrame.current);
+    const startY = currentScrollY.current;
+    const distance = targetY - startY;
+    const startTime = Date.now();
+    const step = () => {
+      const elapsed = Date.now() - startTime;
+      const t = Math.min(elapsed / duration, 1);
+      scrollRef.current?.scrollTo({ y: startY + distance * easeInOutSine(t), animated: false });
+      if (t < 1) {
+        scrollAnimFrame.current = requestAnimationFrame(step);
+      } else {
+        scrollAnimFrame.current = null;
+      }
+    };
+    scrollAnimFrame.current = requestAnimationFrame(step);
+  }, []);
+
+  useEffect(() => () => {
+    if (scrollAnimFrame.current != null) cancelAnimationFrame(scrollAnimFrame.current);
+  }, []);
+
+  // Reset the active filter whenever the business OR the viewed year
+  // changes, and re-anchor the week/month steppers inside the newly
+  // viewed year (today for the current year, Dec 31 for a past one) —
+  // a stale anchor from a different year would silently produce a range
+  // outside the year actually on screen, which matters now that the week/
+  // month labels no longer repeat the year (it's redundant with the year
+  // selector above, so a mismatched anchor would be invisible in the UI).
+  useEffect(() => {
+    animateFilterChange();
+    setFilterType(null);
+    const anchor = year === currentYear ? todayIso() : `${year}-12-31`;
+    setWeekAnchor(anchor);
+    setMonthAnchor(anchor);
+  }, [businessId, year, currentYear]);
+
+  const selectFilter = (key: FilterType) => {
+    animateFilterChange();
+    setFilterType(prev => (prev === key ? null : key));
+  };
+
+  const filterRange = useMemo(() => {
+    switch (filterType) {
+      case null:
+        return null;
+      case 'semaine':
+        return clampToToday(weekRange(dayFromIso(weekAnchor)));
+      case 'mois':
+        return clampToToday(monthRange(dayFromIso(monthAnchor)));
+      case 'personnalise':
+        return customStart && customEnd ? clampToToday({ start: customStart, end: customEnd }) : null;
+    }
+  }, [filterType, weekAnchor, monthAnchor, customStart, customEnd]);
+
+  // Fires when a chip is picked, switched, or its range resolves (e.g.
+  // Personnalisé only gets a filterRange once both dates are typed) — never
+  // on deselect (filterType null), since collapsing content needs no scroll.
+  useEffect(() => {
+    if (!filterType) return;
+    const t = setTimeout(() => {
+      const target = Math.max(filterSectionY.current - spacing[4], 0);
+      // Skip the nudge entirely when we're already this close — otherwise
+      // switching Semaine → Mois while both sit in roughly the same place
+      // re-fires a full scroll each time, which reads as the screen
+      // fighting the tap instead of just swapping the numbers in place.
+      if (Math.abs(target - currentScrollY.current) > 40) {
+        smoothScrollTo(target);
+      }
+    }, 60);
+    return () => clearTimeout(t);
+  }, [filterType, filterRange?.start, filterRange?.end, smoothScrollTo]);
 
   useFocusEffect(
     useCallback(() => {
       if (!businessId || !role) return;
-      fetchReportsSnapshot(businessId, PERIOD_DAYS[period], role, userId);
-      if (role !== 'investisseur' && role !== 'vendeur') {
-        fetchStockVelocity(businessId);
+      fetchYearReport(businessId, year, role, userId);
+      // Vendeur never sees the profit hero this baseline feeds — skip the
+      // extra round trip entirely for that role.
+      if (!isVendeur && hasPreviousYear) {
+        fetchPreviousYearReport(businessId, year, role, userId);
       }
-    }, [businessId, role, userId, period]),
+    }, [businessId, role, userId, year, isVendeur, hasPreviousYear]),
   );
 
-  // ── Snapshot values (display units, already ÷100 by the store) ────────────
-  const revenue            = snapshot?.revenue            ?? 0;
-  const netProfit          = snapshot?.net_profit         ?? 0;
-  const operExpenses       = snapshot?.operating_expenses ?? 0;
-  const shippingExp        = snapshot?.shipping_expenses  ?? 0;
-  const creditOutstanding  = snapshot?.credit_outstanding ?? 0;
-  const creditCount        = snapshot?.credit_count       ?? 0;
-  const periodOrderCount   = snapshot?.period_order_count ?? 0;
-  const cashOnHand         = snapshot?.cash_on_hand       ?? 0;
-  const stockValue         = snapshot?.stock_value        ?? 0;
-  const totalApports       = snapshot?.total_apports      ?? 0;
-  const periodApports      = snapshot?.period_apports     ?? 0;
-  const topSellers         = snapshot?.top_sellers        ?? [];
-  const hasMultipleSellers = topSellers.length > 1;
+  useEffect(() => {
+    if (!businessId || !role) return;
+    if (filterRange) {
+      fetchFilterReport(businessId, filterRange.start, filterRange.end, role, userId);
+    } else {
+      clearFilterReport();
+    }
+  }, [businessId, role, userId, filterRange?.start, filterRange?.end, fetchFilterReport, clearFilterReport]);
 
-  const myRevenue       = snapshot?.my_revenue       ?? 0;
-  const mySalesCount    = snapshot?.my_sales_count   ?? 0;
-  const myCreditPending = snapshot?.my_credit_pending ?? 0;
-  const myCreditCount   = snapshot?.my_credit_count   ?? 0;
+  // ── Headline (year-level) values ──────────────────────────────────────────
+  const cashOnHand        = yearReport?.cash_on_hand        ?? 0;
+  const yearProfit        = yearReport?.net_profit          ?? 0;
+  const yearSalesCount    = yearReport?.sales_count          ?? 0;
+  const yearUnitsSold     = yearReport?.units_sold           ?? 0;
 
-  const investorBalance  = snapshot?.investor_balance  ?? 0;
-  const myTotalInvested  = snapshot?.my_total_invested  ?? 0;
-  const myPeriodApports  = snapshot?.my_period_apports  ?? 0;
-  const roi = myTotalInvested > 0 && investorBalance > 0
-    ? ((investorBalance / myTotalInvested) * 100)
-    : null;
+  const myYearSalesCount  = yearReport?.my_sales_count       ?? 0;
+  const myYearUnitsSold   = yearReport?.my_units_sold        ?? 0;
 
-  // ── Stock velocity — critical items only (< 14 days or rupture) ──────────────
-  const criticalStock = useMemo(
-    () => stockVelocity.filter(i => i.days_remaining !== null && i.days_remaining < 14).slice(0, 6),
-    [stockVelocity],
+  // "vs l'an dernier" — same full-year profit, one year back. Only ever
+  // rendered once a real previous-year figure has actually loaded, so a
+  // brand-new business (or one still fetching) never flashes a misleading
+  // "+100%"-style delta off an implicit zero baseline.
+  const previousYearProfit = previousYearReport?.net_profit ?? 0;
+  const profitDelta = yearProfit - previousYearProfit;
+  const showProfitDeltaPill = !isVendeur && hasPreviousYear
+    && previousYearReport !== null && !previousYearReportLoading
+    && profitDelta !== 0;
+
+  const heatmapData = isVendeur ? (yearReport?.my_daily ?? []) : (yearReport?.daily ?? []);
+
+  const periodLabel = filterRange
+    ? filterRange.start === filterRange.end
+      ? fmtDateFr(filterRange.start)
+      : `du ${fmtDateFr(filterRange.start)} au ${fmtDateFr(filterRange.end)}`
+    : '';
+
+  const legend = (
+    <View style={styles.legendRow}>
+      <Text variant="caption" color="secondary">−</Text>
+      <View style={[styles.legendSwatch, { backgroundColor: palette.border }]} />
+      <View style={[styles.legendSwatch, { backgroundColor: `${palette.success}4D` }]} />
+      <View style={[styles.legendSwatch, { backgroundColor: `${palette.success}FF` }]} />
+      <Text variant="caption" color="secondary">+</Text>
+    </View>
   );
 
-  // ── Chart buckets from daily activity (display logic only, not financial math) ─
-  const chartBuckets = useMemo(() => {
-    const activity = snapshot?.activity ?? [];
-    if (period === 'trimestre') {
-      const today = new Date();
-      const buckets: { key: string; label: string; val: number }[] = [];
-      for (let w = 12; w >= 0; w--) {
-        const d = new Date(today); d.setDate(today.getDate() - w * 7);
-        buckets.push({ key: `w${w}`, label: w === 0 ? 'Récent' : `${d.getDate()}/${d.getMonth() + 1}`, val: 0 });
-      }
-      for (const pt of activity) {
-        const daysAgo = Math.floor((today.getTime() - new Date(pt.date).getTime()) / 86_400_000);
-        const idx = 12 - Math.min(Math.floor(daysAgo / 7), 12);
-        if (idx >= 0) buckets[idx].val += pt.amount;
-      }
-      return buckets;
-    }
-    return activity.map(pt => ({
-      key:   pt.date,
-      label: period === 'semaine' ? new Date(pt.date).toLocaleDateString('fr-FR', { weekday: 'short' }) : '',
-      val:   pt.amount,
-    }));
-  }, [snapshot?.activity, period]);
-  const maxBar = Math.max(...chartBuckets.map(b => b.val), 1);
-
-  const sellerChartBuckets = useMemo(() => {
-    const activity = snapshot?.my_activity ?? [];
-    if (period === 'trimestre') {
-      const today = new Date();
-      const buckets: { key: string; label: string; val: number }[] = [];
-      for (let w = 12; w >= 0; w--) {
-        const d = new Date(today); d.setDate(today.getDate() - w * 7);
-        buckets.push({ key: `w${w}`, label: w === 0 ? 'Récent' : `${d.getDate()}/${d.getMonth() + 1}`, val: 0 });
-      }
-      for (const pt of activity) {
-        const daysAgo = Math.floor((today.getTime() - new Date(pt.date).getTime()) / 86_400_000);
-        const idx = 12 - Math.min(Math.floor(daysAgo / 7), 12);
-        if (idx >= 0) buckets[idx].val += pt.amount;
-      }
-      return buckets;
-    }
-    return activity.map(pt => ({
-      key:   pt.date,
-      label: period === 'semaine' ? new Date(pt.date).toLocaleDateString('fr-FR', { weekday: 'short' }) : '',
-      val:   pt.amount,
-    }));
-  }, [snapshot?.my_activity, period]);
-  const sellerMaxBar = Math.max(...sellerChartBuckets.map(b => b.val), 1);
-
-  const periodToggle = (
+  const filterChipsRow = (
     <View style={styles.periodRow}>
-      {(['semaine', 'mois', 'trimestre'] as Period[]).map(p => (
-        <Pressable key={p} onPress={() => setPeriod(p)}
-          style={[styles.periodChip, period === p && styles.periodActive]}>
-          <Text style={[styles.periodLabel, period === p && styles.periodLabelActive]}>
-            {p === 'semaine' ? 'Semaine' : p === 'mois' ? 'Mois' : 'Trimestre'}
-          </Text>
+      {FILTER_CHIPS.map(c => (
+        <Pressable key={c.key} onPress={() => selectFilter(c.key)}
+          style={[styles.periodChip, filterType === c.key && styles.periodActive]}>
+          <Text style={[styles.periodLabel, filterType === c.key && styles.periodLabelActive]}>{c.label}</Text>
         </Pressable>
       ))}
     </View>
   );
 
-  const activityChart = (
-    <Card style={{ gap: spacing[3] }}>
-      <Text style={styles.sectionTitle}>Activité</Text>
-      <View style={styles.barsRow}>
-        {chartBuckets.map((b, i) => (
-          <View key={b.key ?? i} style={styles.barWrap}>
-            <View style={[styles.bar, { height: Math.max(4, (b.val / maxBar) * 72) }]} />
-            {period === 'semaine' && (
-              <Text style={styles.barLabel} numberOfLines={1}>{b.label}</Text>
-            )}
+  const filterSubControl = (() => {
+    switch (filterType) {
+      case 'semaine': {
+        const r = weekRange(dayFromIso(weekAnchor));
+        // Can't step into a week that hasn't happened yet — there's no
+        // sales data for the future. Without this bound, stepping forward
+        // past today's week produced a range clampToToday then silently
+        // collapsed into a confusing single "today" day, while the chip
+        // above still showed the full (fictional) future week.
+        const currentWeekStart = weekRange(new Date()).start;
+        const atLastWeek = r.start >= currentWeekStart;
+        return (
+          <View style={styles.stepperRow}>
+            <Pressable onPress={() => setWeekAnchor(iso => isoOf(new Date(dayFromIso(iso).setDate(dayFromIso(iso).getDate() - 7))))}>
+              <Text variant="h4" color="secondary">‹</Text>
+            </Pressable>
+            <Text variant="body" style={{ fontVariant: ['tabular-nums'] }}>{fmtDateFr(r.start)} au {fmtDateFr(r.end)}</Text>
+            {/* Hidden entirely (not just greyed) once the next step would
+                land in the future — there's nothing there to go see. */}
+            <Pressable
+              onPress={() => setWeekAnchor(iso => isoOf(new Date(dayFromIso(iso).setDate(dayFromIso(iso).getDate() + 7))))}
+              disabled={atLastWeek}
+              style={atLastWeek ? { opacity: 0 } : undefined}
+            >
+              <Text variant="h4" color="secondary">›</Text>
+            </Pressable>
           </View>
-        ))}
-      </View>
-    </Card>
-  );
-
-  const sellerActivityChart = (
-    <Card style={{ gap: spacing[3] }}>
-      <Text style={styles.sectionTitle}>Activité</Text>
-      <View style={styles.barsRow}>
-        {sellerChartBuckets.map((b, i) => (
-          <View key={b.key ?? i} style={styles.barWrap}>
-            <View style={[styles.bar, { height: Math.max(4, (b.val / sellerMaxBar) * 72) }]} />
-            {period === 'semaine' && (
-              <Text style={styles.barLabel} numberOfLines={1}>{b.label}</Text>
-            )}
+        );
+      }
+      case 'mois': {
+        const r = monthRange(dayFromIso(monthAnchor));
+        const monthDate = dayFromIso(monthAnchor);
+        // Bounded to the year currently on screen — the month label no
+        // longer shows a year (see fmtMonthFr), so silently drifting into
+        // a different year here would be invisible in the UI.
+        const atFirstMonth = monthDate.getMonth() === 0;
+        const atLastMonth = monthDate.getMonth() === (isCurrentYear ? new Date().getMonth() : 11);
+        return (
+          <View style={styles.stepperRow}>
+            <Pressable
+              onPress={() => !atFirstMonth && setMonthAnchor(iso => { const d = dayFromIso(iso); return isoOf(new Date(d.getFullYear(), d.getMonth() - 1, 1)); })}
+              disabled={atFirstMonth}
+            >
+              <Text variant="h4" color={atFirstMonth ? 'disabled' : 'secondary'}>‹</Text>
+            </Pressable>
+            <Text variant="body">{fmtMonthFr(r.start)}</Text>
+            {/* Hidden entirely (not just greyed) once the next step would
+                land in the future — there's nothing there to go see. */}
+            <Pressable
+              onPress={() => setMonthAnchor(iso => { const d = dayFromIso(iso); return isoOf(new Date(d.getFullYear(), d.getMonth() + 1, 1)); })}
+              disabled={atLastMonth}
+              style={atLastMonth ? { opacity: 0 } : undefined}
+            >
+              <Text variant="h4" color="secondary">›</Text>
+            </Pressable>
           </View>
-        ))}
-      </View>
-    </Card>
-  );
+        );
+      }
+      case 'personnalise':
+        return (
+          <View style={styles.customRow}>
+            <View style={{ flex: 1 }}>
+              <DatePickerField label="Début" value={customStart} onChange={v => { animateFilterChange(); setCustomStart(v); }} maxToday minDate={`${year}-01-01`} />
+            </View>
+            <View style={{ flex: 1 }}>
+              <DatePickerField label="Fin" value={customEnd} onChange={v => { animateFilterChange(); setCustomEnd(v); }} maxToday minDate={customStart || `${year}-01-01`} />
+            </View>
+          </View>
+        );
+      default:
+        return null;
+    }
+  })();
 
-  // Show the skeleton for the entire duration of any fetch — including a
-  // period-tab switch, not just the very first load. Rendering the previous
-  // period's snapshot while a new one is in flight is what caused stale
-  // day counts / bar labels to flash briefly before snapping to the right
-  // period's data.
-  if (snapshotLoading) {
+  // Role-gated metric rows, built from a given PeriodReport-shaped source —
+  // shared between the always-visible year headline and the period detail
+  // panel below, since both render the same fields off different sources.
+  function renderVolumeRow(source: PeriodReport | null, loading: boolean) {
+    const salesCount = isVendeur ? (source?.my_sales_count ?? 0) : (source?.sales_count ?? 0);
+    const unitsSold   = isVendeur ? (source?.my_units_sold  ?? 0) : (source?.units_sold  ?? 0);
+    return (
+      <View style={styles.gridRow}>
+        <StatCard
+          label="Ventes" loading={loading}
+          value={`${salesCount}`}
+          accent={palette.primary} bg={palette.primaryLight}
+        />
+        <StatCard
+          label="Produits vendus" loading={loading}
+          value={`${Math.round(unitsSold).toLocaleString('fr-FR')}`}
+          accent={palette.primary} bg={palette.primaryLight}
+        />
+      </View>
+    );
+  }
+
+  if (yearReportLoading && !yearReport) {
     return (
       <Screen>
         <View style={styles.hdr}>
           <Pressable onPress={() => router.back()}>
             <Text variant="body" color="secondary">‹ Retour</Text>
           </Pressable>
-          <Text variant="h4">{isInvestisseur ? businessName : 'Mes chiffres'}</Text>
+          <Text variant="h4">{seesWholeBusiness ? 'Les chiffres' : 'Mes chiffres'}</Text>
           <View style={{ width: 60 }} />
         </View>
-        <View style={styles.content}>
-          {periodToggle}
-        </View>
         <SkeletonKpiGrid />
+      </Screen>
+    );
+  }
+
+  if (periodOffline && !yearReport) {
+    return (
+      <Screen>
+        <View style={styles.hdr}>
+          <Pressable onPress={() => router.back()}>
+            <Text variant="body" color="secondary">‹ Retour</Text>
+          </Pressable>
+          <Text variant="h4">{seesWholeBusiness ? 'Les chiffres' : 'Mes chiffres'}</Text>
+          <View style={{ width: 60 }} />
+        </View>
+        <OfflineNotice
+          offlineSince={periodOfflineSince}
+          onRetry={() => { if (role) fetchYearReport(businessId, year, role, userId); }}
+        />
+        <View style={styles.content}>
+          <Text variant="body" color="secondary" style={{ textAlign: 'center', marginTop: spacing[8] }}>
+            Données non disponibles hors ligne. Ouvrez l'application en ligne une première fois pour activer le mode hors ligne.
+          </Text>
+        </View>
       </Screen>
     );
   }
@@ -292,237 +501,140 @@ export default function RapportsScreen() {
         <Pressable onPress={() => router.back()}>
           <Text variant="body" color="secondary">‹ Retour</Text>
         </Pressable>
-        <Text variant="h4">{isInvestisseur ? businessName : 'Mes chiffres'}</Text>
+        <Text variant="h4">{seesWholeBusiness ? 'Les chiffres' : 'Mes chiffres'}</Text>
         <View style={{ width: 60 }} />
       </View>
 
-      {offline && <OfflineNotice offlineSince={offlineSince} />}
+      {periodOffline && (
+        <OfflineNotice
+          offlineSince={periodOfflineSince}
+          onRetry={() => {
+            if (!role) return;
+            if (filterRange) fetchFilterReport(businessId, filterRange.start, filterRange.end, role, userId);
+            else fetchYearReport(businessId, year, role, userId);
+          }}
+        />
+      )}
 
-      {/* ════════════════════════════════════════════════════════════════════════
-          VENDEUR VIEW
-          ════════════════════════════════════════════════════════════════════ */}
-      {isVendeur ? (
-        <ScrollView contentContainerStyle={styles.content} showsVerticalScrollIndicator={false}>
-          {periodToggle}
+      <ScrollView
+        ref={scrollRef}
+        contentContainerStyle={styles.content}
+        showsVerticalScrollIndicator={false}
+        onScroll={e => { currentScrollY.current = e.nativeEvent.contentOffset.y; }}
+        scrollEventThrottle={16}
+      >
 
-          {/* ── 1. Hero: ventes personnelles ──────────────────────────────── */}
-          <Card style={styles.hero}>
-            <Text style={styles.heroCaption}>{PERIOD_VENDEUR_SENTENCE[period]}</Text>
-            <Text style={[styles.heroAmount, { color: palette.success }]}>
-              {fmt(myRevenue, currency)}
-            </Text>
-            {mySalesCount > 0 ? (
-              <Text style={styles.heroSub}>
-                sur {mySalesCount} vente{mySalesCount !== 1 ? 's' : ''}
+        {/* ── Year selector — floored at the year the business started ────── */}
+        <View style={styles.yearRow}>
+          <Pressable onPress={() => year > creationYear && setYear(y => y - 1)} hitSlop={12} disabled={year <= creationYear}>
+            <Text variant="h4" color={year <= creationYear ? 'disabled' : 'secondary'}>‹</Text>
+          </Pressable>
+          <Text variant="h3" style={{ fontVariant: ['tabular-nums'] }}>{year}</Text>
+          {/* Hidden entirely (not just greyed) once the next year would be
+              in the future — there's nothing there to go see. */}
+          <Pressable
+            onPress={() => setYear(y => y + 1)}
+            hitSlop={12}
+            disabled={year >= currentYear}
+            style={year >= currentYear ? { opacity: 0 } : undefined}
+          >
+            <Text variant="h4" color="secondary">›</Text>
+          </Pressable>
+        </View>
+
+        {/* ── Headline: profit hero (admin/manager/investisseur only) ──────
+             Bénéfice cumulé is the one number this screen is "about" — sized
+             and elevated to read as the hero, with a real vs-last-year delta
+             underneath. Argent disponible drops to a secondary full-width
+             bar right below, same visual tier as Ventes/Produits vendus. */}
+        {!isVendeur && (
+          <Card elevated style={styles.profitHero}>
+            <Text style={styles.profitHeroLabel}>Bénéfice cumulé {year}</Text>
+            {yearReportLoading ? <ValueSkeleton /> : (
+              <Text
+                style={[styles.profitHeroAmount, { color: yearProfit >= 0 ? palette.success : palette.warning }]}
+                numberOfLines={1}
+                adjustsFontSizeToFit
+              >
+                {fmt(yearProfit, currency)}
               </Text>
-            ) : (
-              <Text style={styles.heroSub}>Aucune vente sur cette période</Text>
             )}
+            <View style={styles.profitHeroComparison}>
+              {showProfitDeltaPill ? (
+                <Pill
+                  variant="solid"
+                  tone={profitDelta > 0 ? 'success' : 'warning'}
+                  icon={profitDelta > 0 ? 'arrow-up' : 'arrow-down'}
+                >
+                  {profitDelta > 0
+                    ? `${fmt(Math.abs(profitDelta), currency)} de plus qu'en ${year - 1}`
+                    : `${fmt(Math.abs(profitDelta), currency)} de moins qu'en ${year - 1}`}
+                </Pill>
+              ) : !hasPreviousYear ? (
+                <Text variant="caption" color="secondary">Première année d'activité</Text>
+              ) : null}
+            </View>
           </Card>
+        )}
 
-          {/* ── 2. Activité personnelle ────────────────────────────────────── */}
-          {sellerActivityChart}
-
-          {/* ── 3. Crédits en attente ─────────────────────────────────────── */}
-          {myCreditPending > 0 && (
-            <StatCard
-              label="Crédits en attente"
-              value={fmt(myCreditPending, currency)}
-              accent={palette.warning}
-              bg={palette.warningLight}
-              note={`${myCreditCount} commande${myCreditCount > 1 ? 's' : ''} en cours`}
-            />
-          )}
-        </ScrollView>
-
-      /* ════════════════════════════════════════════════════════════════════════
-         INVESTISSEUR VIEW
-         ════════════════════════════════════════════════════════════════════ */
-      ) : isInvestisseur ? (
-        <ScrollView contentContainerStyle={styles.content} showsVerticalScrollIndicator={false}>
-
-          {/* ── 1. Hero: ROI si bénéfice, sinon mise totale ───────────────── */}
-          {roi !== null && roi > 0 ? (
-            <Card style={styles.hero}>
-              <Text style={styles.heroCaption}>Votre investissement rapporte actuellement</Text>
-              <Text style={[styles.heroAmount, { color: palette.success }]}>
-                {roi.toFixed(1)}%
-              </Text>
-              <Text style={styles.heroSub}>
-                soit {fmt(investorBalance, currency)} de bénéfice
-              </Text>
-            </Card>
-          ) : (
-            <Card style={[styles.hero, { backgroundColor: palette.primaryLight }]}>
-              <Text style={[styles.heroCaption, { color: palette.primary }]}>
-                Vous avez investi dans {businessName}
-              </Text>
-              <Text style={[styles.heroAmount, { color: palette.primary }]}>
-                {fmt(myTotalInvested, currency)}
-              </Text>
-              <Text style={[styles.heroSub, { color: palette.primary }]}>
-                bénéfice en cours
-              </Text>
-            </Card>
-          )}
-
-          {/* ── 2. Période ────────────────────────────────────────────────── */}
-          {periodToggle}
-
-          {/* ── 3. Santé de la boutique sur la période ────────────────────── */}
-          <StatCard
-            label={`Bénéfice de la boutique ${PERIOD_BOUTIQUE[period]}`}
-            value={fmt(netProfit, currency)}
-            accent={netProfit >= 0 ? palette.success : palette.warning}
-            bg={netProfit >= 0 ? palette.successLight : palette.warningLight}
-            note={periodOrderCount > 0
-              ? `${periodOrderCount} vente${periodOrderCount !== 1 ? 's' : ''}`
-              : 'Aucune vente'}
-          />
-
-          {/* ── 4. Activité ───────────────────────────────────────────────── */}
-          {activityChart}
-
-          {/* ── Separator ─────────────────────────────────────────────────── */}
-          <SectionSep label="Votre mise" />
-
-          {/* ── 5. Investissement personnel ───────────────────────────────── */}
-          <StatCard
-            label={`Vous avez mis dans ${businessName}`}
-            value={fmt(myTotalInvested, currency)}
-            accent={palette.primary}
-            bg={palette.primaryLight}
-            note={myPeriodApports > 0
-              ? `dont ${fmt(myPeriodApports, currency)} ${PERIOD_BOUTIQUE[period]}`
-              : undefined}
-          />
-
-        </ScrollView>
-
-      /* ════════════════════════════════════════════════════════════════════════
-         ADMIN / MANAGER VIEW
-         ════════════════════════════════════════════════════════════════════ */
-      ) : (
-        <ScrollView contentContainerStyle={styles.content} showsVerticalScrollIndicator={false}>
-          {periodToggle}
-
-          {/* ── 1. Hero: bénéfice net ──────────────────────────────────────── */}
-          <Card style={styles.hero}>
-            <Text style={styles.heroCaption}>{PERIOD_SENTENCE[period]}</Text>
-            <Text style={[styles.heroAmount, { color: netProfit >= 0 ? palette.success : palette.warning }]}>
-              {fmt(netProfit, currency)}
-            </Text>
-            {periodOrderCount > 0 ? (
-              <Text style={styles.heroSub}>
-                sur {periodOrderCount} vente{periodOrderCount !== 1 ? 's' : ''}
-              </Text>
-            ) : (
-              <Text style={styles.heroSub}>Aucune vente sur cette période</Text>
-            )}
-          </Card>
-
-          {/* ── 2. Dépenses — only if > 0 ─────────────────────────────────── */}
-          {operExpenses > 0 && (
-            <StatCard
-              label="Dépenses"
-              value={fmt(operExpenses, currency)}
-              accent={palette.warning}
-              bg={palette.warningLight}
-            />
-          )}
-
-          {/* ── 3. Frais de transport — only if > 0 ───────────────────────── */}
-          {shippingExp > 0 && (
-            <StatCard
-              label="Frais de transport"
-              value={fmt(shippingExp, currency)}
-              accent={palette.textSecondary}
-              bg={palette.surface}
-              note="Déjà inclus dans votre coût de revient"
-            />
-          )}
-
-          {/* ── 4. Crédits en attente — only if > 0 ───────────────────────── */}
-          {creditOutstanding > 0 && (
-            <StatCard
-              label="Crédits en attente"
-              value={fmt(creditOutstanding, currency)}
-              accent={palette.warning}
-              bg={palette.warningLight}
-              note={`${creditCount} commande${creditCount > 1 ? 's' : ''} en cours`}
-            />
-          )}
-
-          {/* ── 5. Stock critique — only if items < 14 days or rupture ───────── */}
-          {criticalStock.length > 0 && (
-            <Card style={{ gap: spacing[3] }}>
-              <Text style={styles.sectionTitle}>Stock critique</Text>
-              {criticalStock.map(item => (
-                <View key={item.item_id} style={styles.listRow}>
-                  <Text variant="body" style={{ flex: 1 }} numberOfLines={1}>{item.item_name}</Text>
-                  <DaysBadge days={item.days_remaining} />
-                </View>
-              ))}
-            </Card>
-          )}
-
-          {/* ── 6. Activité ───────────────────────────────────────────────────── */}
-          {activityChart}
-
-          {/* ── 7. Vendeurs — only if team ────────────────────────────────────── */}
-          {hasMultipleSellers && topSellers.length > 0 && (
-            <Card style={{ gap: spacing[3] }}>
-              <Text style={styles.sectionTitle}>Vendeurs {PERIOD_SELLER[period]}</Text>
-              {topSellers.map((seller, i) => {
-                const pct = revenue > 0 ? (seller.revenue / revenue) * 100 : 0;
-                return (
-                  <View key={seller.name} style={{ gap: spacing[1] }}>
-                    <View style={styles.listRow}>
-                      <Text variant="caption" style={{ width: 18, color: palette.textSecondary }}>#{i + 1}</Text>
-                      <Text variant="body" style={{ flex: 1 }} numberOfLines={1}>{seller.name}</Text>
-                      <Text variant="caption" color="secondary">{fmt(seller.revenue, currency)}</Text>
-                    </View>
-                    <View style={styles.barTrack}>
-                      <View style={[styles.barFill, { width: `${pct}%` as unknown as number }]} />
-                    </View>
-                  </View>
-                );
-              })}
-            </Card>
-          )}
-
-          {/* ── Separator ─────────────────────────────────────────────────────── */}
-          <SectionSep label="Votre boutique" />
-
-          {/* ── 8. Valeur du stock + Argent disponible ────────────────────────── */}
+        {!isVendeur && (
           <View style={styles.gridRow}>
+            {/* Amber/attention family, not the count-purple used by Ventes/
+                Produits vendus below — cash-on-hand is a figure to keep an
+                eye on, not a count, and purple is reserved for interaction
+                and count highlights elsewhere on this screen. */}
             <StatCard
-              label="Valeur du stock"
-              value={fmt(stockValue, currency)}
-              accent={palette.primary}
-              bg={palette.primaryLight}
-            />
-            <StatCard
-              label="Argent disponible"
+              label="Argent disponible" loading={yearReportLoading}
               value={fmt(cashOnHand, currency)}
-              accent={cashOnHand >= 0 ? palette.primary : palette.warning}
-              bg={cashOnHand >= 0 ? palette.primaryLight : palette.warningLight}
+              accent={palette.warning}
+              bg={palette.warningLight}
             />
           </View>
+        )}
 
-          {/* ── 9. Capital — only if any ──────────────────────────────────────── */}
-          {totalApports > 0 && (
-            <StatCard
-              label="Capital investi total"
-              value={fmt(totalApports, currency)}
-              accent={palette.primary}
-              bg={palette.primaryLight}
-              note={periodApports > 0 ? `dont ${fmt(periodApports, currency)} sur cette période` : undefined}
-            />
+        {/* ── Sales volume — always visible, motivational, never hidden ──── */}
+        {renderVolumeRow(yearReport, yearReportLoading)}
+
+        {/* ── Year heatmap ─────────────────────────────────────────────────── */}
+        <Card style={{ gap: spacing[3] }}>
+          <Text style={styles.sectionTitle}>Activité</Text>
+          <YearHeatmap
+            year={year}
+            data={heatmapData}
+            highlightRange={filterRange}
+            defaultMonth={isCurrentYear ? new Date().getMonth() + 1 : undefined}
+          />
+          {legend}
+        </Card>
+
+        {/* ── Period filter ─────────────────────────────────────────────────── */}
+        <View
+          style={{ gap: spacing[4] }}
+          onLayout={e => { filterSectionY.current = e.nativeEvent.layout.y; }}
+        >
+          {filterChipsRow}
+          {filterSubControl}
+
+          {/* ── Period detail panel — only while a filter chip is active. ──────
+               Tapping the active chip again clears it and hides this panel. */}
+          {filterRange && (
+            <>
+              <SectionSep label={periodLabel} />
+              {!isVendeur && (
+                <StatCard
+                  label="Bénéfice de la période" loading={filterReportLoading}
+                  value={fmt(filterReport?.net_profit ?? 0, currency)}
+                  accent={(filterReport?.net_profit ?? 0) >= 0 ? palette.success : palette.warning}
+                  bg={(filterReport?.net_profit ?? 0) >= 0 ? palette.successLight : palette.warningLight}
+                />
+              )}
+              {renderVolumeRow(filterReport, filterReportLoading)}
+            </>
           )}
+        </View>
 
-        </ScrollView>
-      )}
+
+      </ScrollView>
     </Screen>
   );
 }
@@ -537,45 +649,66 @@ function makeStyles(p: Palette) {
   },
   content: { padding: spacing[4], gap: spacing[4], paddingBottom: spacing[10] },
 
-  // Period chips
-  periodRow:         { flexDirection: 'row', gap: spacing[2] },
-  periodChip:        { flex: 1, paddingVertical: spacing[2], alignItems: 'center', borderRadius: radius.md, borderWidth: 1.5, borderColor: p.border, backgroundColor: p.surface },
-  periodActive:      { backgroundColor: p.textPrimary, borderColor: p.textPrimary },
-  periodLabel:       { fontSize: 13, fontWeight: '600' as const, color: p.textSecondary },
-  periodLabelActive: { color: p.background },
+  // Year selector — a bordered pill, not bare text, so it reads as a real
+  // control (the chevrons alone didn't signal "tappable" clearly enough).
+  yearRow: {
+    flexDirection: 'row', alignItems: 'center', justifyContent: 'center', gap: spacing[5],
+    alignSelf: 'center',
+    paddingVertical: spacing[2], paddingHorizontal: spacing[6],
+    borderRadius: radius.full, borderWidth: 1.5, borderColor: p.border,
+    backgroundColor: p.surface,
+  },
 
-  // Hero card
+  // Period / filter chips
+  periodRow:         { flexDirection: 'row', flexWrap: 'wrap', gap: spacing[2], justifyContent: 'center' },
+  periodChip:        { paddingVertical: spacing[2], paddingHorizontal: spacing[3], alignItems: 'center', borderRadius: radius.md, borderWidth: 1.5, borderColor: p.border, backgroundColor: p.surface },
+  // Brand purple, not a neutral black/white pill — the active period tab is
+  // exactly the kind of "genuinely important state" this app's purple is
+  // reserved for, and a stark black fill reads as an unrelated, ad-hoc
+  // accent next to the purple used everywhere else (Ventes, Produits vendus).
+  periodActive:      { backgroundColor: p.primary, borderColor: p.primary },
+  periodLabel:       { fontFamily: fontFamily.semibold, fontSize: 13, color: p.textSecondary },
+  periodLabelActive: { color: p.textInverse },
+  stepperRow:        { flexDirection: 'row', alignItems: 'center', justifyContent: 'space-between', paddingHorizontal: spacing[2] },
+  customRow:         { flexDirection: 'row', gap: spacing[3] },
+
+  // Hero card (investisseur ROI) — currently unused, kept for a future pass
   hero:        { gap: spacing[2], alignItems: 'center', paddingVertical: spacing[5], backgroundColor: p.surface },
-  heroCaption: { fontSize: 14, color: p.textSecondary, fontWeight: '500' as const, textAlign: 'center' as const },
-  heroAmount:  { fontSize: 34, fontWeight: '800' as const, color: p.textPrimary, letterSpacing: -0.5, lineHeight: 42 },
+  heroCaption: { fontFamily: fontFamily.medium, fontSize: 14, color: p.textSecondary, textAlign: 'center' as const },
+  heroAmount:  { fontFamily: fontFamily.bold, fontSize: 34, color: p.textPrimary, letterSpacing: -0.5, lineHeight: 42 },
   heroSub:     { fontSize: 13, color: p.textSecondary, textAlign: 'center' as const },
+
+  // Profit hero — mirrors the dashboard's revenue-hero convention (left-
+  // aligned caption + big amount + a bottom comparison row divided by a
+  // hairline) so the two "hero number" moments in the app read as the same
+  // pattern, not two different ones.
+  profitHero:           { gap: spacing[2] },
+  profitHeroLabel:      { fontFamily: fontFamily.medium, fontSize: 13, color: p.textSecondary },
+  profitHeroAmount:      { fontFamily: fontFamily.bold, fontSize: 32, letterSpacing: -0.5, lineHeight: 38, fontVariant: ['tabular-nums'] as ['tabular-nums'] },
+  profitHeroComparison: {
+    flexDirection: 'row', alignItems: 'center',
+    paddingTop: spacing[3], marginTop: spacing[1],
+    borderTopWidth: StyleSheet.hairlineWidth, borderTopColor: p.border,
+    minHeight: 20,
+  },
 
   // 2-col grid
   gridRow:   { flexDirection: 'row', gap: spacing[4] },
   statCard:  { flex: 1, gap: spacing[1], minHeight: 90 },
-  statLabel: { fontSize: 12, color: p.textSecondary, fontWeight: '500' as const },
-  statValue: { fontSize: 16, fontWeight: '700' as const, lineHeight: 22 },
+  statLabel: { fontFamily: fontFamily.medium, fontSize: 12, color: p.textSecondary },
+  statValue: { fontFamily: fontFamily.bold, fontSize: 16, lineHeight: 22, fontVariant: ['tabular-nums'] as ['tabular-nums'] },
   statNote:  { fontSize: 11, color: p.textSecondary },
 
   // Section title
-  sectionTitle: { fontSize: 14, fontWeight: '700' as const, color: p.textPrimary },
+  sectionTitle: { fontFamily: fontFamily.bold, fontSize: 14, color: p.textPrimary },
 
   // Section separator
   sectionSep:      { flexDirection: 'row' as const, alignItems: 'center' as const, gap: spacing[3] },
   sectionSepLine:  { flex: 1, height: StyleSheet.hairlineWidth, backgroundColor: p.border },
-  sectionSepLabel: { fontSize: 11, color: p.textSecondary, fontWeight: '600' as const, textTransform: 'uppercase' as const, letterSpacing: 0.8 },
+  sectionSepLabel: { fontFamily: fontFamily.semibold, fontSize: 11, color: p.textSecondary, textTransform: 'uppercase' as const, letterSpacing: 0.8, fontVariant: ['tabular-nums'] as ['tabular-nums'] },
 
-  // Bar chart
-  barsRow:  { flexDirection: 'row', alignItems: 'flex-end', gap: 3, height: 80 },
-  barWrap:  { flex: 1, alignItems: 'center', gap: 3, justifyContent: 'flex-end' },
-  bar:      { width: '100%', backgroundColor: p.primary, borderRadius: 3, minHeight: 4 },
-  barLabel: { fontSize: 9, color: p.textSecondary, textAlign: 'center' as const },
-
-  // List rows
-  listRow:    { flexDirection: 'row', alignItems: 'center', gap: spacing[2] },
-
-  // Seller progress bar
-  barTrack: { height: 4, backgroundColor: p.border, borderRadius: 2, marginLeft: 18, marginRight: 4 },
-  barFill:  { height: 4, backgroundColor: p.primary, borderRadius: 2 },
+  // Heatmap legend
+  legendRow:    { flexDirection: 'row', alignItems: 'center', gap: spacing[1], alignSelf: 'flex-end' },
+  legendSwatch: { width: 10, height: 10, borderRadius: 2.5 },
   });
 }

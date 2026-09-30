@@ -20,18 +20,18 @@ const EXPO_PUSH_URL = 'https://exp.host/--/api/v2/push/send';
 // Every event's title is the business name, EXCEPT chat_message, where the
 // sender name IS the point (named exception to the lock-screen rule).
 const EVENT_TITLES: Record<string, string> = {
-  sale_completed:    '✅ Vente enregistrée',
-  sale_cancelled:    '⚠️ Vente annulée',
-  sale_edited:       '✏️ Vente modifiée',
-  low_stock:         '📦 Stock bas', // product name is appended, e.g. "📦 Stock bas : Riz"
-  partnership_request:  '🤝 Demande de partenariat',
+  sale_completed: '✅ Vente enregistrée',
+  sale_cancelled: '⚠️ Vente annulée',
+  sale_edited: '✏️ Vente modifiée',
+  low_stock: '📦 Stock bas', // product name is appended, e.g. "📦 Stock bas : Riz"
+  partnership_request: '🤝 Demande de partenariat',
   partnership_accepted: '🤝 Partenariat accepté',
-  support_message:   '💬 Nouveau message',
-  support_reply:     '💬 Réponse du support',
+  support_message: '💬 Nouveau message',
+  support_reply: '💬 Réponse du support',
   alpha_quota_reset: '✨ Alpha',
-  daily_digest:      '🌙 Votre journée',
-  activation_nudge_1:      '💰 Un client vous doit de l\'argent ?',
-  activation_nudge_2:      '⏰ Une minute suffit',
+  daily_digest: '🌙 Votre journée',
+  activation_nudge_1: '💰 Un client vous doit de l\'argent ?',
+  activation_nudge_2: '⏰ Une minute suffit',
   // second_action_reminder's title is contextual (product/debt/sale) — see
   // SECOND_ACTION_TITLES and buildTitle below, not this fixed map.
   revenue_milestone: '🎉 Nouveau cap franchi',
@@ -40,8 +40,8 @@ const EVENT_TITLES: Record<string, string> = {
 
 const SECOND_ACTION_TITLES: Record<string, string> = {
   product: '📦 Premier produit ajouté',
-  debt:    '💰 Première dette notée',
-  sale:    '✅ Première vente notée',
+  debt: '💰 Première dette notée',
+  sale: '✅ Première vente notée',
 };
 
 function buildTitle(eventType: string, bizName: string, p: Record<string, unknown>): string {
@@ -57,7 +57,7 @@ function buildTitle(eventType: string, bizName: string, p: Record<string, unknow
 // categoryIdentifier must match what's registered in NotificationSetup.tsx
 const CATEGORY_MAP: Record<string, string> = {
   expense_submitted: 'expense_pending',
-  chat_message:      'chat_incoming',
+  chat_message: 'chat_incoming',
 };
 
 interface DispatchInput {
@@ -91,6 +91,7 @@ const FOUNDER_EVENTS = new Set(['support_reply']);
 const CRON_EVENTS = new Set([
   'alpha_quota_reset', 'daily_digest',
   'activation_nudge_1', 'activation_nudge_2', 'second_action_reminder',
+  'revenue_milestone', 'debt_aging_reminder',
 ]);
 
 async function callerIsFounder(supabase: ReturnType<typeof createClient>, userId: string): Promise<boolean> {
@@ -352,14 +353,14 @@ serve(async (req) => {
     // registry's FIXED templates (lock-screen rule: no client name or amount
     // ever leaves the server for these). `data` is whitelist-sanitized too —
     // it is never just `...payload` anymore.
-    const title      = buildTitle(event_type, bizName, payload);
-    const subtitle   = eventDef.subtitle;
-    const body       = eventDef.body(payload);
-    const route      = eventDef.route(payload);
-    const safeData   = sanitizeDataPayload(event_type, payload);
-    const isUrgent   = eventDef.urgent;
-    const soundFile  = isUrgent ? 'patron_urgent.wav' : 'patron_default.wav';
-    const channelId  = isUrgent ? 'patron_urgent' : 'patron_default';
+    const title = buildTitle(event_type, bizName, payload);
+    const subtitle = eventDef.subtitle;
+    const body = eventDef.body(payload);
+    const route = eventDef.route(payload);
+    const safeData = sanitizeDataPayload(event_type, payload);
+    const isUrgent = eventDef.urgent;
+    const soundFile = isUrgent ? 'patron_urgent.wav' : 'patron_default.wav';
+    const channelId = isUrgent ? 'patron_urgent' : 'patron_default';
     const categoryId = CATEGORY_MAP[event_type];
 
     const CHUNK = 100;

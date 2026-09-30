@@ -1,18 +1,18 @@
-import { useEffect, useMemo, useRef, useState } from 'react';
+import { useEffect, useId, useMemo, useRef, useState } from 'react';
 import {
   Animated,
   FlatList,
+  InputAccessoryView,
   InteractionManager,
-  Modal,
   Platform,
   Pressable,
   StyleSheet,
   TextInput,
   View,
 } from 'react-native';
-import { SafeAreaView } from 'react-native-safe-area-context';
 import { Text } from './Text';
 import { Input } from './Input';
+import { FormSheet } from './FormSheet';
 import { useTheme } from '@/src/theme';
 import { spacing, radius } from '@/src/theme';
 import type { Palette } from '@/src/theme';
@@ -63,6 +63,17 @@ function buildList(search: string): ListItem[] {
 export function PhoneInput({ onChange, label, autoFocus, resetKey, strict = true, initialValue, autofillOwnNumber }: PhoneInputProps) {
   const { palette } = useTheme();
   const styles = useMemo(() => makeStyles(palette), [palette]);
+
+  // number-pad has no built-in return key on iOS, so the OS auto-injects its
+  // own floating "Done" pill above the keyboard when nothing else claims
+  // that role. Every real usage of this field sits inside a form that
+  // already has its own visible submit/continue button on screen, so that
+  // pill is pure redundant chrome — a blank, linked InputAccessoryView
+  // suppresses it (the mere presence of a linked accessory claims the slot)
+  // without showing anything in its place. `useId()` keeps this unique per
+  // instance rather than a fixed string, in case this component is ever
+  // mounted more than once on screen at the same time.
+  const accessoryId = `phoneInput-${useId()}`;
 
   const defaultCode    = detectCountryCode();
   const defaultCountry = ALL_COUNTRIES.find(c => c.code === defaultCode) ?? PINNED[0];
@@ -212,34 +223,38 @@ export function PhoneInput({ onChange, label, autoFocus, resetKey, strict = true
             selectionColor="transparent"
             textContentType={autofillOwnNumber ? 'telephoneNumber' : undefined}
             autoComplete={autofillOwnNumber ? 'tel' : undefined}
+            inputAccessoryViewID={Platform.OS === 'ios' ? accessoryId : undefined}
           />
         </View>
       </Pressable>
-      <Modal visible={pickerOpen} animationType="slide" presentationStyle="pageSheet" onRequestClose={() => setPickerOpen(false)}>
-        <SafeAreaView style={styles.modal} edges={['top']}>
-          <View style={styles.modalHeader}>
-            <Text variant="h4">Choisir un pays</Text>
-            <Pressable onPress={() => { setPickerOpen(false); setSearch(''); }}>
-              <Text variant="body" color="secondary">Fermer</Text>
-            </Pressable>
-          </View>
-          <View style={styles.searchWrap}>
-            <Input
-              placeholder="Pays ou indicatif"
-              value={search}
-              onChangeText={setSearch}
-              autoFocus={Platform.OS === 'ios'}
-            />
-          </View>
-          <FlatList
-            data={listData}
-            keyExtractor={(item, i) => ('divider' in item ? `div-${i}` : item.code)}
-            renderItem={renderPickerItem}
-            keyboardShouldPersistTaps="handled"
-            contentContainerStyle={{ paddingBottom: spacing[10] }}
+      {Platform.OS === 'ios' && (
+        <InputAccessoryView nativeID={accessoryId}>
+          <View style={{ height: 0 }} />
+        </InputAccessoryView>
+      )}
+      <FormSheet
+        visible={pickerOpen}
+        onClose={() => { setPickerOpen(false); setSearch(''); }}
+        title="Choisir un pays"
+        cancelLabel="Fermer"
+        scrollable={false}
+      >
+        <View style={styles.searchWrap}>
+          <Input
+            placeholder="Pays ou indicatif"
+            value={search}
+            onChangeText={setSearch}
+            autoFocus={Platform.OS === 'ios'}
           />
-        </SafeAreaView>
-      </Modal>
+        </View>
+        <FlatList
+          data={listData}
+          keyExtractor={(item, i) => ('divider' in item ? `div-${i}` : item.code)}
+          renderItem={renderPickerItem}
+          keyboardShouldPersistTaps="handled"
+          contentContainerStyle={{ paddingBottom: spacing[10] }}
+        />
+      </FormSheet>
     </View>
   );
 }
@@ -271,12 +286,6 @@ function makeStyles(p: Palette) {
     emptyDigit:  { fontSize: 18, fontWeight: '400', color: p.textSecondary },
     sep:         { fontSize: 18, color: p.textSecondary, width: 7, textAlign: 'center' },
     hiddenInput: { position: 'absolute', top: 0, left: 0, right: 0, bottom: 0, color: 'transparent', backgroundColor: 'transparent' },
-    modal:       { flex: 1, backgroundColor: p.background },
-    modalHeader: {
-      flexDirection: 'row', alignItems: 'center', justifyContent: 'space-between',
-      paddingHorizontal: spacing[5], paddingVertical: spacing[4],
-      borderBottomWidth: 1, borderBottomColor: p.border,
-    },
     searchWrap:  { paddingHorizontal: spacing[5], paddingVertical: spacing[3] },
     countryRow: {
       flexDirection: 'row', alignItems: 'center',

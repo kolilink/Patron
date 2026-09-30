@@ -5,25 +5,32 @@ import {
   Animated,
   Easing,
   FlatList,
-  KeyboardAvoidingView,
+  InputAccessoryView,
+  Keyboard,
   Modal,
   Platform,
   Pressable,
+  RefreshControl,
   ScrollView,
   StyleSheet,
   Switch,
   TextInput,
   View,
 } from 'react-native';
-import { SafeAreaView, useSafeAreaInsets } from 'react-native-safe-area-context';
+import { useSafeAreaInsets } from 'react-native-safe-area-context';
 import { Screen } from '@/src/components/ui/Screen';
+import { FormSheet } from '@/src/components/ui/FormSheet';
 import { Button } from '@/src/components/ui/Button';
 import { Card } from '@/src/components/ui/Card';
+import { EmptyState } from '@/src/components/ui/EmptyState';
 import { Input } from '@/src/components/ui/Input';
+import { NoResultsState } from '@/src/components/ui/NoResultsState';
+import { Pill } from '@/src/components/ui/Pill';
 import { Text } from '@/src/components/ui/Text';
 import { PhoneInput } from '@/src/components/ui/PhoneInput';
 import { Ionicons } from '@expo/vector-icons';
-import { useTheme, radius, spacing, fontFamily as FF, PRODUCT_BADGE_PALETTE } from '@/src/theme';
+import { useTheme, radius, spacing, shadow, fontFamily as FF, FLOATING_TAB_BAR_CLEARANCE, SEARCH_VISIBILITY_THRESHOLD } from '@/src/theme';
+import { useAnimateLayoutChange } from '@/src/hooks/useAnimateLayoutChange';
 import type { Palette } from '@/src/theme';
 import type { Product, ProductVariant } from '@/src/types';
 import { useAuthStore } from '@/stores/auth';
@@ -41,6 +48,12 @@ import { activationPriming } from '@/stores/activationPriming';
 
 function formatPrice(amount: number, currency: string) {
   return `${amount.toLocaleString('fr-FR')} ${currency}`;
+}
+
+// List rows show the bare number — the currency is declared once above the
+// list instead of repeated on every row (see the "Prix (devise)" header).
+function formatPriceValue(amount: number) {
+  return amount.toLocaleString('fr-FR');
 }
 
 
@@ -71,11 +84,20 @@ const EMPTY_FORM: FormState = {
 function productToForm(p: Product, currency: string): FormState {
   return {
     name: p.name,
-    purchase_price: p.cost_price > 0 ? formatAmountInput(String(p.cost_price), currency) : '',
+    purchase_price: p.cost_price > 0 ? formatAmountInput(String(Math.round(p.cost_price)), currency) : '',
     extra_fees: '',
-    sale_price: formatAmountInput(String(p.sale_price), currency),
+    sale_price: formatAmountInput(String(Math.round(p.sale_price)), currency),
     initial_stock: '',
-    purchase_qty: '1',
+    // Defaults to the product's real current stock, not a flat '1' — this is
+    // the divisor for "Frais supplémentaires" below, and a merchant editing
+    // an existing product almost always means to spread a new fee across
+    // what she already has in stock, not across a single mystery unit.
+    // Dividing by 1 by default silently inflates cost_price by the full fee
+    // amount instead of the intended per-unit share. p.stock_qty is always 0
+    // for a has_variants product (documented invariant) — Math.max(...,1)
+    // falls back to the old safe default there, since variants track their
+    // own cost independently and this field's output isn't meaningful for them.
+    purchase_qty: String(Math.max(p.stock_qty || 0, 1)),
     reorder_level: p.reorder_level > 0 ? String(p.reorder_level) : '',
     supplier_id: p.supplier_id ?? '',
   };
@@ -204,44 +226,120 @@ interface ProductFormProps {
   businessId: string;
   userId: string;
   initialVariants?: ProductVariant[];
+  /** Seeds a fresh (non-editing) form's name field — the "no search match"
+   *  dead-end flip: "+ Nouveau produit « X »" opens straight to a form with
+   *  the searched name already typed, instead of a blank one. */
+  initialName?: string;
 }
 
 function generateLocalKey() {
   return `${Date.now()}-${Math.random().toString(36).slice(2, 7)}`;
 }
 
-// Extended local type — _overridePrice tracks whether this variant has custom prices
-type VariantDraftItem = DraftVariant & { _key: string; _overridePrice: boolean };
+// iOS-only: decimal-pad/number-pad keyboards have no built-in return key, so the
+// "Suivant" chain for those fields needs a shared accessory bar above the keyboard.
+const PRICE_ACCESSORY_ID = 'catalogue-product-form-price-accessory';
+
+// The product form's "Plus d'informations" fields (purchase_qty, extra_fees,
+// reorder_level) and each variant row's qty/price cells are numeric but have
+// no natural "next field" to chain to the way purchase→sale→quantity does —
+// and this modal's "Enregistrer" button is always visible (FormSheet footer,
+// never scrolls away), so a keyboard "Done" affordance would just repeat it.
+// A blank, linked accessory suppresses iOS's own auto-injected Done pill
+// without showing anything in its place.
+const SILENT_ACCESSORY_ID = 'catalogue-product-form-silent-accessory';
+const STOCK_ADJUST_ACCESSORY_ID = 'catalogue-stock-adjust-silent-accessory';
+
+// _touched: has the merchant directly typed into THIS row's price field at
+// least once (even if they cleared it back to empty)? Distinct from
+// sale_price===0 alone — an untouched row at 0 is still silently tracking
+// the top price (see VariantRow), while a touched row at 0 was deliberately
+// cleared and must never be auto-filled again or silently resolved at save.
+type VariantDraftItem = DraftVariant & { _key: string; _touched: boolean };
 
 interface VariantRowProps {
   variant: VariantDraftItem;
   currency: string;
+  // The top "Prix de vente unitaire" field's current value (display units).
+  // A variant row still at sale_price=0 tracks this live — see VariantRow.
+  fallbackPrice: number;
   onChange: (patch: Partial<VariantDraftItem>) => void;
   onRemove: () => void;
 }
 
-function VariantRow({ variant, onChange, onRemove }: Omit<VariantRowProps, 'currency'>) {
+// Column widths shared with the header row (variantListHeader below) so the
+// two stay visually aligned — name/price flex, qty and the trailing remove
+// button are fixed. Price gets the larger flex share and a minWidth floor:
+// it's the one field that must never visually truncate (a merchant editing
+// a single variant's price needs to see every digit, not just base products).
+const VARIANT_QTY_WIDTH = 60;
+const VARIANT_REMOVE_WIDTH = 28;
+const VARIANT_NAME_FLEX = 1.3;
+const VARIANT_PRICE_FLEX = 1.2;
+const VARIANT_PRICE_MIN_WIDTH = 118;
+
+function VariantRow({ variant, currency, fallbackPrice, onChange, onRemove }: VariantRowProps) {
   const { palette } = useTheme();
   const styles = useMemo(() => makeStyles(palette), [palette]);
+  // Local formatted text buffer, same pattern as the top-level "Prix de vente"
+  // field — formatAmountInput must run on the raw keystroke string, not on a
+  // round-trip through the stored number, or an in-progress "12," GNF grouping
+  // separator gets clobbered mid-type.
+  const stillTracking = !variant._touched && variant.sale_price === 0;
+  const effectiveInitial = stillTracking ? fallbackPrice : variant.sale_price;
+  const [priceText, setPriceText] = useState(
+    effectiveInitial > 0 ? formatAmountInput(String(Math.round(effectiveInitial)), currency) : ''
+  );
+  // The "Tailles et couleurs" toggle sits above the price field in this form,
+  // so the first variant row is always created before a price exists to
+  // pre-fill from — it's born at sale_price=0. A row that's never been
+  // directly typed into keeps tracking the top field live, right up until
+  // the merchant types their own value — at that point onChangeText below
+  // marks it _touched and this effect stops firing for good, even if they
+  // clear it back to empty afterward. A deliberate clear must never snap
+  // back to the auto price — that's the merchant's own choice to leave it
+  // blank (handleSave then blocks the save with a clear error instead of
+  // silently substituting the top price).
+  useEffect(() => {
+    if (!variant._touched && variant.sale_price === 0) {
+      setPriceText(fallbackPrice > 0 ? formatAmountInput(String(Math.round(fallbackPrice)), currency) : '');
+    }
+  }, [fallbackPrice, variant.sale_price, variant._touched, currency]);
   return (
     <View style={styles.variantRowHeader}>
       <TextInput
-        style={[styles.fieldInput, { flex: 1, fontSize: 17 }]}
+        style={[styles.fieldInput, { flex: VARIANT_NAME_FLEX, fontSize: 17 }]}
         value={variant.name}
         onChangeText={v => onChange({ name: v })}
         placeholder="S, M, L, Rouge, 1L…"
         placeholderTextColor={palette.textDisabled}
       />
       <TextInput
-        style={[styles.fieldInput, { width: 60, textAlign: 'right', fontSize: 17 }]}
+        style={[styles.fieldInput, { width: VARIANT_QTY_WIDTH, textAlign: 'right', fontSize: 17 }]}
         value={variant.stock_qty > 0 ? String(variant.stock_qty) : ''}
         onChangeText={v => onChange({ stock_qty: parseInt(v) || 0 })}
         keyboardType="number-pad"
         placeholder="0"
         placeholderTextColor={palette.textDisabled}
+        inputAccessoryViewID={Platform.OS === 'ios' ? SILENT_ACCESSORY_ID : undefined}
       />
-      <Text style={[styles.unitTag, { marginLeft: 4 }]}>pcs</Text>
-      <Pressable onPress={onRemove} hitSlop={10} style={{ paddingHorizontal: 4 }}>
+      <TextInput
+        style={[
+          styles.fieldInput,
+          { flex: VARIANT_PRICE_FLEX, minWidth: VARIANT_PRICE_MIN_WIDTH, textAlign: 'right', fontSize: 17 },
+        ]}
+        value={priceText}
+        onChangeText={v => {
+          const formatted = formatAmountInput(v, currency);
+          setPriceText(formatted);
+          onChange({ sale_price: parseAmountInput(formatted, currency), _touched: true });
+        }}
+        keyboardType="decimal-pad"
+        placeholder="0"
+        placeholderTextColor={palette.textDisabled}
+        inputAccessoryViewID={Platform.OS === 'ios' ? SILENT_ACCESSORY_ID : undefined}
+      />
+      <Pressable onPress={onRemove} hitSlop={10} style={{ width: VARIANT_REMOVE_WIDTH, alignItems: 'flex-end' }} accessibilityLabel="Retirer cette variante" accessibilityRole="button">
         <Ionicons name="close-circle" size={20} color={palette.textDisabled} />
       </Pressable>
     </View>
@@ -251,9 +349,13 @@ function VariantRow({ variant, onChange, onRemove }: Omit<VariantRowProps, 'curr
 function makeVariantItem(form: FormState, currency: string, overrides?: Partial<VariantDraftItem>): VariantDraftItem {
   return {
     _key: generateLocalKey(),
-    _overridePrice: false,
+    _touched: false,
     name: '',
-    sale_price: parseAmountInput(form.sale_price, currency),
+    // Always starts at 0, never a one-time snapshot of the top price — every
+    // new row (the first auto-created one or a later "Ajouter une variante")
+    // tracks the top field live via VariantRow's fallbackPrice until the
+    // merchant actually types their own value into it. See VariantRow.
+    sale_price: 0,
     cost_price: totalCost(form, currency),
     stock_qty: 0,
     reorder_level: 0,
@@ -261,7 +363,7 @@ function makeVariantItem(form: FormState, currency: string, overrides?: Partial<
   };
 }
 
-function ProductFormModal({ visible, editing, onClose, onSave, saving, currency, fournisseurs, businessId, userId, initialVariants }: ProductFormProps) {
+function ProductFormModal({ visible, editing, onClose, onSave, saving, currency, fournisseurs, businessId, userId, initialVariants, initialName }: ProductFormProps) {
   const { palette } = useTheme();
   const styles = useMemo(() => makeStyles(palette), [palette]);
   const [form, setForm] = useState<FormState>(EMPTY_FORM);
@@ -270,12 +372,17 @@ function ProductFormModal({ visible, editing, onClose, onSave, saving, currency,
   const [hasVariants, setHasVariants] = useState(false);
   const [variantDraft, setVariantDraft] = useState<VariantDraftItem[]>([]);
   const nameRef = useRef<TextInput>(null);
+  const raf2Ref = useRef<number | null>(null);
+  const purchasePriceRef = useRef<TextInput>(null);
+  const salePriceRef = useRef<TextInput>(null);
+  const initialStockRef = useRef<TextInput>(null);
+  const [focusedPriceField, setFocusedPriceField] = useState<'purchase_price' | 'sale_price' | 'quantity' | null>(null);
   const scrollRef = useRef<ScrollView>(null);
   const insets = useSafeAreaInsets();
 
   useEffect(() => {
     if (visible) {
-      const f = editing ? productToForm(editing, currency) : EMPTY_FORM;
+      const f = editing ? productToForm(editing, currency) : { ...EMPTY_FORM, name: initialName ?? '' };
       setForm(f);
       setFormError(null);
       setShowDetails(false);
@@ -284,7 +391,7 @@ function ProductFormModal({ visible, editing, onClose, onSave, saving, currency,
       if (isVariant && initialVariants && initialVariants.length > 0) {
         setVariantDraft(initialVariants.map(v => ({
           _key: v.id,
-          _overridePrice: false,
+          _touched: true, // already has its own saved state — not a fresh auto-tracking row
           name: v.name,
           sale_price: v.sale_price,
           cost_price: v.cost_price,
@@ -294,9 +401,25 @@ function ProductFormModal({ visible, editing, onClose, onSave, saving, currency,
       } else {
         setVariantDraft([]);
       }
-      setTimeout(() => nameRef.current?.focus(), 200);
+      // Focus as soon as the native TextInput node actually exists, not on a
+      // flat guessed delay — the old 200ms fired well after the sheet's own
+      // slide-up had mostly finished, so the keyboard's rise started as a
+      // separate, later beat instead of overlapping the sheet's motion. Two
+      // rAFs: the first lets this render's commit flush, the second lets the
+      // native node mount off the back of that — the earliest frame it's
+      // actually safe to call .focus(), so the keyboard starts rising
+      // together with the sheet instead of after it settles.
+      const raf1 = requestAnimationFrame(() => {
+        raf2Ref.current = requestAnimationFrame(() => {
+          nameRef.current?.focus();
+        });
+      });
+      return () => {
+        cancelAnimationFrame(raf1);
+        if (raf2Ref.current !== null) cancelAnimationFrame(raf2Ref.current);
+      };
     }
-  }, [visible, editing, initialVariants]);
+  }, [visible, editing, initialVariants, initialName]);
 
   const setField = (key: keyof FormState) => (val: string) =>
     setForm(prev => ({ ...prev, [key]: val }));
@@ -312,14 +435,27 @@ function ProductFormModal({ visible, editing, onClose, onSave, saving, currency,
       setFormError('Chaque version doit avoir un nom');
       return;
     }
+    // An untouched row still at 0 has never been directly typed into — it's
+    // been silently tracking the top price on screen (see VariantRow's
+    // fallbackPrice), so resolve it to that same current value here rather
+    // than writing a literal 0. A row the merchant DID touch — even if they
+    // left it empty on purpose — is never auto-resolved: it passes through
+    // as-is, so the check below can correctly catch it as missing instead of
+    // silently substituting a price the merchant deliberately cleared.
+    const resolvedVariants = variantDraft.map(v =>
+      (!v._touched && v.sale_price === 0)
+        ? { ...v, sale_price: parseAmountInput(form.sale_price, currency) }
+        : v,
+    );
+    if (hasVariants && resolvedVariants.some(v => v.sale_price <= 0)) {
+      setFormError('Entrer tous les prix de vente');
+      return;
+    }
     setFormError(null);
-    // Each variant keeps its own loaded price — a new variant already defaults
-    // to the parent form's price at creation time (see makeVariantItem), and an
-    // existing variant's distinct price must not be clobbered by an unrelated edit.
     await onSave(
       formToData(form, currency),
       hasVariants,
-      variantDraft.map(({ _key: _k, _overridePrice: _op, ...v }) => v),
+      resolvedVariants.map(({ _key: _k, _touched: _t, ...v }) => v),
     );
   };
 
@@ -340,32 +476,63 @@ function ProductFormModal({ visible, editing, onClose, onSave, saving, currency,
   const totalVariantStock = variantDraft.reduce((s, v) => s + (v.stock_qty || 0), 0);
   const showLiveCalc = !editing && !hasVariants && liveInvested > 0;
   const showProfitHint = (pp > 0 || computedCost > 0) && sp > 0;
+  // Whether the single plain "Quantité achetée" field is on screen to chain into —
+  // it's replaced by the variant list when hasVariants, and hidden entirely when editing.
+  const quantityFieldVisible = !editing && !hasVariants;
+
+  const handlePriceAccessoryNext = () => {
+    if (focusedPriceField === 'purchase_price') {
+      salePriceRef.current?.focus();
+    } else if (focusedPriceField === 'sale_price' && quantityFieldVisible) {
+      initialStockRef.current?.focus();
+    } else {
+      // Last field in the chain — dismiss only, never auto-submit.
+      Keyboard.dismiss();
+    }
+  };
+  const priceAccessoryLabel =
+    focusedPriceField === 'purchase_price' || (focusedPriceField === 'sale_price' && quantityFieldVisible)
+      ? 'Suivant'
+      : 'Terminé';
 
   return (
-    <Modal visible={visible} animationType="slide" presentationStyle="pageSheet" onRequestClose={onClose}>
-        <KeyboardAvoidingView
-          behavior={Platform.OS === 'ios' ? 'padding' : 'height'}
-          keyboardVerticalOffset={Platform.OS === 'ios' ? 46 : 0}
-          style={{ flex: 1 }}
-        >
-          <SafeAreaView style={styles.modalSafe} edges={['bottom']}>
-            <View style={styles.modalHeader}>
-              <Pressable onPress={onClose} style={styles.modalCancel}>
-                <Text variant="body" color="secondary">Annuler</Text>
-              </Pressable>
-              <Text variant="h4">{editing ? 'Modifier le produit' : 'Nouveau produit'}</Text>
-              <View style={{ width: 64 }} />
-            </View>
-
-            <ScrollView
-              ref={scrollRef}
-              style={{ flexGrow: 1 }}
-              contentContainerStyle={[styles.formStack, { paddingBottom: 16 }]}
-              keyboardShouldPersistTaps="handled"
-            >
+    <FormSheet
+      ref={scrollRef}
+      visible={visible}
+      onClose={onClose}
+      title={editing ? 'Modifier le produit' : 'Nouveau produit'}
+      contentContainerStyle={[styles.formStack, { paddingBottom: 16 }]}
+      footer={
+        <View style={[styles.modalFooter, { paddingBottom: Math.max(insets.bottom, spacing[5]) }]}>
+          <Button label={saving ? (editing ? 'Enregistrement…' : 'Ajout…') : (editing ? 'Enregistrer' : 'Ajouter')} onPress={handleSave}
+            loading={saving} fullWidth size="lg" />
+        </View>
+      }
+      accessory={
+        // decimal-pad/number-pad have no built-in return key on iOS — this bar
+        // stands in for it so Prix d'achat → Prix de vente → Quantité can chain
+        // the same way "Suivant" on the keyboard would. Never wired to handleSave.
+        Platform.OS === 'ios' ? (
+          <>
+            <InputAccessoryView nativeID={PRICE_ACCESSORY_ID}>
+              <View style={styles.priceAccessoryBar}>
+                <Pressable onPress={handlePriceAccessoryNext} hitSlop={8}>
+                  <Text variant="body" style={{ color: palette.primary, fontFamily: FF.semibold }}>
+                    {priceAccessoryLabel}
+                  </Text>
+                </Pressable>
+              </View>
+            </InputAccessoryView>
+            <InputAccessoryView nativeID={SILENT_ACCESSORY_ID}>
+              <View style={{ height: 0 }} />
+            </InputAccessoryView>
+          </>
+        ) : undefined
+      }
+    >
               {formError && (
                 <View style={styles.formError}>
-                  <Text variant="bodySmall" color="danger">{formError}</Text>
+                  <Text variant="bodySmall" color="warning">{formError}</Text>
                 </View>
               )}
 
@@ -379,14 +546,16 @@ function ProductFormModal({ visible, editing, onClose, onSave, saving, currency,
                   onChangeText={setField('name')}
                   placeholder="Nom du produit"
                   placeholderTextColor={palette.textDisabled}
+                  returnKeyType="next"
+                  blurOnSubmit={false}
+                  onSubmitEditing={() => purchasePriceRef.current?.focus()}
                 />
               </View>
 
               {/* 2 — Variant toggle (early, before prices) */}
               <View style={styles.variantToggleRow}>
                 <View style={{ flex: 1 }}>
-                  <Text variant="body" style={{ fontFamily: FF.medium }}>Ce produit a des variétés ?</Text>
-                  <Text variant="caption" color="secondary">Tailles, couleurs, volumes…</Text>
+                  <Text variant="body" color="secondary" style={{ fontFamily: FF.medium }}>Tailles et couleurs</Text>
                 </View>
                 <Switch
                   value={hasVariants}
@@ -407,11 +576,17 @@ function ProductFormModal({ visible, editing, onClose, onSave, saving, currency,
                   {`Prix d'achat unitaire (${currency})`}
                 </Text>
                 <TextInput
+                  ref={purchasePriceRef}
                   style={styles.fieldInput}
                   value={form.purchase_price}
                   onChangeText={v => setForm(prev => ({ ...prev, purchase_price: formatAmountInput(v, currency) }))}
                   keyboardType="decimal-pad"
                   placeholderTextColor={palette.textDisabled}
+                  returnKeyType="next"
+                  blurOnSubmit={false}
+                  onSubmitEditing={() => salePriceRef.current?.focus()}
+                  onFocus={() => setFocusedPriceField('purchase_price')}
+                  inputAccessoryViewID={Platform.OS === 'ios' ? PRICE_ACCESSORY_ID : undefined}
                 />
               </View>
 
@@ -421,11 +596,20 @@ function ProductFormModal({ visible, editing, onClose, onSave, saving, currency,
                   {`Prix de vente unitaire (${currency})`}
                 </Text>
                 <TextInput
+                  ref={salePriceRef}
                   style={styles.fieldInput}
                   value={form.sale_price}
                   onChangeText={v => setForm(prev => ({ ...prev, sale_price: formatAmountInput(v, currency) }))}
                   keyboardType="decimal-pad"
                   placeholderTextColor={palette.textDisabled}
+                  returnKeyType={quantityFieldVisible ? 'next' : 'done'}
+                  blurOnSubmit={false}
+                  onSubmitEditing={() => {
+                    if (quantityFieldVisible) initialStockRef.current?.focus();
+                    else Keyboard.dismiss();
+                  }}
+                  onFocus={() => setFocusedPriceField('sale_price')}
+                  inputAccessoryViewID={Platform.OS === 'ios' ? PRICE_ACCESSORY_ID : undefined}
                 />
                 {(() => {
                   const sp = parseAmountInput(form.sale_price, currency);
@@ -447,11 +631,16 @@ function ProductFormModal({ visible, editing, onClose, onSave, saving, currency,
                   <Text style={styles.fieldLabel}>Quantité achetée</Text>
                   <View style={styles.fieldRow}>
                     <TextInput
+                      ref={initialStockRef}
                       style={[styles.fieldInput, { flex: 1 }]}
                       value={form.initial_stock}
                       onChangeText={setField('initial_stock')}
                       keyboardType="number-pad"
                       placeholderTextColor={palette.textDisabled}
+                      returnKeyType="done"
+                      onSubmitEditing={() => Keyboard.dismiss()}
+                      onFocus={() => setFocusedPriceField('quantity')}
+                      inputAccessoryViewID={Platform.OS === 'ios' ? PRICE_ACCESSORY_ID : undefined}
                     />
                     <Text style={styles.unitTag}>pcs</Text>
                   </View>
@@ -462,14 +651,26 @@ function ProductFormModal({ visible, editing, onClose, onSave, saving, currency,
               {hasVariants && (
                 <View style={styles.variantList}>
                   <View style={styles.variantListHeader}>
-                    <Text style={[styles.fieldLabel, { flex: 1 }]}>Variantes</Text>
-                    <Text style={[styles.fieldLabel, { width: 60, textAlign: 'right' }]}>Qté</Text>
-                    <View style={{ width: 72 }} />
+                    <Text
+                      style={[styles.fieldLabel, { flex: VARIANT_NAME_FLEX, fontSize: 10, letterSpacing: 0 }]}
+                      numberOfLines={1}
+                    >
+                      Variantes
+                    </Text>
+                    <Text style={[styles.fieldLabel, { width: VARIANT_QTY_WIDTH, textAlign: 'right' }]}>Qté</Text>
+                    <Text
+                      style={[styles.fieldLabel, { flex: VARIANT_PRICE_FLEX, minWidth: VARIANT_PRICE_MIN_WIDTH, textAlign: 'right' }]}
+                    >
+                      Prix
+                    </Text>
+                    <View style={{ width: VARIANT_REMOVE_WIDTH }} />
                   </View>
                   {variantDraft.map((v, i) => (
                     <VariantRow
                       key={v._key}
                       variant={v}
+                      currency={currency}
+                      fallbackPrice={sp}
                       onChange={patch => setVariantDraft(prev => prev.map((item, idx) => idx === i ? { ...item, ...patch } : item))}
                       onRemove={() => setVariantDraft(prev => prev.filter((_, idx) => idx !== i))}
                     />
@@ -501,8 +702,8 @@ function ProductFormModal({ visible, editing, onClose, onSave, saving, currency,
               )}
               {showProfitHint && (
                 <View style={styles.liveCalcBlock}>
-                  <Text style={[styles.liveCalcText, { color: sp > computedCost ? palette.success : palette.danger }]}>
-                    Gain : {(sp - computedCost).toLocaleString('fr-FR')} {currency} par unité
+                  <Text style={[styles.liveCalcText, { color: sp > computedCost ? palette.success : palette.warning }]}>
+                    Bénéfice : {(sp - computedCost).toLocaleString('fr-FR')} {currency} par pièce
                   </Text>
                 </View>
               )}
@@ -533,8 +734,9 @@ function ProductFormModal({ visible, editing, onClose, onSave, saving, currency,
                         onChangeText={setField('purchase_qty')}
                         keyboardType="number-pad"
                         placeholderTextColor={palette.textDisabled}
+                        inputAccessoryViewID={Platform.OS === 'ios' ? SILENT_ACCESSORY_ID : undefined}
                       />
-                      <Text variant="caption" color="secondary">Utilisé pour répartir les frais par unité</Text>
+                      <Text variant="caption" color="secondary">Utilisée pour répartir les frais par unité</Text>
                     </View>
                   )}
 
@@ -547,6 +749,7 @@ function ProductFormModal({ visible, editing, onClose, onSave, saving, currency,
                       keyboardType="decimal-pad"
                       placeholder="0"
                       placeholderTextColor={palette.textDisabled}
+                      inputAccessoryViewID={Platform.OS === 'ios' ? SILENT_ACCESSORY_ID : undefined}
                     />
                   </View>
 
@@ -559,22 +762,14 @@ function ProductFormModal({ visible, editing, onClose, onSave, saving, currency,
                         onChangeText={setField('reorder_level')}
                         keyboardType="number-pad"
                         placeholderTextColor={palette.textDisabled}
+                        inputAccessoryViewID={Platform.OS === 'ios' ? SILENT_ACCESSORY_ID : undefined}
                       />
                       <Text variant="caption" color="secondary">Vous serez alerté à ce niveau de stock</Text>
                     </View>
                   )}
                 </>
               )}
-            </ScrollView>
-          </SafeAreaView>
-
-          {/* Footer outside ScrollView+SafeAreaView so KAV lifts it cleanly above the keyboard */}
-          <View style={[styles.modalFooter, { paddingBottom: Math.max(insets.bottom, spacing[5]) }]}>
-            <Button label={saving ? (editing ? 'Enregistrement…' : 'Ajout…') : (editing ? 'Enregistrer' : 'Ajouter')} onPress={handleSave}
-              loading={saving} fullWidth size="lg" />
-          </View>
-        </KeyboardAvoidingView>
-      </Modal>
+    </FormSheet>
   );
 }
 
@@ -603,43 +798,13 @@ function StockAdjustModal({ visible, product, onClose, onConfirm, saving, curren
   if (!product) return null;
 
   return (
-    <Modal visible={visible} animationType="slide" presentationStyle="formSheet" onRequestClose={onClose}>
-      <SafeAreaView style={styles.modalSafe} edges={['bottom']}>
-        <View style={styles.modalHeader}>
-          <Pressable onPress={onClose} style={styles.modalCancel}>
-            <Text variant="body" color="secondary">Annuler</Text>
-          </Pressable>
-          <Text variant="h4">Ajuster le stock</Text>
-          <View style={{ width: 64 }} />
-        </View>
-
-        <ScrollView contentContainerStyle={styles.modalContent} keyboardShouldPersistTaps="handled">
-          <Card style={styles.stockPreview}>
-            <Text variant="label">{product.name}</Text>
-            <Text variant="amountLarge">{product.stock_qty} {product.unit}</Text>
-            <Text variant="caption" color="secondary">Stock actuel</Text>
-          </Card>
-
-          <View style={styles.typeRow}>
-            <Pressable onPress={() => setType('entree')}
-              style={[styles.typeChip, type === 'entree' && styles.typeChipEntree]}>
-              <Text variant="label" style={{ color: type === 'entree' ? palette.textInverse : palette.textPrimary }}>
-                + Entrée
-              </Text>
-            </Pressable>
-            <Pressable onPress={() => setType('perte')}
-              style={[styles.typeChip, type === 'perte' && styles.typeChipPerte]}>
-              <Text variant="label" style={{ color: type === 'perte' ? palette.textInverse : palette.textPrimary }}>
-                − Perte / Retrait
-              </Text>
-            </Pressable>
-          </View>
-
-          <Input label="Quantité" value={qty} onChangeText={setQty} keyboardType="number-pad" />
-          <Input label="Note (optionnel)" value={note} onChangeText={setNote}
-            placeholder="Livraison, retour client, casse" />
-        </ScrollView>
-
+    <FormSheet
+      visible={visible}
+      onClose={onClose}
+      title="Ajuster le stock"
+      presentationStyle="formSheet"
+      contentContainerStyle={styles.modalContent}
+      footer={
         <View style={styles.modalFooter}>
           <Button
             label={saving ? 'Enregistrement…' : 'Confirmer'}
@@ -652,8 +817,43 @@ function StockAdjustModal({ visible, product, onClose, onConfirm, saving, curren
             variant={type === 'perte' ? 'danger' : 'primary'}
           />
         </View>
-      </SafeAreaView>
-    </Modal>
+      }
+      accessory={
+        Platform.OS === 'ios' ? (
+          <InputAccessoryView nativeID={STOCK_ADJUST_ACCESSORY_ID}>
+            <View style={{ height: 0 }} />
+          </InputAccessoryView>
+        ) : undefined
+      }
+    >
+      <Card style={styles.stockPreview}>
+        <Text variant="label">{product.name}</Text>
+        <Text variant="amountLarge">{product.stock_qty} {product.unit}</Text>
+        <Text variant="caption" color="secondary">Stock actuel</Text>
+      </Card>
+
+      <View style={styles.typeRow}>
+        <Pressable onPress={() => setType('entree')}
+          style={[styles.typeChip, type === 'entree' && styles.typeChipEntree]}>
+          <Text variant="label" style={{ color: type === 'entree' ? palette.textInverse : palette.textPrimary }}>
+            + Entrée
+          </Text>
+        </Pressable>
+        <Pressable onPress={() => setType('perte')}
+          style={[styles.typeChip, type === 'perte' && styles.typeChipPerte]}>
+          <Text variant="label" style={{ color: type === 'perte' ? palette.textInverse : palette.textPrimary }}>
+            − Perte / Retrait
+          </Text>
+        </Pressable>
+      </View>
+
+      <Input
+        label="Quantité" value={qty} onChangeText={setQty} keyboardType="number-pad"
+        inputAccessoryViewID={Platform.OS === 'ios' ? STOCK_ADJUST_ACCESSORY_ID : undefined}
+      />
+      <Input label="Note (optionnel)" value={note} onChangeText={setNote}
+        placeholder="Livraison, retour client, casse" />
+    </FormSheet>
   );
 }
 
@@ -698,79 +898,74 @@ function ProductStatsModal({ visible, product, onClose, businessId, currency, fe
 
   if (!product) return null;
 
-  const profitColor = stats && stats.profit >= 0 ? palette.success : palette.danger;
+  const profitColor = stats && stats.profit >= 0 ? palette.success : palette.warning;
 
   return (
-    <Modal visible={visible} animationType="slide" presentationStyle="formSheet" onRequestClose={onClose}>
-      <SafeAreaView style={styles.modalSafe} edges={['bottom']}>
-        <View style={styles.modalHeader}>
-          <Pressable onPress={onClose} style={styles.modalCancel}>
-            <Text variant="body" color="secondary">Fermer</Text>
-          </Pressable>
-          <Text variant="h4" numberOfLines={1} style={{ flex: 1, textAlign: 'center' }}>Rentabilité</Text>
-          <View style={{ width: 64 }} />
+    <FormSheet
+      visible={visible}
+      onClose={onClose}
+      title="Rentabilité"
+      cancelLabel="Fermer"
+      presentationStyle="formSheet"
+      contentContainerStyle={styles.modalContent}
+    >
+      <Text variant="label" color="secondary" style={{ textAlign: 'center' }}>{product.name}</Text>
+
+      {/* Period toggle */}
+      <View style={styles.typeRow}>
+        <Pressable onPress={() => setPeriod('mois')}
+          style={[styles.typeChip, period === 'mois' && styles.typeChipEntree]}>
+          <Text variant="label" style={{ color: period === 'mois' ? palette.textInverse : palette.textPrimary }}>
+            Ce mois
+          </Text>
+        </Pressable>
+        <Pressable onPress={() => setPeriod('tout')}
+          style={[styles.typeChip, period === 'tout' && styles.typeChipEntree]}>
+          <Text variant="label" style={{ color: period === 'tout' ? palette.textInverse : palette.textPrimary }}>
+            Depuis le début
+          </Text>
+        </Pressable>
+      </View>
+
+      {loading ? (
+        <View style={{ alignItems: 'center', paddingVertical: 32 }}>
+          <Text variant="body" color="secondary">Chargement…</Text>
         </View>
-
-        <ScrollView contentContainerStyle={styles.modalContent}>
-          <Text variant="label" color="secondary" style={{ textAlign: 'center' }}>{product.name}</Text>
-
-          {/* Period toggle */}
-          <View style={styles.typeRow}>
-            <Pressable onPress={() => setPeriod('mois')}
-              style={[styles.typeChip, period === 'mois' && styles.typeChipEntree]}>
-              <Text variant="label" style={{ color: period === 'mois' ? palette.textInverse : palette.textPrimary }}>
-                Ce mois
-              </Text>
-            </Pressable>
-            <Pressable onPress={() => setPeriod('tout')}
-              style={[styles.typeChip, period === 'tout' && styles.typeChipEntree]}>
-              <Text variant="label" style={{ color: period === 'tout' ? palette.textInverse : palette.textPrimary }}>
-                Depuis le début
-              </Text>
-            </Pressable>
+      ) : stats ? (
+        <Card style={{ gap: 0 }}>
+          <View style={styles.statsRow}>
+            <Text variant="body" color="secondary">Encaissé</Text>
+            <Text variant="body" style={{ fontFamily: 'System', fontWeight: '600' }}>
+              {formatAmount(stats.revenue, currency)}
+            </Text>
           </View>
-
-          {loading ? (
-            <View style={{ alignItems: 'center', paddingVertical: 32 }}>
-              <Text variant="body" color="secondary">Chargement…</Text>
-            </View>
-          ) : stats ? (
-            <Card style={{ gap: 0 }}>
-              <View style={styles.statsRow}>
-                <Text variant="body" color="secondary">Encaissé</Text>
-                <Text variant="body" style={{ fontFamily: 'System', fontWeight: '600' }}>
-                  {formatAmount(stats.revenue, currency)}
-                </Text>
-              </View>
-              <View style={[styles.statsRow, styles.statsRowBorder]}>
-                <Text variant="body" color="secondary">Coût d'achat</Text>
-                <Text variant="body" style={{ fontFamily: 'System', fontWeight: '600' }}>
-                  {formatAmount(stats.capital, currency)}
-                </Text>
-              </View>
-              {stats.linkedExpenses > 0 && (
-                <View style={[styles.statsRow, styles.statsRowBorder]}>
-                  <Text variant="body" color="secondary">Dépenses liées</Text>
-                  <Text variant="body" style={{ fontFamily: 'System', fontWeight: '600' }}>
-                    {formatAmount(stats.linkedExpenses, currency)}
-                  </Text>
-                </View>
-              )}
-              <View style={[styles.statsRow, styles.statsRowBorder]}>
-                <Text variant="body">Bénéfice</Text>
-                <Text variant="body" style={{ fontFamily: 'System', fontWeight: '700', color: profitColor }}>
-                  {stats.profit >= 0 ? '+' : ''}{formatAmount(stats.profit, currency)}
-                </Text>
-              </View>
-            </Card>
-          ) : (
-            <View style={{ alignItems: 'center', paddingVertical: 32 }}>
-              <Text variant="body" color="secondary">Aucune donnée disponible.</Text>
+          <View style={[styles.statsRow, styles.statsRowBorder]}>
+            <Text variant="body" color="secondary">Coût d'achat</Text>
+            <Text variant="body" style={{ fontFamily: 'System', fontWeight: '600' }}>
+              {formatAmount(stats.capital, currency)}
+            </Text>
+          </View>
+          {stats.linkedExpenses > 0 && (
+            <View style={[styles.statsRow, styles.statsRowBorder]}>
+              <Text variant="body" color="secondary">Dépenses liées</Text>
+              <Text variant="body" style={{ fontFamily: 'System', fontWeight: '600' }}>
+                {formatAmount(stats.linkedExpenses, currency)}
+              </Text>
             </View>
           )}
-        </ScrollView>
-      </SafeAreaView>
-    </Modal>
+          <View style={[styles.statsRow, styles.statsRowBorder]}>
+            <Text variant="body">Bénéfice</Text>
+            <Text variant="body" style={{ fontFamily: 'System', fontWeight: '700', color: profitColor }}>
+              {stats.profit >= 0 ? '+' : ''}{formatAmount(stats.profit, currency)}
+            </Text>
+          </View>
+        </Card>
+      ) : (
+        <View style={{ alignItems: 'center', paddingVertical: 32 }}>
+          <Text variant="body" color="secondary">Aucune donnée disponible.</Text>
+        </View>
+      )}
+    </FormSheet>
   );
 }
 
@@ -782,34 +977,36 @@ interface ProductRowProps {
   onPress: () => void;
   onLongPress?: () => void;
   archived?: boolean;
+  /** Only meaningful when product.has_variants — undefined while still loading. */
+  variants?: ProductVariant[];
 }
 
-function StockStatus({ product }: { product: Product }) {
+function StockStatus({ product, variants }: { product: Product; variants?: ProductVariant[] }) {
   const { palette } = useTheme();
   const styles = useMemo(() => makeStyles(palette), [palette]);
 
   if (product.has_variants) {
-    return null;
+    // Parent stock_qty is always 0 for a variant product — real stock lives
+    // per-variant. Undefined (not loaded yet) intentionally shows nothing,
+    // same fail-open default the Actifs/Épuisés split already uses, rather
+    // than flashing "Épuisé" while variants are still being fetched.
+    if (!variants || variants.length === 0) return null;
+    const isOut = variants.every(v => v.stock_qty <= 0);
+    if (!isOut) return null;
+    return <Pill tone="warning">Fini</Pill>;
   }
 
   const isOut = product.stock_qty === 0;
   const isLow = !isOut && product.reorder_level > 0 && product.stock_qty <= product.reorder_level;
 
   if (isOut) {
-    return (
-      <View style={styles.stockOutRow}>
-        <Text style={styles.stockOutText}>Épuisé</Text>
-      </View>
-    );
+    return <Pill tone="warning">Fini</Pill>;
   }
   if (isLow) {
     return (
-      <View style={styles.stockLowRow}>
-        <Ionicons name="leaf-outline" size={11} color={palette.warning} />
-        <Text style={styles.stockLowText}>
-          Bientôt fini · Il reste {product.stock_qty} {product.unit}
-        </Text>
-      </View>
+      <Pill tone="warning" icon="leaf-outline">
+        Bientôt fini · Il reste {product.stock_qty} {product.unit}
+      </Pill>
     );
   }
   return (
@@ -817,23 +1014,76 @@ function StockStatus({ product }: { product: Product }) {
   );
 }
 
-function productBadgeColor(name: string) {
-  const sum = name.split('').reduce((acc, ch) => acc + ch.charCodeAt(0), 0);
-  return PRODUCT_BADGE_PALETTE.bg[sum % PRODUCT_BADGE_PALETTE.bg.length];
-}
-
-function productBadgeTextColor(name: string) {
-  const sum = name.split('').reduce((acc, ch) => acc + ch.charCodeAt(0), 0);
-  return PRODUCT_BADGE_PALETTE.text[sum % PRODUCT_BADGE_PALETTE.text.length];
-}
-
-function ProductRow({ product, currency, onPress, onLongPress, archived }: ProductRowProps) {
+// ─── Archive switch (Actifs / Archivés) ────────────────────────────────────
+// One sliding-pill control instead of two independent chips sitting side by
+// side — same binary choice, but reads as a single switch with a satisfying
+// slide + settle bounce, not "two buttons that happen to be next to each
+// other". Labels are the real state names (Actifs/Archivés), never a
+// generic ON/OFF baked into the control itself.
+function ArchiveSwitch({ value, onChange }: { value: 'actifs' | 'archives'; onChange: (v: 'actifs' | 'archives') => void }) {
   const { palette } = useTheme();
   const styles = useMemo(() => makeStyles(palette), [palette]);
-  const badgeBg = productBadgeColor(product.name);
-  const badgeTextColor = productBadgeTextColor(product.name);
+  const [trackWidth, setTrackWidth] = useState(0);
+  const slide = useRef(new Animated.Value(value === 'archives' ? 1 : 0)).current;
+  const bounce = useRef(new Animated.Value(1)).current;
+
+  useEffect(() => {
+    Animated.parallel([
+      Animated.spring(slide, {
+        toValue: value === 'archives' ? 1 : 0,
+        useNativeDriver: true,
+        friction: 8,
+        tension: 60,
+      }),
+      // A tiny squash-and-settle on the thumb itself — the "cool" tactile
+      // feedback on top of the slide, not just a flat linear move.
+      Animated.sequence([
+        Animated.timing(bounce, { toValue: 0.92, duration: 90, useNativeDriver: true }),
+        Animated.spring(bounce, { toValue: 1, useNativeDriver: true, friction: 5, tension: 140 }),
+      ]),
+    ]).start();
+  }, [value, slide, bounce]);
+
+  const inset = 3;
+  const thumbWidth = Math.max(trackWidth / 2 - inset, 0);
+  const thumbTranslate = slide.interpolate({ inputRange: [0, 1], outputRange: [0, thumbWidth] });
+
+  return (
+    <View style={styles.switchTrack} onLayout={e => setTrackWidth(e.nativeEvent.layout.width)}>
+      {trackWidth > 0 && (
+        <Animated.View
+          style={[
+            styles.switchThumb,
+            { width: thumbWidth, transform: [{ translateX: thumbTranslate }, { scale: bounce }] },
+          ]}
+        />
+      )}
+      {(['actifs', 'archives'] as const).map(t => (
+        <Pressable key={t} onPress={() => onChange(t)} style={styles.switchOption} hitSlop={4}>
+          <Text
+            variant="caption"
+            style={{
+              color: value === t ? palette.textInverse : palette.textSecondary,
+              fontWeight: value === t ? '700' : '500',
+            }}
+          >
+            {t === 'actifs' ? 'Actifs' : 'Archivés'}
+          </Text>
+        </Pressable>
+      ))}
+    </View>
+  );
+}
+
+function ProductRow({ product, onPress, onLongPress, archived, variants }: ProductRowProps) {
+  const { palette } = useTheme();
+  const styles = useMemo(() => makeStyles(palette), [palette]);
   const initial = product.name.charAt(0).toUpperCase();
-  const isOutOfStock = !archived && !product.has_variants && product.stock_qty === 0;
+  const isOutOfStock = !archived && (
+    product.has_variants
+      ? !!(variants && variants.length > 0 && variants.every(v => v.stock_qty <= 0))
+      : product.stock_qty === 0
+  );
 
   if (archived) {
     return (
@@ -842,8 +1092,8 @@ function ProductRow({ product, currency, onPress, onLongPress, archived }: Produ
         onLongPress={onLongPress}
         style={({ pressed }) => [styles.productRow, pressed && { opacity: 0.65 }]}
       >
-        <View style={[styles.productBadge, { backgroundColor: badgeBg, opacity: 0.5 }]}>
-          <Text style={[styles.productBadgeText, { color: badgeTextColor }]}>{initial}</Text>
+        <View style={[styles.productBadge, { opacity: 0.5 }]}>
+          <Text allowFontScaling={false} style={styles.productBadgeText}>{initial}</Text>
         </View>
         <View style={styles.productCenter}>
           <Text style={[styles.productName, { color: palette.textDisabled }]} numberOfLines={1}>{product.name}</Text>
@@ -858,8 +1108,8 @@ function ProductRow({ product, currency, onPress, onLongPress, archived }: Produ
 
   return (
     <Pressable onPress={onPress} style={({ pressed }) => [styles.productRow, pressed && { opacity: 0.65 }]}>
-      <View style={[styles.productBadge, { backgroundColor: badgeBg, opacity: isOutOfStock ? 0.38 : 1 }]}>
-        <Text style={[styles.productBadgeText, { color: badgeTextColor }]}>{initial}</Text>
+      <View style={[styles.productBadge, { opacity: isOutOfStock ? 0.38 : 1 }]}>
+        <Text style={styles.productBadgeText}>{initial}</Text>
       </View>
       <View style={styles.productCenter}>
         <View style={{ flexDirection: 'row', alignItems: 'center', gap: spacing[2] }}>
@@ -873,20 +1123,26 @@ function ProductRow({ product, currency, onPress, onLongPress, archived }: Produ
             </View>
           ) : null}
         </View>
-        <StockStatus product={product} />
+        <StockStatus product={product} variants={variants} />
       </View>
-      <View style={[styles.productRight, product.has_variants && { alignSelf: 'stretch' }]}>
-        <Text style={[styles.priceText, isOutOfStock && { color: palette.textDisabled }]}>
-          {formatPrice(product.sale_price, currency)}
-        </Text>
-        {product.has_variants ? (
-          <Ionicons
-            name="chevron-forward"
-            size={14}
-            color={palette.primary}
-            style={{ position: 'absolute', bottom: 0, right: 0 }}
-          />
-        ) : null}
+      {/* One non-wrapping row: price, then — only for a real variant product
+          — its chevron. Previously the chevron sat absolutely positioned at
+          the bottom of a stretched container while the price sat at the
+          top, which could visually split them onto two lines; and a second,
+          unrelated chevron had been added to every non-variant row, when
+          the chevron's only real meaning is "this product has varieties". */}
+      <View style={styles.productRight}>
+        <View style={styles.priceRow}>
+          <Text
+            style={[styles.priceText, isOutOfStock && { color: palette.textDisabled }]}
+            numberOfLines={1}
+          >
+            {formatPriceValue(product.sale_price)}
+          </Text>
+          {product.has_variants && (
+            <Ionicons name="chevron-forward" size={14} color={palette.textDisabled} />
+          )}
+        </View>
       </View>
     </Pressable>
   );
@@ -912,7 +1168,7 @@ function RestoreActionSheet({
   if (!product) return null;
 
   return (
-    <Modal visible={visible} transparent animationType="slide" onRequestClose={onClose}>
+    <Modal visible={visible} transparent animationType="slide" onRequestClose={onClose} statusBarTranslucent navigationBarTranslucent>
       <Pressable style={styles.actionSheetOverlay} onPress={onClose} />
       <View style={[styles.actionSheet, { paddingBottom: Math.max(insets.bottom, spacing[4]) }]}>
         <View style={styles.sheetHandle} />
@@ -966,7 +1222,7 @@ function ProductActionSheet({
     : `${product.stock_qty} ${product.unit} · ${formatPrice(product.sale_price, currency)}`;
 
   return (
-    <Modal visible={visible} transparent animationType="slide" onRequestClose={onClose}>
+    <Modal visible={visible} transparent animationType="slide" onRequestClose={onClose} statusBarTranslucent navigationBarTranslucent>
       <Pressable style={styles.actionSheetOverlay} onPress={onClose} />
       <View style={[styles.actionSheet, { paddingBottom: Math.max(insets.bottom, spacing[4]) }]}>
         <View style={styles.sheetHandle} />
@@ -1043,21 +1299,74 @@ export default function CatalogueScreen() {
     useProductStore();
   const { fournisseurs, fetchFournisseurs } = useFournisseursStore();
 
-  const [search, setSearch] = useState('');
-  const [showForm, setShowForm] = useState(false);
-  const [editingProduct, setEditingProduct] = useState<Product | null>(null);
+  // Mirrors showFork's 24h boundary in app/(app)/_layout.tsx: the
+  // activation fork guides a brand-new merchant to their first product for
+  // the first 24h, then stops showing anywhere. If the catalogue is still
+  // completely empty (no active AND no archived product — archived alone
+  // would mean they've actually used the app before) at that point, this
+  // screen needs its own way forward instead of quietly rendering nothing.
+  const noProductsAtAll = products.length === 0 && archivedProducts.length === 0;
+  const businessAgeMs = business?.created_at
+    ? Date.now() - new Date(business.created_at).getTime()
+    : Infinity;
+  const showActivationEmptyState = canEdit && !offline && noProductsAtAll && businessAgeMs >= 24 * 60 * 60 * 1000;
 
-  const { openForm } = useLocalSearchParams<{ openForm?: string }>();
+  const [search, setSearch] = useState('');
+  // Initialized straight from the param (not via an effect that fires after
+  // the first render) — an effect-driven open meant the bare catalogue
+  // screen was visible for a frame before the form slid up on top of it,
+  // reading as "arrive, then it opens" instead of one direct motion.
+  const { openForm, prefillName } = useLocalSearchParams<{ openForm?: string; prefillName?: string }>();
+  const [showForm, setShowForm] = useState(openForm === '1');
+  const [editingProduct, setEditingProduct] = useState<Product | null>(null);
+  // Set only by the "no search match" create-shortcut below; cleared on every
+  // other way of opening the form so a stale searched name never leaks into
+  // an unrelated "Ajouter un produit" tap.
+  const [prefillProductName, setPrefillProductName] = useState<string | undefined>(undefined);
+
+  // Catalogue is a tab screen and stays mounted after the first visit, so
+  // the useState initializer above only ever fires the very first time —
+  // this effect re-applies openForm on every fresh arrival too (same fix
+  // vendre.tsx needed for its mode param), or every "Un produit" tap after
+  // the first one on an already-mounted Catalogue silently did nothing.
   useEffect(() => {
     if (openForm === '1') {
       setEditingProduct(null);
+      setPrefillProductName(prefillName ?? undefined);
       setShowForm(true);
-      router.setParams({ openForm: undefined });
+      router.setParams({ openForm: undefined, prefillName: undefined });
     }
-  }, [openForm]);
+  }, [openForm, prefillName]);
+
+  // The activation fork (app/(app)/_layout.tsx) is evaluated globally so it
+  // can show on top of any screen — but this form is itself a real Modal
+  // (via FormSheet), and the fork trying to show at the same time would be
+  // two Modals visible at once, the same class of bug already fixed twice
+  // elsewhere in this app. Suppress the fork for exactly as long as this
+  // form is genuinely open, not a guessed timeout — someone filling in a
+  // product shouldn't have the wall interrupt mid-form no matter how long
+  // they take, but the moment they close it without saving, it's fair game
+  // again immediately.
+  useEffect(() => {
+    useAuthStore.setState({ suppressActivationFork: showForm });
+    return () => { if (showForm) useAuthStore.setState({ suppressActivationFork: false }); };
+  }, [showForm]);
+
   const [showAdjust, setShowAdjust] = useState(false);
   const [adjustTarget, setAdjustTarget] = useState<Product | null>(null);
   const [tab, setTab] = useState<'actifs' | 'archives'>('actifs');
+
+  // Search is shown once the CURRENT tab's own list is big enough to need it
+  // — an active catalogue of 3 products with 40 archived items shouldn't get
+  // a search box just because the archive is long.
+  const searchVisible = (tab === 'actifs' ? products.length : archivedProducts.length) >= SEARCH_VISIBILITY_THRESHOLD;
+  useAnimateLayoutChange(searchVisible);
+  // Clear a typed query when the box disappears (list shrank, or a tab
+  // switch landed on a shorter list) so it can't silently keep narrowing
+  // whichever tab is current with no visible input left to clear it.
+  useEffect(() => {
+    if (!searchVisible) setSearch('');
+  }, [searchVisible]);
   const [successMsg, setSuccessMsg] = useState('');
   const [showStats, setShowStats] = useState(false);
   const [statsTarget, setStatsTarget] = useState<Product | null>(null);
@@ -1067,6 +1376,7 @@ export default function CatalogueScreen() {
   const [actionSheetProduct, setActionSheetProduct] = useState<Product | null>(null);
   const [showRestoreSheet, setShowRestoreSheet] = useState(false);
   const [restoreSheetProduct, setRestoreSheetProduct] = useState<Product | null>(null);
+  const [refreshing, setRefreshing] = useState(false);
 
   useEffect(() => {
     if (editingProduct?.has_variants && businessId) {
@@ -1109,14 +1419,19 @@ export default function CatalogueScreen() {
 
   useEffect(() => {
     if (businessId) {
-      fetchProducts(businessId, userId);
+      fetchProducts(businessId, userId, session?.activeMembership?.id, session?.activeMembership?.role);
       fetchFournisseurs(businessId);
+      // Also needed on mount (not just on tab switch, see the effect below)
+      // so showActivationEmptyState can tell "truly zero products anywhere"
+      // apart from "zero active, but some archived" without waiting for the
+      // merchant to visit the Archivés tab first.
+      fetchArchivedProducts(businessId);
     }
   }, [businessId]);
 
   useFocusEffect(
     useCallback(() => {
-      if (businessId) fetchProducts(businessId, userId);
+      if (businessId) fetchProducts(businessId, userId, session?.activeMembership?.id, session?.activeMembership?.role);
     }, [businessId, userId]),
   );
 
@@ -1125,6 +1440,13 @@ export default function CatalogueScreen() {
       fetchArchivedProducts(businessId);
     }
   }, [tab, businessId]);
+
+  const onRefresh = useCallback(async () => {
+    if (!businessId) return;
+    setRefreshing(true);
+    await (tab === 'archives' ? fetchArchivedProducts(businessId) : fetchProducts(businessId, userId, session?.activeMembership?.id, session?.activeMembership?.role));
+    setRefreshing(false);
+  }, [businessId, userId, tab]);
 
   useEffect(() => {
     if (!businessId || products.length === 0) return;
@@ -1287,39 +1609,52 @@ export default function CatalogueScreen() {
         </View>
       ) : null}
 
-      {offline && <OfflineNotice offlineSince={offlineSince} />}
+      {offline && (
+        <OfflineNotice offlineSince={offlineSince} onRetry={() => fetchProducts(businessId, userId, session?.activeMembership?.id, session?.activeMembership?.role)} />
+      )}
 
       {/* Header */}
       <View style={styles.header}>
         <View>
           <Text variant="h3">Produits</Text>
-          <Text variant="caption" color="secondary">
-            {tab === 'actifs'
-              ? `${products.length} produit${products.length !== 1 ? 's' : ''}`
-              : `${archivedProducts.length} archivé${archivedProducts.length !== 1 ? 's' : ''}`}
-          </Text>
-        </View>
-      </View>
-
-      {/* Tabs */}
-      <View style={styles.tabRow}>
-        {(['actifs', 'archives'] as const).map(t => (
-          <Pressable key={t} onPress={() => setTab(t)} style={[styles.tabChip, tab === t && styles.tabChipActive]}>
-            <Text variant="caption" style={{ color: tab === t ? palette.textInverse : palette.textSecondary }}>
-              {t === 'actifs' ? 'Actifs' : 'Archivés'}
+          {!showActivationEmptyState && (
+            <Text variant="caption" color="secondary">
+              {tab === 'actifs'
+                ? `${products.length} produit${products.length !== 1 ? 's' : ''}`
+                : `${archivedProducts.length} archivé${archivedProducts.length !== 1 ? 's' : ''}`}
             </Text>
-          </Pressable>
-        ))}
+          )}
+        </View>
+        {/* Currency declared once here instead of repeated on every row's
+            price (see formatPriceValue in ProductRow) — archived rows don't
+            show a price at all, so this only applies to Actifs. */}
+        {!showActivationEmptyState && tab === 'actifs' && (
+          <Text variant="caption" color="secondary">Prix ({currency})</Text>
+        )}
       </View>
 
-      {/* Search */}
-      <View style={styles.searchRow}>
-        <Input placeholder="Rechercher un produit…" value={search} onChangeText={setSearch} style={{ flex: 1 }} />
-      </View>
+      {/* Tabs — hidden once the 24h onboarding window has closed on a still
+          completely empty catalogue; nothing to switch between yet. */}
+      {!showActivationEmptyState && (
+        <View style={styles.tabRow}>
+          <ArchiveSwitch value={tab} onChange={setTab} />
+        </View>
+      )}
 
-      {/* Stats row (actifs only) */}
+      {searchVisible && (
+        <View style={styles.searchRow}>
+          <Input placeholder="Rechercher un produit…" value={search} onChangeText={setSearch} style={{ flex: 1 }} />
+        </View>
+      )}
+
+      {/* Stats row (actifs only). "Valeur du stock" is cost_price-derived —
+          hidden for vendeur to match the real data-level gate (cost_price is
+          always 0 in their own fetched data as of migration_v193.sql; this
+          is the display-side complement, not a substitute for it, since a
+          raw "0 GNF" would just look like a bug rather than actually hidden). */}
       {products.length > 0 && tab === 'actifs' && (
         <View style={styles.statsCard}>
+          {role !== 'vendeur' && (
           <View style={styles.statCol}>
             <Text variant="caption" color="secondary">Valeur du stock</Text>
             <Text style={styles.statValue}>
@@ -1330,6 +1665,7 @@ export default function CatalogueScreen() {
               )}
             </Text>
           </View>
+          )}
           {outOfStockActive.length > 0 && (
             <>
               <View style={styles.statDivider} />
@@ -1339,7 +1675,7 @@ export default function CatalogueScreen() {
                     ? '1 produit est fini'
                     : `${outOfStockActive.length} produits sont finis`}
                 </Text>
-                <Text style={[styles.statValue, { color: palette.primary }]}>Voir →</Text>
+                <Text style={[styles.statValue, { color: palette.primary }]}>Voir</Text>
               </Pressable>
             </>
           )}
@@ -1350,53 +1686,95 @@ export default function CatalogueScreen() {
       {loading && products.length === 0 ? (
         <SkeletonList count={8} />
       ) : tab === 'actifs' && products.length === 0 ? (
-        <View style={styles.emptyState}>
-          <Ionicons name="cube-outline" size={72} color={palette.textDisabled} />
-          <Text variant="h4">Catalogue vide</Text>
-          <Text variant="body" color="secondary" style={styles.emptyDesc}>
-            {!canEdit
-              ? 'Votre responsable ajoutera les produits bientôt.'
-              : 'Ajoutez votre premier produit pour démarrer.'}
-          </Text>
-        </View>
+        !offline && canEdit ? (
+          // One consistent empty state regardless of the 24h activation-fork
+          // window — the fork is a modal that overlays whatever's behind it
+          // when it shows, so there's no real conflict with also having a
+          // real inline action here. The floating FAB stays hidden while the
+          // list is empty (see fabContainer below) so it can never collide
+          // with this block's own button.
+          <EmptyState
+            icon="cube-outline"
+            title="Aucun produit pour le moment."
+            subtitle="Ajoutez ce que vous vendez pour aller plus vite à la caisse."
+            actionLabel="+ Ajouter un produit"
+            onAction={() => { setEditingProduct(null); setPrefillProductName(undefined); setShowForm(true); }}
+          />
+        ) : (
+          <View style={styles.emptyState}>
+            <Ionicons name={offline ? 'cloud-offline-outline' : 'cube-outline'} size={72} color={palette.textDisabled} />
+            <Text variant="h4">{offline ? 'Catalogue non disponible hors ligne' : 'Catalogue vide'}</Text>
+            <Text variant="body" color="secondary" style={styles.emptyDesc}>
+              {offline
+                ? 'Ouvrez l\'application en ligne une première fois pour activer le mode hors ligne.'
+                : 'Votre responsable ajoutera les produits bientôt.'}
+            </Text>
+          </View>
+        )
       ) : tab === 'archives' && archivedFiltered.length === 0 ? (
-        <View style={styles.emptyState}>
-          <Ionicons name="cube-outline" size={48} color={palette.textDisabled} />
-          <Text variant="body" color="secondary">Aucun produit archivé.</Text>
-        </View>
+        // Two distinct states, never conflated: a search with no match must
+        // never read as "your archive is empty" — that would make a merchant
+        // fear her archived products are gone, when they simply don't match
+        // what she typed.
+        search.trim() ? (
+          <NoResultsState query={search} />
+        ) : (
+          <EmptyState
+            icon="cube-outline"
+            title="Aucun produit archivé."
+            subtitle="Les produits que vous archivez apparaîtront ici."
+          />
+        )
       ) : (
-        <FlatList
-          data={displayList}
-          keyExtractor={p => p.id}
-          renderItem={({ item }) => (
-            <ProductRow
-              product={item}
-              currency={currency}
-              archived={tab === 'archives'}
-              onPress={() => {
-                if (tab === 'archives') {
-                  setRestoreSheetProduct(item);
-                  setShowRestoreSheet(true);
-                  return;
-                }
-                openOptions(item);
-              }}
-              onLongPress={() => tab === 'archives' ? undefined : openOptions(item)}
-            />
-          )}
-          ItemSeparatorComponent={() => <View style={styles.separator} />}
-          contentContainerStyle={styles.list}
-          showsVerticalScrollIndicator={false}
-          keyboardShouldPersistTaps="handled"
-          ListEmptyComponent={
-            search.trim() ? (
-              <View style={[styles.emptyState, { paddingTop: spacing[10] }]}>
-                <Ionicons name="search-outline" size={48} color={palette.textDisabled} />
-                <Text variant="body" color="secondary">Aucun résultat pour "{search}"</Text>
-              </View>
-            ) : null
-          }
-        />
+        // Inset, rounded container matching the search field / "Valeur du
+        // stock" card above it — the list used to be a full-width, sharp-
+        // edged block with no visual relationship to those. overflow:
+        // 'hidden' is what clips the first/last row's corners to the
+        // container's own radius instead of them staying square.
+        <View style={styles.listContainer}>
+          <FlatList
+            style={{ flex: 1 }}
+            data={displayList}
+            keyExtractor={p => p.id}
+            renderItem={({ item }) => (
+              <ProductRow
+                product={item}
+                currency={currency}
+                archived={tab === 'archives'}
+                variants={variantsByProduct[item.id]}
+                onPress={() => {
+                  if (tab === 'archives') {
+                    setRestoreSheetProduct(item);
+                    setShowRestoreSheet(true);
+                    return;
+                  }
+                  openOptions(item);
+                }}
+                onLongPress={() => tab === 'archives' ? undefined : openOptions(item)}
+              />
+            )}
+            ItemSeparatorComponent={() => <View style={styles.separator} />}
+            contentContainerStyle={styles.list}
+            showsVerticalScrollIndicator={false}
+            keyboardShouldPersistTaps="handled"
+            refreshControl={
+              <RefreshControl refreshing={refreshing} onRefresh={onRefresh} tintColor={palette.primary} colors={[palette.primary]} />
+            }
+            ListEmptyComponent={
+              search.trim() ? (
+                <NoResultsState
+                  query={search}
+                  createLabel={`+ Nouveau produit « ${search.trim()} »`}
+                  onCreate={() => {
+                    setEditingProduct(null);
+                    setPrefillProductName(search.trim());
+                    setShowForm(true);
+                  }}
+                />
+              ) : null
+            }
+          />
+        </View>
       )}
 
       {/* Out-of-stock bottom sheet */}
@@ -1405,6 +1783,8 @@ export default function CatalogueScreen() {
         animationType="slide"
         transparent
         onRequestClose={() => setShowOutOfStockModal(false)}
+        statusBarTranslucent
+        navigationBarTranslucent
       >
         <Pressable style={styles.outOfStockOverlay} onPress={() => setShowOutOfStockModal(false)} />
         <View style={styles.outOfStockSheet}>
@@ -1416,7 +1796,7 @@ export default function CatalogueScreen() {
                 {outOfStockActive.length} produit{outOfStockActive.length !== 1 ? 's' : ''} à réapprovisionner
               </Text>
             </View>
-            <Pressable onPress={() => setShowOutOfStockModal(false)} style={{ padding: spacing[2] }}>
+            <Pressable onPress={() => setShowOutOfStockModal(false)} style={{ padding: spacing[2] }} accessibilityLabel="Fermer" accessibilityRole="button">
               <Ionicons name="close" size={22} color={palette.textSecondary} />
             </Pressable>
           </View>
@@ -1427,6 +1807,7 @@ export default function CatalogueScreen() {
               <ProductRow
                 product={item}
                 currency={currency}
+                variants={variantsByProduct[item.id]}
                 onPress={() => {
                   setShowOutOfStockModal(false);
                   setTimeout(() => openOptions(item), 350);
@@ -1471,7 +1852,7 @@ export default function CatalogueScreen() {
       <ProductFormModal
         visible={showForm}
         editing={editingProduct}
-        onClose={() => { setShowForm(false); setEditingProduct(null); }}
+        onClose={() => { setShowForm(false); setEditingProduct(null); setPrefillProductName(undefined); }}
         onSave={handleSave}
         saving={saving}
         currency={currency}
@@ -1479,6 +1860,7 @@ export default function CatalogueScreen() {
         businessId={businessId}
         userId={userId}
         initialVariants={initialVariants}
+        initialName={prefillProductName}
       />
 
       {/* Stock Adjust Modal */}
@@ -1501,15 +1883,16 @@ export default function CatalogueScreen() {
         fetchStats={fetchProductStats}
       />
 
-      {canEdit && tab === 'actifs' && (
+      {canEdit && tab === 'actifs' && products.length > 0 && (
         <Animated.View style={[styles.fabContainer, { opacity: fabOpacity, transform: [{ scale: fabScale }] }]}>
           <Pressable
-            onPress={() => { setEditingProduct(null); setShowForm(true); }}
-            style={({ pressed }) => [styles.fab, pressed && { opacity: 0.82 }]}
+            onPress={() => { setEditingProduct(null); setPrefillProductName(undefined); setShowForm(true); }}
+            style={({ pressed }) => [styles.fabExtended, pressed && { opacity: 0.82 }]}
             accessibilityLabel="Ajouter un produit"
             accessibilityRole="button"
           >
-            <Text style={styles.fabIcon}>+</Text>
+            <Ionicons name="add" size={20} color={palette.textInverse} />
+            <Text style={styles.fabExtendedLabel}>Produit</Text>
           </Pressable>
         </Animated.View>
       )}
@@ -1535,15 +1918,29 @@ function makeStyles(p: Palette) {
       paddingHorizontal: spacing[5], paddingTop: spacing[4], paddingBottom: spacing[3],
     },
     tabRow: {
-      flexDirection: 'row', gap: spacing[2],
+      flexDirection: 'row',
       paddingHorizontal: spacing[5], paddingBottom: spacing[3],
     },
-    tabChip: {
-      paddingHorizontal: spacing[4], paddingVertical: spacing[1.5],
-      borderRadius: radius.full, borderWidth: 1, borderColor: p.border,
-      backgroundColor: p.surface,
+    // Fixed width, not flex/intrinsic — the two switchOption labels below
+    // use flex:1 each, so they need a resolved parent width to split
+    // evenly; that's also what keeps the sliding thumb's "half the track"
+    // math exact regardless of which label is longer ("Archivés" vs "Actifs").
+    switchTrack: {
+      flexDirection: 'row',
+      width: 224, height: 40,
+      borderRadius: radius.full,
+      backgroundColor: p.background,
+      borderWidth: 1, borderColor: p.border,
+      position: 'relative',
     },
-    tabChipActive: { backgroundColor: p.primary, borderColor: p.primary },
+    switchThumb: {
+      position: 'absolute',
+      top: 3, bottom: 3, left: 3,
+      borderRadius: radius.full,
+      backgroundColor: p.primary,
+      ...shadow.sm,
+    },
+    switchOption: { flex: 1, alignItems: 'center', justifyContent: 'center', zIndex: 1 },
     alertBanner: {
       backgroundColor: p.warningLight, paddingHorizontal: spacing[5], paddingVertical: spacing[2],
       borderBottomWidth: 1, borderBottomColor: p.warning,
@@ -1563,39 +1960,43 @@ function makeStyles(p: Palette) {
     statCol: { flex: 1, gap: 3 },
     statDivider: { width: 1, backgroundColor: p.border, marginHorizontal: spacing[4] },
     statValue: { fontFamily: FF.bold, fontSize: 18, color: p.textPrimary },
-    list: { paddingHorizontal: spacing[5], paddingBottom: spacing[10] },
+    // Horizontal inset now lives on listContainer's own margin below, not
+    // here — the FlatList's content spans the container's full width, with
+    // each row supplying its own horizontal padding instead.
+    list: { paddingBottom: spacing[10] },
+    // Same radius/border/surface language as statsCard and the search
+    // field above it — same radius.md token, not a one-off literal value.
+    listContainer: {
+      flex: 1,
+      marginHorizontal: spacing[5],
+      borderRadius: radius.md,
+      borderWidth: 1, borderColor: p.border,
+      backgroundColor: p.surface,
+      overflow: 'hidden',
+    },
     separator: { height: 0 },
     productRow: {
       flexDirection: 'row', alignItems: 'center',
-      paddingVertical: spacing[4],
+      paddingHorizontal: spacing[4], paddingVertical: spacing[4],
       borderBottomWidth: 1, borderBottomColor: p.border,
       backgroundColor: p.surface,
     },
+    // One neutral tile token for every product — no per-item hash color.
+    // Swap this for the real product photo once catalogue photos ship.
     productBadge: {
       width: 44, height: 44, borderRadius: radius.md,
       alignItems: 'center', justifyContent: 'center',
       marginRight: 0,
+      backgroundColor: p.background, borderWidth: 1, borderColor: p.border,
     },
-    productBadgeText: { fontFamily: FF.semibold, fontSize: 16 },
-    productCenter: { flex: 1, paddingLeft: 12, gap: 3 },
+    productBadgeText: { fontFamily: FF.semibold, fontSize: 16, color: p.textSecondary },
+    // minWidth: 0 lets this column actually shrink below its content's
+    // natural width — without it, a long product name can push the
+    // trailing price/chevron group past the row's edge instead of the
+    // name truncating.
+    productCenter: { flex: 1, minWidth: 0, paddingLeft: 12, gap: 3 },
     productName: { fontFamily: FF.semibold, fontSize: 16, color: p.textPrimary },
     productStockText: { fontFamily: FF.regular, fontSize: 13, color: p.textSecondary },
-    stockLowRow: {
-      flexDirection: 'row', alignItems: 'center', gap: 4,
-      alignSelf: 'flex-start',
-      backgroundColor: p.warningLight,
-      borderRadius: radius.full,
-      paddingHorizontal: 8, paddingVertical: 3,
-    },
-    stockLowText: { fontFamily: FF.medium, fontSize: 12, color: p.warning },
-    stockOutRow: {
-      flexDirection: 'row', alignItems: 'center', gap: 4,
-      alignSelf: 'flex-start',
-      backgroundColor: p.warningLight,
-      borderRadius: radius.full,
-      paddingHorizontal: 8, paddingVertical: 3,
-    },
-    stockOutText: { fontFamily: FF.semibold, fontSize: 12, color: p.warning },
     productMeta: { flexDirection: 'row', gap: spacing[2], alignItems: 'center' },
     categoryBadge: {
       backgroundColor: p.primaryLight, borderRadius: radius.sm,
@@ -1605,19 +2006,33 @@ function makeStyles(p: Palette) {
       backgroundColor: p.warningLight, borderRadius: radius.sm,
       paddingHorizontal: spacing[1.5], paddingVertical: 2, borderWidth: 1, borderColor: p.warning,
     },
-    productRight: { alignItems: 'flex-end' },
-    priceText: { fontFamily: FF.semibold, fontSize: 15, color: p.primary },
+    // flexShrink: 0 — the trailing price+chevron group never shrinks or
+    // wraps; productCenter's minWidth: 0 above is what gives it the room
+    // to hold its own full width by taking space from the name instead.
+    productRight: { alignItems: 'flex-end', flexShrink: 0 },
+    priceRow: { flexDirection: 'row', alignItems: 'center', gap: spacing[1] },
+    // Neutral, same weight as the product name — ordinary prices are not an
+    // accent moment. Tabular figures keep the column aligned as it scrolls.
+    priceText: {
+      fontFamily: FF.semibold, fontSize: 15, color: p.textPrimary,
+      fontVariant: ['tabular-nums'] as ['tabular-nums'],
+    },
     emptyState: { flex: 1, alignItems: 'center', justifyContent: 'center', padding: spacing[8], gap: spacing[3] },
     emptyDesc: { textAlign: 'center', maxWidth: 260 },
-
-    fabContainer: { position: 'absolute', bottom: 194, right: spacing[4], zIndex: 10 },
-    fab: {
-      width: 56, height: 56, borderRadius: radius.full,
-      backgroundColor: p.primary, alignItems: 'center', justifyContent: 'center',
+    // 194 was tuned against the old flush tab bar's flex space; the floating
+    // pill no longer reserves that space, so the same clearance is added
+    // here too to keep this FAB sitting exactly where it did before.
+    fabContainer: { position: 'absolute', bottom: 194 + FLOATING_TAB_BAR_CLEARANCE, right: spacing[4], zIndex: 10 },
+    // The floating "Ajouter un produit" pill — labeled instead of a bare
+    // icon, per the calm-catalogue redesign. Auto-width, floating bottom-right.
+    fabExtended: {
+      flexDirection: 'row', alignItems: 'center', gap: spacing[2],
+      height: 56, paddingHorizontal: spacing[5], borderRadius: radius.full,
+      backgroundColor: p.primary,
       shadowColor: p.textPrimary, shadowOffset: { width: 0, height: 4 },
       shadowOpacity: 0.18, shadowRadius: 8, elevation: 8,
     },
-    fabIcon: { fontSize: 28, lineHeight: 32, fontWeight: '300' as const, color: p.textInverse, marginTop: -2 },
+    fabExtendedLabel: { fontFamily: FF.semibold, fontSize: 15, color: p.textInverse },
 
     modalSafe: { flex: 1, backgroundColor: p.background },
     modalHeader: {
@@ -1627,10 +2042,16 @@ function makeStyles(p: Palette) {
     },
     modalCancel: { minWidth: 64 },
     modalContent: { padding: spacing[5], gap: spacing[4] },
+    // Depth from a soft upward shadow instead of a tinted panel + hairline —
+    // background matches the screen itself so there's no visible "canvas"
+    // behind the button, just enough shadow to read as pinned above the
+    // scrollable content on both platforms (shadow props on iOS, elevation
+    // on Android — shadow.md already bundles both).
     modalFooter: {
-      padding: spacing[5], borderTopWidth: 1, borderTopColor: p.border, backgroundColor: p.surface,
+      padding: spacing[5], backgroundColor: p.background,
+      ...shadow.md, shadowOffset: { width: 0, height: -2 },
     },
-    formError: { backgroundColor: p.dangerLight, borderRadius: radius.md, padding: spacing[3] },
+    formError: { backgroundColor: p.warningLight, borderRadius: radius.md, padding: spacing[3] },
 
     formStack: {},
     fieldBlock: {
@@ -1653,6 +2074,11 @@ function makeStyles(p: Palette) {
       paddingHorizontal: spacing[5], paddingVertical: spacing[3],
       alignItems: 'center' as const,
       borderBottomWidth: 1, borderBottomColor: p.border,
+    },
+    priceAccessoryBar: {
+      flexDirection: 'row', justifyContent: 'flex-end',
+      paddingHorizontal: spacing[4], paddingVertical: spacing[2.5],
+      backgroundColor: p.surface, borderTopWidth: 1, borderTopColor: p.border,
     },
 
     pickerField: {
@@ -1715,12 +2141,7 @@ function makeStyles(p: Palette) {
     variantListHeader: {
       flexDirection: 'row', alignItems: 'center',
       paddingHorizontal: spacing[5], paddingTop: spacing[3], paddingBottom: spacing[1],
-    },
-    variantPriceOverride: {
-      flexDirection: 'row',
-      paddingHorizontal: spacing[5], paddingVertical: spacing[2],
-      gap: spacing[4],
-      borderBottomWidth: 1, borderBottomColor: p.border,
+      gap: spacing[2],
     },
     addVariantBtn: {
       flexDirection: 'row', alignItems: 'center',

@@ -15,6 +15,8 @@ import { JoinCodeStep } from '@/src/components/JoinCodeStep';
 import { useTheme, radius, spacing } from '@/src/theme';
 import type { Palette } from '@/src/theme';
 import { useAuthStore } from '@/stores/auth';
+import { trackEvent, classifyAuthError } from '@/lib/analytics';
+import { openWhatsApp } from '@/src/utils/whatsapp';
 
 type Step = 'phone' | 'otp' | 'code';
 
@@ -51,6 +53,10 @@ export default function RejoindreScreen() {
       verificationIdRef.current = result.verificationId;
       phoneRef.current = normalized;
       setStep('otp');
+    } else {
+      trackEvent('auth_phone_submit_failed', null, null, {
+        reason: classifyAuthError(useAuthStore.getState().error),
+      });
     }
   };
 
@@ -62,6 +68,9 @@ export default function RejoindreScreen() {
         setStep('code');
       }
     } else {
+      trackEvent('auth_failed', null, null, {
+        reason: classifyAuthError(useAuthStore.getState().error),
+      });
       setOtpKey(k => k + 1);
     }
   };
@@ -80,7 +89,7 @@ export default function RejoindreScreen() {
   };
 
   const SUBS: Record<Step, string> = {
-    phone: 'Votre responsable vous a partagé un code. Vérifiez votre identité pour y accéder.',
+    phone: "Votre responsable vous a envoyé un code d'invitation. Vérifiez votre numéro pour rejoindre son commerce.",
     otp: 'Votre code Patron a été envoyé par WhatsApp. Il est valable pour 10 min.',
     code: 'Entrez le code partagé par votre partenaire pour rejoindre son commerce :)',
   };
@@ -88,7 +97,7 @@ export default function RejoindreScreen() {
   return (
     <Screen>
       <KeyboardAvoidingView
-        behavior={Platform.OS === 'ios' ? 'padding' : 'height'}
+        behavior={Platform.OS === 'ios' ? 'padding' : undefined}
         style={styles.kav}
       >
         <View style={styles.content}>
@@ -129,18 +138,18 @@ export default function RejoindreScreen() {
           {step === 'phone' && (
             <View style={styles.form}>
               <PhoneInput
-                label="Votre numéro"
                 onChange={(e164, complete) => { setPhone(e164); setPhoneComplete(complete); }}
                 autoFocus
                 resetKey={resetKey}
               />
-              <Button label="Continuer" loading={loading} onPress={handleContinuer} fullWidth size="lg" disabled={!phoneComplete} />
+              <Button label="Envoyer le code" loading={loading} onPress={handleContinuer} fullWidth size="lg" disabled={!phoneComplete} />
             </View>
           )}
 
           {step === 'otp' && (
             <View style={[styles.form, styles.formCentered]}>
               <OtpInput key={otpKey} onComplete={handleOtpComplete} disabled={loading} autoFocus whatsappAutofill />
+              <Button label="Ouvrir WhatsApp" variant="ghost" onPress={openWhatsApp} />
               <Button label="Renvoyer le code" variant="ghost" loading={loading} onPress={handleResendRejoindre} />
               <Button
                 label="Changer de numéro"
@@ -168,7 +177,7 @@ export default function RejoindreScreen() {
 function makeStyles(p: Palette) {
   return StyleSheet.create({
     safe: { flex: 1, backgroundColor: p.background },
-    kav: { flex: 1 },
+    kav: { flex: 1, backgroundColor: p.background },
     content: { flex: 1, padding: spacing[6], gap: spacing[8], justifyContent: 'center' },
     header: { gap: spacing[3] },
     back: { alignSelf: 'flex-start', marginBottom: spacing[1] },

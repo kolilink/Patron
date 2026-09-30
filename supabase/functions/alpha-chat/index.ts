@@ -1,5 +1,6 @@
 import { serve } from 'https://deno.land/std@0.177.0/http/server.ts';
 import { createClient } from 'https://esm.sh/@supabase/supabase-js@2';
+import { safeErrorResponse } from '../_shared/errors.ts';
 
 // Alpha: the AI business advisor (db/migration_v133.sql + migration_v134.sql
 // renamed it from "Mystic"). Called right after send_alpha_message() has
@@ -48,18 +49,26 @@ import { createClient } from 'https://esm.sh/@supabase/supabase-js@2';
 // code, not by RLS. Tool-calling is bounded to MAX_TOOL_ROUNDS to guarantee
 // termination and cap worst-case cost; the final round is sent WITHOUT the
 // tools param so the model is forced to answer in plain text rather than
-// attempt another call. Assumes Groq's llama-3.3-70b-versatile actually
-// supports OpenAI-compatible tool-calling — if that assumption is ever wrong,
-// the existing Groq→OpenAI fallback below degrades safely (a rejected
-// `tools` param just throws and falls through to OpenAI), at worse cost, not
-// incorrect behavior.
+// attempt another call. Uses Groq's openai/gpt-oss-20b (switched from
+// llama-3.3-70b-versatile 2026-07-16) — an OpenAI open-weight model Groq
+// hosts on the same OpenAI-compatible /chat/completions endpoint, so this
+// was a same-shape model swap, not a new integration: same base URL, same
+// GROQ_API_KEY, same request/response shape. gpt-oss-20b is explicitly
+// positioned by Groq for agentic/tool-use workloads, unlike llama-3.3-70b.
+// One real difference: gpt-oss-20b is a reasoning model, so Groq's response
+// also includes a `message.reasoning` field by default alongside the usual
+// `message.content` — harmless here since callChatCompletions only reads
+// `content`, but worth knowing if this response is ever logged/inspected
+// raw. If the tools param is ever rejected for any reason, the existing
+// Groq→OpenAI fallback below still degrades safely (throws and falls
+// through to OpenAI), at worse cost, not incorrect behavior.
 
 const corsHeaders = {
   'Access-Control-Allow-Origin': '*',
   'Access-Control-Allow-Headers': 'authorization, x-client-info, apikey, content-type',
 };
 
-const GROQ_MODEL = 'llama-3.3-70b-versatile';
+const GROQ_MODEL = 'openai/gpt-oss-20b';
 const OPENAI_MODEL = 'gpt-4o-mini';
 const FALLBACK_MESSAGE = "Désolé, je n'ai pas pu répondre — réessayez dans un instant.";
 const PERIOD_DAYS = 30;
@@ -76,6 +85,35 @@ const LIFETIME_PERIOD_DAYS = 3650;
 // worst-case latency and worst-case token cost — without it, a model that
 // keeps deciding "let me check one more thing" could loop indefinitely.
 const MAX_TOOL_ROUNDS = 3;
+// Was 400 — too tight for what the system prompt actually requires per
+// reply (bolded key figures + trend comparison + a conditional "Action à
+// faire" line, in French, which tokenizes worse than English), and nothing
+// checked whether the model actually finished. That combination is what
+// produced real mid-word cutoffs in production ("...ce qui correspond à
+// environ **1000 maill"): the API returns finish_reason: 'length' when a
+// reply is cut short, but the code just shipped message.content as-is.
+//
+// This isn't a cost control (see CLAUDE.md's Alpha "Billing" note — even a
+// paid user maxing out their daily quota all month costs ~$0.10-0.15) and
+// it isn't meant to shape reply length either — that's the system prompt's
+// job ("phrases courtes", one action line, max 3 bold figures). Omitting
+// max_tokens entirely isn't "uncapped" — the API just falls back to its own
+// default ceiling (effectively the rest of the context window), which is
+// far larger and not tuned to this app. The only real reason to set an
+// explicit number here is as a backstop against a genuine malfunction (a
+// repetition/degeneration loop — rare but real, and this function
+// auto-falls-back between two different models/providers, which doubles
+// the surface for it): on a synchronous, non-streaming mobile screen over
+// the low-bandwidth connections this app targets, a broken generation
+// should fail in a few seconds, not run until it fills the context window.
+// 1000 is picked to sit comfortably above any legitimate reply.
+const MAX_REPLY_TOKENS = 1000;
+// If a reply still hits the token cap, ask the model to continue exactly
+// once more rather than truncating — bounded to 1 so a pathological reply
+// can't multiply latency/cost indefinitely.
+const MAX_CONTINUATIONS = 1;
+const CONTINUE_INSTRUCTION =
+  "Continue ta réponse précédente exactement où tu t'es arrêtée, sans rien répéter, sans redémarrer la phrase ou le mot en cours.";
 // ventes_sur_periode is clamped to this many days so a merchant asking for
 // "since the beginning" via the date-range tool can't return a payload sized
 // like the very per-transaction dump depuis_le_debut was designed to avoid.
@@ -90,11 +128,13 @@ Règles :
 - Réponds en français, ton direct, concret, jamais condescendant. Pas de jargon financier occidental.
 - Base CHAQUE conseil sur les chiffres fournis dans "Données du commerce" ci-dessous. Cite les chiffres réels (montants, noms) plutôt que des généralités du type "vendez plus" ou "réduisez vos coûts".
 - "meilleurs_vendeurs" liste des MEMBRES DE L'ÉQUIPE (des personnes — vendeurs/gérants) classés par chiffre d'affaires généré : ce ne sont jamais des produits, même si le nom ressemble à un nom de produit. "produits_les_plus_vendus" liste de vrais articles du catalogue classés par revenu. Ne confonds jamais les deux catégories.
+- Le résultat de l'outil chercher_produit contient SOIT un "prix_vente"/"stock_actuel" uniques (produit simple), SOIT une liste "variantes" (produit à tailles/couleurs, chacune avec son propre prix et son propre stock) — jamais les deux. Quand "variantes" est présent, ne cite JAMAIS un seul prix ou un seul stock comme si c'était celui du produit entier : donne la fourchette de prix (ex: "entre 10 000 et 15 000 GNF selon la couleur"), ou le prix/stock exact d'une variante précise si le commerçant en a nommé une.
 - Les listes "produits_stock_bas" et "produits_en_rupture" sont déjà calculées — ne recalcule jamais toi-même des jours de stock restant, ne fais aucune arithmétique sur les données fournies : utilise directement les valeurs telles quelles.
 - "evolution_vs_periode_precedente" compare la période actuelle aux 30 jours précédents (déjà calculé — n'invente jamais toi-même un pourcentage). Utilise-la pour dire si les choses vont mieux ou moins bien, pas juste donner un chiffre isolé : un chiffre d'affaires stable en apparence peut être une baisse par rapport au mois dernier, et l'inverse. "evolution_pct: null" veut dire qu'il n'y avait rien à comparer sur la période précédente (pas un chiffre à zéro) — dis-le en mots ("c'est nouveau par rapport au mois dernier"), n'affiche jamais "null" ou "None".
 - "depuis_le_debut" donne les totaux depuis le tout début de l'activité du commerce (pas seulement les 30 derniers jours) — utilise-le quand la question porte sur la performance globale ou l'historique complet ("comment va mon commerce depuis le début ?", "combien j'ai gagné au total ?"), pas seulement sur le mois en cours.
 - Si "credit_en_cours" est élevé par rapport au chiffre d'affaires, mentionne-le comme risque de trésorerie, mais ne prétends JAMAIS savoir quel client précis est en retard, SAUF si tu as utilisé l'outil chercher_client pour ce client précis.
 - Tu as accès à 4 outils pour vérifier des faits précis avant de répondre : chercher_produit (un produit nommé), chercher_client (un client nommé), ventes_sur_periode (une date ou période précise, différente du mois en cours), depenses_detail (le détail des dépenses au lieu du seul total). Utilise l'outil correspondant DÈS QUE le commerçant nomme un produit, un client, ou une date/période précise — ne réponds jamais "je ne sais pas" ou par une généralité si un outil peut vérifier le fait réel. N'utilise ces outils que quand la question le justifie ; pour une question générale ("comment va mon commerce"), les données déjà fournies ci-dessous suffisent.
+- Quand le commerçant parle d'une période relative ("aujourd'hui", "hier", "cette semaine", "les 7 derniers jours", "ce mois-ci", "le mois dernier", etc.), tu connais déjà les dates exactes correspondantes : elles sont dans "Repères de dates" ci-dessous. Convertis toi-même la période en dates AAAA-MM-JJ à partir de ces repères et appelle DIRECTEMENT l'outil ventes_sur_periode. Ne demande JAMAIS au commerçant de te fournir une date ou une plage de dates au format AAAA-MM-JJ — un commerçant ne raisonne pas en plages de dates, et lui renvoyer la question est un échec. Ne demande une précision QUE si la période est réellement ambiguë (ex: "compare deux mois" sans dire lesquels), et dans ce cas propose des choix en langage courant (ex: "cette semaine, ce mois-ci, ou le mois dernier ?"), jamais des dates ISO.
 - Ne cite JAMAIS un chiffre (montant, quantité, date) qui n'apparaît ni dans "Données du commerce" ci-dessous, ni dans le résultat d'un outil que tu as toi-même appelé dans cette réponse. Si tu n'as pas la donnée exacte, dis-le clairement plutôt que d'estimer ou d'arrondir un chiffre qui semble plausible.
 - Si le message du commerçant est trop court ou vague pour être une vraie question (une seule lettre, un mot isolé, un salut sans question, "autre chose", "je ne sais pas", etc.), ta réponse ENTIÈRE doit être UNIQUEMENT une question de clarification courte et amicale, avec 1-2 exemples génériques de sujets (ventes, stock, dépenses, trésorerie, crédit). N'écris RIEN d'autre : pas de chiffre, pas de montant, pas de nom de produit ou de vendeur, et surtout pas le texte "Action à faire" sous aucune forme (ni rempli, ni vide, ni suivi d'un "?") — cette ligne n'existe que dans les réponses de la règle suivante. Cite des données réelles seulement une fois que le commerçant a posé une vraie question sur un sujet précis.
 - Si une question sort du cadre du commerce (ventes, stock, dépenses, crédit, trésorerie), redirige poliment vers ce périmètre.
@@ -279,6 +319,46 @@ function buildDataBlock(
   return { data, nameToLabel };
 }
 
+function isoDay(d: Date): string {
+  return d.toISOString().slice(0, 10);
+}
+
+// The model never knew what "today" was, so it could not turn a relative
+// period ("cette semaine", "les 7 derniers jours", "aujourd'hui") into the
+// AAAA-MM-JJ range ventes_sur_periode requires — it dead-ended by asking the
+// merchant to type an ISO date range (which no shopkeeper thinks in) and
+// looped when the plain-language answer still gave it no dates it could use.
+// Precompute the common ranges here rather than let the model do date math:
+// getting a weekday or a week boundary wrong is the same class of error the
+// "ne fais aucune arithmétique sur les données" rule already guards against.
+// Guinea is GMT year-round (no DST), so the edge function's UTC clock IS the
+// merchant's local date — no timezone conversion needed.
+function buildDateContext(): string {
+  const now = new Date();
+  const today = new Date(Date.UTC(now.getUTCFullYear(), now.getUTCMonth(), now.getUTCDate()));
+  let weekday = '';
+  try {
+    weekday = today.toLocaleDateString('fr-FR', { weekday: 'long', timeZone: 'UTC' });
+  } catch { /* label only — non-critical if the locale is unavailable */ }
+
+  const yesterday = new Date(today); yesterday.setUTCDate(today.getUTCDate() - 1);
+  const sevenAgo = new Date(today); sevenAgo.setUTCDate(today.getUTCDate() - 6);
+  // Monday of the current week (getUTCDay: 0=dim .. 6=sam).
+  const monday = new Date(today); monday.setUTCDate(today.getUTCDate() - ((today.getUTCDay() + 6) % 7));
+  const firstOfMonth = new Date(Date.UTC(today.getUTCFullYear(), today.getUTCMonth(), 1));
+  // First and last day of the previous calendar month.
+  const prevMonthLast = new Date(Date.UTC(today.getUTCFullYear(), today.getUTCMonth(), 0));
+  const prevMonthFirst = new Date(Date.UTC(prevMonthLast.getUTCFullYear(), prevMonthLast.getUTCMonth(), 1));
+
+  return `Repères de dates (le commerçant est en Guinée, fuseau GMT) :
+- aujourd'hui : ${isoDay(today)}${weekday ? ` (${weekday})` : ''}
+- hier : ${isoDay(yesterday)}
+- les 7 derniers jours : ${isoDay(sevenAgo)} au ${isoDay(today)}
+- cette semaine (depuis lundi) : ${isoDay(monday)} au ${isoDay(today)}
+- ce mois-ci : ${isoDay(firstOfMonth)} au ${isoDay(today)}
+- le mois dernier : ${isoDay(prevMonthFirst)} au ${isoDay(prevMonthLast)}`;
+}
+
 function buildSystemPrompt(
   businessName: string,
   businessType: string | null,
@@ -289,6 +369,8 @@ function buildSystemPrompt(
   return `${STATIC_INSTRUCTIONS}
 
 Commerce : ${businessName} (${businessType ?? 'petit commerce'}). Devise : ${currency}. Tu t'adresses à ${roleLabel(role)}.
+
+${buildDateContext()}
 
 Données du commerce (déjà converties en ${currency} affichable, PAS en centimes) :
 ${JSON.stringify(data)}`;
@@ -304,7 +386,7 @@ const TOOLS = [
     function: {
       name: 'chercher_produit',
       description:
-        "Cherche un produit du catalogue par son nom et retourne son stock actuel, son prix, et (pour un rôle qui y a accès) sa rentabilité réelle depuis le début. À utiliser dès que le commerçant nomme un produit précis.",
+        "Cherche un produit du catalogue par son nom et retourne son stock actuel et son prix — soit directement, soit (si le produit a des tailles/couleurs) sous forme d'une liste de variantes ayant chacune son propre prix et stock — et (pour un rôle qui y a accès) sa rentabilité réelle depuis le début. À utiliser dès que le commerçant nomme un produit précis.",
       parameters: {
         type: 'object',
         properties: { nom: { type: 'string', description: 'Nom (ou partie du nom) du produit' } },
@@ -381,7 +463,7 @@ async function executeTool(name: string, args: Record<string, unknown>, ctx: Too
         if (!nom) return { erreur: 'Nom de produit manquant' };
         const { data: products } = await userClient
           .from('products')
-          .select('id, name, category, sale_price, stock_qty')
+          .select('id, name, category, sale_price, stock_qty, has_variants')
           .eq('business_id', businessId)
           .eq('archived', false)
           .ilike('name', `%${nom}%`)
@@ -390,12 +472,31 @@ async function executeTool(name: string, args: Record<string, unknown>, ctx: Too
 
         const canSeeProfit = role === 'administrateur' || role === 'manager' || role === 'investisseur';
         const produits = await Promise.all(products.map(async (p) => {
-          const base: Record<string, unknown> = {
-            nom: p.name,
-            categorie: p.category,
-            stock_actuel: p.stock_qty,
-            prix_vente: Math.round(p.sale_price / 100),
-          };
+          const base: Record<string, unknown> = { nom: p.name, categorie: p.category };
+          // A variant product's own sale_price/stock_qty are not real,
+          // sellable numbers: stock_qty is architecturally always 0 for a
+          // variant parent (submit_sale/cancel_sale only ever touch
+          // product_variants.stock_qty — see migration_v125), and sale_price
+          // is just the template value a new variant gets pre-filled with,
+          // not something anyone can actually buy at. Real numbers live per
+          // variant, so this returns a "variantes" list instead of a single
+          // price/stock — the prompt tells Alpha never to state one flat
+          // price for a product shaped this way.
+          if (p.has_variants) {
+            const { data: variants } = await userClient
+              .from('product_variants')
+              .select('name, sale_price, stock_qty')
+              .eq('product_id', p.id)
+              .eq('archived', false);
+            base.variantes = (variants ?? []).map(v => ({
+              nom: v.name,
+              prix_vente: Math.round(v.sale_price / 100),
+              stock_actuel: v.stock_qty,
+            }));
+          } else {
+            base.prix_vente = Math.round(p.sale_price / 100);
+            base.stock_actuel = p.stock_qty;
+          }
           if (!canSeeProfit) return base;
           const { data: stats } = await userClient.rpc('get_product_stats', {
             p_product_id: p.id, p_business_id: businessId, p_since: null,
@@ -530,28 +631,30 @@ async function callChatCompletions(
 ): Promise<string> {
   const messages: ChatTurn[] = [{ role: 'system', content: systemPrompt }, ...turns];
 
+  const postCompletion = (allowTools: boolean) => fetch(baseUrl, {
+    method: 'POST',
+    headers: {
+      'Content-Type': 'application/json',
+      Authorization: `Bearer ${apiKey}`,
+    },
+    body: JSON.stringify({
+      model,
+      messages,
+      temperature: 0.6,
+      max_tokens: MAX_REPLY_TOKENS,
+      ...(allowTools ? { tools: TOOLS, tool_choice: 'auto' } : {}),
+    }),
+  });
+
   for (let round = 0; round <= MAX_TOOL_ROUNDS; round++) {
-    const allowTools = toolCtx && round < MAX_TOOL_ROUNDS;
-    const resp = await fetch(baseUrl, {
-      method: 'POST',
-      headers: {
-        'Content-Type': 'application/json',
-        Authorization: `Bearer ${apiKey}`,
-      },
-      body: JSON.stringify({
-        model,
-        messages,
-        temperature: 0.6,
-        max_tokens: 400,
-        ...(allowTools ? { tools: TOOLS, tool_choice: 'auto' } : {}),
-      }),
-    });
+    const allowTools = Boolean(toolCtx && round < MAX_TOOL_ROUNDS);
+    const resp = await postCompletion(allowTools);
     if (!resp.ok) {
       const errText = await resp.text().catch(() => '');
       throw new Error(`${model} error ${resp.status}: ${errText.slice(0, 300)}`);
     }
     const json = await resp.json() as {
-      choices?: { message?: { content?: string; tool_calls?: ChatTurn['tool_calls'] } }[];
+      choices?: { message?: { content?: string; tool_calls?: ChatTurn['tool_calls'] }; finish_reason?: string }[];
     };
     const message = json.choices?.[0]?.message;
     const toolCalls = message?.tool_calls;
@@ -569,9 +672,29 @@ async function callChatCompletions(
       continue;
     }
 
-    const content = message?.content?.trim();
-    if (!content) throw new Error(`${model} returned no content`);
-    return content;
+    // Final text answer for this round. If the model hit MAX_REPLY_TOKENS
+    // mid-sentence (finish_reason === 'length'), feed back the partial
+    // content as an assistant turn and ask it to keep going, up to
+    // MAX_CONTINUATIONS times, instead of returning a severed sentence.
+    let content = message?.content ?? '';
+    if (!content.trim()) throw new Error(`${model} returned no content`);
+    let finishReason = json.choices?.[0]?.finish_reason;
+
+    for (let cont = 0; finishReason === 'length' && cont < MAX_CONTINUATIONS; cont++) {
+      messages.push({ role: 'assistant', content });
+      messages.push({ role: 'user', content: CONTINUE_INSTRUCTION });
+      const contResp = await postCompletion(false);
+      if (!contResp.ok) break; // return what we already have rather than fail the whole reply
+      const contJson = await contResp.json() as {
+        choices?: { message?: { content?: string }; finish_reason?: string }[];
+      };
+      const piece = contJson.choices?.[0]?.message?.content;
+      if (!piece) break;
+      content += piece;
+      finishReason = contJson.choices?.[0]?.finish_reason;
+    }
+
+    return content.trim();
   }
   throw new Error(`${model}: exceeded tool-call rounds without a final answer`);
 }
@@ -786,6 +909,13 @@ serve(async (req) => {
         headers: { ...corsHeaders, 'Content-Type': 'application/json' },
       });
     } catch (genErr) {
+      // Full detail (Groq/OpenAI status+body, tool-call failures, ...) goes
+      // server-side only — error_note (founder-visible via alpha_messages,
+      // same posture as generate-support-draft's failed drafts). The chat
+      // bubble the merchant actually sees is FALLBACK_MESSAGE, and
+      // stores/alpha.ts never reads this response's `error` field at all
+      // (confirmed: no reference to it anywhere in that file), so genericizing
+      // it here is a pure hygiene fix, not a behavior change.
       const msg = genErr instanceof Error ? genErr.message : 'Erreur inconnue';
       console.error('alpha-chat generation failure:', msg);
 
@@ -801,16 +931,11 @@ serve(async (req) => {
         .select()
         .single();
 
-      return new Response(JSON.stringify({ ok: false, message: failedRow ?? null, error: msg }), {
+      return new Response(JSON.stringify({ ok: false, message: failedRow ?? null, error: 'Génération impossible' }), {
         headers: { ...corsHeaders, 'Content-Type': 'application/json' },
       });
     }
   } catch (e) {
-    const msg = e instanceof Error ? e.message : 'Erreur inconnue';
-    console.error('alpha-chat crash:', msg);
-    return new Response(JSON.stringify({ error: msg }), {
-      status: 500,
-      headers: { ...corsHeaders, 'Content-Type': 'application/json' },
-    });
+    return safeErrorResponse(e, corsHeaders, 'alpha-chat');
   }
 });

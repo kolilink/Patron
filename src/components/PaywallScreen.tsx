@@ -141,7 +141,6 @@ export function PaywallScreen({ business, onDismiss, inline = false, onPurchased
         onPurchased?.();
       })
       .catch(() => {});
-    // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
 
   const restore = async () => {
@@ -263,7 +262,7 @@ export function PaywallScreen({ business, onDismiss, inline = false, onPurchased
           of the content below on the plain background. */}
       <View style={styles.headerPanel}>
         {onDismiss && (
-          <Pressable onPress={onDismiss} hitSlop={12} style={styles.closeBtn}>
+          <Pressable onPress={onDismiss} hitSlop={12} style={styles.closeBtn} accessibilityLabel="Fermer" accessibilityRole="button">
             <Ionicons name="close" size={22} color={palette.textSecondary} />
           </Pressable>
         )}

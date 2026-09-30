@@ -1,5 +1,42 @@
 import { posthog } from './posthog';
+import { isNetworkError } from '@/lib/sync';
 import type { AppSession } from '@/src/types';
+
+export type AuthErrorReason =
+  | 'invalid_code'
+  | 'expired'
+  | 'locked_out'
+  | 'rate_limited'
+  | 'invalid_phone'
+  | 'send_failed'
+  | 'phone_exists'
+  | 'phone_not_found'
+  | 'network_error'
+  | 'unknown';
+
+// Maps the raw string stores/auth.ts's error state already holds (thrown
+// straight from create-phone-verification/verify-phone-code) to a stable
+// reason bucket for auth_failed events. Ordered most-specific-first since
+// e.g. "Trop de tentatives incorrectes" also contains "Trop de tentatives".
+const AUTH_ERROR_PATTERNS: ReadonlyArray<readonly [string, AuthErrorReason]> = [
+  ['Code incorrect',                 'invalid_code'],
+  ['Code expiré',                    'expired'],
+  ['Trop de tentatives incorrectes', 'locked_out'],
+  ['Trop de tentatives',             'rate_limited'],
+  ['Numéro de téléphone invalide',   'invalid_phone'],
+  ["Impossible d'envoyer le code",   'send_failed'],
+  ['PHONE_EXISTS',                   'phone_exists'],
+  ['PHONE_NOT_FOUND',                'phone_not_found'],
+];
+
+export function classifyAuthError(raw: string | null | undefined): AuthErrorReason {
+  if (!raw) return 'unknown';
+  if (isNetworkError(raw)) return 'network_error';
+  for (const [needle, reason] of AUTH_ERROR_PATTERNS) {
+    if (raw.includes(needle)) return reason;
+  }
+  return 'unknown';
+}
 
 export function trackEvent(
   event: string,
