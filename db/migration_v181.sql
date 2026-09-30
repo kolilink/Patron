@@ -391,13 +391,19 @@ $$;
 
 -- ─── receive_purchase_order ─────────────────────────────────────────────────
 
+-- Merged with main's v158 (PR #41): this function now logs a
+-- po_receipt_batches row and RETURNS uuid (the batch id) instead of void.
+-- This branch's only intended change here was the role-gate NULL-bypass
+-- guard (IS NULL OR), which v158 predates; that guard is kept in the body below.
+DROP FUNCTION IF EXISTS receive_purchase_order(uuid, uuid, uuid[], int[], bigint);
+
 CREATE OR REPLACE FUNCTION receive_purchase_order(
   p_po_id               uuid,
   p_business_id         uuid,
   p_line_ids            uuid[]  DEFAULT NULL,
   p_line_qtys           int[]   DEFAULT NULL,
   p_shipping_cost_cents bigint  DEFAULT 0
-) RETURNS void LANGUAGE plpgsql SECURITY DEFINER AS $$
+) RETURNS uuid LANGUAGE plpgsql SECURITY DEFINER SET search_path = public AS $$
 DECLARE
   l                  RECORD;
   recv_qty           int;
@@ -421,6 +427,8 @@ DECLARE
   -- For expense description
   v_supplier_name    text;
   v_po_date          date;
+  v_expense_id       uuid;
+  v_batch_id         uuid;
 BEGIN
   IF get_role(p_business_id) IS NULL OR get_role(p_business_id) NOT IN ('administrateur', 'manager') THEN
     RAISE EXCEPTION 'Accès refusé' USING ERRCODE = 'P0001';
@@ -433,6 +441,10 @@ BEGIN
   ) THEN
     RAISE EXCEPTION 'Commande introuvable ou déjà reçue';
   END IF;
+
+  v_batch_id := gen_random_uuid();
+  INSERT INTO po_receipt_batches (id, po_id, business_id, shipping_cost_cents, created_by)
+  VALUES (v_batch_id, p_po_id, p_business_id, p_shipping_cost_cents, auth.uid());
 
   -- Pre-pass: compute total value of lines being received
   FOR l IN
@@ -497,6 +509,10 @@ BEGIN
       'Commande reçue', auth.uid()
     );
 
+    -- Log exactly what this line contributed, for void_purchase_order_receipt.
+    INSERT INTO po_receipt_batch_lines (batch_id, po_line_id, product_id, variant_id, qty_received, landed_cost_cents)
+    VALUES (v_batch_id, l.id, l.product_id, l.variant_id, recv_qty, v_landed_cost);
+
     -- AVCO cost update
     IF l.variant_id IS NOT NULL THEN
       SELECT stock_qty, cost_price INTO v_current_stock, v_current_cost
@@ -546,8 +562,7 @@ BEGIN
 
     INSERT INTO expenses (
       id, business_id, amount, description, category,
-      date, status, created_by, approved_by, approved_at,
-      purchase_order_id
+      date, status, created_by, approved_by, approved_at, purchase_order_id
     ) VALUES (
       gen_random_uuid(),
       p_business_id,
@@ -560,7 +575,10 @@ BEGIN
       auth.uid(),
       now(),
       p_po_id
-    );
+    )
+    RETURNING id INTO v_expense_id;
+
+    UPDATE po_receipt_batches SET expense_id = v_expense_id WHERE id = v_batch_id;
   END IF;
 
   -- Final PO status
@@ -571,8 +589,12 @@ BEGIN
      SET status      = CASE WHEN received_lines = total_lines THEN 'recu' ELSE 'recu_partiel' END,
          received_at = CASE WHEN received_lines = total_lines THEN now() ELSE received_at END
    WHERE id = p_po_id;
+
+  RETURN v_batch_id;
 END;
 $$;
+
+GRANT EXECUTE ON FUNCTION receive_purchase_order(uuid, uuid, uuid[], int[], bigint) TO authenticated;
 
 -- ─── record_injection ───────────────────────────────────────────────────────
 

@@ -273,13 +273,17 @@ $$;
 -- signature when parameter count changes; only an explicit DROP does).
 DROP FUNCTION IF EXISTS receive_purchase_order(uuid, uuid);
 
+-- Merged with main's v158 (PR #41): the function logs a po_receipt_batches
+-- row and RETURNS uuid (the batch id). This migration's own intent — scoping
+-- the variant AVCO path by business_id — is preserved below on top of that
+-- contract, along with the role-gate NULL-bypass guard (IS NULL OR).
 CREATE OR REPLACE FUNCTION receive_purchase_order(
   p_po_id               uuid,
   p_business_id         uuid,
   p_line_ids            uuid[]  DEFAULT NULL,
   p_line_qtys           int[]   DEFAULT NULL,
   p_shipping_cost_cents bigint  DEFAULT 0
-) RETURNS void LANGUAGE plpgsql SECURITY DEFINER SET search_path = public AS $$
+) RETURNS uuid LANGUAGE plpgsql SECURITY DEFINER SET search_path = public AS $$
 DECLARE
   l                  RECORD;
   recv_qty           int;
@@ -297,6 +301,8 @@ DECLARE
   v_new_cost         bigint;
   v_supplier_name    text;
   v_po_date          date;
+  v_expense_id       uuid;
+  v_batch_id         uuid;
 BEGIN
   IF get_role(p_business_id) IS NULL OR get_role(p_business_id) NOT IN ('administrateur', 'manager') THEN
     RAISE EXCEPTION 'Accès refusé' USING ERRCODE = 'P0001';
@@ -309,6 +315,10 @@ BEGIN
   ) THEN
     RAISE EXCEPTION 'Commande introuvable ou déjà reçue';
   END IF;
+
+  v_batch_id := gen_random_uuid();
+  INSERT INTO po_receipt_batches (id, po_id, business_id, shipping_cost_cents, created_by)
+  VALUES (v_batch_id, p_po_id, p_business_id, p_shipping_cost_cents, auth.uid());
 
   FOR l IN
     SELECT * FROM po_lines
@@ -368,6 +378,10 @@ BEGIN
       'entree', recv_qty, p_po_id, 'purchase_order',
       'Commande reçue', auth.uid()
     );
+
+    -- Log exactly what this line contributed, for void_purchase_order_receipt.
+    INSERT INTO po_receipt_batch_lines (batch_id, po_line_id, product_id, variant_id, qty_received, landed_cost_cents)
+    VALUES (v_batch_id, l.id, l.product_id, l.variant_id, recv_qty, v_landed_cost);
 
     IF l.variant_id IS NOT NULL THEN
       -- Scoped to this business — previously matched by id alone, unlike
@@ -432,7 +446,10 @@ BEGIN
       auth.uid(),
       now(),
       p_po_id
-    );
+    )
+    RETURNING id INTO v_expense_id;
+
+    UPDATE po_receipt_batches SET expense_id = v_expense_id WHERE id = v_batch_id;
   END IF;
 
   SELECT COUNT(*) INTO total_lines    FROM po_lines WHERE po_id = p_po_id;
@@ -442,6 +459,8 @@ BEGIN
      SET status      = CASE WHEN received_lines = total_lines THEN 'recu' ELSE 'recu_partiel' END,
          received_at = CASE WHEN received_lines = total_lines THEN now() ELSE received_at END
    WHERE id = p_po_id;
+
+  RETURN v_batch_id;
 END;
 $$;
 
