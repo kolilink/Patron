@@ -35,6 +35,11 @@ interface Base {
 export interface User {
   id: string;
   name: string;
+  // Phase 5 — stable visible identity. NULL until the member confirms a
+  // pseudo at arrival (existing rows and fresh sign-ups both start NULL), so
+  // these are optional to reflect reality.
+  pseudo?: string | null;
+  pseudo_confirmed_at?: string | null;
   email: string;
   phone: string | null;
   avatar_url: string | null;
@@ -412,7 +417,7 @@ export interface AlphaQuotaStatus {
 
 // ─── Forum (Le Marché) ────────────────────────────────────────────────────────
 
-export type MarketCategory = 'suggestion' | 'entraide' | 'general';
+export type MarketCategory = 'suggestion' | 'entraide' | 'general' | 'annonce';
 
 export interface MarketPost {
   id: string;
@@ -426,6 +431,12 @@ export interface MarketPost {
   created_at: string;
   updated_at: string;
   edited_at?: string | null;
+  // Phase 3 — first-post approval. 'pending' posts are visible only to
+  // their author and the founder until cleared.
+  status?: 'approved' | 'pending';
+  // Phase 6 — L'équipe Patron welcome post + founder notices. Pinned
+  // posts sort to the top of Le Marché.
+  is_pinned?: boolean;
 }
 
 export interface MarketComment {
@@ -439,6 +450,26 @@ export interface MarketComment {
   created_at: string;
   edited_at?: string | null;
   author_level?: number;
+}
+
+// ─── Moderation (Phase 1) ─────────────────────────────────────────────────────
+
+export type ReportMotif = 'harcelement' | 'donnees_privees' | 'spam' | 'mauvais_espace' | 'autre';
+export type ReportEtat = 'nouveau' | 'en_cours' | 'resolu';
+
+export interface Report {
+  id: string;
+  post_id: string;
+  post_title: string | null;
+  post_excerpt: string | null;
+  post_author_id: string | null;
+  post_author_name: string | null;
+  motif: ReportMotif;
+  detail: string | null;
+  reporter_id: string;
+  etat: ReportEtat;
+  created_at: string;
+  report_count: number;
 }
 
 // ─── Member Product Scope ─────────────────────────────────────────────────────

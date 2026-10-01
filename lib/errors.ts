@@ -41,16 +41,63 @@ const TRANSLATIONS: [string, string][] = [
 ];
 
 export function translateError(err: unknown, fallback: string): string {
-  const message =
-    err instanceof Error
-      ? err.message
-      : typeof (err as Record<string, unknown>)?.message === 'string'
-        ? (err as Record<string, unknown>).message as string
-        : null;
+  const message = extractRawMessage(err);
   if (!message) return fallback;
   const lower = message.toLowerCase();
   for (const [pattern, translation] of TRANSLATIONS) {
     if (lower.includes(pattern)) return translation;
   }
   return fallback;
+}
+
+/**
+ * Server-authored, already-French, non-technical messages that must reach the
+ * user VERBATIM — never through the English-pattern translation table. This is
+ * how the non-punitive Phase 3 rate-limit message
+ * ("Doucement — vous pourrez republier dans X minutes.") and the Phase 5
+ * identity messages survive the client without being rewritten into a generic
+ * fallback.
+ */
+export function extractRawMessage(err: unknown): string | null {
+  return err instanceof Error
+    ? err.message
+    : typeof (err as Record<string, unknown>)?.message === 'string'
+      ? (err as Record<string, unknown>).message as string
+      : null;
+}
+
+const SERVER_FRIENDLY_PREFIXES = [
+  'doucement',
+  'votre pseudo',
+  'participez aux discussions',
+  'categorie invalide',
+  'catégorie invalide',
+  'ce pseudo',
+  'le pseudo doit',
+  'vous ne pouvez pas signaler',
+  'vous avez deja signale',
+  'vous avez déjà signalé',
+  'post introuvable',
+  'motif invalide',
+  'connexion requise',
+  'acces refusé',
+  'accès refusé',
+  'maximum un niveau',
+];
+
+/**
+ * Prefer the server's own French sentence when it is one we authored (raised
+ * via RAISE EXCEPTION in a SECURITY DEFINER RPC), otherwise translate.
+ * Prevents the client from rephrasing messages the spec demands stay intact.
+ */
+export function friendlyMessage(err: unknown, fallback: string): string {
+  const raw = extractRawMessage(err);
+  if (raw) {
+    const trimmed = raw.trim();
+    const lower = trimmed.toLowerCase();
+    if (SERVER_FRIENDLY_PREFIXES.some(p => lower.startsWith(p))) {
+      return trimmed;
+    }
+  }
+  return translateError(err, fallback);
 }

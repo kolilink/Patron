@@ -32,12 +32,12 @@ import { notifyEvent } from '@/src/utils/notifications';
 
 // ─── Last phone + biometric refresh token (quick-login) ──────────────────────
 
-const LAST_PHONE_KEY      = 'patron_last_phone';
-const BIO_REFRESH_KEY     = 'patron_bio_refresh_token';
+const LAST_PHONE_KEY = 'patron_last_phone';
+const BIO_REFRESH_KEY = 'patron_bio_refresh_token';
 const LAST_BUSINESS_NAME_KEY = 'patron_last_business_name';
 
 async function saveLastPhone(phone: string): Promise<void> {
-  try { await SecureStore.setItemAsync(LAST_PHONE_KEY, phone); } catch {}
+  try { await SecureStore.setItemAsync(LAST_PHONE_KEY, phone); } catch { }
 }
 
 export async function getLastPhone(): Promise<string | null> {
@@ -51,7 +51,7 @@ export async function getLastPhone(): Promise<string | null> {
 // getLastPhone already solves the identical "screen has no session yet"
 // problem for the WhatsApp re-login fallback.
 async function saveLastBusinessName(name: string): Promise<void> {
-  try { await SecureStore.setItemAsync(LAST_BUSINESS_NAME_KEY, name); } catch {}
+  try { await SecureStore.setItemAsync(LAST_BUSINESS_NAME_KEY, name); } catch { }
 }
 
 export async function getLastBusinessName(): Promise<string | null> {
@@ -59,7 +59,7 @@ export async function getLastBusinessName(): Promise<string | null> {
 }
 
 async function saveBioRefreshToken(token: string): Promise<void> {
-  try { await SecureStore.setItemAsync(BIO_REFRESH_KEY, token); } catch {}
+  try { await SecureStore.setItemAsync(BIO_REFRESH_KEY, token); } catch { }
 }
 
 async function getBioRefreshToken(): Promise<string | null> {
@@ -67,7 +67,7 @@ async function getBioRefreshToken(): Promise<string | null> {
 }
 
 async function clearBioRefreshToken(): Promise<void> {
-  try { await SecureStore.deleteItemAsync(BIO_REFRESH_KEY); } catch {}
+  try { await SecureStore.deleteItemAsync(BIO_REFRESH_KEY); } catch { }
 }
 
 // ─── Session cache (offline restart resilience) ───────────────────────────────
@@ -83,7 +83,7 @@ async function persistSessionCache(session: AppSession): Promise<void> {
     for (let i = 0; i < chunks; i++) {
       await SecureStore.setItemAsync(`${SESSION_CACHE_KEY}_${i}`, json.slice(i * CHUNK_SIZE, (i + 1) * CHUNK_SIZE));
     }
-  } catch {}
+  } catch { }
 }
 
 async function restoreSessionCache(): Promise<AppSession | null> {
@@ -112,7 +112,7 @@ async function clearSessionCache(): Promise<void> {
       await SecureStore.deleteItemAsync(`${SESSION_CACHE_KEY}_${i}`);
     }
     await SecureStore.deleteItemAsync(`${SESSION_CACHE_KEY}_count`);
-  } catch {}
+  } catch { }
 }
 
 // If logout() couldn't reach the server to revoke the session (offline, or
@@ -123,7 +123,7 @@ async function retryPendingSignOut(): Promise<void> {
   const pending = await getKV(PENDING_SIGNOUT_TOKEN_KEY).catch(() => null);
   if (!pending) return;
   const ok = await revokeAccessToken(pending);
-  if (ok) await setKV(PENDING_SIGNOUT_TOKEN_KEY, '').catch(() => {});
+  if (ok) await setKV(PENDING_SIGNOUT_TOKEN_KEY, '').catch(() => { });
 }
 
 // ─────────────────────────────────────────────────────────────────────────────
@@ -193,6 +193,11 @@ interface AuthStore {
   signInAnonymously: () => Promise<void>;
   login: (email: string, password: string) => Promise<void>;
   register: (name: string, email: string, password: string) => Promise<void>;
+  // Phase 5 — stable visible identity. Chooses/confirms the member's familiar
+  // pseudo at arrival. Returns the confirmed pseudo. The server (confirm_pseudo
+  // in migration_v207) enforces 2-30 chars and case-insensitive uniqueness, and
+  // every post resolves to this pseudo — never the legal name, never 'Anonyme'.
+  confirmPseudo: (pseudo: string) => Promise<string>;
   logout: () => Promise<void>;
   revokeOtherSessions: () => Promise<boolean>;
   selectBusiness: (businessId: string) => void;
@@ -342,12 +347,15 @@ async function loadSession(userId: string, authPhone?: string | null, skipCache 
     (async () => {
       const { error } = await supabase.from('profiles').update({ pending_deletion_at: null }).eq('id', userId);
       if (!error) toast.success('Bon retour ! La suppression de votre compte a été annulée.');
-    })().catch(() => {});
+    })().catch(() => { });
   }
 
   const user: User = {
     id: userId,
     name: p.name ?? '',
+    // Phase 5 — stable visible identity. NULL until confirmed at arrival.
+    pseudo: p.pseudo ?? null,
+    pseudo_confirmed_at: p.pseudo_confirmed_at ?? null,
     email: p.email ?? '',
     phone: p.phone ?? authPhone ?? null,
     avatar_url: p.avatar_url ?? null,
@@ -603,6 +611,32 @@ export const useAuthStore = create<AuthStore>((set, get) => ({
     }
   },
 
+  // Phase 5 — choose/confirm the familiar pseudo at arrival. The server RPC
+  // confirm_pseudo validates length and uniqueness; on success we update the
+  // in-memory session so the whole app reflects the stable identity without a
+  // full reload.
+  confirmPseudo: async (pseudo) => {
+    const trimmed = pseudo.trim();
+    const { data, error } = await supabase.rpc('confirm_pseudo', { p_pseudo: trimmed });
+    if (error) throw error;
+    if (data !== true) throw new Error('Impossible de confirmer ce pseudo');
+
+    set(state => {
+      if (!state.session) return {};
+      return {
+        session: {
+          ...state.session,
+          user: {
+            ...state.session.user,
+            pseudo: trimmed,
+            pseudo_confirmed_at: new Date().toISOString(),
+          },
+        },
+      };
+    });
+    return trimmed;
+  },
+
   logout: async () => {
     const { session } = get();
     const userId = session?.user.id;
@@ -634,7 +668,7 @@ export const useAuthStore = create<AuthStore>((set, get) => ({
     await clearSessionCache();
     void clearBioRefreshToken();
     await setLocked(false);
-    if (userId) setKV(`demo_mode_${userId}`, 'false').catch(() => {});
+    if (userId) setKV(`demo_mode_${userId}`, 'false').catch(() => { });
     resetAllStores();
     set({ session: null, locked: false, justAuthenticated: false, error: null, pendingPhoneVerification: null });
 
@@ -642,7 +676,7 @@ export const useAuthStore = create<AuthStore>((set, get) => ({
       // Unsubscribe Realtime channels before signOut() disconnects the
       // WebSocket — otherwise channel error callbacks can fire after the
       // socket closes and become unhandled rejections that crash Hermes.
-      try { await supabase.removeAllChannels(); } catch {}
+      try { await supabase.removeAllChannels(); } catch { }
       let signOutOk = true;
       try { await supabase.auth.signOut(); } catch { signOutOk = false; }
       // signOut() throwing means we can't be sure the server ever heard about
@@ -651,7 +685,7 @@ export const useAuthStore = create<AuthStore>((set, get) => ({
       // otherwise this refresh token would stay valid on Supabase's side.
       if (!signOutOk && accessTokenToRevoke) {
         const ok = await revokeAccessToken(accessTokenToRevoke);
-        if (!ok) await setKV(PENDING_SIGNOUT_TOKEN_KEY, accessTokenToRevoke).catch(() => {});
+        if (!ok) await setKV(PENDING_SIGNOUT_TOKEN_KEY, accessTokenToRevoke).catch(() => { });
       }
       _explicitLogout = false;
     })();
@@ -694,7 +728,7 @@ export const useAuthStore = create<AuthStore>((set, get) => ({
     const membership = session.memberships.find(m => m.business_id === businessId);
     if (!membership) return;
 
-    setKV(`last_business_${session.user.id}`, businessId).catch(() => {});
+    setKV(`last_business_${session.user.id}`, businessId).catch(() => { });
     resetAllStores();
 
     const nextSession: AppSession = {
@@ -783,10 +817,10 @@ export const useAuthStore = create<AuthStore>((set, get) => ({
 
       const newMemberships = [...session.memberships, m];
       // Persist so next cold start lands on the newly created business
-      setKV(`last_business_${session.user.id}`, businessId).catch(() => {});
+      setKV(`last_business_${session.user.id}`, businessId).catch(() => { });
       void loginPurchases(businessId);
       // Seed the cache so first-reload removal detection works immediately
-      syncKnownBusinesses(session.user.id, newMemberships).catch(() => {});
+      syncKnownBusinesses(session.user.id, newMemberships).catch(() => { });
       resetAllStores();
       const nextSession: AppSession = {
         ...session,
@@ -853,7 +887,7 @@ export const useAuthStore = create<AuthStore>((set, get) => ({
     const fallback = wasActive ? remaining[0] : undefined;
 
     if (wasActive) resetAllStores();
-    setKV(`last_business_${session.user.id}`, fallback?.business_id ?? '').catch(() => {});
+    setKV(`last_business_${session.user.id}`, fallback?.business_id ?? '').catch(() => { });
 
     const nextSession: AppSession = {
       ...session,
@@ -914,10 +948,10 @@ export const useAuthStore = create<AuthStore>((set, get) => ({
       const { business_id } = invite as { business_id: string };
 
       // Persist the joined business so next cold start (and loadSession below) lands on it
-      setKV(`last_business_${session.user.id}`, business_id).catch(() => {});
+      setKV(`last_business_${session.user.id}`, business_id).catch(() => { });
       // Reload the full session now that the membership exists and RLS can see the business
       const appSession = await loadSession(session.user.id);
-      syncKnownBusinesses(session.user.id, appSession.memberships).catch(() => {});
+      syncKnownBusinesses(session.user.id, appSession.memberships).catch(() => { });
       resetAllStores();
 
       const joinedMembership = appSession.memberships.find(m => m.business_id === business_id);
@@ -1190,7 +1224,7 @@ export const useAuthStore = create<AuthStore>((set, get) => ({
 
       void saveLastPhone(phone.trim());
       // Clear demo mode flag — this user is now a real account
-      setKV(`demo_mode_${user.id}`, 'false').catch(() => {});
+      setKV(`demo_mode_${user.id}`, 'false').catch(() => { });
       const appSession = await loadSession(user.id);
       identifyUser(appSession);
       if (appSession.activeBusiness) void loginPurchases(appSession.activeBusiness.id);
@@ -1385,7 +1419,7 @@ export const useAuthStore = create<AuthStore>((set, get) => ({
       try {
         const code = Localization.getLocales()[0]?.currencyCode;
         if (code && SUPPORTED_CURRENCIES.has(code)) demoCurrency = code;
-      } catch {}
+      } catch { }
 
       const { data: fnData, error: fnErr } = await supabase.functions.invoke('seed-demo-business', {
         body: { currency: demoCurrency },
@@ -1402,8 +1436,8 @@ export const useAuthStore = create<AuthStore>((set, get) => ({
       if (fnData?.error) throw new Error(fnData.error);
 
       const { businessId } = fnData as { businessId: string };
-      await setKV(`last_business_${userId}`, businessId).catch(() => {});
-      await setKV(`demo_mode_${userId}`, 'true').catch(() => {});
+      await setKV(`last_business_${userId}`, businessId).catch(() => { });
+      await setKV(`demo_mode_${userId}`, 'true').catch(() => { });
 
       const appSession = await loadSession(userId);
       set({ session: { ...appSession, isDemoMode: true }, loading: false });
@@ -1457,11 +1491,11 @@ export const useAuthStore = create<AuthStore>((set, get) => ({
       dismissedFromBusiness: { name: removedBusinessName },
       session: state.session
         ? {
-            ...state.session,
-            memberships: remainingMemberships,
-            activeBusiness: (first.business as Business) ?? null,
-            activeMembership: first,
-          }
+          ...state.session,
+          memberships: remainingMemberships,
+          activeBusiness: (first.business as Business) ?? null,
+          activeMembership: first,
+        }
         : null,
     }));
   },

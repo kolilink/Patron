@@ -26,6 +26,7 @@ import Animated, {
   runOnJS,
 } from 'react-native-reanimated';
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
+import { Image } from 'expo-image';
 import { Screen } from '@/src/components/ui/Screen';
 import { FormSheet } from '@/src/components/ui/FormSheet';
 import { EmptyState } from '@/src/components/ui/EmptyState';
@@ -51,6 +52,12 @@ import { useInviterStore } from '@/stores/inviter';
 import { SkeletonList } from '@/src/components/ui/SkeletonPlaceholder';
 import { supabase } from '@/lib/supabase';
 import { generateFallbackName } from '@/lib/id';
+import { friendlyMessage } from '@/lib/errors';
+import { PostActionsMenu } from '@/src/components/ui/PostActionsMenu';
+import { ConductBanner, ComposerReminder } from '@/src/components/ui/ConductBanner';
+import { PrivacyWallSheet } from '@/src/components/ui/PrivacyWallSheet';
+import { PseudoSheet } from '@/src/components/ui/PseudoSheet';
+import { CURRENCY_LIST } from '@/src/constants/currency';
 import type { ChatMessage, MarketPost, MarketCategory } from '@/src/types';
 
 // expo-av's native module only exists once the app has been rebuilt with this
@@ -66,7 +73,7 @@ function getAudio(): typeof Audio | null {
 
 // ─── Forum constants ──────────────────────────────────────────────────────────
 
-const MARKET_CATS: MarketCategory[] = ['suggestion', 'entraide', 'general'];
+const MARKET_CATS: MarketCategory[] = ['suggestion', 'entraide', 'general', 'annonce'];
 
 const CAT_LABEL: Record<string, string> = {
   tout: 'Tout',
@@ -359,6 +366,15 @@ function PostCard({ post, isNew, isLiked, isOwnPost, onPress, onLike }: {
                 {CAT_LABEL[post.category] ?? post.category}
               </Text>
             </View>
+            {post.is_pinned && (
+              <>
+                <Text style={styles.pcMetaDot}>·</Text>
+                <View style={styles.pinBadge}>
+                  <Ionicons name="pin" size={10} color={palette.primary} />
+                  <Text style={styles.pinBadgeText}>Épinglé</Text>
+                </View>
+              </>
+            )}
           </View>
         </View>
       </View>
@@ -406,9 +422,13 @@ function PostCard({ post, isNew, isLiked, isOwnPost, onPress, onLike }: {
         {/* Push action button to far right */}
         <View style={{ flex: 1 }} />
 
+        {/* Phase 1 — Signaler / Bloquer l'auteur / Supprimer on every post */}
+        <PostActionsMenu post={post} isOwnPost={isOwnPost} />
+
         <Pressable
           onPress={e => { e.stopPropagation(); onPress(); }}
           hitSlop={8}
+          style={styles.pcOpenBtn}
         >
           <Ionicons name="arrow-undo-outline" size={17} color={palette.primary} />
         </Pressable>
@@ -430,6 +450,15 @@ export default function DiscussionsScreen() {
   const userId = session?.user.id ?? '';
   const userName = session?.user.name || generateFallbackName(userId);
   const businessName = session?.activeBusiness?.name ?? '';
+  // Jobs de lancement - "Mon commerce (public card)": a read-only identity
+  // card for the active business. No catalogue/prices here (HORS SCOPE).
+  const businessCurrency = session?.activeBusiness?.currency ?? 'GNF';
+  const businessType = session?.activeBusiness?.type ?? null;
+  const businessLogo = session?.activeBusiness?.logo_url ?? null;
+  const currencyLabel = useMemo(() => {
+    const found = CURRENCY_LIST.find(c => c.code === businessCurrency);
+    return found ? `${found.flag} ${found.name}` : businessCurrency;
+  }, [businessCurrency]);
   const role = session?.activeMembership?.role;
   const isAdminOrManager = role === 'administrateur' || role === 'manager';
   const membres = useEquipeStore(s => s.membres);
@@ -518,6 +547,18 @@ export default function DiscussionsScreen() {
   const [newContent, setNewContent] = useState('');
   const [newCategory, setNewCategory] = useState<MarketCategory | null>(null);
   const [postError, setPostError] = useState('');
+  const [showPrivacy, setShowPrivacy] = useState(false);
+  // Phase 5 — no anonymous posts: if the account has no confirmed pseudo yet,
+  // the composer is gated behind this identity sheet.
+  const [showPseudo, setShowPseudo] = useState(false);
+  const userPseudo = session?.user.pseudo ?? null;
+  const openComposer = () => {
+    if (userPseudo) {
+      setShowNewPost(true);
+    } else {
+      setShowPseudo(true);
+    }
+  };
   const marketChannelRef = useRef<ReturnType<typeof supabase.channel> | null>(null);
 
   // ─── Amis state ───────────────────────────────────────────────────────────
@@ -963,8 +1004,12 @@ export default function DiscussionsScreen() {
       await createPost(newTitle.trim(), newContent.trim(), newCategory);
       haptics.success();
       closeNewPost();
-    } catch {
+    } catch (err) {
       haptics.error();
+      // Phase 3 — the server's non-punitive rate-limit sentence
+      // ("Doucement — vous pourrez republier dans X minutes.") and the
+      // Phase 5 identity gate are shown verbatim, never rephrased.
+      setPostError(friendlyMessage(err, 'Impossible de publier. Réessayez.'));
     }
   };
 
@@ -1004,7 +1049,15 @@ export default function DiscussionsScreen() {
             <Text variant="body" color="secondary">‹ Retour</Text>
           </Pressable>
           <Text variant="h4">Discussions</Text>
-          <View style={{ width: 60 }} />
+          <Pressable
+            onPress={() => setShowPrivacy(true)}
+            hitSlop={10}
+            style={{ width: 60, alignItems: 'flex-end' }}
+            accessibilityLabel="Vos données restent privées"
+            accessibilityRole="button"
+          >
+            <Ionicons name="lock-closed-outline" size={20} color={palette.textSecondary} />
+          </Pressable>
         </View>
 
         <View style={styles.tabRow}>
@@ -1045,6 +1098,9 @@ export default function DiscussionsScreen() {
         </View>
 
         <Animated.View style={[{ flex: 1 }, contentStyle]}>
+          {/* Phase 2 — code de conduite pinned atop each social space */}
+          <ConductBanner compact />
+
           {/* Category chips — outside KAV so they sit flush under the tab row */}
           {activeTab === 'marche' && marketOffline && (
             <View style={{ paddingHorizontal: spacing[4], paddingTop: spacing[1] }}>
@@ -1077,7 +1133,7 @@ export default function DiscussionsScreen() {
               </ScrollView>
               {canPost && (
                 <Pressable
-                  onPress={() => setShowNewPost(true)}
+                  onPress={openComposer}
                   style={({ pressed }) => [styles.composeBtn, pressed && { opacity: 0.65 }]}
                   accessibilityLabel="Nouveau post"
                   accessibilityRole="button"
@@ -1091,6 +1147,48 @@ export default function DiscussionsScreen() {
           {activeTab === 'boutique' ? (
             /* ── Ma Boutique ── */
             <>
+              {/* Jobs de lancement — "Mon commerce (public card)": a read-only
+                  identity card (nom, activité, monnaie, logo) pinned above the
+                  private team chat. Public visibility stays off by default; no
+                  catalogue or prices here (HORS SCOPE). */}
+              <View style={styles.commerceCard}>
+                <View style={styles.commerceCardTop}>
+                  <View style={styles.commerceAvatar}>
+                    {businessLogo ? (
+                      <Image
+                        source={{ uri: businessLogo }}
+                        style={styles.commerceLogo}
+                        contentFit="cover"
+                        transition={150}
+                      />
+                    ) : (
+                      <Text style={styles.commerceAvatarText} allowFontScaling={false}>
+                        {(businessName || 'P').charAt(0).toUpperCase()}
+                      </Text>
+                    )}
+                  </View>
+                  <View style={{ flex: 1, minWidth: 0 }}>
+                    <Text variant="h4" numberOfLines={1}>{businessName || 'Mon commerce'}</Text>
+                    <View style={styles.commerceMetaRow}>
+                      {businessType ? (
+                        <View style={[styles.commercePill, { backgroundColor: palette.primaryLight }]}>
+                          <Text variant="caption" style={{ color: palette.primaryDark }} numberOfLines={1}>
+                            {businessType}
+                          </Text>
+                        </View>
+                      ) : null}
+                      <Text variant="caption" color="secondary" numberOfLines={1}>{currencyLabel}</Text>
+                    </View>
+                  </View>
+                  <Ionicons name="lock-closed-outline" size={18} color={palette.textSecondary} />
+                </View>
+                <View style={styles.commerceCardNote}>
+                  <Text variant="caption" color="secondary" style={{ lineHeight: 18 }}>
+                    Votre fiche reste privée. Personne ne voit votre commerce ici sans votre accord.
+                  </Text>
+                </View>
+              </View>
+
               {chatOffline && (
                 <View style={{ paddingHorizontal: spacing[4], paddingTop: spacing[1] }}>
                   <Text variant="caption" color="secondary">Hors ligne — dernières données connues</Text>
@@ -1489,6 +1587,8 @@ export default function DiscussionsScreen() {
           })()}
           contentContainerStyle={styles.modalContent}
         >
+          {/* Phase 2 — rules visible BEFORE publishing */}
+          <ComposerReminder />
           <View style={styles.composerCard}>
             <TextInput
               style={styles.composerTitle}
@@ -1646,6 +1746,16 @@ export default function DiscussionsScreen() {
             </View>
           </View>
         </FormSheet>
+
+        {/* ── Phase 4 — privacy wall info screen ── */}
+        <PrivacyWallSheet visible={showPrivacy} onClose={() => setShowPrivacy(false)} />
+
+        {/* ── Phase 5 — stable visible identity gate (no anonymous posts) ── */}
+        <PseudoSheet
+          visible={showPseudo}
+          onClose={() => setShowPseudo(false)}
+          onConfirmed={() => setShowNewPost(true)}
+        />
 
       </Screen>
     </KeyboardAvoidingView>
@@ -1923,6 +2033,17 @@ function makeStyles(p: Palette) {
     newBadgeText: { fontSize: 10, color: p.success, fontWeight: '700' as const },
     catBadge: { borderRadius: radius.full, paddingHorizontal: spacing[2], paddingVertical: 2 },
     catBadgeText: { fontSize: 11, fontWeight: '600' as const },
+    // Phase 6 — pinned (L'équipe Patron / notices)
+    pinBadge: {
+      flexDirection: 'row' as const,
+      alignItems: 'center' as const,
+      gap: 3,
+      borderRadius: radius.full,
+      paddingHorizontal: spacing[2],
+      paddingVertical: 2,
+      backgroundColor: p.primaryLight,
+    },
+    pinBadgeText: { fontSize: 11, fontWeight: '700' as const, color: p.primary },
 
     // Forum: flat surface — hairline separator, no card chrome
     pcCard: {
@@ -1961,6 +2082,7 @@ function makeStyles(p: Palette) {
       gap: 16,
     },
     pcStatRow: { flexDirection: 'row' as const, alignItems: 'center' as const, gap: 6 },
+    pcOpenBtn: { padding: 4 },
     pcStat: { fontSize: 13, color: p.textSecondary, fontWeight: '500' as const },
     pcStatLiked: { color: p.primary },
     pcActionVerified: { fontSize: 13, color: p.primary, fontWeight: '600' as const },
@@ -2019,6 +2141,60 @@ function makeStyles(p: Palette) {
       backgroundColor: p.surface,
     },
     modalCatChipActive: { backgroundColor: p.primary, borderColor: p.primary },
+
+    // Mon commerce (public card) — Jobs de lancement
+    commerceCard: {
+      marginHorizontal: spacing[4],
+      marginTop: spacing[3],
+      marginBottom: spacing[1],
+      backgroundColor: p.surface,
+      borderRadius: radius.lg,
+      borderWidth: 1,
+      borderColor: p.border,
+      overflow: 'hidden' as const,
+    },
+    commerceCardTop: {
+      flexDirection: 'row' as const,
+      alignItems: 'center' as const,
+      gap: spacing[3],
+      paddingHorizontal: spacing[4],
+      paddingVertical: spacing[4],
+    },
+    commerceAvatar: {
+      width: 48,
+      height: 48,
+      borderRadius: 24,
+      backgroundColor: p.primaryLight,
+      alignItems: 'center' as const,
+      justifyContent: 'center' as const,
+      overflow: 'hidden' as const,
+      flexShrink: 0,
+    },
+    commerceLogo: {
+      width: '100%' as const,
+      height: '100%' as const,
+    },
+    commerceAvatarText: {
+      fontSize: 20,
+      fontWeight: '700' as const,
+      color: p.primary,
+    },
+    commerceMetaRow: {
+      flexDirection: 'row' as const,
+      alignItems: 'center' as const,
+      gap: spacing[2],
+      marginTop: spacing[1],
+    },
+    commercePill: {
+      paddingHorizontal: spacing[2],
+      paddingVertical: 2,
+      borderRadius: radius.full,
+      maxWidth: 160,
+    },
+    commerceCardNote: {
+      paddingHorizontal: spacing[4],
+      paddingBottom: spacing[3],
+    },
 
     // Amis tab
     amisHeader: {

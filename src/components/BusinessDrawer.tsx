@@ -175,6 +175,11 @@ export function BusinessDrawer() {
     router.push('/(app)/founder-kpi');
   };
 
+  const handleModeration = () => {
+    closeBusinessDrawer();
+    router.push('/(app)/moderation');
+  };
+
   const handleAlpha = () => {
     closeBusinessDrawer();
     router.push('/(app)/alpha');
@@ -305,6 +310,14 @@ export function BusinessDrawer() {
                     <Ionicons name="stats-chart-outline" size={18} color={palette.textSecondary} />
                   </View>
                   <Text style={[styles.footerLabel, { flex: 1 }]}>KPI</Text>
+                </Pressable>
+                {/* Moderation — the single queue for every Signalement across all
+                    spaces (Phase 1). Founder only, same pattern as Service client. */}
+                <Pressable onPress={handleModeration} style={({ pressed }) => [styles.footerRow, pressed && { opacity: 0.6 }]}>
+                  <View style={styles.footerIcon}>
+                    <Ionicons name="shield-checkmark-outline" size={18} color={palette.textSecondary} />
+                  </View>
+                  <Text style={[styles.footerLabel, { flex: 1 }]}>Modération</Text>
                 </Pressable>
               </>
             ) : (
