@@ -16,6 +16,19 @@ jest.mock('@/lib/db', () => ({
   setKV: jest.fn((k: string, v: string) => { kv.set(k, v); return Promise.resolve(); }),
 }));
 
+// lib/analytics.ts imports isNetworkError from lib/sync.ts, which imports
+// lib/supabase.ts at module top level. Without this mock, that module-level
+// createClient() runs for real and instantiates a Supabase RealtimeClient —
+// which throws on CI's Node 20 (no native WebSocket). Every other suite that
+// imports lib/sync mocks @/lib/supabase; this one was missing it and only
+// passed locally because dev machines run Node 22+/24 with native WebSocket.
+jest.mock('@/lib/supabase', () => ({
+  supabase: {
+    rpc: jest.fn(),
+    from: jest.fn(),
+  },
+}));
+
 import {
   trackEvent,
   identifyUser,
