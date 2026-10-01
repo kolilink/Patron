@@ -1,5 +1,5 @@
 import { create } from 'zustand';
-import { enqueue, getQueueCount, saveProductCache, getProductCache } from '@/lib/db';
+import { enqueue, getQueueCount, saveProductCache, getProductCache, getKV, setKV } from '@/lib/db';
 import { generateId } from '@/lib/id';
 import { useSyncStore } from '@/stores/sync';
 import { useVentesStore } from '@/stores/ventes';
@@ -66,6 +66,29 @@ interface SalesStore {
   ) => Promise<boolean>;
   clearError: () => void;
   reset: () => void;
+}
+
+// first_value_action (spec §1): the business's first sale OR first credit
+// entry, fired at most once per business per device. The server's
+// sale_orders is the authoritative source for TTFV on the founder screen;
+// this event only feeds PostHog funnels, so it errs toward NOT firing when
+// unsure: only for admin/manager (a vendeur only sees their own sales, so
+// "my first" isn't "the shop's first"), only once this business's sales
+// have actually been loaded, and only when at most this one sale is there.
+async function maybeTrackFirstValue(businessId: string, userId: string, kind: 'sale' | 'credit'): Promise<void> {
+  try {
+    const flagKey = `first_value_sent_${businessId}`;
+    if (await getKV(flagKey)) return;
+    const role = useAuthStore.getState().session?.activeMembership?.role;
+    if (role !== 'administrateur' && role !== 'manager') return;
+    const ventes = useVentesStore.getState();
+    if (ventes.salesFetchedFor !== businessId) return;
+    const prior = ventes.sales.filter(v => v.status === 'paye' || v.status === 'credit').length;
+    await setKV(flagKey, '1');
+    if (prior <= 1) trackEvent('first_value_action', businessId, userId, { kind });
+  } catch {
+    // Silently drop — analytics must never affect merchant experience
+  }
 }
 
 export const useSalesStore = create<SalesStore>((set, get) => ({
@@ -240,7 +263,8 @@ export const useSalesStore = create<SalesStore>((set, get) => ({
     useSyncStore.getState().kick();
     set({ lastCarnetDebtQueued: true });
     haptics.success();
-    trackEvent('credit_debt_queued', businessId, userId);
+    trackEvent('credit_recorded', businessId, userId, { source: 'quick' });
+    void maybeTrackFirstValue(businessId, userId, 'credit');
     return true;
   },
 
@@ -278,7 +302,8 @@ export const useSalesStore = create<SalesStore>((set, get) => ({
     useSyncStore.getState().kick();
     set({ lastQuickSaleQueued: true });
     haptics.success();
-    trackEvent('quick_sale_queued', businessId, userId);
+    trackEvent('sale_recorded', businessId, userId, { source: 'quick', qty });
+    void maybeTrackFirstValue(businessId, userId, 'sale');
     return true;
   },
 
@@ -370,7 +395,9 @@ export const useSalesStore = create<SalesStore>((set, get) => ({
     // separate issues.
     set({ cart: [], submitting: false, lastSubmitQueued: true, lastSaleId: null });
     haptics.success();
-    trackEvent('sale_submitted', businessId, userId, {
+    // A cart sold on credit IS a credit entry (spec: sale_recorded vs credit_recorded).
+    trackEvent(isCredit ? 'credit_recorded' : 'sale_recorded', businessId, userId, {
+      source:         'cart',
       is_credit:      isCredit,
       items_count:    cartSnapshot.length,
       has_discount:   (discountAmount ?? 0) > 0,
@@ -378,6 +405,7 @@ export const useSalesStore = create<SalesStore>((set, get) => ({
       currency:       useAuthStore.getState().session?.activeBusiness?.currency,
       total_amount:   totalAmount,
     });
+    void maybeTrackFirstValue(businessId, userId, isCredit ? 'credit' : 'sale');
 
     // Optimistically decrement stock in both the local product cache and the
     // in-memory Zustand store so the POS reflects updated quantities

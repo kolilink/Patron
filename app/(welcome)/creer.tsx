@@ -20,6 +20,7 @@ import type { Palette } from '@/src/theme';
 import { useAuthStore } from '@/stores/auth';
 import { useInviterStore } from '@/stores/inviter';
 import { getPendingInviteToken, clearPendingInviteToken } from '@/lib/inviteLink';
+import { recordFunnelStep } from '@/lib/funnel';
 import { trackEvent, classifyAuthError } from '@/lib/analytics';
 import { useCountdown } from '@/src/hooks/useCountdown';
 import { formatCountdown } from '@/src/utils/format';
@@ -82,10 +83,13 @@ export default function CreerScreen() {
     clearError();
     const normalized = phone.trim().replace(/\s/g, '');
     if (!normalized) return;
+    trackEvent('signup_started', null, null);
     const result = await createPhoneVerification(normalized);
     if (result) {
       verificationIdRef.current = result.verificationId;
       phoneRef.current = normalized;
+      trackEvent('otp_sent', null, null, { flow: 'signup' });
+      void recordFunnelStep('otp_sent');
       setStep('otp');
       otpValidity.start(OTP_VALIDITY_SECONDS);
       resendCooldown.start(RESEND_COOLDOWN_SECONDS);
@@ -99,12 +103,17 @@ export default function CreerScreen() {
   const handleOtpComplete = async (code: string) => {
     const ok = await verifyPhoneCode(phoneRef.current, code, verificationIdRef.current);
     if (ok) {
+      trackEvent('otp_verified', null, null, { flow: 'signup' });
+      // Links this device to the anonymous user upgradePhone() keeps — the
+      // future businesses.created_by — for the founder funnel.
+      void recordFunnelStep('otp_verified');
       await upgradePhone(phoneRef.current);
       if (!useAuthStore.getState().error) {
         setStep('details');
       }
     } else {
-      trackEvent('auth_failed', null, null, {
+      trackEvent('otp_failed', null, null, {
+        flow: 'signup',
         reason: classifyAuthError(useAuthStore.getState().error),
       });
       setOtpKey(k => k + 1);

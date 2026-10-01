@@ -1,4 +1,5 @@
 import * as Linking from 'expo-linking';
+import { trackEvent } from '@/lib/analytics';
 import * as Clipboard from 'expo-clipboard';
 import * as Application from 'expo-application';
 import { Platform } from 'react-native';
@@ -101,6 +102,9 @@ export async function capturePendingInviteToken(): Promise<string | null> {
 
         if (token) {
             await setKV(PENDING_KEY, token);
+            // Deferred channel (install referrer / clipboard) — the link was
+            // opened before the app was installed.
+            trackEvent('invite_opened', null, null, { source: 'deferred' });
             return token;
         }
         return null;

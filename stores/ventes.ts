@@ -606,6 +606,7 @@ export const useVentesStore = create<VentesStore>((set, get) => ({
       }
       set({ saving: false });
       notifyCreditPaid();
+      trackEvent('repayment_recorded', sale.business_id, null, { fully_settled: result.fully_paid, scope: 'sale' });
       return { ok: true, fullyPaid: result.fully_paid, paymentId };
     } catch (err) {
       if (isNetworkError(err)) {
@@ -626,6 +627,7 @@ export const useVentesStore = create<VentesStore>((set, get) => ({
         set({ saving: false });
         useSyncStore.getState().kick();
         notifyCreditPaid();
+        trackEvent('repayment_recorded', sale.business_id, null, { fully_settled: fullyPaid, scope: 'sale', queued: true });
         // No server row yet in the offline fallback — paymentId stays
         // undefined until the queued RPC drains (undo unavailable until sync).
         return { ok: true, fullyPaid };
@@ -712,7 +714,7 @@ export const useVentesStore = create<VentesStore>((set, get) => ({
         console.error('[recordClientPayment] refreshPendingOverlay failed (write already succeeded)', overlayErr);
       }
       set({ saving: false });
-      trackEvent('debt_payment_recorded', businessId, null, { fully_settled: fullySettled });
+      trackEvent('repayment_recorded', businessId, null, { fully_settled: fullySettled, scope: 'client' });
       notifyCreditPaid();
       return { ok: true, fullySettled, paymentIds };
     } catch (err) {
@@ -738,7 +740,7 @@ export const useVentesStore = create<VentesStore>((set, get) => ({
         fullySettled = get().sales
           .filter(s => s.customer_name === customerName && s.business_id === businessId && s.status === 'credit')
           .reduce((sum, s) => sum + (s.total_amount - (s.discount_amount ?? 0) - (s.amount_paid ?? 0)), 0) < 0.01;
-        trackEvent('debt_payment_recorded', businessId, null, { fully_settled: fullySettled });
+        trackEvent('repayment_recorded', businessId, null, { fully_settled: fullySettled, scope: 'client' });
         notifyCreditPaid();
         return { ok: true, fullySettled, paymentIds };
       }

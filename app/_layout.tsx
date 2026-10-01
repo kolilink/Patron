@@ -3,7 +3,7 @@ import * as Sentry from '@sentry/react-native';
 import { useEffect, useRef } from 'react';
 import { View } from 'react-native';
 import { GestureHandlerRootView } from 'react-native-gesture-handler';
-import { Stack, usePathname, useGlobalSearchParams } from 'expo-router';
+import { Stack, useSegments } from 'expo-router';
 import * as SplashScreen from 'expo-splash-screen';
 import { useFonts } from 'expo-font';
 import { Ionicons } from '@expo/vector-icons';
@@ -26,7 +26,8 @@ import { openDb } from '@/lib/db';
 import { capturePendingInviteToken } from '@/lib/inviteLink';
 import { ThemeProvider } from '@/src/theme';
 import { posthog } from '@/lib/posthog';
-import { identifyUser, resetAnalytics } from '@/lib/analytics';
+import { identifyUser, resetAnalytics, trackEvent, analyticsIsTest, loadDeviceTestFlag } from '@/lib/analytics';
+import { recordInstallIfFirstOpen, recordFunnelStep, flushFunnelOutbox } from '@/lib/funnel';
 import { configurePurchases } from '@/lib/purchases';
 import { withStartupTiming, reportFirstScreenRender, reportFirstInteraction } from '@/lib/startupTiming';
 
@@ -62,23 +63,25 @@ function RootLayout() {
   const initialize = useAuthStore(s => s.initialize);
   const session = useAuthStore(s => s.session);
   const [fontsLoaded] = useFonts(ALL_FONTS);
-  const pathname = usePathname();
-  const params = useGlobalSearchParams();
-  const previousPathname = useRef<string | undefined>(undefined);
+  // Route TEMPLATE ("/(app)/clients/[name]"), never the concrete path or
+  // its params — those carry a client's name, a phone, ids (spec §0: zero
+  // PII in events). useSegments() returns the template segments.
+  const segments = useSegments();
+  const screenName = '/' + segments.join('/');
+  const previousScreen = useRef<string | undefined>(undefined);
 
   // Manual screen tracking for Expo Router
   useEffect(() => {
-    if (previousPathname.current !== pathname) {
-      posthog.screen(pathname, {
-        previous_screen: previousPathname.current ?? null,
-        ...params,
+    if (previousScreen.current !== screenName) {
+      posthog.screen(screenName, {
+        previous_screen: previousScreen.current ?? null,
       });
-      if (previousPathname.current === undefined) {
+      if (previousScreen.current === undefined) {
         reportFirstScreenRender();
       }
-      previousPathname.current = pathname;
+      previousScreen.current = screenName;
     }
-  }, [pathname, params]);
+  }, [screenName]);
 
   // Keep Sentry + PostHog user context in sync with the active session.
   // Sentry.* calls are guarded by the same DSN check as Sentry.init() above —
@@ -95,6 +98,9 @@ function RootLayout() {
         Sentry.setTag('role', session.activeMembership?.role ?? 'none');
       }
       identifyUser(session);
+      // Server funnel log: a team/test session marks this device test (the
+      // server ignores it for a device already linked to a real merchant).
+      if (analyticsIsTest()) void recordFunnelStep('seen');
     } else {
       if (process.env.EXPO_PUBLIC_SENTRY_DSN) {
         Sentry.setUser(null);
@@ -114,6 +120,13 @@ function RootLayout() {
       // clipboard) now that the KV store is open. Never blocks startup —
       // a missing token just means a normal sign-up, never a dead end.
       return capturePendingInviteToken();
+    }).then(async () => {
+      // Measurement (docs/measurement.md): first-open install record, the
+      // cold-start app_opened, and a retry of any funnel steps still queued.
+      await loadDeviceTestFlag();
+      await recordInstallIfFirstOpen();
+      trackEvent('app_opened', null, null, { source: 'cold_start' });
+      void flushFunnelOutbox();
     }).catch(() => {
       /* non-fatal */
     }).finally(() => {

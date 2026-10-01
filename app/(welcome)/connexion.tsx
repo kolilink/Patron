@@ -82,7 +82,7 @@ export default function ConnexionScreen() {
     const result = await loginWithPhone(normalized);
     if (result) {
       verificationIdRef.current = result.verificationId;
-      trackEvent('auth_otp_screen_shown', null, null);
+      trackEvent('otp_sent', null, null, { flow: 'login' });
       setStep('otp');
       otpValidity.start(OTP_VALIDITY_SECONDS);
       resendCooldown.start(RESEND_COOLDOWN_SECONDS);
@@ -101,10 +101,11 @@ export default function ConnexionScreen() {
       verificationIdRef.current,
     );
     if (ok) {
-      trackEvent('auth_otp_verified', null, null);
+      trackEvent('otp_verified', null, null, { flow: 'login' });
       await restorePhoneSession(normalizedPhoneRef.current, verificationIdRef.current);
     } else {
-      trackEvent('auth_failed', null, null, {
+      trackEvent('otp_failed', null, null, {
+        flow: 'login',
         reason: classifyAuthError(useAuthStore.getState().error),
       });
       setOtpKey(k => k + 1);
