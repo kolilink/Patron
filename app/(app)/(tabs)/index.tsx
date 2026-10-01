@@ -1,5 +1,5 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
-import { InputAccessoryView, KeyboardAvoidingView, Modal, Platform, Pressable, ScrollView, StyleSheet, TextInput, View } from 'react-native';
+import { InputAccessoryView, KeyboardAvoidingView, Modal, Platform, Pressable, ScrollView, Share, StyleSheet, TextInput, View } from 'react-native';
 import { Gesture, GestureDetector } from 'react-native-gesture-handler';
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
 import { runOnJS } from 'react-native-reanimated';
@@ -36,6 +36,7 @@ import { saveDashboardKpiCache, getDashboardKpiCache, getKV, setKV } from '@/lib
 import { SkeletonKpiGrid } from '@/src/components/ui/SkeletonPlaceholder';
 import { haptics } from '@/lib/haptics';
 import { toast } from '@/stores/toast';
+import { useInviterStore, buildInviteLink, buildInviteMessage } from '@/stores/inviter';
 
 
 interface KPIs {
@@ -172,6 +173,33 @@ export default function AccueilScreen() {
     if (isFounder) void loadFounderConversations();
   }, [isFounder]);
 
+  // ─── Inviter — one-tap invite-a-friend (Phase 1) ─────────────────────────
+  // Creates a single-use 24h smart link + fallback code server-side, then
+  // opens the native share sheet with the prefilled editable French "tu"
+  // message. No rewards/wallet language anywhere — progress only.
+  const [inviting, setInviting] = useState(false);
+  const handleInvite = useCallback(async () => {
+    if (inviting) return;
+    setInviting(true);
+    haptics.tap();
+    try {
+      const invite = await useInviterStore.getState().createInvite();
+      if (!invite) {
+        const err = useInviterStore.getState().error;
+        toast.warning(err ?? "Impossible de créer l'invitation");
+        return;
+      }
+      const link = buildInviteLink(invite.token);
+      const message = buildInviteMessage(link, invite.code);
+      trackEvent('invite_shared', businessId, userId, { source: 'accueil_header' });
+      await Share.share({ message });
+    } catch {
+      toast.warning("Impossible d'ouvrir le partage");
+    } finally {
+      setInviting(false);
+    }
+  }, [inviting, businessId, userId]);
+
   const { products, fetchProducts } = useProductStore();
   const ventesSales = useVentesStore(s => s.sales);
   const { snapshot: rapportsSnapshot, fetchReportsSnapshot } = useRapportsStore();
@@ -238,7 +266,7 @@ export default function AccueilScreen() {
       // Auto-dismiss for businesses older than 7 days — they predate this onboarding flow
       const ageMs = business?.created_at ? Date.now() - new Date(business.created_at).getTime() : Infinity;
       if (ageMs > 7 * 24 * 60 * 60 * 1000) {
-        setKV(key, '1').catch(() => {});
+        setKV(key, '1').catch(() => { });
         setOnboardingDismissed(true);
       } else {
         setOnboardingDismissed(false);
@@ -263,7 +291,7 @@ export default function AccueilScreen() {
       if (val !== null) return;
       void setKV(key, '1');
       setShowCarnetSheet(true);
-    }).catch(() => {});
+    }).catch(() => { });
   }, [userId, businessId, isOwner, business?.created_at, onboardingDismissed]);
 
   const step2Done = products.length > 0;
@@ -299,7 +327,7 @@ export default function AccueilScreen() {
     const liveStep2 = liveProducts.length > 0;
     const liveStep3 = liveSales.some(s => s.business_id === businessId && s.status !== 'annule');
     if (!liveStep2 || !liveStep3) return;
-    setKV(`onboarding_done_${userId}_${businessId}`, '1').catch(() => {});
+    setKV(`onboarding_done_${userId}_${businessId}`, '1').catch(() => { });
     setOnboardingDismissed(true);
   }, [showOnboarding, loading, step2Done, step3Done, userId, businessId]);
 
@@ -337,7 +365,7 @@ export default function AccueilScreen() {
         loadBestSellers(),
       ]);
       if (isInvestisseur && membershipId) {
-        fetchMemberScope(membershipId).then(rows => setInvestorScope(rows)).catch(() => {});
+        fetchMemberScope(membershipId).then(rows => setInvestorScope(rows)).catch(() => { });
         fetchBalance(businessId, userId);
         fetchPayouts(businessId, userId);
       }
@@ -402,14 +430,14 @@ export default function AccueilScreen() {
     return {
       revenue_today: todaySales.filter(s => !s.is_credit).reduce((sum, s) => sum + s.total_amount - (s.discount_amount ?? 0), 0),
       revenue_yesterday: cached?.revenue_yesterday ?? 0,
-      revenue_month:     cached?.revenue_month     ?? 0,
-      sales_today:       todaySales.length,
-      credit_total:      creditSales.reduce((sum, s) => sum + (s.total_amount - (s.discount_amount ?? 0) - (s.amount_paid ?? 0)), 0),
-      credit_count:      new Set(creditSales.map(s => s.customer_name).filter(Boolean)).size + creditSales.filter(s => !s.customer_name).length,
-      low_stock:         pOffline.filter(p => !p.has_variants && p.reorder_level > 0 && p.stock_qty <= p.reorder_level).length
-                         + Object.values(vOffline).flat().filter(v => v.reorder_level > 0 && v.stock_qty <= v.reorder_level).length,
-      expenses_month:    cached?.expenses_month    ?? 0,
-      first_sale_at:     cached?.first_sale_at     ?? null,
+      revenue_month: cached?.revenue_month ?? 0,
+      sales_today: todaySales.length,
+      credit_total: creditSales.reduce((sum, s) => sum + (s.total_amount - (s.discount_amount ?? 0) - (s.amount_paid ?? 0)), 0),
+      credit_count: new Set(creditSales.map(s => s.customer_name).filter(Boolean)).size + creditSales.filter(s => !s.customer_name).length,
+      low_stock: pOffline.filter(p => !p.has_variants && p.reorder_level > 0 && p.stock_qty <= p.reorder_level).length
+        + Object.values(vOffline).flat().filter(v => v.reorder_level > 0 && v.stock_qty <= v.reorder_level).length,
+      expenses_month: cached?.expenses_month ?? 0,
+      first_sale_at: cached?.first_sale_at ?? null,
     };
   };
 
@@ -427,7 +455,7 @@ export default function AccueilScreen() {
       const { data, error } = await withTimeout(
         supabase.rpc('get_dashboard_kpis', {
           p_business_id: businessId,
-          p_today:       localDate,
+          p_today: localDate,
         }),
       );
       if (error) {
@@ -436,15 +464,15 @@ export default function AccueilScreen() {
       }
       const d = data as Record<string, number | string | null>;
       const freshKpis: KPIs = {
-        revenue_today:     Number(d.revenue_today)     / 100,
+        revenue_today: Number(d.revenue_today) / 100,
         revenue_yesterday: Number(d.revenue_yesterday) / 100,
-        revenue_month:     Number(d.revenue_month)     / 100,
-        sales_today:       Number(d.sales_today),
-        credit_total:      Number(d.credit_total)      / 100,
-        credit_count:      Number(d.credit_count),
-        low_stock:         Number(d.low_stock),
-        expenses_month:    Number(d.expenses_month)    / 100,
-        first_sale_at:     (d.first_sale_at as string | null) ?? null,
+        revenue_month: Number(d.revenue_month) / 100,
+        sales_today: Number(d.sales_today),
+        credit_total: Number(d.credit_total) / 100,
+        credit_count: Number(d.credit_count),
+        low_stock: Number(d.low_stock),
+        expenses_month: Number(d.expenses_month) / 100,
+        first_sale_at: (d.first_sale_at as string | null) ?? null,
       };
       setKpis(freshKpis);
       void saveDashboardKpiCache(businessId, freshKpis);
@@ -462,7 +490,7 @@ export default function AccueilScreen() {
       supabase.rpc('get_best_sellers', {
         p_business_id: businessId,
         p_month_start: monthStart,
-        p_limit:       5,
+        p_limit: 5,
       }),
     );
     if (bsErr) throw bsErr;
@@ -470,9 +498,9 @@ export default function AccueilScreen() {
     setBestSellers(
       (data ?? [])
         .map((r: BestSeller) => ({
-          product_id:    r.product_id,
-          product_name:  r.product_name,
-          total_qty:     Number(r.total_qty),
+          product_id: r.product_id,
+          product_name: r.product_name,
+          total_qty: Number(r.total_qty),
           total_revenue: Number(r.total_revenue) / 100,
         }))
         .filter((bs: BestSeller) => bs.total_qty >= 2),
@@ -536,7 +564,7 @@ export default function AccueilScreen() {
 
   const pendingPayout = payouts.find(p => p.status === 'en_attente');
 
-  const monthNet        = rapportsSnapshot?.net_profit        ?? 0;
+  const monthNet = rapportsSnapshot?.net_profit ?? 0;
   const monthOrderCount = rapportsSnapshot?.period_order_count ?? 0;
 
   const salesCount = kpis?.sales_today ?? 0;
@@ -546,7 +574,7 @@ export default function AccueilScreen() {
   const dayPart = getDayPart();
   const dayGreeting = dayPart === 'morning' ? 'Bonne journée'
     : dayPart === 'evening' ? 'Voici votre journée'
-    : null;
+      : null;
   // Never prints "0 ventes" — a zero-sales day drops the count entirely
   // rather than stating it, same reasoning as the debt card's zero-state
   // below: a quiet fact stated as a number reads as a verdict, a CTA reads
@@ -554,8 +582,8 @@ export default function AccueilScreen() {
   const heroCaption = dayPart === 'morning'
     ? (hasSoldToday ? `Bonjour · ${salesCount} vente${salesCount !== 1 ? 's' : ''}` : 'Bonjour')
     : dayPart === 'evening'
-    ? (hasSoldToday ? `Ce soir · ${salesCount} vente${salesCount !== 1 ? 's' : ''}` : 'Ce soir')
-    : (hasSoldToday ? `${salesCount} vente${salesCount !== 1 ? 's' : ''} aujourd'hui` : "Aujourd'hui");
+      ? (hasSoldToday ? `Ce soir · ${salesCount} vente${salesCount !== 1 ? 's' : ''}` : 'Ce soir')
+      : (hasSoldToday ? `${salesCount} vente${salesCount !== 1 ? 's' : ''} aujourd'hui` : "Aujourd'hui");
 
   const isEvening = dayPart === 'evening' || dayPart === 'night';
   // "Bienvenue" used to be keyed on the business's creation date — wrong,
@@ -582,10 +610,10 @@ export default function AccueilScreen() {
   const comparisonText = !hasEverSold
     ? 'Bienvenue'
     : isFirstSaleToday
-    ? 'Première vente notée ✓'
-    : isEvening
-    ? `Ce mois : ${amtOrMask(kpis?.revenue_month ?? 0)}`
-    : "Même niveau qu'hier";
+      ? 'Première vente notée ✓'
+      : isEvening
+        ? `Ce mois : ${amtOrMask(kpis?.revenue_month ?? 0)}`
+        : "Même niveau qu'hier";
   // Only a genuine directional signal earns the loud solid pill — a flat day
   // stays plain text, same restraint as everywhere else in this app's color
   // system. "Bienvenue"/"Première vente"/"Ce mois" aren't deltas at all, so
@@ -594,11 +622,11 @@ export default function AccueilScreen() {
 
   return (
     <KeyboardAvoidingView style={{ flex: 1, backgroundColor: palette.background }} behavior={Platform.OS === 'ios' ? 'padding' : undefined}>
-    <Screen tab>
-      {/* Swipe right from the left edge to open the business drawer —
+      <Screen tab>
+        {/* Swipe right from the left edge to open the business drawer —
           complements the header menu icon's tap-to-open. */}
-      <GestureDetector gesture={edgeSwipeOpenDrawer}>
-        {/* top was a flat 64 — didn't account for the device's real safe-area
+        <GestureDetector gesture={edgeSwipeOpenDrawer}>
+          {/* top was a flat 64 — didn't account for the device's real safe-area
             inset, so on a phone with a taller inset (Dynamic Island models
             especially) this could still reach up into the header row and
             steal the hamburger icon's taps before the underlying Pressable
@@ -606,446 +634,444 @@ export default function AccueilScreen() {
             not just "opens nothing", which pointed at a touch being
             intercepted rather than a broken onPress. insets.top is measured
             fresh per device now, not guessed. */}
-        <View style={[styles.edgeSwipeCatcher, { top: insets.top + HEADER_ROW_HEIGHT }]} pointerEvents="box-only" />
-      </GestureDetector>
+          <View style={[styles.edgeSwipeCatcher, { top: insets.top + HEADER_ROW_HEIGHT }]} pointerEvents="box-only" />
+        </GestureDetector>
 
-      {/* One-time carnet import sheet shown after business creation */}
-      <Modal
-        visible={showCarnetSheet}
-        transparent
-        animationType="slide"
-        onRequestClose={() => setShowCarnetSheet(false)}
-        statusBarTranslucent
-        navigationBarTranslucent
-      >
-        <View style={styles.sheetBackdrop}>
-          <Pressable style={StyleSheet.absoluteFill} onPress={() => setShowCarnetSheet(false)} />
-          <View style={[styles.sheetPanel, { backgroundColor: palette.surface }]}>
-            <View style={[styles.sheetHandle, { backgroundColor: palette.border }]} />
-            <Text variant="h3" style={styles.sheetTitle}>Votre commerce est créé !</Text>
-            <Text variant="body" color="secondary" style={styles.sheetBody}>
-              Des gens vous doivent de l'argent ?
-            </Text>
-            <Button
-              label="Oui, les noter →"
-              size="lg"
-              fullWidth
-              onPress={() => {
-                setShowCarnetSheet(false);
-                router.push('/(app)/onboarding/carnet');
-              }}
-              style={{ marginTop: spacing[2] }}
-            />
-            <Button
-              label="Pas maintenant"
-              variant="ghost"
-              fullWidth
-              onPress={() => setShowCarnetSheet(false)}
-            />
+        {/* One-time carnet import sheet shown after business creation */}
+        <Modal
+          visible={showCarnetSheet}
+          transparent
+          animationType="slide"
+          onRequestClose={() => setShowCarnetSheet(false)}
+          statusBarTranslucent
+          navigationBarTranslucent
+        >
+          <View style={styles.sheetBackdrop}>
+            <Pressable style={StyleSheet.absoluteFill} onPress={() => setShowCarnetSheet(false)} />
+            <View style={[styles.sheetPanel, { backgroundColor: palette.surface }]}>
+              <View style={[styles.sheetHandle, { backgroundColor: palette.border }]} />
+              <Text variant="h3" style={styles.sheetTitle}>Votre commerce est créé !</Text>
+              <Text variant="body" color="secondary" style={styles.sheetBody}>
+                Des gens vous doivent de l'argent ?
+              </Text>
+              <Button
+                label="Oui, les noter →"
+                size="lg"
+                fullWidth
+                onPress={() => {
+                  setShowCarnetSheet(false);
+                  router.push('/(app)/onboarding/carnet');
+                }}
+                style={{ marginTop: spacing[2] }}
+              />
+              <Button
+                label="Pas maintenant"
+                variant="ghost"
+                fullWidth
+                onPress={() => setShowCarnetSheet(false)}
+              />
+            </View>
           </View>
-        </View>
-      </Modal>
+        </Modal>
 
-      {isOffline && <OfflineNotice offlineSince={null} onRetry={() => loadAll()} />}
+        {isOffline && <OfflineNotice offlineSince={null} onRetry={() => loadAll()} />}
 
-      <ScrollView style={{ flex: 1 }} contentContainerStyle={styles.content} showsVerticalScrollIndicator={false}>
+        <ScrollView style={{ flex: 1 }} contentContainerStyle={styles.content} showsVerticalScrollIndicator={false}>
 
-        {/* Header */}
-        <View style={styles.header}>
-          <View style={{ flexDirection: 'row', alignItems: 'center' }}>
-            <Pressable
-              onPress={openBusinessPicker}
-              hitSlop={10}
-              style={({ pressed }) => [{ opacity: pressed ? 0.5 : 1 }]}
-              accessibilityLabel="Changer de commerce"
-              accessibilityRole="button"
-            >
-              <Ionicons name="menu" size={24} color={palette.textPrimary} />
-            </Pressable>
-            <Text variant="h4" style={{ marginLeft: 12 }} numberOfLines={1}>
-              {business?.name}
-            </Text>
-          </View>
-          <View style={{ flexDirection: 'row', alignItems: 'center', gap: spacing[2] }}>
-            {/* Support moved to the lateral drawer (BusinessDrawer footer) —
-                founder still lands on support-inbox, regular members on
-                support, same destinations as before, just relocated. This
-                header slot (formerly the headphone icon) now hosts a
-                persistent shortcut into the ongoing Alpha conversation —
-                the bottom pill bar is for starting a new question quickly;
-                this is for jumping back in to see history/continue one. */}
-            <Pressable
-              onPress={() => router.push('/(app)/alpha')}
-              style={({ pressed }) => [styles.chatBtn, { opacity: pressed ? 0.7 : 1 }]}
-              accessibilityLabel="Alpha, votre assistant"
-              accessibilityRole="button"
-            >
-              <View style={styles.chatIconBox}>
-                <Text style={{ color: palette.textSecondary, fontWeight: '800', fontSize: 20, lineHeight: 24 }}>A</Text>
-              </View>
-            </Pressable>
-            <Pressable
-              onPress={() => router.push('/(app)/discussions')}
-              style={({ pressed }) => [styles.chatBtn, { opacity: pressed ? 0.7 : 1 }]}
-              accessibilityLabel="Discussions"
-              accessibilityRole="button"
-            >
-              <View style={styles.chatIconBox}>
-                <Ionicons name="chatbubbles-outline" size={24} color={palette.textSecondary} />
-              </View>
-              {totalUnread > 0 && (
-                <View style={styles.chatBadge}>
-                  <Text style={styles.chatBadgeText}>{totalUnread > 99 ? '99+' : String(totalUnread)}</Text>
-                </View>
-              )}
-            </Pressable>
-          </View>
-        </View>
-
-        {loading ? (
-          <SkeletonKpiGrid />
-        ) : isVendeur && products.length === 0 ? (
-          /* ── Empty state for vendeur: no products configured yet ── */
-          <Card style={styles.welcome}>
-            <Text variant="h4" style={{ textAlign: 'center' }}>Aucun produit</Text>
-            <Text variant="body" color="secondary" style={{ textAlign: 'center' }}>
-              Votre commerce n'a pas encore de produits configurés.{'\n'}
-              Contactez votre gérant pour commencer à vendre.
-            </Text>
-          </Card>
-
-        ) : isInvestisseur ? (
-          /* ── INVESTOR HOME ─────────────────────────────────────────────────── */
-          <View style={{ gap: spacing[4] }}>
-
-            {/* ── 1. Gains hero ── */}
-            {pendingPayout ? (
-              <Card elevated style={[styles.heroCard, { backgroundColor: palette.warningLight }]}>
-                <Text variant="caption" style={{ color: palette.warning }}>Demande en cours</Text>
-                <Text variant="amountLarge" style={{ color: palette.warning, fontSize: 44, lineHeight: 56 }}>
-                  {formatAmount(pendingPayout.requested_amount, currency)}
-                </Text>
-                <Text variant="caption" color="secondary" style={{ marginTop: spacing[1] }}>
-                  en cours de traitement
-                </Text>
-              </Card>
-            ) : (
-              <Card elevated style={styles.heroCard}>
-                <View style={styles.investorHeroRow}>
-                  <View style={{ flex: 1, gap: spacing[1] }}>
-                    <Text variant="caption" color="secondary">Vos gains</Text>
-                    <Text
-                      variant="amountLarge"
-                      style={{ color: (balance ?? 0) > 0 ? palette.success : palette.textPrimary, fontSize: 44, lineHeight: 56 }}
-                    >
-                      {formatAmount(balance ?? 0, currency)}
-                    </Text>
-                  </View>
-                  {(balance ?? 0) > 0 && (
-                    <Pressable
-                      onPress={() => {
-                        setWithdrawAmountStr(formatAmountInput(String(Math.round(balance ?? 0)), currency));
-                        setShowWithdrawSheet(true);
-                      }}
-                      style={[styles.withdrawBtn, { borderColor: palette.primary }]}
-                    >
-                      <Text variant="label" style={{ color: palette.primary }}>Retirer</Text>
-                    </Pressable>
-                  )}
-                </View>
-                <View style={[styles.heroComparison, { marginTop: spacing[3] }]}>
-                  <Text variant="caption" color="secondary">
-                    {monthNet > 0
-                      ? `Ce mois, bénéfice de ${formatAmount(monthNet, currency)} · ${monthOrderCount} vente${monthOrderCount !== 1 ? 's' : ''}`
-                      : monthOrderCount > 0
-                      ? `Ce mois · ${monthOrderCount} vente${monthOrderCount !== 1 ? 's' : ''}`
-                      : 'Aucune vente ce mois'}
-                  </Text>
-                </View>
-              </Card>
-            )}
-
-            {/* ── 2. Leurs produits ── */}
-            {investorScope.length > 0 && (
-              <View style={styles.section}>
-                <Text variant="label" color="secondary" style={styles.sectionTitle}>
-                  Vos produits
-                </Text>
-                {investorScope.map(stake => {
-                  const bs      = bestSellers.find(b => b.product_id === stake.product_id);
-                  const product = products.find(p => p.id === stake.product_id);
-                  const cost    = product?.cost_price ?? 0;
-                  const profit  = bs ? bs.total_revenue - bs.total_qty * cost : 0;
-                  const gain    = (stake.profit_share / 100) * profit;
-                  return (
-                    <View key={stake.product_id} style={styles.bsRow}>
-                      <Text variant="body" style={{ flex: 1 }} numberOfLines={1}>{stake.product_name}</Text>
-                      <View style={{ alignItems: 'flex-end' }}>
-                        {bs && bs.total_revenue > 0 ? (
-                          <>
-                            <Text variant="label" style={{ color: palette.success }}>
-                              {formatAmount(gain, currency)}
-                            </Text>
-                            <Text variant="caption" color="secondary">
-                              {stake.profit_share}% · {formatAmount(bs.total_revenue, currency)}
-                            </Text>
-                          </>
-                        ) : (
-                          <Text variant="caption" color="secondary">{stake.profit_share}% des bénéfices</Text>
-                        )}
-                      </View>
-                    </View>
-                  );
-                })}
-                {investorGain > 0 && (
-                  <View style={[styles.bsRow, { borderBottomWidth: 0 }]}>
-                    <Text variant="body" color="secondary" style={{ flex: 1 }}>Gain estimé ce mois</Text>
-                    <Text variant="label" style={{ color: palette.success }}>
-                      {formatAmount(investorGain, currency)}
-                    </Text>
-                  </View>
-                )}
-              </View>
-            )}
-
-          </View>
-
-        ) : (
-          <>
-            {/* ── Zone 1: Hero — Today ── */}
-            {dayGreeting ? (
-              <Text variant="caption" color="secondary">{dayGreeting}</Text>
-            ) : null}
-            <Card onPress={() => router.push('/ventes')} elevated style={styles.heroCard}>
+          {/* Header */}
+          <View style={styles.header}>
+            <View style={{ flexDirection: 'row', alignItems: 'center' }}>
               <Pressable
-                onPress={() => setIsPrivate(p => !p)}
-                style={styles.heroEye}
-                hitSlop={12}
-                accessibilityLabel={isPrivate ? 'Afficher le montant' : 'Masquer le montant'}
+                onPress={openBusinessPicker}
+                hitSlop={10}
+                style={({ pressed }) => [{ opacity: pressed ? 0.5 : 1 }]}
+                accessibilityLabel="Changer de commerce"
                 accessibilityRole="button"
               >
-                <Ionicons
-                  name={isPrivate ? 'eye-off-outline' : 'eye-outline'}
-                  size={18}
-                  color={isPrivate ? palette.primary : palette.textSecondary}
-                />
+                <Ionicons name="menu" size={24} color={palette.textPrimary} />
               </Pressable>
-              <View style={styles.heroTop}>
-                <Text variant="caption" color="secondary">
-                  {heroCaption}
-                </Text>
-                {hasSoldToday ? (
-                  <View style={styles.heroAmountRow}>
-                    <Text variant="amountLarge" color="success" style={styles.heroAmount}>
-                      {rawOrMask(kpis?.revenue_today ?? 0)}
-                    </Text>
-                    <Text variant="amountLarge" color="success" style={styles.heroCurrency}>
-                      {currency}
-                    </Text>
-                  </View>
-                ) : (
-                  // Never a giant "0" — a quiet fact plus an invitation to act
-                  // on it, instead of a number that reads as a verdict. Kept
-                  // deliberately compact (title + button, no subtitle) — this
-                  // sits inside the hero card, not a full-screen empty state.
-                  // A real button, not a text link — this is the single most
-                  // likely next action on the screen a busy shop owner opens most.
-                  <View style={styles.heroEmptyState}>
-                    <Text variant="body" color="secondary">Aucune vente aujourd'hui.</Text>
-                    <Button
-                      label="Enregistrer une vente"
-                      onPress={() => { setQuickCaptureMode('vente'); setShowQuickCapture(true); }}
-                      size="sm"
-                      style={styles.heroEmptyAction}
-                    />
+              <Text variant="h4" style={{ marginLeft: 12 }} numberOfLines={1}>
+                {business?.name}
+              </Text>
+            </View>
+            <View style={{ flexDirection: 'row', alignItems: 'center', gap: spacing[2] }}>
+              {/* Inviter pill — the single invite-a-friend entry point. Replaces
+                  the former "A" header shortcut (Alpha) here; Alpha now lives
+                  in the lateral drawer as "Assistant IA" (BusinessDrawer footer),
+                  same destination, no stranded function. The discussions icon
+                  to the right stays put. */}
+              <Pressable
+                onPress={handleInvite}
+                disabled={inviting}
+                style={({ pressed }) => [styles.invitePill, (pressed || inviting) && { opacity: 0.7 }]}
+                accessibilityLabel="Inviter un ami sur Patron"
+                accessibilityRole="button"
+              >
+                <Ionicons name="person-add-outline" size={14} color={palette.textInverse} />
+                <Text style={styles.invitePillText}>Inviter</Text>
+              </Pressable>
+              <Pressable
+                onPress={() => router.push('/(app)/discussions')}
+                style={({ pressed }) => [styles.chatBtn, { opacity: pressed ? 0.7 : 1 }]}
+                accessibilityLabel="Discussions"
+                accessibilityRole="button"
+              >
+                <View style={styles.chatIconBox}>
+                  <Ionicons name="chatbubbles-outline" size={24} color={palette.textSecondary} />
+                </View>
+                {totalUnread > 0 && (
+                  <View style={styles.chatBadge}>
+                    <Text style={styles.chatBadgeText}>{totalUnread > 99 ? '99+' : String(totalUnread)}</Text>
                   </View>
                 )}
-              </View>
-              <View style={styles.heroComparison}>
-                {showDeltaPill ? (
-                  <Pill
-                    variant="solid"
-                    tone={delta > 0 ? 'success' : 'warning'}
-                    icon={delta > 0 ? 'arrow-up' : 'arrow-down'}
-                  >
-                    {delta > 0 ? `${deltaAmt} de plus qu'hier` : `${deltaAmt} de moins qu'hier`}
-                  </Pill>
-                ) : (
-                  <Text variant="caption" color="secondary">{comparisonText}</Text>
-                )}
-              </View>
+              </Pressable>
+            </View>
+          </View>
+
+          {loading ? (
+            <SkeletonKpiGrid />
+          ) : isVendeur && products.length === 0 ? (
+            /* ── Empty state for vendeur: no products configured yet ── */
+            <Card style={styles.welcome}>
+              <Text variant="h4" style={{ textAlign: 'center' }}>Aucun produit</Text>
+              <Text variant="body" color="secondary" style={{ textAlign: 'center' }}>
+                Votre commerce n'a pas encore de produits configurés.{'\n'}
+                Contactez votre gérant pour commencer à vendre.
+              </Text>
             </Card>
 
-            {/* ── Zone 2: Attention. The debt card always renders — data
+          ) : isInvestisseur ? (
+            /* ── INVESTOR HOME ─────────────────────────────────────────────────── */
+            <View style={{ gap: spacing[4] }}>
+
+              {/* ── 1. Gains hero ── */}
+              {pendingPayout ? (
+                <Card elevated style={[styles.heroCard, { backgroundColor: palette.warningLight }]}>
+                  <Text variant="caption" style={{ color: palette.warning }}>Demande en cours</Text>
+                  <Text variant="amountLarge" style={{ color: palette.warning, fontSize: 44, lineHeight: 56 }}>
+                    {formatAmount(pendingPayout.requested_amount, currency)}
+                  </Text>
+                  <Text variant="caption" color="secondary" style={{ marginTop: spacing[1] }}>
+                    en cours de traitement
+                  </Text>
+                </Card>
+              ) : (
+                <Card elevated style={styles.heroCard}>
+                  <View style={styles.investorHeroRow}>
+                    <View style={{ flex: 1, gap: spacing[1] }}>
+                      <Text variant="caption" color="secondary">Vos gains</Text>
+                      <Text
+                        variant="amountLarge"
+                        style={{ color: (balance ?? 0) > 0 ? palette.success : palette.textPrimary, fontSize: 44, lineHeight: 56 }}
+                      >
+                        {formatAmount(balance ?? 0, currency)}
+                      </Text>
+                    </View>
+                    {(balance ?? 0) > 0 && (
+                      <Pressable
+                        onPress={() => {
+                          setWithdrawAmountStr(formatAmountInput(String(Math.round(balance ?? 0)), currency));
+                          setShowWithdrawSheet(true);
+                        }}
+                        style={[styles.withdrawBtn, { borderColor: palette.primary }]}
+                      >
+                        <Text variant="label" style={{ color: palette.primary }}>Retirer</Text>
+                      </Pressable>
+                    )}
+                  </View>
+                  <View style={[styles.heroComparison, { marginTop: spacing[3] }]}>
+                    <Text variant="caption" color="secondary">
+                      {monthNet > 0
+                        ? `Ce mois, bénéfice de ${formatAmount(monthNet, currency)} · ${monthOrderCount} vente${monthOrderCount !== 1 ? 's' : ''}`
+                        : monthOrderCount > 0
+                          ? `Ce mois · ${monthOrderCount} vente${monthOrderCount !== 1 ? 's' : ''}`
+                          : 'Aucune vente ce mois'}
+                    </Text>
+                  </View>
+                </Card>
+              )}
+
+              {/* ── 2. Leurs produits ── */}
+              {investorScope.length > 0 && (
+                <View style={styles.section}>
+                  <Text variant="label" color="secondary" style={styles.sectionTitle}>
+                    Vos produits
+                  </Text>
+                  {investorScope.map(stake => {
+                    const bs = bestSellers.find(b => b.product_id === stake.product_id);
+                    const product = products.find(p => p.id === stake.product_id);
+                    const cost = product?.cost_price ?? 0;
+                    const profit = bs ? bs.total_revenue - bs.total_qty * cost : 0;
+                    const gain = (stake.profit_share / 100) * profit;
+                    return (
+                      <View key={stake.product_id} style={styles.bsRow}>
+                        <Text variant="body" style={{ flex: 1 }} numberOfLines={1}>{stake.product_name}</Text>
+                        <View style={{ alignItems: 'flex-end' }}>
+                          {bs && bs.total_revenue > 0 ? (
+                            <>
+                              <Text variant="label" style={{ color: palette.success }}>
+                                {formatAmount(gain, currency)}
+                              </Text>
+                              <Text variant="caption" color="secondary">
+                                {stake.profit_share}% · {formatAmount(bs.total_revenue, currency)}
+                              </Text>
+                            </>
+                          ) : (
+                            <Text variant="caption" color="secondary">{stake.profit_share}% des bénéfices</Text>
+                          )}
+                        </View>
+                      </View>
+                    );
+                  })}
+                  {investorGain > 0 && (
+                    <View style={[styles.bsRow, { borderBottomWidth: 0 }]}>
+                      <Text variant="body" color="secondary" style={{ flex: 1 }}>Gain estimé ce mois</Text>
+                      <Text variant="label" style={{ color: palette.success }}>
+                        {formatAmount(investorGain, currency)}
+                      </Text>
+                    </View>
+                  )}
+                </View>
+              )}
+
+            </View>
+
+          ) : (
+            <>
+              {/* ── Zone 1: Hero — Today ── */}
+              {dayGreeting ? (
+                <Text variant="caption" color="secondary">{dayGreeting}</Text>
+              ) : null}
+              <Card onPress={() => router.push('/ventes')} elevated style={styles.heroCard}>
+                <Pressable
+                  onPress={() => setIsPrivate(p => !p)}
+                  style={styles.heroEye}
+                  hitSlop={12}
+                  accessibilityLabel={isPrivate ? 'Afficher le montant' : 'Masquer le montant'}
+                  accessibilityRole="button"
+                >
+                  <Ionicons
+                    name={isPrivate ? 'eye-off-outline' : 'eye-outline'}
+                    size={18}
+                    color={isPrivate ? palette.primary : palette.textSecondary}
+                  />
+                </Pressable>
+                <View style={styles.heroTop}>
+                  <Text variant="caption" color="secondary">
+                    {heroCaption}
+                  </Text>
+                  {hasSoldToday ? (
+                    <View style={styles.heroAmountRow}>
+                      <Text variant="amountLarge" color="success" style={styles.heroAmount}>
+                        {rawOrMask(kpis?.revenue_today ?? 0)}
+                      </Text>
+                      <Text variant="amountLarge" color="success" style={styles.heroCurrency}>
+                        {currency}
+                      </Text>
+                    </View>
+                  ) : (
+                    // Never a giant "0" — a quiet fact plus an invitation to act
+                    // on it, instead of a number that reads as a verdict. Kept
+                    // deliberately compact (title + button, no subtitle) — this
+                    // sits inside the hero card, not a full-screen empty state.
+                    // A real button, not a text link — this is the single most
+                    // likely next action on the screen a busy shop owner opens most.
+                    <View style={styles.heroEmptyState}>
+                      <Text variant="body" color="secondary">Aucune vente aujourd'hui.</Text>
+                      <Button
+                        label="Enregistrer une vente"
+                        onPress={() => { setQuickCaptureMode('vente'); setShowQuickCapture(true); }}
+                        size="sm"
+                        style={styles.heroEmptyAction}
+                      />
+                    </View>
+                  )}
+                </View>
+                <View style={styles.heroComparison}>
+                  {showDeltaPill ? (
+                    <Pill
+                      variant="solid"
+                      tone={delta > 0 ? 'success' : 'warning'}
+                      icon={delta > 0 ? 'arrow-up' : 'arrow-down'}
+                    >
+                      {delta > 0 ? `${deltaAmt} de plus qu'hier` : `${deltaAmt} de moins qu'hier`}
+                    </Pill>
+                  ) : (
+                    <Text variant="caption" color="secondary">{comparisonText}</Text>
+                  )}
+                </View>
+              </Card>
+
+              {/* ── Zone 2: Attention. The debt card always renders — data
                 variant when someone owes money, or the zero-debts CTA (the
                 deferred hero action) when nobody currently does — so this
                 zone is never entirely empty for the default role branch. The
                 low-stock card stays purely conditional: it's a genuine "is
                 anything wrong" signal with no equivalent always-useful
                 zero-state. The two resolve independently of each other. ── */}
-            <View style={styles.attentionZone}>
-              {isOwner && <DebtReminderDeniedCard userId={userId} refreshSignal={debtDeniedRefresh} />}
-              {(kpis?.credit_count ?? 0) > 0 ? (
-                // Bespoke, not <KpiCard> — this is about PEOPLE who owe
-                // her, not a warning/cash state, so it deliberately skips
-                // KpiCard's colored icon-circle + tone-tinted amount
-                // treatment (still used, unchanged, by "À racheter" below).
-                // The amount is plain foreground; color appears only on
-                // the aging line, and only when a debt is genuinely old.
-                <Card
-                  onPress={() => router.push({ pathname: '/(app)/clients', params: { filter: 'doivent' } })}
-                  style={{ gap: spacing[1] }}
-                >
-                  <View style={{ flexDirection: 'row', alignItems: 'center', gap: spacing[2] }}>
-                    <Text variant="caption" color="secondary" style={{ flex: 1 }}>
-                      {kpis?.credit_count} client{(kpis?.credit_count ?? 0) > 1 ? 's' : ''} vous {(kpis?.credit_count ?? 0) > 1 ? 'doivent' : 'doit'}
-                    </Text>
-                    <Ionicons name="chevron-forward" size={16} color={palette.textSecondary} />
-                  </View>
-                  <Text variant="amountLarge">{amtOrMask(kpis?.credit_total ?? 0)}</Text>
-                  {creditAging.agingCount > 0 && (
-                    <Text variant="caption" style={{ color: debtAgeColor(creditAging.oldestDays, palette) }}>
-                      dont {creditAging.agingCount} depuis {creditAging.oldestDays} jour{creditAging.oldestDays > 1 ? 's' : ''}
-                    </Text>
-                  )}
-                </Card>
-              ) : (
-                // The deferred hero action — same single-purpose form the
-                // first-run gate itself uses (see FirstRunHeroOverlay,
-                // opened below via showDebtCapture), reachable again any
-                // time there are currently zero outstanding debts, not just
-                // once at first run.
-                <Card style={{ gap: spacing[2] }}>
-                  <Text variant="h4">Qui vous doit de l&apos;argent ?</Text>
-                  <Text variant="body" color="secondary">Écrivez son nom et le montant.</Text>
-                  <Button
-                    label="Enregistrer une dette"
-                    onPress={() => setShowDebtCapture(true)}
-                    fullWidth
-                    size="md"
-                    style={{ marginTop: spacing[1] }}
-                  />
-                </Card>
-              )}
-              {lowStock > 0 && (
-                <KpiCard
-                  label="À racheter"
-                  value={String(lowStock)}
-                  sub={`produit${lowStock > 1 ? 's' : ''} à racheter`}
-                  onPress={isVendeur ? undefined : () => router.push('/(app)/(tabs)/catalogue')}
-                  tone="warning"
-                  icon="leaf-outline"
-                />
-              )}
-            </View>
-
-            {showDebtCapture && (
-              <FirstRunHeroOverlay
-                businessId={businessId}
-                userId={userId}
-                currency={currency}
-                onDone={() => { setShowDebtCapture(false); loadAll(); }}
-              />
-            )}
-
-            {/* ── Best sellers ── */}
-            {visibleBestSellers.length > 0 && (
-              <View style={styles.section}>
-                <Text variant="label" color="secondary" style={styles.sectionTitle}>
-                  Produits qui marchent
-                </Text>
-                {visibleBestSellers.map((bs, i) => (
-                  <View key={bs.product_id} style={styles.bsRow}>
-                    <Text variant="caption" style={{ width: 20, color: palette.textSecondary }}>#{i + 1}</Text>
-                    <Text variant="body" style={{ flex: 1 }} numberOfLines={1}>{bs.product_name}</Text>
-                    <View style={{ alignItems: 'flex-end' }}>
-                      <Text variant="label">{amtOrMask(bs.total_revenue)}</Text>
-                      <Text variant="caption" color="secondary">{bs.total_qty} unité{bs.total_qty > 1 ? 's' : ''}</Text>
+              <View style={styles.attentionZone}>
+                {isOwner && <DebtReminderDeniedCard userId={userId} refreshSignal={debtDeniedRefresh} />}
+                {(kpis?.credit_count ?? 0) > 0 ? (
+                  // Bespoke, not <KpiCard> — this is about PEOPLE who owe
+                  // her, not a warning/cash state, so it deliberately skips
+                  // KpiCard's colored icon-circle + tone-tinted amount
+                  // treatment (still used, unchanged, by "À racheter" below).
+                  // The amount is plain foreground; color appears only on
+                  // the aging line, and only when a debt is genuinely old.
+                  <Card
+                    onPress={() => router.push({ pathname: '/(app)/clients', params: { filter: 'doivent' } })}
+                    style={{ gap: spacing[1] }}
+                  >
+                    <View style={{ flexDirection: 'row', alignItems: 'center', gap: spacing[2] }}>
+                      <Text variant="caption" color="secondary" style={{ flex: 1 }}>
+                        {kpis?.credit_count} client{(kpis?.credit_count ?? 0) > 1 ? 's' : ''} vous {(kpis?.credit_count ?? 0) > 1 ? 'doivent' : 'doit'}
+                      </Text>
+                      <Ionicons name="chevron-forward" size={16} color={palette.textSecondary} />
                     </View>
-                  </View>
-                ))}
+                    <Text variant="amountLarge">{amtOrMask(kpis?.credit_total ?? 0)}</Text>
+                    {creditAging.agingCount > 0 && (
+                      <Text variant="caption" style={{ color: debtAgeColor(creditAging.oldestDays, palette) }}>
+                        dont {creditAging.agingCount} depuis {creditAging.oldestDays} jour{creditAging.oldestDays > 1 ? 's' : ''}
+                      </Text>
+                    )}
+                  </Card>
+                ) : (
+                  // The deferred hero action — same single-purpose form the
+                  // first-run gate itself uses (see FirstRunHeroOverlay,
+                  // opened below via showDebtCapture), reachable again any
+                  // time there are currently zero outstanding debts, not just
+                  // once at first run.
+                  <Card style={{ gap: spacing[2] }}>
+                    <Text variant="h4">Qui vous doit de l&apos;argent ?</Text>
+                    <Text variant="body" color="secondary">Écrivez son nom et le montant.</Text>
+                    <Button
+                      label="Enregistrer une dette"
+                      onPress={() => setShowDebtCapture(true)}
+                      fullWidth
+                      size="md"
+                      style={{ marginTop: spacing[1] }}
+                    />
+                  </Card>
+                )}
+                {lowStock > 0 && (
+                  <KpiCard
+                    label="À racheter"
+                    value={String(lowStock)}
+                    sub={`produit${lowStock > 1 ? 's' : ''} à racheter`}
+                    onPress={isVendeur ? undefined : () => router.push('/(app)/(tabs)/catalogue')}
+                    tone="warning"
+                    icon="leaf-outline"
+                  />
+                )}
               </View>
-            )}
 
-
-            {/* ── Zone 3: Month context — hidden in evening/night (already in comparison) ── */}
-            {dayPart !== 'evening' && dayPart !== 'night' ? (
-              <Text variant="caption" color="secondary" style={styles.monthLine}>
-                Ce mois: {amtOrMask(kpis?.revenue_month ?? 0)}
-              </Text>
-            ) : null}
-          </>
-        )}
-      </ScrollView>
-
-      {/* ── Withdrawal sheet ── */}
-      <Modal
-        visible={showWithdrawSheet}
-        transparent
-        animationType="slide"
-        onRequestClose={() => setShowWithdrawSheet(false)}
-        statusBarTranslucent
-        navigationBarTranslucent
-      >
-        <Pressable style={styles.sheetBackdrop} onPress={() => setShowWithdrawSheet(false)}>
-          <Pressable style={[styles.sheetPanel, { backgroundColor: palette.surface }]} onPress={() => {}}>
-            <View style={[styles.sheetHandle, { backgroundColor: palette.border }]} />
-            <Text variant="h4" style={styles.sheetTitle}>Retirer mes gains</Text>
-            <Text variant="caption" color="secondary" style={styles.sheetBody}>
-              Disponible : {formatAmount(balance ?? 0, currency)}
-            </Text>
-
-            {/* Amount input */}
-            <View style={{ width: '100%', gap: spacing[2] }}>
-              <Text variant="label">Montant à retirer</Text>
-              <View style={[styles.withdrawInput, { borderColor: palette.border, backgroundColor: palette.background }]}>
-                <TextInput
-                  style={{ flex: 1, fontSize: 28, fontWeight: '700', color: palette.textPrimary }}
-                  value={withdrawAmountStr}
-                  onChangeText={v => setWithdrawAmountStr(formatAmountInput(v, currency))}
-                  keyboardType="numeric"
-                  placeholder="0"
-                  placeholderTextColor={palette.textDisabled}
-                  selectTextOnFocus
-                  inputAccessoryViewID={Platform.OS === 'ios' ? WITHDRAW_SHEET_SILENT_ACCESSORY_ID : undefined}
+              {showDebtCapture && (
+                <FirstRunHeroOverlay
+                  businessId={businessId}
+                  userId={userId}
+                  currency={currency}
+                  onDone={() => { setShowDebtCapture(false); loadAll(); }}
                 />
-                <Text variant="label" color="secondary">{currency}</Text>
-              </View>
-            </View>
+              )}
 
-            <Button
-              label={investorSaving ? 'Envoi…' : 'Envoyer la demande'}
-              fullWidth
-              size="lg"
-              loading={investorSaving}
-              onPress={async () => {
-                const amt = parseAmountInput(withdrawAmountStr, currency);
-                if (!amt || amt <= 0) { toast.warning('Entrez un montant valide'); return; }
-                const balanceVal = balance ?? 0;
-                if (amt > balanceVal) { toast.warning('Montant supérieur à votre solde'); return; }
-                const amtCents = BigInt(Math.round(amt * 100));
-                const ok = await requestPayout(businessId, amtCents);
-                if (ok) {
-                  haptics.success();
-                  toast.success('Demande envoyée');
-                  setShowWithdrawSheet(false);
-                  setWithdrawAmountStr('');
-                }
-              }}
-            />
-            <Pressable onPress={() => setShowWithdrawSheet(false)}>
-              <Text variant="label" color="secondary">Annuler</Text>
+              {/* ── Best sellers ── */}
+              {visibleBestSellers.length > 0 && (
+                <View style={styles.section}>
+                  <Text variant="label" color="secondary" style={styles.sectionTitle}>
+                    Produits qui marchent
+                  </Text>
+                  {visibleBestSellers.map((bs, i) => (
+                    <View key={bs.product_id} style={styles.bsRow}>
+                      <Text variant="caption" style={{ width: 20, color: palette.textSecondary }}>#{i + 1}</Text>
+                      <Text variant="body" style={{ flex: 1 }} numberOfLines={1}>{bs.product_name}</Text>
+                      <View style={{ alignItems: 'flex-end' }}>
+                        <Text variant="label">{amtOrMask(bs.total_revenue)}</Text>
+                        <Text variant="caption" color="secondary">{bs.total_qty} unité{bs.total_qty > 1 ? 's' : ''}</Text>
+                      </View>
+                    </View>
+                  ))}
+                </View>
+              )}
+
+
+              {/* ── Zone 3: Month context — hidden in evening/night (already in comparison) ── */}
+              {dayPart !== 'evening' && dayPart !== 'night' ? (
+                <Text variant="caption" color="secondary" style={styles.monthLine}>
+                  Ce mois: {amtOrMask(kpis?.revenue_month ?? 0)}
+                </Text>
+              ) : null}
+            </>
+          )}
+        </ScrollView>
+
+        {/* ── Withdrawal sheet ── */}
+        <Modal
+          visible={showWithdrawSheet}
+          transparent
+          animationType="slide"
+          onRequestClose={() => setShowWithdrawSheet(false)}
+          statusBarTranslucent
+          navigationBarTranslucent
+        >
+          <Pressable style={styles.sheetBackdrop} onPress={() => setShowWithdrawSheet(false)}>
+            <Pressable style={[styles.sheetPanel, { backgroundColor: palette.surface }]} onPress={() => { }}>
+              <View style={[styles.sheetHandle, { backgroundColor: palette.border }]} />
+              <Text variant="h4" style={styles.sheetTitle}>Retirer mes gains</Text>
+              <Text variant="caption" color="secondary" style={styles.sheetBody}>
+                Disponible : {formatAmount(balance ?? 0, currency)}
+              </Text>
+
+              {/* Amount input */}
+              <View style={{ width: '100%', gap: spacing[2] }}>
+                <Text variant="label">Montant à retirer</Text>
+                <View style={[styles.withdrawInput, { borderColor: palette.border, backgroundColor: palette.background }]}>
+                  <TextInput
+                    style={{ flex: 1, fontSize: 28, fontWeight: '700', color: palette.textPrimary }}
+                    value={withdrawAmountStr}
+                    onChangeText={v => setWithdrawAmountStr(formatAmountInput(v, currency))}
+                    keyboardType="numeric"
+                    placeholder="0"
+                    placeholderTextColor={palette.textDisabled}
+                    selectTextOnFocus
+                    inputAccessoryViewID={Platform.OS === 'ios' ? WITHDRAW_SHEET_SILENT_ACCESSORY_ID : undefined}
+                  />
+                  <Text variant="label" color="secondary">{currency}</Text>
+                </View>
+              </View>
+
+              <Button
+                label={investorSaving ? 'Envoi…' : 'Envoyer la demande'}
+                fullWidth
+                size="lg"
+                loading={investorSaving}
+                onPress={async () => {
+                  const amt = parseAmountInput(withdrawAmountStr, currency);
+                  if (!amt || amt <= 0) { toast.warning('Entrez un montant valide'); return; }
+                  const balanceVal = balance ?? 0;
+                  if (amt > balanceVal) { toast.warning('Montant supérieur à votre solde'); return; }
+                  const amtCents = BigInt(Math.round(amt * 100));
+                  const ok = await requestPayout(businessId, amtCents);
+                  if (ok) {
+                    haptics.success();
+                    toast.success('Demande envoyée');
+                    setShowWithdrawSheet(false);
+                    setWithdrawAmountStr('');
+                  }
+                }}
+              />
+              <Pressable onPress={() => setShowWithdrawSheet(false)}>
+                <Text variant="label" color="secondary">Annuler</Text>
+              </Pressable>
             </Pressable>
           </Pressable>
-        </Pressable>
-        {Platform.OS === 'ios' && (
-          <InputAccessoryView nativeID={WITHDRAW_SHEET_SILENT_ACCESSORY_ID}>
-            <View style={{ height: 0 }} />
-          </InputAccessoryView>
-        )}
-      </Modal>
+          {Platform.OS === 'ios' && (
+            <InputAccessoryView nativeID={WITHDRAW_SHEET_SILENT_ACCESSORY_ID}>
+              <View style={{ height: 0 }} />
+            </InputAccessoryView>
+          )}
+        </Modal>
 
-      {/* One-tap capture — the "radical simplicity" entry point. Investisseur
+        {/* One-tap capture — the "radical simplicity" entry point. Investisseur
           is read-only (no write access to sale_orders/clients), so it's the
           one role that never sees this. Positioned above the floating tab
           bar the same way catalogue.tsx's/vendre.tsx's own FABs are, plus a
@@ -1054,52 +1080,52 @@ export default function AccueilScreen() {
           a real device. A pure shortcut alongside Vendre — nothing about
           the underlying credit/sale flow changes, only how fast it's
           reached from the screen the app actually opens to. */}
-      {!isInvestisseur && (
-        <Pressable
-          onPress={() => {
-            trackEvent('quick_capture_opened', businessId, userId, { source: 'accueil_fab' });
-            setShowQuickCapture(true);
+        {!isInvestisseur && (
+          <Pressable
+            onPress={() => {
+              trackEvent('quick_capture_opened', businessId, userId, { source: 'accueil_fab' });
+              setShowQuickCapture(true);
+            }}
+            style={({ pressed }) => [styles.quickCaptureFab, pressed && { opacity: 0.82 }]}
+            accessibilityLabel="Ajouter une vente ou une dette"
+            accessibilityRole="button"
+          >
+            <Ionicons name="add" size={20} color={palette.textInverse} />
+            <Text style={styles.quickCaptureFabLabel}>Ajouter</Text>
+          </Pressable>
+        )}
+
+        <QuickCaptureSheet
+          visible={showQuickCapture}
+          onClose={() => {
+            // This sheet is a plain RN Modal rendered by Accueil itself — but
+            // per FirstRunHeroOverlay's own fix above, a native Modal opening/
+            // closing never triggers a real react-navigation focus transition
+            // regardless of where in the tree it's mounted, so useFocusEffect
+            // alone would leave the day-card/debt-card stale after a credit
+            // debt or quick sale recorded here, exactly like that bug. loadAll
+            // is cheap and idempotent — a no-op close (nothing was ever
+            // recorded this session) just refetches the same numbers.
+            setShowQuickCapture(false);
+            loadAll();
           }}
-          style={({ pressed }) => [styles.quickCaptureFab, pressed && { opacity: 0.82 }]}
-          accessibilityLabel="Ajouter une vente ou une dette"
-          accessibilityRole="button"
-        >
-          <Ionicons name="add" size={20} color={palette.textInverse} />
-          <Text style={styles.quickCaptureFabLabel}>Ajouter</Text>
-        </Pressable>
-      )}
-
-      <QuickCaptureSheet
-        visible={showQuickCapture}
-        onClose={() => {
-          // This sheet is a plain RN Modal rendered by Accueil itself — but
-          // per FirstRunHeroOverlay's own fix above, a native Modal opening/
-          // closing never triggers a real react-navigation focus transition
-          // regardless of where in the tree it's mounted, so useFocusEffect
-          // alone would leave the day-card/debt-card stale after a credit
-          // debt or quick sale recorded here, exactly like that bug. loadAll
-          // is cheap and idempotent — a no-op close (nothing was ever
-          // recorded this session) just refetches the same numbers.
-          setShowQuickCapture(false);
-          loadAll();
-        }}
-        businessId={businessId}
-        userId={userId}
-        currency={currency}
-        initialMode={quickCaptureMode}
-      />
-
-      {businessId && userId && (
-        <PaymentReminderAsker
           businessId={businessId}
           userId={userId}
-          active={isOwner && !session?.isDemoMode}
-          blocked={showQuickCapture || showDebtCapture}
-          onDenied={() => setDebtDeniedRefresh(n => n + 1)}
+          currency={currency}
+          initialMode={quickCaptureMode}
         />
-      )}
 
-    </Screen>
+        {businessId && userId && (
+          <PaymentReminderAsker
+            businessId={businessId}
+            userId={userId}
+            active={isOwner && !session?.isDemoMode}
+            blocked={showQuickCapture || showDebtCapture}
+            onDenied={() => setDebtDeniedRefresh(n => n + 1)}
+          />
+        )}
+
+      </Screen>
     </KeyboardAvoidingView>
   );
 }
@@ -1127,6 +1153,13 @@ function makeStyles(p: Palette) {
     },
     quickCaptureFabLabel: { fontSize: 15, fontWeight: '600' as const, color: p.textInverse },
     header: { paddingBottom: spacing[2], flexDirection: 'row', alignItems: 'center', justifyContent: 'space-between' },
+    invitePill: {
+      flexDirection: 'row', alignItems: 'center', gap: spacing[1],
+      backgroundColor: p.primary,
+      paddingHorizontal: spacing[3], paddingVertical: spacing[1],
+      borderRadius: radius.full,
+    },
+    invitePillText: { fontSize: 13, fontWeight: '600' as const, color: p.textInverse },
     chatBtn: { padding: spacing[1] },
     chatIconBox: { width: 24, height: 24, alignItems: 'center', justifyContent: 'center' },
     chatBadge: {
@@ -1181,7 +1214,7 @@ function makeStyles(p: Palette) {
       marginBottom: spacing[2],
     },
     sheetTitle: { textAlign: 'center' },
-    sheetBody:  { textAlign: 'center', lineHeight: 24 },
+    sheetBody: { textAlign: 'center', lineHeight: 24 },
 
     welcome: { alignItems: 'center', gap: spacing[4], paddingVertical: spacing[8], paddingHorizontal: spacing[6] },
     welcomeEmoji: { fontSize: 52, lineHeight: 72 },

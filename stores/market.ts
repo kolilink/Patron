@@ -30,6 +30,7 @@ interface MarketStore {
   prependPost: (post: MarketPost) => void;
   createPost: (title: string, content: string, category: MarketCategory) => Promise<void>;
   editPost: (postId: string, title: string, content: string) => Promise<void>;
+  removePost: (postId: string) => void;
 
   fetchPostDetail: (postId: string, userId: string) => Promise<void>;
   addComment: (postId: string, parentId: string | null, content: string) => Promise<void>;
@@ -77,6 +78,8 @@ export const useMarketStore = create<MarketStore>((set, get) => ({
       let q = supabase
         .from('market_posts')
         .select('*')
+        // Phase 6 — pinned posts (welcome/notices) float above chronology.
+        .order('is_pinned', { ascending: false })
         .order('created_at', { ascending: false })
         .limit(50);
       if (category) q = q.eq('category', category);
@@ -164,19 +167,34 @@ export const useMarketStore = create<MarketStore>((set, get) => ({
         p_category: category,
       });
       if (error) throw error;
-      // Fetch the newly created post to prepend it
+      // Fetch the newly created post to prepend it (the author always sees
+      // their own post, including a first post still pending approval).
       const { data: post, error: fetchErr } = await supabase
         .from('market_posts')
         .select('*')
         .eq('id', data)
         .single();
       if (fetchErr) throw fetchErr;
-      get().prependPost(post as MarketPost);
+      const created = post as MarketPost;
+      get().prependPost(created);
+      if (created.status === 'pending') {
+        toast.info('Votre première annonce sera visible après validation par l\'équipe Patron.');
+      }
       set({ creating: false });
     } catch (err) {
       set({ creating: false, error: translateError(err, 'Erreur de création') });
       throw err;
     }
+  },
+
+  // Remove a post from every local view after a successful delete
+  // (own-post delete or founder moderation). Realtime only covers INSERT
+  // for the forum list, so a deletion must be applied locally too.
+  removePost: (postId) => {
+    set(state => ({
+      posts: state.posts.filter(p => p.id !== postId),
+      activePost: state.activePost?.id === postId ? null : state.activePost,
+    }));
   },
 
   editPost: async (postId, title, content) => {

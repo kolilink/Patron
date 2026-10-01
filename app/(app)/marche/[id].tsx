@@ -21,6 +21,8 @@ import { useAuthStore } from '@/stores/auth';
 import { useMarketStore } from '@/stores/market';
 import { supabase } from '@/lib/supabase';
 import { generateFallbackName } from '@/lib/id';
+import { PostActionsMenu } from '@/src/components/ui/PostActionsMenu';
+import { PseudoSheet } from '@/src/components/ui/PseudoSheet';
 import type { MarketComment, MarketPost } from '@/src/types';
 
 const LOCALE = Intl.DateTimeFormat().resolvedOptions().locale;
@@ -60,8 +62,8 @@ function PostHeaderBlock({
   const { palette } = useTheme();
   const styles = useMemo(() => makeStyles(palette), [palette]);
   const authorName = post.author_name || generateFallbackName(post.author_id);
-  const initial    = authorName.charAt(0).toUpperCase();
-  const color      = avatarColor(post.author_id);
+  const initial = authorName.charAt(0).toUpperCase();
+  const color = avatarColor(post.author_id);
   const lastTapRef = useRef(0);
 
   const handleBodyTap = () => {
@@ -91,10 +93,12 @@ function PostHeaderBlock({
           </Text>
         </View>
         {isOwnPost && (
-          <Pressable onPress={onEdit} hitSlop={8} style={styles.editPostBtn} accessibilityLabel="Plus d'options" accessibilityRole="button">
-            <Ionicons name="ellipsis-horizontal" size={20} color={palette.textSecondary} />
+          <Pressable onPress={onEdit} hitSlop={8} style={styles.editPostBtn} accessibilityLabel="Modifier le post" accessibilityRole="button">
+            <Ionicons name="pencil-outline" size={18} color={palette.textSecondary} />
           </Pressable>
         )}
+        {/* Phase 1 — Signaler / Bloquer l'auteur / Supprimer on every post */}
+        <PostActionsMenu post={post} isOwnPost={isOwnPost} />
       </View>
 
       {/* Title */}
@@ -168,12 +172,12 @@ function CommentItem({
 }) {
   const { palette } = useTheme();
   const styles = useMemo(() => makeStyles(palette), [palette]);
-  const authorName   = comment.author_name || generateFallbackName(comment.author_id);
-  const initial      = authorName.charAt(0).toUpperCase();
-  const color        = avatarColor(comment.author_id);
-  const level        = comment.author_level ?? 1;
-  const isSelf       = comment.author_id === currentUserId;
-  const lastTapRef   = useRef(0);
+  const authorName = comment.author_name || generateFallbackName(comment.author_id);
+  const initial = authorName.charAt(0).toUpperCase();
+  const color = avatarColor(comment.author_id);
+  const level = comment.author_level ?? 1;
+  const isSelf = comment.author_id === currentUserId;
+  const lastTapRef = useRef(0);
 
   const handleBubbleTap = () => {
     if (isSelf) return;
@@ -268,8 +272,8 @@ export default function PostDetailScreen() {
   const { palette } = useTheme();
   const styles = useMemo(() => makeStyles(palette), [palette]);
   const { id } = useLocalSearchParams<{ id: string }>();
-  const session  = useAuthStore(s => s.session);
-  const userId   = session?.user.id ?? '';
+  const session = useAuthStore(s => s.session);
+  const userId = session?.user.id ?? '';
 
   const {
     activePost, comments, loadingDetail,
@@ -277,22 +281,25 @@ export default function PostDetailScreen() {
     likedPostIds, likedCommentIds, toggleCommentLike,
   } = useMarketStore();
 
-  const [text, setText]             = useState('');
+  const [text, setText] = useState('');
   const [replyingTo, setReplyingTo] = useState<MarketComment | null>(null);
   const [highlightedCommentId, setHighlightedCommentId] = useState<string | null>(null);
-  const inputRef        = useRef<TextInput>(null);
-  const channelRef      = useRef<ReturnType<typeof supabase.channel> | null>(null);
+  const inputRef = useRef<TextInput>(null);
+  const channelRef = useRef<ReturnType<typeof supabase.channel> | null>(null);
   const commentsListRef = useRef<FlatList<{ comment: MarketComment; isReply: boolean }>>(null);
-  const editScrollRef   = useRef<ScrollView>(null);
+  const editScrollRef = useRef<ScrollView>(null);
 
   // Edit post state
-  const [showEdit, setShowEdit]       = useState(false);
-  const [editTitle, setEditTitle]     = useState('');
+  const [showEdit, setShowEdit] = useState(false);
+  const [editTitle, setEditTitle] = useState('');
   const [editContent, setEditContent] = useState('');
-  const [editSaving, setEditSaving]   = useState(false);
-  const [editError, setEditError]     = useState('');
+  const [editSaving, setEditSaving] = useState(false);
+  const [editError, setEditError] = useState('');
+  // Phase 5 — no anonymous comments: gate behind the identity sheet.
+  const [showPseudo, setShowPseudo] = useState(false);
+  const userPseudo = session?.user.pseudo ?? null;
 
-  const isLiked   = likedPostIds.includes(id ?? '');
+  const isLiked = likedPostIds.includes(id ?? '');
   const isOwnPost = activePost?.author_id === userId;
 
   useFocusEffect(useCallback(() => {
@@ -325,7 +332,7 @@ export default function PostDetailScreen() {
 
   const handleSaveEdit = async () => {
     if (!activePost) return;
-    const title   = editTitle.trim();
+    const title = editTitle.trim();
     const content = editContent.trim();
     if (!title) { setEditError('Le titre est obligatoire'); return; }
     if (!content) { setEditError('Le contenu est obligatoire'); return; }
@@ -345,6 +352,10 @@ export default function PostDetailScreen() {
   const handleSend = async () => {
     const trimmed = text.trim();
     if (!trimmed || !id) return;
+    if (!userPseudo) {
+      setShowPseudo(true);
+      return;
+    }
     setText('');
     const parentId = replyingTo?.id ?? null;
     setReplyingTo(null);
@@ -398,7 +409,7 @@ export default function PostDetailScreen() {
         ) : !activePost ? null : (
           <FlatList
             ref={commentsListRef}
-            onScrollToIndexFailed={() => {}}
+            onScrollToIndexFailed={() => { }}
             data={threadedComments}
             keyExtractor={({ comment }) => comment.id}
             contentContainerStyle={styles.listContent}
@@ -509,35 +520,38 @@ export default function PostDetailScreen() {
         keyboardShouldPersistTaps="handled"
         keyboardDismissMode="interactive"
       >
-              <View style={styles.editCard}>
-                <TextInput
-                  style={styles.editTitleInput}
-                  value={editTitle}
-                  onChangeText={t => { setEditTitle(t); setEditError(''); }}
-                  placeholder="Titre"
-                  placeholderTextColor={palette.textSecondary}
-                  maxLength={100}
-                  returnKeyType="next"
-                  autoFocus
-                />
-                <View style={styles.editDivider} />
-                <TextInput
-                  style={styles.editBodyInput}
-                  value={editContent}
-                  onChangeText={t => { setEditContent(t); setEditError(''); }}
-                  placeholder="Partagez votre idée"
-                  placeholderTextColor={palette.textSecondary}
-                  multiline
-                  maxLength={1000}
-                  textAlignVertical="top"
-                  scrollEnabled={false}
-                  onFocus={() => setTimeout(() => editScrollRef.current?.scrollToEnd({ animated: true }), 300)}
-                />
-              </View>
-              {editError ? (
-                <Text variant="caption" style={{ color: palette.warning, marginTop: 8 }}>{editError}</Text>
-              ) : null}
+        <View style={styles.editCard}>
+          <TextInput
+            style={styles.editTitleInput}
+            value={editTitle}
+            onChangeText={t => { setEditTitle(t); setEditError(''); }}
+            placeholder="Titre"
+            placeholderTextColor={palette.textSecondary}
+            maxLength={100}
+            returnKeyType="next"
+            autoFocus
+          />
+          <View style={styles.editDivider} />
+          <TextInput
+            style={styles.editBodyInput}
+            value={editContent}
+            onChangeText={t => { setEditContent(t); setEditError(''); }}
+            placeholder="Partagez votre idée"
+            placeholderTextColor={palette.textSecondary}
+            multiline
+            maxLength={1000}
+            textAlignVertical="top"
+            scrollEnabled={false}
+            onFocus={() => setTimeout(() => editScrollRef.current?.scrollToEnd({ animated: true }), 300)}
+          />
+        </View>
+        {editError ? (
+          <Text variant="caption" style={{ color: palette.warning, marginTop: 8 }}>{editError}</Text>
+        ) : null}
       </FormSheet>
+
+      {/* ── Phase 5 — stable visible identity gate (no anonymous comments) ── */}
+      <PseudoSheet visible={showPseudo} onClose={() => setShowPseudo(false)} />
 
     </Screen>
   );
@@ -547,7 +561,7 @@ export default function PostDetailScreen() {
 
 function makeStyles(p: Palette) {
   return StyleSheet.create({
-    safe:   { flex: 1, backgroundColor: p.background },
+    safe: { flex: 1, backgroundColor: p.background },
     header: {
       flexDirection: 'row',
       alignItems: 'center',
@@ -557,23 +571,23 @@ function makeStyles(p: Palette) {
       gap: spacing[3],
     },
     headerTitle: { flex: 1 },
-    listContent:   { paddingBottom: spacing[8] },
-    centered:      { alignItems: 'center', justifyContent: 'center', padding: spacing[8] },
+    listContent: { paddingBottom: spacing[8] },
+    centered: { alignItems: 'center', justifyContent: 'center', padding: spacing[8] },
     emptyComments: { alignItems: 'center', padding: spacing[6] },
 
     // ── Post header ──
     postHeader: { padding: spacing[5] },
-    authorRow:  { flexDirection: 'row', alignItems: 'center', gap: spacing[3] },
+    authorRow: { flexDirection: 'row', alignItems: 'center', gap: spacing[3] },
     postAvatar: {
       width: 36, height: 36, borderRadius: 18,
       alignItems: 'center', justifyContent: 'center',
     },
     postAvatarText: { fontSize: 15, fontWeight: '700' as const, color: p.textInverse },
-    authorInfo:     { flex: 1 },
-    authorName:  { fontSize: 15, fontWeight: '600' as const, color: p.textPrimary },
-    authorMeta:  { fontSize: 13, color: p.textSecondary, marginTop: 2 },
-    postTitle:   { fontSize: 18, fontWeight: '700' as const, color: p.textPrimary, marginTop: 14, marginBottom: 8 },
-    postBody:    { fontSize: 15, lineHeight: 22, color: p.textPrimary, marginBottom: 16 },
+    authorInfo: { flex: 1 },
+    authorName: { fontSize: 15, fontWeight: '600' as const, color: p.textPrimary },
+    authorMeta: { fontSize: 13, color: p.textSecondary, marginTop: 2 },
+    postTitle: { fontSize: 18, fontWeight: '700' as const, color: p.textPrimary, marginTop: 14, marginBottom: 8 },
+    postBody: { fontSize: 15, lineHeight: 22, color: p.textPrimary, marginBottom: 16 },
 
     interactionBar: {
       flexDirection: 'row',
@@ -596,12 +610,12 @@ function makeStyles(p: Palette) {
       borderWidth: 1,
       borderColor: p.border,
     },
-    likeBtnText:       { fontSize: 14, color: p.textSecondary, fontWeight: '500' as const },
+    likeBtnText: { fontSize: 14, color: p.textSecondary, fontWeight: '500' as const },
     likeBtnTextActive: { color: p.primary },
-    commentCountView:  { flexDirection: 'row' as const, alignItems: 'center' as const, gap: 6 },
-    commentCountText:  { fontSize: 13, color: p.textSecondary },
+    commentCountView: { flexDirection: 'row' as const, alignItems: 'center' as const, gap: 6 },
+    commentCountText: { fontSize: 13, color: p.textSecondary },
 
-    commentsLabel:     { borderTopWidth: 1, borderTopColor: p.border, paddingTop: spacing[3] },
+    commentsLabel: { borderTopWidth: 1, borderTopColor: p.border, paddingTop: spacing[3] },
     commentsLabelText: { fontSize: 13, fontWeight: '600' as const, color: p.textSecondary },
 
     // ── Comment items ──
@@ -629,7 +643,7 @@ function makeStyles(p: Palette) {
     },
     levelBadgeText: { fontSize: 7, fontWeight: '800' as const, color: p.textInverse, lineHeight: 10 },
 
-    commentRight:  { flex: 1 },
+    commentRight: { flex: 1 },
     commentBubble: {
       backgroundColor: p.surfaceElevated,
       borderRadius: 14,
@@ -665,12 +679,12 @@ function makeStyles(p: Palette) {
     replyPreviewContent: { flex: 1, paddingVertical: 4, paddingHorizontal: 8 },
     replyPreviewName: { fontSize: 11, fontWeight: '700' as const, color: p.primary, marginBottom: 1 },
     replyPreviewText: { fontSize: 11, color: p.textSecondary },
-    commentMeta:    { flexDirection: 'row' as const, alignItems: 'center' as const, marginBottom: 4 },
-    commentAuthor:  { fontSize: 13, fontWeight: '600' as const, color: p.textPrimary },
-    commentTime:    { fontSize: 11, color: p.textSecondary },
+    commentMeta: { flexDirection: 'row' as const, alignItems: 'center' as const, marginBottom: 4 },
+    commentAuthor: { fontSize: 13, fontWeight: '600' as const, color: p.textPrimary },
+    commentTime: { fontSize: 11, color: p.textSecondary },
     commentContent: { fontSize: 14, lineHeight: 19, color: p.textPrimary },
 
-    commentActions:   { flexDirection: 'row' as const, alignItems: 'center' as const, gap: 16, marginTop: 6, paddingLeft: 2 },
+    commentActions: { flexDirection: 'row' as const, alignItems: 'center' as const, gap: 16, marginTop: 6, paddingLeft: 2 },
     commentActionBtn: { flexDirection: 'row' as const, alignItems: 'center' as const, gap: 4 },
     commentActionText: { fontSize: 12, color: p.textSecondary, fontWeight: '500' as const },
 
@@ -685,7 +699,7 @@ function makeStyles(p: Palette) {
       gap: spacing[2],
     },
     replyPillText: { color: p.primary, fontStyle: 'italic' as const, flex: 1 },
-    replyClose:    { fontSize: 16, color: p.textSecondary, fontWeight: '600' as const },
+    replyClose: { fontSize: 16, color: p.textSecondary, fontWeight: '600' as const },
     inputRow: {
       flexDirection: 'row',
       alignItems: 'flex-end',
