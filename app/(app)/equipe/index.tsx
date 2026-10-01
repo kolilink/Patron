@@ -135,51 +135,51 @@ function ProductScopePicker({ visible, onClose, products, selectedIds, onConfirm
       }
       scrollable={false}
     >
-        {searchVisible && (
-          <View style={styles.pickerSearch}>
-            <TextInput
-              style={[styles.pickerSearchInput, { color: palette.textPrimary }]}
-              placeholder="Rechercher un produit…"
-              placeholderTextColor={palette.textDisabled}
-              value={search}
-              onChangeText={setSearch}
-            />
-            {search.length > 0 && (
-              <Pressable onPress={() => setSearch('')} hitSlop={8}>
-                <Ionicons name="close-circle" size={16} color={palette.textDisabled} />
-              </Pressable>
-            )}
-          </View>
-        )}
+      {searchVisible && (
+        <View style={styles.pickerSearch}>
+          <TextInput
+            style={[styles.pickerSearchInput, { color: palette.textPrimary }]}
+            placeholder="Rechercher un produit…"
+            placeholderTextColor={palette.textDisabled}
+            value={search}
+            onChangeText={setSearch}
+          />
+          {search.length > 0 && (
+            <Pressable onPress={() => setSearch('')} hitSlop={8}>
+              <Ionicons name="close-circle" size={16} color={palette.textDisabled} />
+            </Pressable>
+          )}
+        </View>
+      )}
 
-        <FlatList
-          data={filtered}
-          keyExtractor={p => p.id}
-          renderItem={({ item }) => {
-            const checked = selected.has(item.id);
-            return (
-              <Pressable
-                onPress={() => toggle(item.id)}
-                style={({ pressed }) => [styles.pickerRow, pressed && { opacity: 0.7 }]}
-              >
-                <View style={[styles.pickerCheck, checked && { backgroundColor: palette.primary, borderColor: palette.primary }]}>
-                  {checked && <Ionicons name="checkmark" size={12} color={palette.textInverse} />}
-                </View>
-                <View style={{ flex: 1 }}>
-                  <Text variant="body">{item.name}</Text>
-                  <Text variant="caption" color="secondary">{formatAmount(item.sale_price, currency)}</Text>
-                </View>
-              </Pressable>
-            );
-          }}
-          ItemSeparatorComponent={() => <View style={{ height: 1, backgroundColor: palette.border }} />}
-          contentContainerStyle={{ paddingBottom: spacing[10] }}
-          ListEmptyComponent={
-            <View style={{ alignItems: 'center', padding: spacing[10] }}>
-              <Text variant="body" color="secondary">Aucun produit trouvé</Text>
-            </View>
-          }
-        />
+      <FlatList
+        data={filtered}
+        keyExtractor={p => p.id}
+        renderItem={({ item }) => {
+          const checked = selected.has(item.id);
+          return (
+            <Pressable
+              onPress={() => toggle(item.id)}
+              style={({ pressed }) => [styles.pickerRow, pressed && { opacity: 0.7 }]}
+            >
+              <View style={[styles.pickerCheck, checked && { backgroundColor: palette.primary, borderColor: palette.primary }]}>
+                {checked && <Ionicons name="checkmark" size={12} color={palette.textInverse} />}
+              </View>
+              <View style={{ flex: 1 }}>
+                <Text variant="body">{item.name}</Text>
+                <Text variant="caption" color="secondary">{formatAmount(item.sale_price, currency)}</Text>
+              </View>
+            </Pressable>
+          );
+        }}
+        ItemSeparatorComponent={() => <View style={{ height: 1, backgroundColor: palette.border }} />}
+        contentContainerStyle={{ paddingBottom: spacing[10] }}
+        ListEmptyComponent={
+          <View style={{ alignItems: 'center', padding: spacing[10] }}>
+            <Text variant="body" color="secondary">Aucun produit trouvé</Text>
+          </View>
+        }
+      />
     </FormSheet>
   );
 }
@@ -295,7 +295,7 @@ function MemberDetailSheet({
         text: 'Retirer',
         style: 'destructive',
         onPress: async () => {
-          haptics.error();
+          haptics.destructive();
           await removeScopeProduct(membre.id, productId);
           const rows = await fetchMemberScope(membre.id);
           setScope(rows);
@@ -325,7 +325,7 @@ function MemberDetailSheet({
         text: 'Retirer',
         style: 'destructive',
         onPress: () => {
-          haptics.error();
+          haptics.destructive();
           removeMembre(membre.id).then(ok => { if (ok) onClose(); });
         },
       },
@@ -337,254 +337,254 @@ function MemberDetailSheet({
 
   return (
     <>
-    <FormSheet
-      visible={visible}
-      onClose={onClose}
-      title={displayedName}
-      cancelLabel="Fermer"
-      contentContainerStyle={styles.mpad}
-    >
-          {/* Identity */}
-          <View style={styles.identityRow}>
-            <View style={styles.avatar}>
-              <Text variant="h4" allowFontScaling={false} style={{ color: palette.textSecondary }}>
-                {displayedName[0]?.toUpperCase()}
-              </Text>
-            </View>
-            <View style={{ flex: 1, gap: 2 }}>
-              <Text variant="label">{displayedName}</Text>
-              {membre.display_name && (
-                <Text variant="caption" color="secondary">Vrai nom : {membre.user_name}</Text>
-              )}
-              {membre.user_phone
-                ? <Text variant="caption" color="secondary">{membre.user_phone}</Text>
-                : <Text variant="caption" color="secondary">{membre.user_email !== '—' ? membre.user_email : 'Pas de contact'}</Text>
-              }
-            </View>
-            <RoleBadge role={membre.role} />
+      <FormSheet
+        visible={visible}
+        onClose={onClose}
+        title={displayedName}
+        cancelLabel="Fermer"
+        contentContainerStyle={styles.mpad}
+      >
+        {/* Identity */}
+        <View style={styles.identityRow}>
+          <View style={styles.avatar}>
+            <Text variant="h4" allowFontScaling={false} style={{ color: palette.textSecondary }}>
+              {displayedName[0]?.toUpperCase()}
+            </Text>
           </View>
+          <View style={{ flex: 1, gap: 2 }}>
+            <Text variant="label">{displayedName}</Text>
+            {membre.display_name && (
+              <Text variant="caption" color="secondary">Vrai nom : {membre.user_name}</Text>
+            )}
+            {membre.user_phone
+              ? <Text variant="caption" color="secondary">{membre.user_phone}</Text>
+              : <Text variant="caption" color="secondary">{membre.user_email !== '—' ? membre.user_email : 'Pas de contact'}</Text>
+            }
+          </View>
+          <RoleBadge role={membre.role} />
+        </View>
 
-          {/* Name edit */}
-          {editingName ? (
-            <View style={styles.nameEditRow}>
-              <TextInput
-                style={[styles.nameEditInput, { color: palette.textPrimary, borderColor: palette.border }]}
-                value={draftName}
-                onChangeText={setDraftName}
-                placeholder="Nom affiché (visible que par vous)"
-                placeholderTextColor={palette.textDisabled}
-                autoFocus
-              />
-              <Pressable onPress={handleSaveName} style={[styles.nameEditBtn, { backgroundColor: palette.primary }]}>
-                <Text variant="label" style={{ color: palette.textInverse }}>OK</Text>
-              </Pressable>
-              <Pressable onPress={() => setEditingName(false)} accessibilityLabel="Fermer" accessibilityRole="button">
-                <Ionicons name="close" size={20} color={palette.textSecondary} />
-              </Pressable>
-            </View>
-          ) : (
-            <Pressable style={styles.nameEditTrigger} onPress={() => setEditingName(true)}>
-              <Ionicons name="pencil-outline" size={14} color={palette.primary} />
-              <Text variant="bodySmall" style={{ color: palette.primary }}>
-                {membre.display_name ? 'Modifier le surnom' : 'Donner un surnom'}
-              </Text>
+        {/* Name edit */}
+        {editingName ? (
+          <View style={styles.nameEditRow}>
+            <TextInput
+              style={[styles.nameEditInput, { color: palette.textPrimary, borderColor: palette.border }]}
+              value={draftName}
+              onChangeText={setDraftName}
+              placeholder="Nom affiché (visible que par vous)"
+              placeholderTextColor={palette.textDisabled}
+              autoFocus
+            />
+            <Pressable onPress={handleSaveName} style={[styles.nameEditBtn, { backgroundColor: palette.primary }]}>
+              <Text variant="label" style={{ color: palette.textInverse }}>OK</Text>
             </Pressable>
-          )}
+            <Pressable onPress={() => setEditingName(false)} accessibilityLabel="Fermer" accessibilityRole="button">
+              <Ionicons name="close" size={20} color={palette.textSecondary} />
+            </Pressable>
+          </View>
+        ) : (
+          <Pressable style={styles.nameEditTrigger} onPress={() => setEditingName(true)}>
+            <Ionicons name="pencil-outline" size={14} color={palette.primary} />
+            <Text variant="bodySmall" style={{ color: palette.primary }}>
+              {membre.display_name ? 'Modifier le surnom' : 'Donner un surnom'}
+            </Text>
+          </Pressable>
+        )}
 
-          {/* Role + Remove actions */}
-          {!isSelf && (
-            <View style={styles.actionRow}>
-              <Pressable style={styles.actionBtn} onPress={handleChangeRole}>
-                <Ionicons name="swap-horizontal-outline" size={18} color={palette.primary} />
-                <Text variant="bodySmall" style={{ color: palette.primary }}>Changer le rôle</Text>
-              </Pressable>
-              <View style={styles.actionDivider} />
-              <Pressable style={styles.actionBtn} onPress={handleRemove}>
-                <Ionicons name="person-remove-outline" size={18} color={palette.danger} />
-                <Text variant="bodySmall" style={{ color: palette.danger }}>Retirer</Text>
-              </Pressable>
+        {/* Role + Remove actions */}
+        {!isSelf && (
+          <View style={styles.actionRow}>
+            <Pressable style={styles.actionBtn} onPress={handleChangeRole}>
+              <Ionicons name="swap-horizontal-outline" size={18} color={palette.primary} />
+              <Text variant="bodySmall" style={{ color: palette.primary }}>Changer le rôle</Text>
+            </Pressable>
+            <View style={styles.actionDivider} />
+            <Pressable style={styles.actionBtn} onPress={handleRemove}>
+              <Ionicons name="person-remove-outline" size={18} color={palette.danger} />
+              <Text variant="bodySmall" style={{ color: palette.danger }}>Retirer</Text>
+            </Pressable>
+          </View>
+        )}
+
+        {/* Investor balance + payout section */}
+        {isInvestisseur && (
+          <>
+            <View style={styles.sectionHdr}>
+              <Text variant="label">Investissement</Text>
             </View>
-          )}
 
-          {/* Investor balance + payout section */}
-          {isInvestisseur && (
-            <>
-              <View style={styles.sectionHdr}>
-                <Text variant="label">Investissement</Text>
-              </View>
+            {investorOffline && (
+              <Text variant="caption" color="secondary" style={{ paddingHorizontal: spacing[4] }}>
+                Hors ligne — dernières données connues
+              </Text>
+            )}
 
-              {investorOffline && (
-                <Text variant="caption" color="secondary" style={{ paddingHorizontal: spacing[4] }}>
-                  Hors ligne — dernières données connues
-                </Text>
-              )}
+            {(() => {
+              const totalInvested = apports
+                .filter(a => a.injected_by_id === membre.user_id)
+                .reduce((s, a) => s + a.amount, 0);
+              return totalInvested > 0 ? (
+                <View style={[styles.scopeRow, { flexDirection: 'column', alignItems: 'flex-start', gap: spacing[1] }]}>
+                  <Text variant="caption" color="secondary">Capital investi</Text>
+                  <Text style={{ fontFamily: FF.bold, fontSize: 22, lineHeight: 30, color: palette.primary }}>
+                    {formatAmount(totalInvested, currency)}
+                  </Text>
+                </View>
+              ) : null;
+            })()}
 
-              {(() => {
-                const totalInvested = apports
-                  .filter(a => a.injected_by_id === membre.user_id)
-                  .reduce((s, a) => s + a.amount, 0);
-                return totalInvested > 0 ? (
-                  <View style={[styles.scopeRow, { flexDirection: 'column', alignItems: 'flex-start', gap: spacing[1] }]}>
-                    <Text variant="caption" color="secondary">Capital investi</Text>
-                    <Text style={{ fontFamily: FF.bold, fontSize: 22, lineHeight: 30, color: palette.primary }}>
-                      {formatAmount(totalInvested, currency)}
-                    </Text>
-                  </View>
-                ) : null;
-              })()}
+            <View style={[styles.scopeRow, { flexDirection: 'column', alignItems: 'flex-start', gap: spacing[1] }]}>
+              <Text variant="caption" color="secondary">Part des bénéfices accumulée</Text>
+              <Text style={{ fontFamily: FF.bold, fontSize: 22, lineHeight: 30, color: palette.success }}>
+                {formatAmount(balance ?? 0, currency)}
+              </Text>
+            </View>
 
-              <View style={[styles.scopeRow, { flexDirection: 'column', alignItems: 'flex-start', gap: spacing[1] }]}>
-                <Text variant="caption" color="secondary">Part des bénéfices accumulée</Text>
-                <Text style={{ fontFamily: FF.bold, fontSize: 22, lineHeight: 30, color: palette.success }}>
-                  {formatAmount(balance ?? 0, currency)}
-                </Text>
-              </View>
-
-              {/* Pending payout request */}
-              {(() => {
-                const pending = payouts.find(p => p.status === 'en_attente');
-                if (!pending) return null;
-                return (
-                  <View style={[styles.scopeRow, { backgroundColor: palette.warning + '12', borderColor: palette.warning, gap: spacing[3] }]}>
-                    <View style={{ flex: 1 }}>
-                      <Text variant="label" style={{ color: palette.warning }}>Demande de retrait</Text>
-                      <Text variant="caption" color="secondary">
-                        {formatAmount(pending.requested_amount, currency)} demandé
-                      </Text>
-                    </View>
-                    <Pressable
-                      onPress={() => {
-                        setPendingPayoutId(pending.id);
-                        setPayoutAmountStr(formatAmountInput(String(Math.round(pending.requested_amount)), currency));
-                        setShowPayoutSheet(true);
-                      }}
-                      style={[styles.assignBtn, { paddingVertical: 0 }]}
-                    >
-                      <Text variant="label" style={{ color: palette.primary }}>Enregistrer le paiement</Text>
-                    </Pressable>
-                  </View>
-                );
-              })()}
-
-              {/* Recent paid payouts */}
-              {payouts.filter(p => p.status === 'paye').slice(0, 3).map(p => (
-                <View key={p.id} style={[styles.scopeRow, { flexDirection: 'row', alignItems: 'center', gap: spacing[3] }]}>
-                  <Ionicons name="checkmark-circle-outline" size={16} color={palette.success} />
+            {/* Pending payout request */}
+            {(() => {
+              const pending = payouts.find(p => p.status === 'en_attente');
+              if (!pending) return null;
+              return (
+                <View style={[styles.scopeRow, { backgroundColor: palette.warning + '12', borderColor: palette.warning, gap: spacing[3] }]}>
                   <View style={{ flex: 1 }}>
-                    <Text variant="body">{formatAmount(p.paid_amount ?? p.requested_amount, currency)}</Text>
+                    <Text variant="label" style={{ color: palette.warning }}>Demande de retrait</Text>
                     <Text variant="caption" color="secondary">
-                      {new Date(p.paid_at ?? p.requested_at).toLocaleDateString('fr-FR', { day: 'numeric', month: 'short', year: 'numeric' })}
+                      {formatAmount(pending.requested_amount, currency)} demandé
                     </Text>
                   </View>
+                  <Pressable
+                    onPress={() => {
+                      setPendingPayoutId(pending.id);
+                      setPayoutAmountStr(formatAmountInput(String(Math.round(pending.requested_amount)), currency));
+                      setShowPayoutSheet(true);
+                    }}
+                    style={[styles.assignBtn, { paddingVertical: 0 }]}
+                  >
+                    <Text variant="label" style={{ color: palette.primary }}>Enregistrer le paiement</Text>
+                  </Pressable>
                 </View>
-              ))}
-            </>
-          )}
+              );
+            })()}
 
-          {/* Product scope section (vendeur or investisseur only) */}
-          {(membre.role === 'vendeur' || membre.role === 'investisseur') && (
-            <>
-              <View style={styles.sectionHdr}>
-                <Text variant="label">Produits assignés</Text>
-                {!scopeAll && scope.length > 0 && (
-                  <View style={[styles.badge, { backgroundColor: palette.primary + '20' }]}>
-                    <Text variant="labelSmall" style={{ color: palette.primary }}>{scope.length}</Text>
-                  </View>
-                )}
+            {/* Recent paid payouts */}
+            {payouts.filter(p => p.status === 'paye').slice(0, 3).map(p => (
+              <View key={p.id} style={[styles.scopeRow, { flexDirection: 'row', alignItems: 'center', gap: spacing[3] }]}>
+                <Ionicons name="checkmark-circle-outline" size={16} color={palette.success} />
+                <View style={{ flex: 1 }}>
+                  <Text variant="body">{formatAmount(p.paid_amount ?? p.requested_amount, currency)}</Text>
+                  <Text variant="caption" color="secondary">
+                    {new Date(p.paid_at ?? p.requested_at).toLocaleDateString('fr-FR', { day: 'numeric', month: 'short', year: 'numeric' })}
+                  </Text>
+                </View>
               </View>
+            ))}
+          </>
+        )}
 
-              {/* Scope all toggle — vendeur only */}
-              {membre.role === 'vendeur' && (
-                <Pressable
-                  style={[styles.scopeToggleRow, { borderColor: scopeAll ? palette.primary : palette.border }]}
-                  onPress={() => handleToggleScopeAll(!scopeAll)}
-                >
-                  <View style={{ flex: 1, gap: 2 }}>
-                    <Text variant="label">Accès à tous les produits</Text>
-                    <Text variant="caption" color="secondary">
-                      {scopeAll ? 'Ce vendeur peut vendre n\'importe quel produit' : 'Limité aux produits ci-dessous'}
-                    </Text>
-                  </View>
-                  <View style={[styles.toggleTrack, { backgroundColor: scopeAll ? palette.primary : palette.border }]}>
-                    <View style={[styles.toggleThumb, { left: scopeAll ? 18 : 2 }]} />
-                  </View>
-                </Pressable>
+        {/* Product scope section (vendeur or investisseur only) */}
+        {(membre.role === 'vendeur' || membre.role === 'investisseur') && (
+          <>
+            <View style={styles.sectionHdr}>
+              <Text variant="label">Produits assignés</Text>
+              {!scopeAll && scope.length > 0 && (
+                <View style={[styles.badge, { backgroundColor: palette.primary + '20' }]}>
+                  <Text variant="labelSmall" style={{ color: palette.primary }}>{scope.length}</Text>
+                </View>
               )}
+            </View>
 
-              {!scopeAll && membre.role === 'vendeur' && scope.length === 0 && (
-                <View style={[styles.scopeRow, { backgroundColor: palette.warningLight, borderColor: palette.warning }]}>
-                  <Ionicons name="warning-outline" size={16} color={palette.warning} />
-                  <Text variant="caption" style={{ flex: 1, color: palette.warning }}>
-                    Aucun produit assigné — ce vendeur ne peut pas vendre tant que vous n'en ajoutez pas.
+            {/* Scope all toggle — vendeur only */}
+            {membre.role === 'vendeur' && (
+              <Pressable
+                style={[styles.scopeToggleRow, { borderColor: scopeAll ? palette.primary : palette.border }]}
+                onPress={() => handleToggleScopeAll(!scopeAll)}
+              >
+                <View style={{ flex: 1, gap: 2 }}>
+                  <Text variant="label">Accès à tous les produits</Text>
+                  <Text variant="caption" color="secondary">
+                    {scopeAll ? 'Ce vendeur peut vendre n\'importe quel produit' : 'Limité aux produits ci-dessous'}
                   </Text>
                 </View>
-              )}
-
-              {scopeAll && membre.role !== 'vendeur' && (
-                <View style={[styles.allProductsChip]}>
-                  <Ionicons name="cube-outline" size={14} color={palette.textSecondary} />
-                  <Text variant="bodySmall" color="secondary">Tous les produits</Text>
+                <View style={[styles.toggleTrack, { backgroundColor: scopeAll ? palette.primary : palette.border }]}>
+                  <View style={[styles.toggleThumb, { left: scopeAll ? 18 : 2 }]} />
                 </View>
-              )}
+              </Pressable>
+            )}
 
-              {(!scopeAll || isInvestisseur) && (
-                loadingScope ? (
-                  <Text variant="caption" color="secondary">Chargement…</Text>
-                ) : (
-                  scope.map(s => (
-                    <View key={s.product_id} style={[styles.scopeRow, isInvestisseur && { flexDirection: 'column', alignItems: 'stretch', gap: spacing[3] }]}>
-                      <View style={styles.scopeRowTop}>
-                        <Text variant="body" style={{ flex: 1 }} numberOfLines={2}>{s.product_name}</Text>
-                        <Pressable
-                          onPress={() => handleRemoveProduct(s.product_id, s.product_name)}
-                          hitSlop={8}
-                          style={{ flexDirection: 'row', alignItems: 'center', gap: spacing[1] }}
-                        >
-                          <Ionicons name="trash-outline" size={16} color={palette.textSecondary} />
-                          <Text variant="caption" color="secondary">Retirer</Text>
-                        </Pressable>
-                      </View>
+            {!scopeAll && membre.role === 'vendeur' && scope.length === 0 && (
+              <View style={[styles.scopeRow, { backgroundColor: palette.warningLight, borderColor: palette.warning }]}>
+                <Ionicons name="warning-outline" size={16} color={palette.warning} />
+                <Text variant="caption" style={{ flex: 1, color: palette.warning }}>
+                  Aucun produit assigné — ce vendeur ne peut pas vendre tant que vous n'en ajoutez pas.
+                </Text>
+              </View>
+            )}
 
-                      {isInvestisseur && (
-                        <View style={{ gap: spacing[1] }}>
-                          <Text style={styles.stakeLabel}>Part des bénéfices (%)</Text>
-                          <TextInput
-                            style={[styles.stakeInput, { color: palette.textPrimary, borderColor: palette.border }]}
-                            value={draftStakes[s.product_id] ?? ''}
-                            onChangeText={v => setDraftStakes(prev => ({ ...prev, [s.product_id]: v }))}
-                            keyboardType="decimal-pad"
-                            placeholder="0"
-                            placeholderTextColor={palette.textDisabled}
-                          />
-                        </View>
-                      )}
+            {scopeAll && membre.role !== 'vendeur' && (
+              <View style={[styles.allProductsChip]}>
+                <Ionicons name="cube-outline" size={14} color={palette.textSecondary} />
+                <Text variant="bodySmall" color="secondary">Tous les produits</Text>
+              </View>
+            )}
+
+            {(!scopeAll || isInvestisseur) && (
+              loadingScope ? (
+                <Text variant="caption" color="secondary">Chargement…</Text>
+              ) : (
+                scope.map(s => (
+                  <View key={s.product_id} style={[styles.scopeRow, isInvestisseur && { flexDirection: 'column', alignItems: 'stretch', gap: spacing[3] }]}>
+                    <View style={styles.scopeRowTop}>
+                      <Text variant="body" style={{ flex: 1 }} numberOfLines={2}>{s.product_name}</Text>
+                      <Pressable
+                        onPress={() => handleRemoveProduct(s.product_id, s.product_name)}
+                        hitSlop={8}
+                        style={{ flexDirection: 'row', alignItems: 'center', gap: spacing[1] }}
+                      >
+                        <Ionicons name="trash-outline" size={16} color={palette.textSecondary} />
+                        <Text variant="caption" color="secondary">Retirer</Text>
+                      </Pressable>
                     </View>
-                  ))
-                )
-              )}
 
-              {isInvestisseur && scope.length > 0 && (
-                <Button
-                  label={saving ? 'Enregistrement…' : 'Enregistrer les montants'}
-                  variant="secondary"
-                  size="sm"
-                  onPress={handleSaveStakeEdits}
-                  loading={saving}
-                  style={{ marginTop: spacing[2] }}
-                />
-              )}
+                    {isInvestisseur && (
+                      <View style={{ gap: spacing[1] }}>
+                        <Text style={styles.stakeLabel}>Part des bénéfices (%)</Text>
+                        <TextInput
+                          style={[styles.stakeInput, { color: palette.textPrimary, borderColor: palette.border }]}
+                          value={draftStakes[s.product_id] ?? ''}
+                          onChangeText={v => setDraftStakes(prev => ({ ...prev, [s.product_id]: v }))}
+                          keyboardType="decimal-pad"
+                          placeholder="0"
+                          placeholderTextColor={palette.textDisabled}
+                        />
+                      </View>
+                    )}
+                  </View>
+                ))
+              )
+            )}
 
-              {(!scopeAll || isInvestisseur) && (
-                <Pressable style={styles.assignBtn} onPress={() => setShowPicker(true)}>
-                  <Ionicons name="add-circle-outline" size={16} color={palette.primary} />
-                  <Text variant="label" style={{ color: palette.primary }}>
-                    {scope.length === 0 ? 'Assigner des produits' : 'Modifier les produits'}
-                  </Text>
-                </Pressable>
-              )}
-            </>
-          )}
-    </FormSheet>
+            {isInvestisseur && scope.length > 0 && (
+              <Button
+                label={saving ? 'Enregistrement…' : 'Enregistrer les montants'}
+                variant="secondary"
+                size="sm"
+                onPress={handleSaveStakeEdits}
+                loading={saving}
+                style={{ marginTop: spacing[2] }}
+              />
+            )}
+
+            {(!scopeAll || isInvestisseur) && (
+              <Pressable style={styles.assignBtn} onPress={() => setShowPicker(true)}>
+                <Ionicons name="add-circle-outline" size={16} color={palette.primary} />
+                <Text variant="label" style={{ color: palette.primary }}>
+                  {scope.length === 0 ? 'Assigner des produits' : 'Modifier les produits'}
+                </Text>
+              </Pressable>
+            )}
+          </>
+        )}
+      </FormSheet>
 
       <ProductScopePicker
         visible={showPicker}
@@ -605,7 +605,7 @@ function MemberDetailSheet({
         navigationBarTranslucent
       >
         <Pressable style={styles.payoutBackdrop} onPress={() => setShowPayoutSheet(false)}>
-          <Pressable style={[styles.payoutPanel, { backgroundColor: palette.surface }]} onPress={() => {}}>
+          <Pressable style={[styles.payoutPanel, { backgroundColor: palette.surface }]} onPress={() => { }}>
             <View style={[styles.payoutHandle, { backgroundColor: palette.border }]} />
             <Text variant="h4">Enregistrer le paiement</Text>
             <Text variant="caption" color="secondary" style={{ textAlign: 'center' }}>
@@ -711,7 +711,7 @@ function NewCodeModal({ visible, onClose, onGenerate, saving, hasManager, produc
       pulseRef.current = Animated.loop(
         Animated.sequence([
           Animated.timing(pulseAnim, { toValue: 1.04, duration: 1800, useNativeDriver: true, easing: Easing.inOut(Easing.sin) }),
-          Animated.timing(pulseAnim, { toValue: 1,    duration: 2400, useNativeDriver: true, easing: Easing.inOut(Easing.sin) }),
+          Animated.timing(pulseAnim, { toValue: 1, duration: 2400, useNativeDriver: true, easing: Easing.inOut(Easing.sin) }),
         ]),
       );
       pulseRef.current.start();
@@ -1185,7 +1185,7 @@ export default function EquipeScreen() {
                         : `Valide · expire ${item.expires_at ? new Date(item.expires_at).toLocaleDateString('fr-FR') : '—'}`}
                     </Text>
                   </View>
-                  <Pressable onPress={() => Alert.alert('Annuler ce code ?', '', [{ text: 'Non', style: 'cancel' }, { text: 'Oui, annuler', style: 'destructive', onPress: () => { haptics.error(); revokeCode(item.id); } }])}>
+                  <Pressable onPress={() => Alert.alert('Annuler ce code ?', '', [{ text: 'Non', style: 'cancel' }, { text: 'Oui, annuler', style: 'destructive', onPress: () => { haptics.destructive(); revokeCode(item.id); } }])}>
                     <Text variant="caption" color="danger">Supprimer</Text>
                   </Pressable>
                 </View>

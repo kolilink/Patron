@@ -22,8 +22,9 @@ import {
 } from '@expo-google-fonts/inter';
 import { PostHogProvider } from 'posthog-react-native';
 import { useAuthStore } from '@/stores/auth';
-import { openDb } from '@/lib/db';
+import { getKV, openDb } from '@/lib/db';
 import { capturePendingInviteToken } from '@/lib/inviteLink';
+import { setEnabled, HAPTICS_KV_KEY } from '@/lib/haptics';
 import { ThemeProvider } from '@/src/theme';
 import { posthog } from '@/lib/posthog';
 import { identifyUser, resetAnalytics, trackEvent, analyticsIsTest, loadDeviceTestFlag } from '@/lib/analytics';
@@ -121,6 +122,9 @@ function RootLayout() {
       // a missing token just means a normal sign-up, never a dead end.
       return capturePendingInviteToken();
     }).then(async () => {
+      // Haptics master switch — hydrate the persisted preference once the KV
+      // store is open. Default ON: only an explicit stored 'false' silences.
+      await getKV(HAPTICS_KV_KEY).then(v => setEnabled(v !== 'false')).catch(() => { });
       // Measurement (docs/measurement.md): first-open install record, the
       // cold-start app_opened, and a retry of any funnel steps still queued.
       await loadDeviceTestFlag();

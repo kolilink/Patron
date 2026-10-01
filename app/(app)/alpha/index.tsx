@@ -17,6 +17,7 @@ import { supabase } from '@/lib/supabase';
 import { PAYWALL_ENABLED } from '@/lib/purchases';
 import { useVoiceRecorder } from '@/src/hooks/useVoiceRecorder';
 import { isSep, buildGroupedItems } from '@/src/lib/chatGrouping';
+import { haptics } from '@/lib/haptics';
 import type { GroupedItem } from '@/src/lib/chatGrouping';
 import type { AlphaMessage } from '@/src/types';
 
@@ -199,12 +200,14 @@ export default function AlphaScreen() {
     // used to) meant a network failure silently erased what the merchant
     // typed, forcing a retype instead of a simple retry.
     const ok = await sendMessage({ businessId, content: trimmed });
+    if (ok) haptics.success();
     if (ok && content === undefined) setText('');
   };
 
   const handleMicPress = async () => {
     if (offline) return;
     setVoiceError(null);
+    haptics.tap();
     await recorder.start();
   };
 
@@ -233,6 +236,7 @@ export default function AlphaScreen() {
       setText(t => (t.trim() ? `${t.trim()} ${data.text}` : data.text));
       inputRef.current?.focus();
     } catch {
+      haptics.warning();
       setVoiceError('Transcription impossible — réessayez.');
     } finally {
       setIsTranscribing(false);
@@ -339,7 +343,7 @@ export default function AlphaScreen() {
         ) : (
           <FlatList
             ref={listRef}
-            onScrollToIndexFailed={() => {}}
+            onScrollToIndexFailed={() => { }}
             data={listItems}
             keyExtractor={item => item.id}
             inverted

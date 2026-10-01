@@ -115,6 +115,7 @@ export default function InvitationsScreen() {
                     text: 'Révoquer',
                     style: 'destructive',
                     onPress: async () => {
+                        haptics.destructive();
                         setRevokingId(invite.id);
                         const ok = await revokeInvite(invite.id);
                         setRevokingId(null);

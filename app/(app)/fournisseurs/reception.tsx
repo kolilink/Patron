@@ -109,11 +109,11 @@ async function loadDraft(businessId: string): Promise<Draft | null> {
 }
 
 function saveDraft(d: Draft) {
-  setKV(draftKey(d.businessId), JSON.stringify(d)).catch(() => {});
+  setKV(draftKey(d.businessId), JSON.stringify(d)).catch(() => { });
 }
 
 function clearDraft(businessId: string) {
-  setKV(draftKey(businessId), '').catch(() => {});
+  setKV(draftKey(businessId), '').catch(() => { });
 }
 
 // Exported so the Fournisseurs list can show "Brouillon — 12 produits · 24
@@ -295,13 +295,13 @@ export default function ReceptionScreen() {
 
   const remainingCount = draft
     ? draft.lines.filter(l => {
-        if (!l.name.trim()) return true;
-        if (l.hasVariants && l.variantSplits) {
-          const sum = l.variantSplits.reduce((s, v) => s + (parseQty(v.qty) ?? 0), 0);
-          return sum !== parseQty(l.qty);
-        }
-        return parseQty(l.qty) === null || !(parseAmountInput(l.unitCost, currency) > 0);
-      }).length
+      if (!l.name.trim()) return true;
+      if (l.hasVariants && l.variantSplits) {
+        const sum = l.variantSplits.reduce((s, v) => s + (parseQty(v.qty) ?? 0), 0);
+        return sum !== parseQty(l.qty);
+      }
+      return parseQty(l.qty) === null || !(parseAmountInput(l.unitCost, currency) > 0);
+    }).length
     : 0;
 
   const handleVerifyDone = () => {
@@ -323,7 +323,7 @@ export default function ReceptionScreen() {
       }
       return;
     }
-    haptics.selection();
+    haptics.success();
     setStep('marge');
   };
 
@@ -399,7 +399,7 @@ export default function ReceptionScreen() {
         <Text variant="h4" numberOfLines={1}>
           {step === 'quoi' ? 'Ce qui est arrivé.'
             : step === 'marge' ? 'Votre marge'
-            : 'Enregistré'}
+              : 'Enregistré'}
         </Text>
         <View style={{ width: 60 }} />
       </View>

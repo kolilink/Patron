@@ -7,6 +7,7 @@ import { Text } from '@/src/components/ui/Text';
 import { useTheme, radius, spacing } from '@/src/theme';
 import type { Palette } from '@/src/theme';
 import { CURRENCY_LIST } from '@/src/constants/currency';
+import { haptics } from '@/lib/haptics';
 
 interface BusinessDetailsStepProps {
   loading: boolean;
@@ -48,10 +49,12 @@ export function BusinessDetailsStep({
   const handleSubmit = () => {
     const trimmed = name.trim();
     if (trimmed.length < 2) {
+      haptics.warning();
       setNameError('Minimum 2 caractères');
       return;
     }
     setNameError(null);
+    haptics.tap();
     onSubmit({ name: trimmed, currency, referralCode: referralCode.trim() || undefined });
   };
 
@@ -79,7 +82,7 @@ export function BusinessDetailsStep({
       <View style={styles.section}>
         <Text variant="label">Monnaie</Text>
 
-        <Pressable style={styles.currencyTrigger} onPress={() => setPickerOpen(v => !v)}>
+        <Pressable style={styles.currencyTrigger} onPress={() => { haptics.toggle(!pickerOpen); setPickerOpen(v => !v); }}>
           <Text style={styles.currencyFlag}>{selectedC.flag}</Text>
           <View style={{ flex: 1 }}>
             <Text variant="label" style={{ color: palette.primary }}>{selectedC.name}</Text>
@@ -92,11 +95,11 @@ export function BusinessDetailsStep({
           <View style={styles.currencyList}>
             {CURRENCY_LIST.map((c, i) => {
               const selected = currency === c.code;
-              const isLast   = i === CURRENCY_LIST.length - 1;
+              const isLast = i === CURRENCY_LIST.length - 1;
               return (
                 <Pressable
                   key={c.code}
-                  onPress={() => { setCurrency(c.code); setPickerOpen(false); }}
+                  onPress={() => { haptics.select(); setCurrency(c.code); setPickerOpen(false); }}
                   style={[
                     styles.currencyRow,
                     selected && styles.currencyRowSelected,
@@ -140,7 +143,7 @@ export function BusinessDetailsStep({
 
 function makeStyles(p: Palette) {
   return StyleSheet.create({
-    form:    { gap: spacing[4] },
+    form: { gap: spacing[4] },
     section: { gap: spacing[3] },
     errorBox: { backgroundColor: p.dangerLight, borderRadius: radius.md, padding: spacing[3] },
 
@@ -151,11 +154,11 @@ function makeStyles(p: Palette) {
       borderRadius: radius.md,
       borderWidth: 1, borderColor: p.primary + '50',
     },
-    currencyList:        { borderRadius: radius.md, borderWidth: 1, borderColor: p.border, overflow: 'hidden' },
-    currencyRow:         { flexDirection: 'row', alignItems: 'center', gap: spacing[3], paddingHorizontal: spacing[4], paddingVertical: spacing[3], backgroundColor: p.surface },
+    currencyList: { borderRadius: radius.md, borderWidth: 1, borderColor: p.border, overflow: 'hidden' },
+    currencyRow: { flexDirection: 'row', alignItems: 'center', gap: spacing[3], paddingHorizontal: spacing[4], paddingVertical: spacing[3], backgroundColor: p.surface },
     currencyRowSelected: { backgroundColor: p.primaryLight },
-    currencyRowBorder:   { borderBottomWidth: StyleSheet.hairlineWidth, borderBottomColor: p.border },
-    currencyFlag:        { fontSize: 22, width: 30, textAlign: 'center' as const },
+    currencyRowBorder: { borderBottomWidth: StyleSheet.hairlineWidth, borderBottomColor: p.border },
+    currencyFlag: { fontSize: 22, width: 30, textAlign: 'center' as const },
 
     currencyNote: { textAlign: 'center' },
   });

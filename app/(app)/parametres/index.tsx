@@ -17,7 +17,8 @@ import { useAuthStore } from '@/stores/auth';
 import { generateFallbackName } from '@/lib/id';
 import { supabase } from '@/lib/supabase';
 import { translateError } from '@/lib/errors';
-import { haptics } from '@/lib/haptics';
+import { haptics, setEnabled, isHapticsEnabled, HAPTICS_KV_KEY } from '@/lib/haptics';
+import { getKV, setKV } from '@/lib/db';
 import { toast } from '@/stores/toast';
 import { checkNotificationPermission, requestNotificationPermission } from '@/src/components/NotificationSetup';
 import { toUnicodeBold } from '@/src/utils/format';
@@ -81,26 +82,43 @@ export default function ParametresScreen() {
   const { session, sendEmailOtp, linkRecoveryEmail, emailOtpLoading, error: authError, clearError, revokeOtherSessions } = useAuthStore();
   const [revokingSessions, setRevokingSessions] = useState(false);
   const business = session?.activeBusiness;
-  const userId   = session?.user.id ?? '';
-  const role     = session?.activeMembership?.role;
-  const isAdmin  = role === 'administrateur';
+  const userId = session?.user.id ?? '';
+  const role = session?.activeMembership?.role;
+  const isAdmin = role === 'administrateur';
 
   const defaultPhone = business?.phone ?? session?.user.phone ?? '';
-  const [bizName,  setBizName]  = useState(business?.name ?? '');
+  const [bizName, setBizName] = useState(business?.name ?? '');
   const [bizPhone, setBizPhone] = useState(defaultPhone);
 
   // PhoneInput fires onChange on mount — skip that first fire so it doesn't reset
   // bizPhone to '' when the stored number's digit count doesn't match exactly.
   const bizPhoneInitKeyRef = useRef(defaultPhone);
-  const bizPhoneSkipRef    = useRef(true);
+  const bizPhoneSkipRef = useRef(true);
   if (bizPhoneInitKeyRef.current !== defaultPhone) {
     bizPhoneInitKeyRef.current = defaultPhone;
-    bizPhoneSkipRef.current    = true;
+    bizPhoneSkipRef.current = true;
   }
   const [currency, setCurrency] = useState(business?.currency ?? '');
   const [userName, setUserName] = useState(session?.user.name ?? '');
-  const [saving,   setSaving]   = useState(false);
+  const [saving, setSaving] = useState(false);
   const [hasSales, setHasSales] = useState<boolean | null>(null);
+
+  // Haptics master switch — default ON, persisted in the KV store (same
+  // getKV/setKV channel as ThemeContext). Flipping it off cuts every haptic
+  // at the single chokepoint in lib/haptics.ts — no per-call-site work.
+  const [hapticsEnabled, setHapticsEnabled] = useState(isHapticsEnabled());
+  useEffect(() => {
+    getKV(HAPTICS_KV_KEY).then(v => {
+      const on = v !== 'false';
+      setEnabled(on);
+      setHapticsEnabled(on);
+    }).catch(() => { });
+  }, []);
+  const handleToggleHaptics = (value: boolean) => {
+    setEnabled(value);
+    setHapticsEnabled(value);
+    void setKV(HAPTICS_KV_KEY, value ? 'true' : 'false');
+  };
 
   // Per-sale push opt-out — see migration_v184.sql. Optimistic toggle with
   // rollback on failure, same shape as every other one-tap preference in
@@ -140,7 +158,7 @@ export default function ParametresScreen() {
   const handleTogglePaymentReminders = async (value: boolean) => {
     if (!value || paymentRemindersGranted) return; // no real "off" action to take
     if (!paymentRemindersCanAsk) {
-      Linking.openSettings().catch(() => {});
+      Linking.openSettings().catch(() => { });
       return;
     }
     const granted = await requestNotificationPermission();
@@ -149,10 +167,10 @@ export default function ParametresScreen() {
   };
 
   // Email recovery linking
-  const [emailStep, setEmailStep]     = useState<'idle' | 'input' | 'otp'>('idle');
-  const [emailInput, setEmailInput]   = useState('');
+  const [emailStep, setEmailStep] = useState<'idle' | 'input' | 'otp'>('idle');
+  const [emailInput, setEmailInput] = useState('');
   const [emailOtpKey, setEmailOtpKey] = useState(0);
-  const emailVerifIdRef               = useRef('');
+  const emailVerifIdRef = useRef('');
 
   // Check if any sales exist — currency locks once this is true
   useEffect(() => {
@@ -174,7 +192,7 @@ export default function ParametresScreen() {
     supabase.from('businesses')
       .update({ phone: session.user.phone })
       .eq('id', business.id)
-      .then(() => {});
+      .then(() => { });
   }, [business?.id]);
 
   const isDirty = (isAdmin
@@ -183,14 +201,14 @@ export default function ParametresScreen() {
   ) || userName.trim() !== (session?.user.name ?? '');
 
   const breathAnim = useRef(new Animated.Value(1)).current;
-  const loopRef    = useRef<Animated.CompositeAnimation | null>(null);
+  const loopRef = useRef<Animated.CompositeAnimation | null>(null);
 
   useEffect(() => {
     if (isDirty) {
       loopRef.current = Animated.loop(
         Animated.sequence([
           Animated.timing(breathAnim, { toValue: 0.35, duration: 850, useNativeDriver: true }),
-          Animated.timing(breathAnim, { toValue: 1,    duration: 850, useNativeDriver: true }),
+          Animated.timing(breathAnim, { toValue: 1, duration: 850, useNativeDriver: true }),
         ]),
       );
       loopRef.current.start();
@@ -203,14 +221,14 @@ export default function ParametresScreen() {
   }, [isDirty]);
 
   const [deleteTarget, setDeleteTarget] = useState<'account' | 'business' | null>(null);
-  const [deleteInput,  setDeleteInput]  = useState('');
-  const [deleting,     setDeleting]     = useState(false);
+  const [deleteInput, setDeleteInput] = useState('');
+  const [deleting, setDeleting] = useState(false);
 
   // Account deletion only: re-verify the phone on file before scheduling.
-  const [deleteAccountStep,   setDeleteAccountStep]   = useState<'confirm' | 'otp'>('confirm');
+  const [deleteAccountStep, setDeleteAccountStep] = useState<'confirm' | 'otp'>('confirm');
   const [deleteVerificationId, setDeleteVerificationId] = useState('');
-  const [deleteOtpKey,        setDeleteOtpKey]        = useState(0);
-  const [deleteOtpError,      setDeleteOtpError]      = useState<string | null>(null);
+  const [deleteOtpKey, setDeleteOtpKey] = useState(0);
+  const [deleteOtpError, setDeleteOtpError] = useState<string | null>(null);
 
   const resetDeleteFlow = () => {
     setDeleteTarget(null);
@@ -243,7 +261,7 @@ export default function ParametresScreen() {
   };
 
   const saveAll = async () => {
-    const trimmedBiz  = bizName.trim();
+    const trimmedBiz = bizName.trim();
     const trimmedUser = userName.trim();
     if (isAdmin && !trimmedBiz) { toast.warning('Donnez un nom au commerce :)'); return; }
     if (!trimmedUser) { toast.warning('Entrez votre nom :)'); return; }
@@ -309,7 +327,7 @@ export default function ParametresScreen() {
         {
           text: 'Quitter', style: 'destructive',
           onPress: async () => {
-            haptics.error();
+            haptics.destructive();
             const memId = session?.activeMembership?.id;
             if (!memId) return;
             const { error } = await supabase.from('memberships').delete().eq('id', memId);
@@ -406,7 +424,7 @@ export default function ParametresScreen() {
   // directly, under the current real session, has neither side effect.
   const handleDeleteAccount = async () => {
     if (deleteInput !== 'SUPPRIMER') return;
-    haptics.error();
+    haptics.destructive();
     setDeleting(true);
 
     try {
@@ -520,7 +538,7 @@ export default function ParametresScreen() {
   // the business, so it's shown as-is rather than re-derived here.
   const handleLeaveOrDeleteBusiness = async () => {
     if (deleteInput !== 'SUPPRIMER' || !business?.id) return;
-    haptics.error();
+    haptics.destructive();
     setDeleting(true);
 
     let error: { code?: string; message?: string } | null;
@@ -661,7 +679,7 @@ export default function ParametresScreen() {
                 onPress={() => {
                   Share.share({
                     message: `Essaie Patron pour gérer ton commerce plus facilement 🙂\n\nUtilise mon code ${toUnicodeBold(business.referral_code!)} en t'inscrivant pour qu'on gagne chacun 1 mois gratuit`,
-                  }).catch(() => {});
+                  }).catch(() => { });
                 }}
                 style={styles.linkRow}
               >
@@ -741,8 +759,10 @@ export default function ParametresScreen() {
                   <Pressable
                     onPress={handleSendEmailCode}
                     disabled={!emailInput.trim().includes('@') || emailOtpLoading}
-                    style={{ flex: 1, alignItems: 'center', paddingVertical: spacing[2],
-                      opacity: !emailInput.trim().includes('@') || emailOtpLoading ? 0.4 : 1 }}
+                    style={{
+                      flex: 1, alignItems: 'center', paddingVertical: spacing[2],
+                      opacity: !emailInput.trim().includes('@') || emailOtpLoading ? 0.4 : 1
+                    }}
                   >
                     <Text variant="label" style={{ color: palette.primary }}>
                       {emailOtpLoading ? 'Envoi…' : 'Envoyer le code'}
@@ -785,6 +805,26 @@ export default function ParametresScreen() {
             )}
           </Card>
 
+
+          {/* Retour haptique — master switch (default ON). Cuts every haptic
+              at the single chokepoint in lib/haptics.ts. */}
+          <Card style={styles.section}>
+            <Text variant="label" color="secondary">Retour haptique</Text>
+            <View style={styles.linkRow}>
+              <View style={{ flex: 1, marginRight: spacing[3] }}>
+                <Text variant="body">Vibrations</Text>
+                <Text variant="caption" color="secondary">
+                  Un léger retour au toucher sur les actions clés
+                </Text>
+              </View>
+              <Switch
+                value={hapticsEnabled}
+                onValueChange={handleToggleHaptics}
+                trackColor={{ false: palette.border, true: palette.primary }}
+                thumbColor={palette.surface}
+              />
+            </View>
+          </Card>
 
           {/* Notifications */}
           <Card style={styles.section}>
@@ -961,8 +1001,10 @@ export default function ParametresScreen() {
                   <Pressable
                     onPress={deleteTarget === 'business' ? handleLeaveOrDeleteBusiness : handleDeleteAccount}
                     disabled={deleteInput !== 'SUPPRIMER' || deleting}
-                    style={{ flex: 1, alignItems: 'center', paddingVertical: spacing[2],
-                      opacity: deleteInput !== 'SUPPRIMER' || deleting ? 0.4 : 1 }}
+                    style={{
+                      flex: 1, alignItems: 'center', paddingVertical: spacing[2],
+                      opacity: deleteInput !== 'SUPPRIMER' || deleting ? 0.4 : 1
+                    }}
                   >
                     <Text variant="label" style={{ color: palette.danger }}>
                       {deleting
@@ -983,8 +1025,8 @@ export default function ParametresScreen() {
 
 function makeStyles(p: Palette) {
   return StyleSheet.create({
-    safe:    { flex: 1, backgroundColor: p.background },
-    hdr:     {
+    safe: { flex: 1, backgroundColor: p.background },
+    hdr: {
       flexDirection: 'row', alignItems: 'center', justifyContent: 'space-between',
       paddingHorizontal: spacing[5], paddingVertical: spacing[4],
       borderBottomWidth: 1, borderBottomColor: p.border,
@@ -992,10 +1034,10 @@ function makeStyles(p: Palette) {
     content: { padding: spacing[5], gap: spacing[4], paddingBottom: spacing[10] },
     section: { gap: spacing[4] },
 
-    chipRow:    { flexDirection: 'row', gap: spacing[2], flexWrap: 'wrap' },
-    chip:       { paddingHorizontal: spacing[4], paddingVertical: spacing[2], borderRadius: radius.full, borderWidth: 1.5, borderColor: p.border, backgroundColor: p.surface },
+    chipRow: { flexDirection: 'row', gap: spacing[2], flexWrap: 'wrap' },
+    chip: { paddingHorizontal: spacing[4], paddingVertical: spacing[2], borderRadius: radius.full, borderWidth: 1.5, borderColor: p.border, backgroundColor: p.surface },
     chipActive: { backgroundColor: p.primary, borderColor: p.primary },
-    chipGhost:  { borderColor: 'transparent', backgroundColor: 'transparent' },
+    chipGhost: { borderColor: 'transparent', backgroundColor: 'transparent' },
 
     // Locked currency display
     currencyLocked: {
@@ -1017,7 +1059,7 @@ function makeStyles(p: Palette) {
     emailBox: { gap: spacing[3], paddingTop: spacing[1] },
 
     // Danger — plain text rows, no border, no background tint
-    dangerRow:  { paddingVertical: spacing[2] },
+    dangerRow: { paddingVertical: spacing[2] },
     dangerText: { fontSize: 15, color: p.danger },
 
     deleteConfirmBox: { gap: spacing[3] },

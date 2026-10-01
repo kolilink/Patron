@@ -125,80 +125,80 @@ function ExpenseFormModal({ visible, editing, onClose, onSave, saving, currency,
         ) : undefined
       }
     >
-          <Input
-            label={`Montant (${currency})`}
-            value={amount}
-            onChangeText={v => setAmount(formatAmountInput(v, currency))}
-            keyboardType="decimal-pad"
-            inputAccessoryViewID={Platform.OS === 'ios' ? EXPENSE_FORM_SILENT_ACCESSORY_ID : undefined}
-          />
+      <Input
+        label={`Montant (${currency})`}
+        value={amount}
+        onChangeText={v => setAmount(formatAmountInput(v, currency))}
+        keyboardType="decimal-pad"
+        inputAccessoryViewID={Platform.OS === 'ios' ? EXPENSE_FORM_SILENT_ACCESSORY_ID : undefined}
+      />
 
-          <Input
-            label="Description"
-            value={description}
-            onChangeText={setDescription}
-            placeholder="Carburant, loyer, salaire du gardien"
-          />
+      <Input
+        label="Description"
+        value={description}
+        onChangeText={setDescription}
+        placeholder="Carburant, loyer, salaire du gardien"
+      />
 
-          {activeProducts.length > 0 && (
-            <View style={{ gap: spacing[2] }}>
-              <Text variant="label">Produit concerné <Text variant="caption" color="secondary">(optionnel)</Text></Text>
-              <ScrollView horizontal showsHorizontalScrollIndicator={false} style={{ flexGrow: 0 }}>
-                {activeProducts.map(p => {
-                  const active = selectedProductId === p.id;
-                  return (
-                    <Pressable
-                      key={p.id}
-                      onPress={() => setSelectedProductId(active ? null : p.id)}
-                      style={[styles.productChip, active && styles.productChipActive]}
-                    >
-                      <Text
-                        variant="caption"
-                        numberOfLines={1}
-                        style={{ color: active ? palette.textInverse : palette.textPrimary }}
-                      >
-                        {p.name}
-                      </Text>
-                    </Pressable>
-                  );
-                })}
-              </ScrollView>
-            </View>
-          )}
-
-          <View style={{ gap: spacing[2] }}>
-            <Text variant="label">Date de la dépense</Text>
-            <View style={styles.datePills}>
-              {(['hier', 'aujourdhui', 'autre'] as const).map(mode => (
+      {activeProducts.length > 0 && (
+        <View style={{ gap: spacing[2] }}>
+          <Text variant="label">Produit concerné <Text variant="caption" color="secondary">(optionnel)</Text></Text>
+          <ScrollView horizontal showsHorizontalScrollIndicator={false} style={{ flexGrow: 0 }}>
+            {activeProducts.map(p => {
+              const active = selectedProductId === p.id;
+              return (
                 <Pressable
-                  key={mode}
-                  onPress={() => {
-                    setDateMode(mode);
-                    if (mode === 'hier') setDate(yesterdayIso());
-                    else if (mode === 'aujourdhui') setDate(todayIso());
-                  }}
-                  style={[styles.datePill, dateMode === mode && styles.datePillActive]}
+                  key={p.id}
+                  onPress={() => setSelectedProductId(active ? null : p.id)}
+                  style={[styles.productChip, active && styles.productChipActive]}
                 >
-                  <Text variant="label" style={{ color: dateMode === mode ? palette.textInverse : palette.textSecondary }}>
-                    {mode === 'hier' ? 'Hier' : mode === 'aujourdhui' ? "Aujourd'hui" : 'Autre date'}
+                  <Text
+                    variant="caption"
+                    numberOfLines={1}
+                    style={{ color: active ? palette.textInverse : palette.textPrimary }}
+                  >
+                    {p.name}
                   </Text>
                 </Pressable>
-              ))}
-            </View>
-            {dateMode === 'autre' && (
-              <DatePickerField value={date} onChange={setDate} maxToday />
-            )}
-          </View>
+              );
+            })}
+          </ScrollView>
+        </View>
+      )}
 
-          {/* Image well — attach a receipt while recording the expense */}
-          <ProofPhotoField
-            existingUrl={editing?.proof_image_url}
-            existingWidth={editing?.proof_image_width}
-            existingHeight={editing?.proof_image_height}
-            value={photo}
-            onChange={setPhoto}
-            disabled={offline}
-          />
+      <View style={{ gap: spacing[2] }}>
+        <Text variant="label">Date de la dépense</Text>
+        <View style={styles.datePills}>
+          {(['hier', 'aujourdhui', 'autre'] as const).map(mode => (
+            <Pressable
+              key={mode}
+              onPress={() => {
+                setDateMode(mode);
+                if (mode === 'hier') setDate(yesterdayIso());
+                else if (mode === 'aujourdhui') setDate(todayIso());
+              }}
+              style={[styles.datePill, dateMode === mode && styles.datePillActive]}
+            >
+              <Text variant="label" style={{ color: dateMode === mode ? palette.textInverse : palette.textSecondary }}>
+                {mode === 'hier' ? 'Hier' : mode === 'aujourdhui' ? "Aujourd'hui" : 'Autre date'}
+              </Text>
+            </Pressable>
+          ))}
+        </View>
+        {dateMode === 'autre' && (
+          <DatePickerField value={date} onChange={setDate} maxToday />
+        )}
+      </View>
+
+      {/* Image well — attach a receipt while recording the expense */}
+      <ProofPhotoField
+        existingUrl={editing?.proof_image_url}
+        existingWidth={editing?.proof_image_width}
+        existingHeight={editing?.proof_image_height}
+        value={photo}
+        onChange={setPhoto}
+        disabled={offline}
+      />
     </FormSheet>
   );
 }
@@ -339,7 +339,7 @@ function MonthGroup({ label, total, items, currency, isManager, userId, business
 
   return (
     <View style={styles.monthBlock}>
-      <Pressable onPress={() => { haptics.selection(); setOpen(o => !o); }} style={styles.monthHeader}>
+      <Pressable onPress={() => { haptics.toggle(!open); setOpen(o => !o); }} style={styles.monthHeader}>
         <Text variant="label" style={styles.monthLabel}>{label}</Text>
         <View style={{ flexDirection: 'row', alignItems: 'center', gap: spacing[2] }}>
           <Text variant="label" style={{ color: palette.warning }}>{fmt(total, currency)}</Text>
@@ -389,7 +389,7 @@ export default function DepensesScreen() {
   const [showForm, setShowForm] = useState(false);
   const [editingExpense, setEditingExpense] = useState<Expense | null>(null);
 
-  const fabScale   = useRef(new Animated.Value(1)).current;
+  const fabScale = useRef(new Animated.Value(1)).current;
   const fabOpacity = useRef(new Animated.Value(1)).current;
 
   useEffect(() => {
@@ -397,12 +397,12 @@ export default function DepensesScreen() {
     const loop = Animated.loop(
       Animated.sequence([
         Animated.parallel([
-          Animated.timing(fabScale,   { toValue: 1.06, duration: 2000, easing, useNativeDriver: true }),
+          Animated.timing(fabScale, { toValue: 1.06, duration: 2000, easing, useNativeDriver: true }),
           Animated.timing(fabOpacity, { toValue: 0.85, duration: 2000, easing, useNativeDriver: true }),
         ]),
         Animated.parallel([
-          Animated.timing(fabScale,   { toValue: 1,    duration: 2000, easing, useNativeDriver: true }),
-          Animated.timing(fabOpacity, { toValue: 1,    duration: 2000, easing, useNativeDriver: true }),
+          Animated.timing(fabScale, { toValue: 1, duration: 2000, easing, useNativeDriver: true }),
+          Animated.timing(fabOpacity, { toValue: 1, duration: 2000, easing, useNativeDriver: true }),
         ]),
       ])
     );
@@ -596,105 +596,105 @@ export default function DepensesScreen() {
 
 function makeStyles(p: Palette) {
   return StyleSheet.create({
-  safe: { flex: 1, backgroundColor: p.background },
-  hdr: {
-    flexDirection: 'row', alignItems: 'center', justifyContent: 'space-between',
-    padding: spacing[5], borderBottomWidth: 1, borderBottomColor: p.border,
-  },
-  list: { padding: spacing[5], gap: spacing[4], paddingBottom: spacing[24] },
+    safe: { flex: 1, backgroundColor: p.background },
+    hdr: {
+      flexDirection: 'row', alignItems: 'center', justifyContent: 'space-between',
+      padding: spacing[5], borderBottomWidth: 1, borderBottomColor: p.border,
+    },
+    list: { padding: spacing[5], gap: spacing[4], paddingBottom: spacing[24] },
 
-  // Pending section
-  pendingSection: { gap: spacing[2] },
-  pendingBadge: {
-    alignSelf: 'flex-start',
-    backgroundColor: p.warning + '20',
-    borderRadius: radius.sm,
-    paddingHorizontal: spacing[2],
-    paddingVertical: spacing[1],
-    borderWidth: 1,
-    borderColor: p.warning + '60',
-  },
+    // Pending section
+    pendingSection: { gap: spacing[2] },
+    pendingBadge: {
+      alignSelf: 'flex-start',
+      backgroundColor: p.warning + '20',
+      borderRadius: radius.sm,
+      paddingHorizontal: spacing[2],
+      paddingVertical: spacing[1],
+      borderWidth: 1,
+      borderColor: p.warning + '60',
+    },
 
-  // Month accordion
-  monthBlock: { gap: 0 },
-  monthHeader: {
-    flexDirection: 'row', justifyContent: 'space-between', alignItems: 'center',
-    paddingVertical: spacing[3], paddingHorizontal: spacing[1],
-    borderBottomWidth: 1, borderBottomColor: p.border,
-  },
-  monthLabel: { textTransform: 'capitalize' },
-  monthItems: { gap: spacing[2], paddingTop: spacing[2] },
+    // Month accordion
+    monthBlock: { gap: 0 },
+    monthHeader: {
+      flexDirection: 'row', justifyContent: 'space-between', alignItems: 'center',
+      paddingVertical: spacing[3], paddingHorizontal: spacing[1],
+      borderBottomWidth: 1, borderBottomColor: p.border,
+    },
+    monthLabel: { textTransform: 'capitalize' },
+    monthItems: { gap: spacing[2], paddingTop: spacing[2] },
 
-  // Expense card
-  expRow: { gap: spacing[2] },
-  expRowPending: { borderLeftWidth: 3, borderLeftColor: p.warning },
-  expTop: { flexDirection: 'row', gap: spacing[3], alignItems: 'flex-start' },
-  statusPill: { paddingHorizontal: spacing[2], paddingVertical: 2, borderRadius: radius.sm },
-  editBtn: {
-    paddingHorizontal: spacing[2], paddingVertical: 2,
-    borderRadius: radius.sm, borderWidth: 1, borderColor: p.primary + '50',
-  },
-  actionRow: { flexDirection: 'row', gap: spacing[2] },
+    // Expense card
+    expRow: { gap: spacing[2] },
+    expRowPending: { borderLeftWidth: 3, borderLeftColor: p.warning },
+    expTop: { flexDirection: 'row', gap: spacing[3], alignItems: 'flex-start' },
+    statusPill: { paddingHorizontal: spacing[2], paddingVertical: 2, borderRadius: radius.sm },
+    editBtn: {
+      paddingHorizontal: spacing[2], paddingVertical: 2,
+      borderRadius: radius.sm, borderWidth: 1, borderColor: p.primary + '50',
+    },
+    actionRow: { flexDirection: 'row', gap: spacing[2] },
 
-  // Inline confirm buttons
-  confirmBtn: {
-    flex: 1, paddingVertical: spacing[2.5], borderRadius: radius.md,
-    alignItems: 'center', justifyContent: 'center',
-  },
-  cancelBtn: {
-    paddingHorizontal: spacing[4], paddingVertical: spacing[2.5],
-    borderRadius: radius.md, borderWidth: 1, borderColor: p.border,
-    alignItems: 'center', justifyContent: 'center',
-  },
+    // Inline confirm buttons
+    confirmBtn: {
+      flex: 1, paddingVertical: spacing[2.5], borderRadius: radius.md,
+      alignItems: 'center', justifyContent: 'center',
+    },
+    cancelBtn: {
+      paddingHorizontal: spacing[4], paddingVertical: spacing[2.5],
+      borderRadius: radius.md, borderWidth: 1, borderColor: p.border,
+      alignItems: 'center', justifyContent: 'center',
+    },
 
-  // Empty
-  empty: { flex: 1, alignItems: 'center', justifyContent: 'center', gap: spacing[3] },
+    // Empty
+    empty: { flex: 1, alignItems: 'center', justifyContent: 'center', gap: spacing[3] },
 
-  // Product chip picker
-  productChip: {
-    paddingHorizontal: spacing[3], paddingVertical: spacing[2],
-    marginRight: spacing[2], borderRadius: radius.full,
-    borderWidth: 1.5, borderColor: p.border, backgroundColor: p.surface, maxWidth: 160,
-  },
-  productChipActive: { backgroundColor: p.primary, borderColor: p.primary },
-  productTag: {
-    alignSelf: 'flex-start', marginTop: 2,
-    paddingHorizontal: spacing[2], paddingVertical: 1,
-    borderRadius: radius.sm, backgroundColor: p.primaryLight,
-  },
+    // Product chip picker
+    productChip: {
+      paddingHorizontal: spacing[3], paddingVertical: spacing[2],
+      marginRight: spacing[2], borderRadius: radius.full,
+      borderWidth: 1.5, borderColor: p.border, backgroundColor: p.surface, maxWidth: 160,
+    },
+    productChipActive: { backgroundColor: p.primary, borderColor: p.primary },
+    productTag: {
+      alignSelf: 'flex-start', marginTop: 2,
+      paddingHorizontal: spacing[2], paddingVertical: 1,
+      borderRadius: radius.sm, backgroundColor: p.primaryLight,
+    },
 
-  // Date pills
-  datePills: { flexDirection: 'row', gap: spacing[2] },
-  datePill: {
-    flex: 1, paddingVertical: spacing[2.5], alignItems: 'center',
-    borderRadius: radius.full, borderWidth: 1.5, borderColor: p.border,
-    backgroundColor: p.surface,
-  },
-  datePillActive: { backgroundColor: p.primary, borderColor: p.primary },
+    // Date pills
+    datePills: { flexDirection: 'row', gap: spacing[2] },
+    datePill: {
+      flex: 1, paddingVertical: spacing[2.5], alignItems: 'center',
+      borderRadius: radius.full, borderWidth: 1.5, borderColor: p.border,
+      backgroundColor: p.surface,
+    },
+    datePillActive: { backgroundColor: p.primary, borderColor: p.primary },
 
-  // FAB — extended (icon + label), never a bare "+": an icon-only action
-  // button can't be recognized by name, only by shape.
-  fabContainer: { position: 'absolute', bottom: 194, right: spacing[4], zIndex: 10 },
-  fabExtended: {
-    flexDirection: 'row', alignItems: 'center', gap: spacing[2],
-    height: 56, paddingHorizontal: spacing[5], borderRadius: radius.full,
-    backgroundColor: p.primary,
-    shadowColor: p.textPrimary, shadowOffset: { width: 0, height: 4 },
-    shadowOpacity: 0.18, shadowRadius: 8, elevation: 8,
-  },
-  fabExtendedLabel: { fontSize: 15, fontWeight: '600' as const, color: p.textInverse },
+    // FAB — extended (icon + label), never a bare "+": an icon-only action
+    // button can't be recognized by name, only by shape.
+    fabContainer: { position: 'absolute', bottom: 194, right: spacing[4], zIndex: 10 },
+    fabExtended: {
+      flexDirection: 'row', alignItems: 'center', gap: spacing[2],
+      height: 56, paddingHorizontal: spacing[5], borderRadius: radius.full,
+      backgroundColor: p.primary,
+      shadowColor: p.textPrimary, shadowOffset: { width: 0, height: 4 },
+      shadowOpacity: 0.18, shadowRadius: 8, elevation: 8,
+    },
+    fabExtendedLabel: { fontSize: 15, fontWeight: '600' as const, color: p.textInverse },
 
-  // Form modal
-  modalSafe: { flex: 1, backgroundColor: p.background },
-  modalHeader: {
-    flexDirection: 'row', alignItems: 'center', justifyContent: 'space-between',
-    padding: spacing[5], borderBottomWidth: 1, borderBottomColor: p.border,
-    backgroundColor: p.surface,
-  },
-  modalContent: { padding: spacing[5], gap: spacing[4] },
-  modalFooter: {
-    padding: spacing[5], borderTopWidth: 1, borderTopColor: p.border,
-    backgroundColor: p.surface,
-  },
+    // Form modal
+    modalSafe: { flex: 1, backgroundColor: p.background },
+    modalHeader: {
+      flexDirection: 'row', alignItems: 'center', justifyContent: 'space-between',
+      padding: spacing[5], borderBottomWidth: 1, borderBottomColor: p.border,
+      backgroundColor: p.surface,
+    },
+    modalContent: { padding: spacing[5], gap: spacing[4] },
+    modalFooter: {
+      padding: spacing[5], borderTopWidth: 1, borderTopColor: p.border,
+      backgroundColor: p.surface,
+    },
   });
 }

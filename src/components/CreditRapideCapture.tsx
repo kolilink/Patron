@@ -227,7 +227,7 @@ export function CreditRapideCapture({ businessId, userId, currency, onViewClient
     }
     const wasQueued = useSalesStore.getState().lastCarnetDebtQueued;
     trackEvent('quick_capture_submitted', businessId, userId, { mode: 'credit', queued: wasQueued });
-    haptics.heavy();
+    haptics.success();
     onAdded?.(parsed * 100);
     setSuccess(true);
     setSessionCount(c => c + 1);

@@ -9,6 +9,9 @@
 module.exports = {
   Platform: {
     OS: 'ios',
+    // Android API level — mutated by haptics tests to exercise the
+    // performAndroidHapticsAsync fallback ladder (30/34 thresholds).
+    Version: 0,
     select: (spec) => ('ios' in spec ? spec.ios : spec.default),
   },
 };

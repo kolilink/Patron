@@ -530,245 +530,245 @@ function ProductFormModal({ visible, editing, onClose, onSave, saving, currency,
         ) : undefined
       }
     >
-              {formError && (
-                <View style={styles.formError}>
-                  <Text variant="bodySmall" color="warning">{formError}</Text>
-                </View>
-              )}
+      {formError && (
+        <View style={styles.formError}>
+          <Text variant="bodySmall" color="warning">{formError}</Text>
+        </View>
+      )}
 
-              {/* 1 — Nom du produit */}
-              <View style={styles.fieldBlock}>
-                <Text style={styles.fieldLabel}>Nom du produit</Text>
-                <TextInput
-                  ref={nameRef}
-                  style={styles.fieldInput}
-                  value={form.name}
-                  onChangeText={setField('name')}
-                  placeholder="Nom du produit"
-                  placeholderTextColor={palette.textDisabled}
-                  returnKeyType="next"
-                  blurOnSubmit={false}
-                  onSubmitEditing={() => purchasePriceRef.current?.focus()}
-                />
-              </View>
+      {/* 1 — Nom du produit */}
+      <View style={styles.fieldBlock}>
+        <Text style={styles.fieldLabel}>Nom du produit</Text>
+        <TextInput
+          ref={nameRef}
+          style={styles.fieldInput}
+          value={form.name}
+          onChangeText={setField('name')}
+          placeholder="Nom du produit"
+          placeholderTextColor={palette.textDisabled}
+          returnKeyType="next"
+          blurOnSubmit={false}
+          onSubmitEditing={() => purchasePriceRef.current?.focus()}
+        />
+      </View>
 
-              {/* 2 — Variant toggle (early, before prices) */}
-              <View style={styles.variantToggleRow}>
-                <View style={{ flex: 1 }}>
-                  <Text variant="body" color="secondary" style={{ fontFamily: FF.medium }}>Tailles et couleurs</Text>
-                </View>
-                <Switch
-                  value={hasVariants}
-                  onValueChange={v => {
-                    setHasVariants(v);
-                    if (v && variantDraft.length === 0) {
-                      setVariantDraft([makeVariantItem(form, currency)]);
-                    }
-                  }}
-                  trackColor={{ false: palette.border, true: palette.primary }}
-                  thumbColor={palette.surface}
-                />
-              </View>
+      {/* 2 — Variant toggle (early, before prices) */}
+      <View style={styles.variantToggleRow}>
+        <View style={{ flex: 1 }}>
+          <Text variant="body" color="secondary" style={{ fontFamily: FF.medium }}>Tailles et couleurs</Text>
+        </View>
+        <Switch
+          value={hasVariants}
+          onValueChange={v => {
+            setHasVariants(v);
+            if (v && variantDraft.length === 0) {
+              setVariantDraft([makeVariantItem(form, currency)]);
+            }
+          }}
+          trackColor={{ false: palette.border, true: palette.primary }}
+          thumbColor={palette.surface}
+        />
+      </View>
 
-              {/* 3 — Prix d'achat */}
-              <View style={styles.fieldBlock}>
-                <Text style={styles.fieldLabel}>
-                  {`Prix d'achat unitaire (${currency})`}
-                </Text>
-                <TextInput
-                  ref={purchasePriceRef}
-                  style={styles.fieldInput}
-                  value={form.purchase_price}
-                  onChangeText={v => setForm(prev => ({ ...prev, purchase_price: formatAmountInput(v, currency) }))}
-                  keyboardType="decimal-pad"
-                  placeholderTextColor={palette.textDisabled}
-                  returnKeyType="next"
-                  blurOnSubmit={false}
-                  onSubmitEditing={() => salePriceRef.current?.focus()}
-                  onFocus={() => setFocusedPriceField('purchase_price')}
-                  inputAccessoryViewID={Platform.OS === 'ios' ? PRICE_ACCESSORY_ID : undefined}
-                />
-              </View>
+      {/* 3 — Prix d'achat */}
+      <View style={styles.fieldBlock}>
+        <Text style={styles.fieldLabel}>
+          {`Prix d'achat unitaire (${currency})`}
+        </Text>
+        <TextInput
+          ref={purchasePriceRef}
+          style={styles.fieldInput}
+          value={form.purchase_price}
+          onChangeText={v => setForm(prev => ({ ...prev, purchase_price: formatAmountInput(v, currency) }))}
+          keyboardType="decimal-pad"
+          placeholderTextColor={palette.textDisabled}
+          returnKeyType="next"
+          blurOnSubmit={false}
+          onSubmitEditing={() => salePriceRef.current?.focus()}
+          onFocus={() => setFocusedPriceField('purchase_price')}
+          inputAccessoryViewID={Platform.OS === 'ios' ? PRICE_ACCESSORY_ID : undefined}
+        />
+      </View>
 
-              {/* 4 — Prix de vente */}
-              <View style={styles.fieldBlock}>
-                <Text style={styles.fieldLabel}>
-                  {`Prix de vente unitaire (${currency})`}
-                </Text>
-                <TextInput
-                  ref={salePriceRef}
-                  style={styles.fieldInput}
-                  value={form.sale_price}
-                  onChangeText={v => setForm(prev => ({ ...prev, sale_price: formatAmountInput(v, currency) }))}
-                  keyboardType="decimal-pad"
-                  placeholderTextColor={palette.textDisabled}
-                  returnKeyType={quantityFieldVisible ? 'next' : 'done'}
-                  blurOnSubmit={false}
-                  onSubmitEditing={() => {
-                    if (quantityFieldVisible) initialStockRef.current?.focus();
-                    else Keyboard.dismiss();
-                  }}
-                  onFocus={() => setFocusedPriceField('sale_price')}
-                  inputAccessoryViewID={Platform.OS === 'ios' ? PRICE_ACCESSORY_ID : undefined}
-                />
-                {(() => {
-                  const sp = parseAmountInput(form.sale_price, currency);
-                  const cp = totalCost(form, currency);
-                  if (cp > 0 && sp > 0 && sp < cp) {
-                    return (
-                      <Text style={{ fontSize: 12, color: palette.warning, marginTop: 4 }}>
-                        Le prix est inférieur au coût d'achat
-                      </Text>
-                    );
-                  }
-                  return null;
-                })()}
-              </View>
+      {/* 4 — Prix de vente */}
+      <View style={styles.fieldBlock}>
+        <Text style={styles.fieldLabel}>
+          {`Prix de vente unitaire (${currency})`}
+        </Text>
+        <TextInput
+          ref={salePriceRef}
+          style={styles.fieldInput}
+          value={form.sale_price}
+          onChangeText={v => setForm(prev => ({ ...prev, sale_price: formatAmountInput(v, currency) }))}
+          keyboardType="decimal-pad"
+          placeholderTextColor={palette.textDisabled}
+          returnKeyType={quantityFieldVisible ? 'next' : 'done'}
+          blurOnSubmit={false}
+          onSubmitEditing={() => {
+            if (quantityFieldVisible) initialStockRef.current?.focus();
+            else Keyboard.dismiss();
+          }}
+          onFocus={() => setFocusedPriceField('sale_price')}
+          inputAccessoryViewID={Platform.OS === 'ios' ? PRICE_ACCESSORY_ID : undefined}
+        />
+        {(() => {
+          const sp = parseAmountInput(form.sale_price, currency);
+          const cp = totalCost(form, currency);
+          if (cp > 0 && sp > 0 && sp < cp) {
+            return (
+              <Text style={{ fontSize: 12, color: palette.warning, marginTop: 4 }}>
+                Le prix est inférieur au coût d'achat
+              </Text>
+            );
+          }
+          return null;
+        })()}
+      </View>
 
-              {/* 5a — Quantity (plain products, new only) */}
-              {!editing && !hasVariants && (
-                <View style={styles.fieldBlock}>
-                  <Text style={styles.fieldLabel}>Quantité achetée</Text>
-                  <View style={styles.fieldRow}>
-                    <TextInput
-                      ref={initialStockRef}
-                      style={[styles.fieldInput, { flex: 1 }]}
-                      value={form.initial_stock}
-                      onChangeText={setField('initial_stock')}
-                      keyboardType="number-pad"
-                      placeholderTextColor={palette.textDisabled}
-                      returnKeyType="done"
-                      onSubmitEditing={() => Keyboard.dismiss()}
-                      onFocus={() => setFocusedPriceField('quantity')}
-                      inputAccessoryViewID={Platform.OS === 'ios' ? PRICE_ACCESSORY_ID : undefined}
-                    />
-                    <Text style={styles.unitTag}>pcs</Text>
-                  </View>
-                </View>
-              )}
+      {/* 5a — Quantity (plain products, new only) */}
+      {!editing && !hasVariants && (
+        <View style={styles.fieldBlock}>
+          <Text style={styles.fieldLabel}>Quantité achetée</Text>
+          <View style={styles.fieldRow}>
+            <TextInput
+              ref={initialStockRef}
+              style={[styles.fieldInput, { flex: 1 }]}
+              value={form.initial_stock}
+              onChangeText={setField('initial_stock')}
+              keyboardType="number-pad"
+              placeholderTextColor={palette.textDisabled}
+              returnKeyType="done"
+              onSubmitEditing={() => Keyboard.dismiss()}
+              onFocus={() => setFocusedPriceField('quantity')}
+              inputAccessoryViewID={Platform.OS === 'ios' ? PRICE_ACCESSORY_ID : undefined}
+            />
+            <Text style={styles.unitTag}>pcs</Text>
+          </View>
+        </View>
+      )}
 
-              {/* 5b — Variant list */}
-              {hasVariants && (
-                <View style={styles.variantList}>
-                  <View style={styles.variantListHeader}>
-                    <Text
-                      style={[styles.fieldLabel, { flex: VARIANT_NAME_FLEX, fontSize: 10, letterSpacing: 0 }]}
-                      numberOfLines={1}
-                    >
-                      Variantes
-                    </Text>
-                    <Text style={[styles.fieldLabel, { width: VARIANT_QTY_WIDTH, textAlign: 'right' }]}>Qté</Text>
-                    <Text
-                      style={[styles.fieldLabel, { flex: VARIANT_PRICE_FLEX, minWidth: VARIANT_PRICE_MIN_WIDTH, textAlign: 'right' }]}
-                    >
-                      Prix
-                    </Text>
-                    <View style={{ width: VARIANT_REMOVE_WIDTH }} />
-                  </View>
-                  {variantDraft.map((v, i) => (
-                    <VariantRow
-                      key={v._key}
-                      variant={v}
-                      currency={currency}
-                      fallbackPrice={sp}
-                      onChange={patch => setVariantDraft(prev => prev.map((item, idx) => idx === i ? { ...item, ...patch } : item))}
-                      onRemove={() => setVariantDraft(prev => prev.filter((_, idx) => idx !== i))}
-                    />
-                  ))}
-                  <Pressable
-                    style={styles.addVariantBtn}
-                    onPress={() => setVariantDraft(prev => [...prev, makeVariantItem(form, currency)])}
-                  >
-                    <Ionicons name="add-circle-outline" size={18} color={palette.primary} />
-                    <Text variant="label" style={{ color: palette.primary, marginLeft: 4 }}>Ajouter une variante</Text>
-                  </Pressable>
-                  {totalVariantStock > 0 && (
-                    <View style={[styles.liveCalcBlock, { borderTopWidth: 0 }]}>
-                      <Text style={styles.liveCalcText}>
-                        Stock total : {totalVariantStock} pcs sur {variantDraft.length} variante{variantDraft.length !== 1 ? 's' : ''}
-                      </Text>
-                    </View>
-                  )}
-                </View>
-              )}
+      {/* 5b — Variant list */}
+      {hasVariants && (
+        <View style={styles.variantList}>
+          <View style={styles.variantListHeader}>
+            <Text
+              style={[styles.fieldLabel, { flex: VARIANT_NAME_FLEX, fontSize: 10, letterSpacing: 0 }]}
+              numberOfLines={1}
+            >
+              Variantes
+            </Text>
+            <Text style={[styles.fieldLabel, { width: VARIANT_QTY_WIDTH, textAlign: 'right' }]}>Qté</Text>
+            <Text
+              style={[styles.fieldLabel, { flex: VARIANT_PRICE_FLEX, minWidth: VARIANT_PRICE_MIN_WIDTH, textAlign: 'right' }]}
+            >
+              Prix
+            </Text>
+            <View style={{ width: VARIANT_REMOVE_WIDTH }} />
+          </View>
+          {variantDraft.map((v, i) => (
+            <VariantRow
+              key={v._key}
+              variant={v}
+              currency={currency}
+              fallbackPrice={sp}
+              onChange={patch => setVariantDraft(prev => prev.map((item, idx) => idx === i ? { ...item, ...patch } : item))}
+              onRemove={() => setVariantDraft(prev => prev.filter((_, idx) => idx !== i))}
+            />
+          ))}
+          <Pressable
+            style={styles.addVariantBtn}
+            onPress={() => setVariantDraft(prev => [...prev, makeVariantItem(form, currency)])}
+          >
+            <Ionicons name="add-circle-outline" size={18} color={palette.primary} />
+            <Text variant="label" style={{ color: palette.primary, marginLeft: 4 }}>Ajouter une variante</Text>
+          </Pressable>
+          {totalVariantStock > 0 && (
+            <View style={[styles.liveCalcBlock, { borderTopWidth: 0 }]}>
+              <Text style={styles.liveCalcText}>
+                Stock total : {totalVariantStock} pcs sur {variantDraft.length} variante{variantDraft.length !== 1 ? 's' : ''}
+              </Text>
+            </View>
+          )}
+        </View>
+      )}
 
-              {/* Live math (plain products) */}
-              {showLiveCalc && (
-                <View style={styles.liveCalcBlock}>
-                  <Text style={styles.liveCalcText}>
-                    Total investi : {liveInvested.toLocaleString('fr-FR')} {currency}
-                  </Text>
-                </View>
-              )}
-              {showProfitHint && (
-                <View style={styles.liveCalcBlock}>
-                  <Text style={[styles.liveCalcText, { color: sp > computedCost ? palette.success : palette.warning }]}>
-                    Bénéfice : {(sp - computedCost).toLocaleString('fr-FR')} {currency} par pièce
-                  </Text>
-                </View>
-              )}
+      {/* Live math (plain products) */}
+      {showLiveCalc && (
+        <View style={styles.liveCalcBlock}>
+          <Text style={styles.liveCalcText}>
+            Total investi : {liveInvested.toLocaleString('fr-FR')} {currency}
+          </Text>
+        </View>
+      )}
+      {showProfitHint && (
+        <View style={styles.liveCalcBlock}>
+          <Text style={[styles.liveCalcText, { color: sp > computedCost ? palette.success : palette.warning }]}>
+            Bénéfice : {(sp - computedCost).toLocaleString('fr-FR')} {currency} par pièce
+          </Text>
+        </View>
+      )}
 
-              {/* Frais & détails — always accessible (not gated on editing) */}
-              <Pressable onPress={toggleDetails} style={styles.detailsBtn}>
-                <Text variant="body" style={{ color: palette.primary }}>
-                  {showDetails ? '▲ Masquer' : '▼ Plus d\'informations'}
-                </Text>
-              </Pressable>
+      {/* Frais & détails — always accessible (not gated on editing) */}
+      <Pressable onPress={toggleDetails} style={styles.detailsBtn}>
+        <Text variant="body" style={{ color: palette.primary }}>
+          {showDetails ? '▲ Masquer' : '▼ Plus d\'informations'}
+        </Text>
+      </Pressable>
 
-              {showDetails && (
-                <>
-                  <SupplierPicker
-                    fournisseurs={fournisseurs}
-                    selectedId={form.supplier_id}
-                    onSelect={id => setForm(p => ({ ...p, supplier_id: id }))}
-                    businessId={businessId}
-                    userId={userId}
-                  />
+      {showDetails && (
+        <>
+          <SupplierPicker
+            fournisseurs={fournisseurs}
+            selectedId={form.supplier_id}
+            onSelect={id => setForm(p => ({ ...p, supplier_id: id }))}
+            businessId={businessId}
+            userId={userId}
+          />
 
-                  {editing && (
-                    <View style={styles.fieldBlock}>
-                      <Text style={styles.fieldLabel}>Quantité de la livraison</Text>
-                      <TextInput
-                        style={styles.fieldInput}
-                        value={form.purchase_qty}
-                        onChangeText={setField('purchase_qty')}
-                        keyboardType="number-pad"
-                        placeholderTextColor={palette.textDisabled}
-                        inputAccessoryViewID={Platform.OS === 'ios' ? SILENT_ACCESSORY_ID : undefined}
-                      />
-                      <Text variant="caption" color="secondary">Utilisée pour répartir les frais par unité</Text>
-                    </View>
-                  )}
+          {editing && (
+            <View style={styles.fieldBlock}>
+              <Text style={styles.fieldLabel}>Quantité de la livraison</Text>
+              <TextInput
+                style={styles.fieldInput}
+                value={form.purchase_qty}
+                onChangeText={setField('purchase_qty')}
+                keyboardType="number-pad"
+                placeholderTextColor={palette.textDisabled}
+                inputAccessoryViewID={Platform.OS === 'ios' ? SILENT_ACCESSORY_ID : undefined}
+              />
+              <Text variant="caption" color="secondary">Utilisée pour répartir les frais par unité</Text>
+            </View>
+          )}
 
-                  <View style={styles.fieldBlock}>
-                    <Text style={styles.fieldLabel}>Frais supplémentaires ({currency})</Text>
-                    <TextInput
-                      style={styles.fieldInput}
-                      value={form.extra_fees}
-                      onChangeText={v => setForm(prev => ({ ...prev, extra_fees: formatAmountInput(v, currency) }))}
-                      keyboardType="decimal-pad"
-                      placeholder="0"
-                      placeholderTextColor={palette.textDisabled}
-                      inputAccessoryViewID={Platform.OS === 'ios' ? SILENT_ACCESSORY_ID : undefined}
-                    />
-                  </View>
+          <View style={styles.fieldBlock}>
+            <Text style={styles.fieldLabel}>Frais supplémentaires ({currency})</Text>
+            <TextInput
+              style={styles.fieldInput}
+              value={form.extra_fees}
+              onChangeText={v => setForm(prev => ({ ...prev, extra_fees: formatAmountInput(v, currency) }))}
+              keyboardType="decimal-pad"
+              placeholder="0"
+              placeholderTextColor={palette.textDisabled}
+              inputAccessoryViewID={Platform.OS === 'ios' ? SILENT_ACCESSORY_ID : undefined}
+            />
+          </View>
 
-                  {!hasVariants && (
-                    <View style={styles.fieldBlock}>
-                      <Text style={styles.fieldLabel}>Seuil d'alerte stock</Text>
-                      <TextInput
-                        style={styles.fieldInput}
-                        value={form.reorder_level}
-                        onChangeText={setField('reorder_level')}
-                        keyboardType="number-pad"
-                        placeholderTextColor={palette.textDisabled}
-                        inputAccessoryViewID={Platform.OS === 'ios' ? SILENT_ACCESSORY_ID : undefined}
-                      />
-                      <Text variant="caption" color="secondary">Vous serez alerté à ce niveau de stock</Text>
-                    </View>
-                  )}
-                </>
-              )}
+          {!hasVariants && (
+            <View style={styles.fieldBlock}>
+              <Text style={styles.fieldLabel}>Seuil d'alerte stock</Text>
+              <TextInput
+                style={styles.fieldInput}
+                value={form.reorder_level}
+                onChangeText={setField('reorder_level')}
+                keyboardType="number-pad"
+                placeholderTextColor={palette.textDisabled}
+                inputAccessoryViewID={Platform.OS === 'ios' ? SILENT_ACCESSORY_ID : undefined}
+              />
+              <Text variant="caption" color="secondary">Vous serez alerté à ce niveau de stock</Text>
+            </View>
+          )}
+        </>
+      )}
     </FormSheet>
   );
 }
@@ -1391,7 +1391,7 @@ export default function CatalogueScreen() {
     }
   }, [editingProduct, businessId]);
 
-  const fabScale   = useRef(new Animated.Value(1)).current;
+  const fabScale = useRef(new Animated.Value(1)).current;
   const fabOpacity = useRef(new Animated.Value(1)).current;
 
   useEffect(() => {
@@ -1399,12 +1399,12 @@ export default function CatalogueScreen() {
     const loop = Animated.loop(
       Animated.sequence([
         Animated.parallel([
-          Animated.timing(fabScale,   { toValue: 1.06, duration: 2000, easing, useNativeDriver: true }),
+          Animated.timing(fabScale, { toValue: 1.06, duration: 2000, easing, useNativeDriver: true }),
           Animated.timing(fabOpacity, { toValue: 0.85, duration: 2000, easing, useNativeDriver: true }),
         ]),
         Animated.parallel([
-          Animated.timing(fabScale,   { toValue: 1,    duration: 2000, easing, useNativeDriver: true }),
-          Animated.timing(fabOpacity, { toValue: 1,    duration: 2000, easing, useNativeDriver: true }),
+          Animated.timing(fabScale, { toValue: 1, duration: 2000, easing, useNativeDriver: true }),
+          Animated.timing(fabOpacity, { toValue: 1, duration: 2000, easing, useNativeDriver: true }),
         ]),
       ])
     );
@@ -1528,7 +1528,7 @@ export default function CatalogueScreen() {
         `"${product.name}" sera retiré du catalogue actif. Vous pourrez le réactiver depuis l'onglet Archivés.`,
         [
           { text: 'Annuler', style: 'cancel' },
-          { text: 'Archiver', style: 'destructive', onPress: () => { haptics.error(); archiveProduct(product.id, businessId); } },
+          { text: 'Archiver', style: 'destructive', onPress: () => { haptics.destructive(); archiveProduct(product.id, businessId); } },
         ],
       );
     }, 350);
@@ -1655,16 +1655,16 @@ export default function CatalogueScreen() {
       {products.length > 0 && tab === 'actifs' && (
         <View style={styles.statsCard}>
           {role !== 'vendeur' && (
-          <View style={styles.statCol}>
-            <Text variant="caption" color="secondary">Valeur du stock</Text>
-            <Text style={styles.statValue}>
-              {formatPrice(
-                products.filter(p => !p.has_variants).reduce((s, p) => s + p.cost_price * p.stock_qty, 0) +
-                Object.values(variantsByProduct).flat().reduce((s, v) => s + v.cost_price * v.stock_qty, 0),
-                currency,
-              )}
-            </Text>
-          </View>
+            <View style={styles.statCol}>
+              <Text variant="caption" color="secondary">Valeur du stock</Text>
+              <Text style={styles.statValue}>
+                {formatPrice(
+                  products.filter(p => !p.has_variants).reduce((s, p) => s + p.cost_price * p.stock_qty, 0) +
+                  Object.values(variantsByProduct).flat().reduce((s, v) => s + v.cost_price * v.stock_qty, 0),
+                  currency,
+                )}
+              </Text>
+            </View>
           )}
           {outOfStockActive.length > 0 && (
             <>
