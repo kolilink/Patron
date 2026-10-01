@@ -9,8 +9,10 @@ import { Text } from '@/src/components/ui/Text';
 import { SkeletonList } from '@/src/components/ui/SkeletonPlaceholder';
 import { PaywallScreen } from '@/src/components/PaywallScreen';
 import { LiveWaveformBars } from '@/src/components/ui/VoiceMessageBubble';
+import { AppSheet } from '@/src/components/ui/AppSheet';
 import { useTheme, spacing, radius } from '@/src/theme';
 import type { Palette } from '@/src/theme';
+import { ALPHA_LABEL, ALPHA_DISCLOSURE, ALPHA_WARNING } from '@/src/constants/alpha';
 import { useAuthStore } from '@/stores/auth';
 import { useAlphaStore } from '@/stores/alpha';
 import { supabase } from '@/lib/supabase';
@@ -108,6 +110,8 @@ export default function AlphaScreen() {
   const [waitBlocked, setWaitBlocked] = useState(false);
   const [isTranscribing, setIsTranscribing] = useState(false);
   const [voiceError, setVoiceError] = useState<string | null>(null);
+  // Phase 4 — "?" info sheet (re-shows the disclosure + warning on demand).
+  const [showInfo, setShowInfo] = useState(false);
   const autoSentRef = useRef(false);
   const autoRecordRef = useRef(false);
   const listRef = useRef<FlatList<GroupedItem<GroupableAlphaMessage>>>(null);
@@ -311,7 +315,15 @@ export default function AlphaScreen() {
           <Text variant="body" color="secondary">‹ Retour</Text>
         </Pressable>
         <Text variant="h4" style={{ fontWeight: '800' }}>{PAYWALL_ENABLED && quota?.has_ai_access ? 'ALPHA PRO' : 'ALPHA'}</Text>
-        <View style={{ width: 60 }} />
+        {/* Phase 4 — permanent "?" entry point to the transparency info sheet. */}
+        <Pressable onPress={() => setShowInfo(true)} hitSlop={8} style={styles.infoBtn} accessibilityLabel="À propos d'Alpha">
+          <Ionicons name="help-circle-outline" size={22} color={palette.textSecondary} />
+        </Pressable>
+      </View>
+
+      {/* Phase 4 — permanent label, visible from first contact. */}
+      <View style={styles.alphaLabelRow}>
+        <Text variant="caption" color="secondary">{ALPHA_LABEL}</Text>
       </View>
 
       {/* Wraps only the content below the header — a KeyboardAvoidingView
@@ -476,6 +488,16 @@ export default function AlphaScreen() {
           dedicated like a real checkout screen, X-to-close via onDismiss,
           matching the reference paywall's scale rather than a small card
           tucked at the bottom of the conversation. */}
+      {/* Phase 4 — transparency info sheet ("?" in the header re-shows the
+          disclosure + warning that the server prefixes to the first reply). */}
+      <AppSheet
+        visible={showInfo}
+        onClose={() => setShowInfo(false)}
+        icon="help-circle-outline"
+        title={ALPHA_LABEL}
+        body={`${ALPHA_DISCLOSURE}\n\n${ALPHA_WARNING}`}
+      />
+
       <Modal
         visible={PAYWALL_ENABLED && !!pendingQuestion && !!session?.activeBusiness}
         animationType="slide"
@@ -500,6 +522,8 @@ export default function AlphaScreen() {
 function makeStyles(p: Palette) {
   return StyleSheet.create({
     header: { flexDirection: 'row', alignItems: 'center', justifyContent: 'space-between', paddingHorizontal: spacing[5], paddingVertical: spacing[3], borderBottomWidth: 1, borderBottomColor: p.border },
+    infoBtn: { width: 60, alignItems: 'flex-end' },
+    alphaLabelRow: { alignItems: 'center', paddingTop: spacing[3], paddingHorizontal: spacing[4] },
     empty: { flex: 1, alignItems: 'center', justifyContent: 'center', paddingHorizontal: spacing[6] },
     suggestion: { borderRadius: radius.lg, paddingHorizontal: spacing[4], paddingVertical: spacing[3] },
     errorStrip: { paddingHorizontal: spacing[4], paddingVertical: spacing[1] },
