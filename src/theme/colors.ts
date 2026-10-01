@@ -24,7 +24,7 @@ export const colors = {
 
   // Warning — amber
   warning: {
-    50:  '#FFFBEB',
+    50: '#FFFBEB',
     100: '#FEF3C7',
     500: '#F59E0B',
     600: '#D97706',
@@ -49,9 +49,9 @@ export const colors = {
   // real critical reading), so it must never bleed into a shared token a
   // merchant-facing screen might reach for by habit.
   health: {
-    green:  '#22C55E',
+    green: '#22C55E',
     yellow: '#EAB308',
-    red:    '#EF4444',
+    red: '#EF4444',
   },
 
   // Apports ("Capital investi" + its "Détails" screen) design-spec palette —
@@ -120,26 +120,26 @@ export const colors = {
 
   // Extended accent colors for avatar palettes and category badges
   fuchsia: {
-    50:  '#FDF4FF',
+    50: '#FDF4FF',
     700: '#86198F',
   },
   emerald: {
-    50:  '#ECFDF5',
+    50: '#ECFDF5',
     500: '#10B981',
     900: '#065F46',
   },
   blue: {
-    50:  '#EFF6FF',
+    50: '#EFF6FF',
     500: '#3B82F6',
     700: '#1D4ED8',
   },
   violet: {
-    50:  '#F5F3FF',
+    50: '#F5F3FF',
     500: '#8B5CF6',
     700: '#6D28D9',
   },
   cyan: {
-    50:  '#ECFEFF',
+    50: '#ECFEFF',
     500: '#06B6D4',
     700: '#0E7490',
   },
@@ -152,26 +152,26 @@ export const colors = {
 } as const;
 
 export const paletteLight = {
-  background:     colors.neutral[50],
-  surface:        colors.neutral[0],
-  surfaceElevated:colors.neutral[0],
-  border:         colors.neutral[200],
-  borderStrong:   colors.neutral[300],
-  shadow:         '#000',
+  background: colors.neutral[50],
+  surface: colors.neutral[0],
+  surfaceElevated: colors.neutral[0],
+  border: colors.neutral[200],
+  borderStrong: colors.neutral[300],
+  shadow: '#000',
 
-  textPrimary:    colors.neutral[900],
-  textSecondary:  colors.neutral[500],
-  textDisabled:   colors.neutral[300],
-  textInverse:    colors.neutral[0],
+  textPrimary: colors.neutral[900],
+  textSecondary: colors.neutral[500],
+  textDisabled: colors.neutral[300],
+  textInverse: colors.neutral[0],
 
   // Reserved for CTA fills, the active/selected state of nav/segmented
   // controls, and real brand moments (e.g. the Alpha entry point) — not a
   // generic tint for prices/links/icons. Used that way it stops signaling
   // anything; reach for textPrimary/textSecondary by default and only use
   // primary where it's actually interactive or actually the brand.
-  primary:        colors.primary[600],
-  primaryLight:   colors.primary[50],
-  primaryDark:    colors.primary[700],
+  primary: colors.primary[600],
+  primaryLight: colors.primary[50],
+  primaryDark: colors.primary[700],
 
   // Sunlight-readability audit (2026-09-28): success[600]/warning[600] only
   // hit 3.3:1 / 3.2:1 on white — well under the 4.5:1 floor this token is
@@ -180,85 +180,109 @@ export const paletteLight = {
   // often at hero size). Bumped one/two steps darker in the same ramp
   // (success[700] = 5.0:1, warning[800] = 7.1:1) — dark mode already clears
   // 10:1+ and is untouched.
-  success:        colors.success[700],
-  successLight:   colors.success[50],
-  warning:        colors.warning[800],
-  warningLight:   colors.warning[50],
-  danger:         colors.danger[600],
-  dangerLight:    colors.danger[50],
+  success: colors.success[700],
+  successLight: colors.success[50],
+  warning: colors.warning[800],
+  warningLight: colors.warning[50],
+  danger: colors.danger[600],
+  dangerLight: colors.danger[50],
 
-  healthGreen:    colors.health.green,
-  healthYellow:   colors.health.yellow,
-  healthRed:      colors.health.red,
+  healthGreen: colors.health.green,
+  healthYellow: colors.health.yellow,
+  healthRed: colors.health.red,
 
   // "Capital investi" + "Détails" only — see colors.apports above.
-  apportsInk:         colors.apports.inkLight,
-  apportsSecondary:   colors.apports.secondaryLight,
-  apportsPurple:      colors.apports.purpleLight,
-  apportsGreen:       colors.apports.greenLight,
-  apportsAmber:       colors.apports.amberLight,
+  apportsInk: colors.apports.inkLight,
+  apportsSecondary: colors.apports.secondaryLight,
+  apportsPurple: colors.apports.purpleLight,
+  apportsGreen: colors.apports.greenLight,
+  apportsAmber: colors.apports.amberLight,
   apportsDestructive: colors.apports.destructiveLight,
-  apportsScreen:      colors.apports.screenLight,
+  apportsScreen: colors.apports.screenLight,
 
   // Clients/Recouvrement only — see colors.recouvrement above.
-  recouvrementOwed:    colors.recouvrement.owedLight,
-  recouvrementPaid:    colors.recouvrement.paidLight,
+  recouvrementOwed: colors.recouvrement.owedLight,
+  recouvrementPaid: colors.recouvrement.paidLight,
   recouvrementPending: colors.recouvrement.pendingLight,
 
-  tabBar:         colors.neutral[0],
-  tabBarBorder:   colors.neutral[200],
-  tabBarActive:   colors.primary[600],
+  tabBar: colors.neutral[0],
+  tabBarBorder: colors.neutral[200],
+  tabBarActive: colors.primary[600],
   tabBarInactive: colors.neutral[400],
+
+  // Floating tab bar glass tiers (see src/components/ui/FloatingTabBar.tsx):
+  // iOS = real blur (expo-blur), Android 13+ = GPU blur (dimezisBlurView),
+  // Android ≤12 = translucent fill + hairline border (no real-time blur —
+  // documented jank/crash on low-end devices). tabBarGlass is the ≤12
+  // translucent fill; tabBarOverlay is the tint laid over blur on the two
+  // blur tiers so they read as this app's surface hue rather than a neutral
+  // frosted white; tabBarHairline is the 1px edge definition.
+  tabBarGlass: 'rgba(255,255,255,0.86)',
+  tabBarOverlay: 'rgba(255,255,255,0.35)',
+  tabBarHairline: 'rgba(15,23,42,0.06)',
+
+  // Soft violet pastille behind the active tab (spec: "accent violet, teinte
+  // douce"). A gentle tint, not a full-saturation fill — the active glyph stays
+  // palette.textPrimary on top of it.
+  tabBarIndicator: 'rgba(139,92,246,0.18)',
 } as const;
 
 export const paletteDark = {
-  background:     '#0F1117',
-  surface:        '#1A1D27',
-  surfaceElevated:'#242736',
-  border:         'rgba(255,255,255,0.08)',
-  borderStrong:   'rgba(255,255,255,0.15)',
-  shadow:         '#000',
+  background: '#0F1117',
+  surface: '#1A1D27',
+  surfaceElevated: '#242736',
+  border: 'rgba(255,255,255,0.08)',
+  borderStrong: 'rgba(255,255,255,0.15)',
+  shadow: '#000',
 
-  textPrimary:    '#F1F5F9',
-  textSecondary:  '#94A3B8',
-  textDisabled:   '#475569',
-  textInverse:    '#0F1117',
+  textPrimary: '#F1F5F9',
+  textSecondary: '#94A3B8',
+  textDisabled: '#475569',
+  textInverse: '#0F1117',
 
-  primary:        '#818CF8',
-  primaryLight:   'rgba(129,140,248,0.14)',
-  primaryDark:    '#6366F1',
+  primary: '#818CF8',
+  primaryLight: 'rgba(129,140,248,0.14)',
+  primaryDark: '#6366F1',
 
-  success:        '#4ADE80',
-  successLight:   'rgba(74,222,128,0.14)',
-  warning:        '#FCD34D',
-  warningLight:   'rgba(252,211,77,0.14)',
-  danger:         '#F87171',
-  dangerLight:    'rgba(248,113,113,0.14)',
+  success: '#4ADE80',
+  successLight: 'rgba(74,222,128,0.14)',
+  warning: '#FCD34D',
+  warningLight: 'rgba(252,211,77,0.14)',
+  danger: '#F87171',
+  dangerLight: 'rgba(248,113,113,0.14)',
 
   // Same literal hex as light mode, deliberately — a traffic-light color
   // has to mean the same thing regardless of theme, unlike the softer
   // success/warning/danger tones above that get dark-mode-adjusted for
   // surface contrast.
-  healthGreen:    colors.health.green,
-  healthYellow:   colors.health.yellow,
-  healthRed:      colors.health.red,
+  healthGreen: colors.health.green,
+  healthYellow: colors.health.yellow,
+  healthRed: colors.health.red,
 
-  apportsInk:         colors.apports.inkDark,
-  apportsSecondary:   colors.apports.secondaryDark,
-  apportsPurple:      colors.apports.purpleDark,
-  apportsGreen:       colors.apports.greenDark,
-  apportsAmber:       colors.apports.amberDark,
+  apportsInk: colors.apports.inkDark,
+  apportsSecondary: colors.apports.secondaryDark,
+  apportsPurple: colors.apports.purpleDark,
+  apportsGreen: colors.apports.greenDark,
+  apportsAmber: colors.apports.amberDark,
   apportsDestructive: colors.apports.destructiveDark,
-  apportsScreen:      colors.apports.screenDark,
+  apportsScreen: colors.apports.screenDark,
 
-  recouvrementOwed:    colors.recouvrement.owedDark,
-  recouvrementPaid:    colors.recouvrement.paidDark,
+  recouvrementOwed: colors.recouvrement.owedDark,
+  recouvrementPaid: colors.recouvrement.paidDark,
   recouvrementPending: colors.recouvrement.pendingDark,
 
-  tabBar:         '#1A1D27',
-  tabBarBorder:   'rgba(255,255,255,0.08)',
-  tabBarActive:   '#818CF8',
+  tabBar: '#1A1D27',
+  tabBarBorder: 'rgba(255,255,255,0.08)',
+  tabBarActive: '#818CF8',
   tabBarInactive: '#64748B',
+
+  // Floating tab bar glass tiers — see the light-mode comment above.
+  tabBarGlass: 'rgba(26,29,39,0.85)',
+  tabBarOverlay: 'rgba(26,29,39,0.40)',
+  tabBarHairline: 'rgba(255,255,255,0.10)',
+
+  // Soft violet pastille — see the light-mode comment above.
+  tabBarIndicator: 'rgba(167,139,250,0.30)',
 } as const;
 
 export type Palette = { readonly [K in keyof typeof paletteLight]: string };
@@ -274,13 +298,13 @@ export const palette = paletteLight;
 // rule — see CLAUDE.md), and teal was dropped rather than given its own
 // pair because it reads too close to cyan to stay distinct at this size.
 export const BUSINESS_AVATAR_PALETTE = [
-  { bg: colors.primary[50],  text: colors.primary[700] },   // indigo
-  { bg: colors.violet[50],   text: colors.violet[700] },    // violet
-  { bg: colors.fuchsia[50],  text: colors.fuchsia[700] },   // fuchsia
-  { bg: colors.warning[50],  text: colors.warning[700] },   // amber
-  { bg: colors.emerald[50],  text: colors.emerald[900] },   // emerald
-  { bg: colors.blue[50],     text: colors.blue[700] },      // blue
-  { bg: colors.cyan[50],     text: colors.cyan[700] },      // cyan
+  { bg: colors.primary[50], text: colors.primary[700] },   // indigo
+  { bg: colors.violet[50], text: colors.violet[700] },    // violet
+  { bg: colors.fuchsia[50], text: colors.fuchsia[700] },   // fuchsia
+  { bg: colors.warning[50], text: colors.warning[700] },   // amber
+  { bg: colors.emerald[50], text: colors.emerald[900] },   // emerald
+  { bg: colors.blue[50], text: colors.blue[700] },      // blue
+  { bg: colors.cyan[50], text: colors.cyan[700] },      // cyan
 ] as const;
 
 // Client list avatar palette (pastel bg tints)
@@ -293,22 +317,22 @@ export const CLIENT_AVATAR_PALETTE = [
 
 // Product category badge palette — bg/text pairs for deterministic badge coloring
 export const PRODUCT_BADGE_PALETTE = {
-  bg:   ['#D1FAE5', '#EDE9FE', '#DBEAFE', colors.warning[100], colors.danger[100], '#CCFBF1'],
-  text: ['#065F46', '#4C1D95', '#1E40AF', '#78350F',           '#9F1239',           '#134E4A'],
+  bg: ['#D1FAE5', '#EDE9FE', '#DBEAFE', colors.warning[100], colors.danger[100], '#CCFBF1'],
+  text: ['#065F46', '#4C1D95', '#1E40AF', '#78350F', '#9F1239', '#134E4A'],
 } as const;
 
 // Role badge colors — keyed by role string for deterministic role display
 export const ROLE_COLORS: Record<string, string> = {
   administrateur: colors.role.administrateur,
-  manager:        colors.role.manager,
-  vendeur:        colors.role.vendeur,
-  investisseur:   colors.role.investisseur,
+  manager: colors.role.manager,
+  vendeur: colors.role.vendeur,
+  investisseur: colors.role.investisseur,
 };
 export const ROLE_COLORS_DARK: Record<string, string> = {
   administrateur: colors.role.administrateurDark,
-  manager:        colors.role.managerDark,
-  vendeur:        colors.role.vendeurDark,
-  investisseur:   colors.role.investisseurDark,
+  manager: colors.role.managerDark,
+  vendeur: colors.role.vendeurDark,
+  investisseur: colors.role.investisseurDark,
 };
 
 // Info tag palette — bg/text pair for linked-product "info" indicators
@@ -316,14 +340,14 @@ export const INFO_TAG = { bg: colors.blue[50], text: colors.blue[700] } as const
 
 // Supplier avatar palette — bg/text pairs for deterministic fournisseur initials
 export const SUPPLIER_AVATAR_PALETTE = [
-  { bg: colors.primary[50],   text: colors.primary[600] },
-  { bg: colors.fuchsia[50],   text: colors.fuchsia[700] },
-  { bg: colors.warning[50],   text: colors.warning[800] },
-  { bg: colors.emerald[50],   text: colors.emerald[900] },
-  { bg: colors.blue[50],      text: colors.blue[700] },
-  { bg: colors.violet[50],    text: colors.violet[700] },
-  { bg: colors.danger[50],    text: colors.danger[700] },
-  { bg: colors.cyan[50],      text: colors.cyan[700] },
+  { bg: colors.primary[50], text: colors.primary[600] },
+  { bg: colors.fuchsia[50], text: colors.fuchsia[700] },
+  { bg: colors.warning[50], text: colors.warning[800] },
+  { bg: colors.emerald[50], text: colors.emerald[900] },
+  { bg: colors.blue[50], text: colors.blue[700] },
+  { bg: colors.violet[50], text: colors.violet[700] },
+  { bg: colors.danger[50], text: colors.danger[700] },
+  { bg: colors.cyan[50], text: colors.cyan[700] },
 ] as const;
 
 // Shared avatar color palette — deterministic color assignment by name
