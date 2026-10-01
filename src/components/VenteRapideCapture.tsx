@@ -88,7 +88,7 @@ export function VenteRapideCapture({ businessId, userId, currency, onAdded }: Ve
     trackEvent('quick_capture_submitted', businessId, userId, {
       mode: 'vente', queued: useSalesStore.getState().lastQuickSaleQueued, qty: qtyAtSubmit,
     });
-    haptics.heavy();
+    haptics.success();
     onAdded?.(amountCents);
 
     // Button morph: "Ajouté" shows for ~900ms then reverts on its own —

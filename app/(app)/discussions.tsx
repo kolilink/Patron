@@ -4,11 +4,9 @@ import {
   FlatList,
   Keyboard,
   KeyboardAvoidingView,
-  Linking,
   Platform,
   Pressable,
   ScrollView,
-  Share,
   StyleSheet,
   TextInput,
   useWindowDimensions,
@@ -787,16 +785,6 @@ export default function DiscussionsScreen() {
   };
 
   // ─── Amis handlers ────────────────────────────────────────────────────────
-  const handleShareMyCode = useCallback(async () => {
-    const code = inviteCode?.code ?? '';
-    if (!code) return;
-    const msg = `Salut 👋 Je t'invite sur mon Patron.\n\nPour m'ajouter → ouvre Discussions, onglet Amis, puis le + en haut à droite. Entre ce code :\n\n${code}\n\n⏱ Il expire dans 24h.`;
-    try {
-      await Linking.openURL(`whatsapp://send?text=${encodeURIComponent(msg)}`);
-    } catch {
-      Share.share({ message: msg });
-    }
-  }, [inviteCode?.code]);
 
   const handleCopyMyCode = useCallback(async () => {
     const code = inviteCode?.code ?? '';
@@ -1722,19 +1710,6 @@ export default function DiscussionsScreen() {
               </Text>
 
               <Pressable
-                onPress={handleShareMyCode}
-                disabled={!inviteCode?.code || inviteCodeLoading}
-                style={({ pressed }) => [
-                  styles.amisShareBtn,
-                  (!inviteCode?.code || inviteCodeLoading) && { opacity: 0.4 },
-                  pressed && { opacity: 0.7 },
-                ]}
-              >
-                <Ionicons name="logo-whatsapp" size={18} color={palette.textInverse} />
-                <Text style={{ color: palette.textInverse, fontWeight: '600', fontSize: 16 }}>Partager</Text>
-              </Pressable>
-
-              <Pressable
                 onPress={() => regenerateInviteCode(businessId)}
                 disabled={inviteCodeLoading}
                 hitSlop={12}
@@ -2308,16 +2283,6 @@ function makeStyles(p: Palette) {
       position: 'absolute' as const,
       top: 0,
       right: 0,
-    },
-    amisShareBtn: {
-      flexDirection: 'row' as const,
-      alignItems: 'center' as const,
-      gap: spacing[2],
-      backgroundColor: p.primary,
-      borderRadius: radius.full,
-      paddingHorizontal: spacing[7],
-      paddingVertical: spacing[4],
-      marginBottom: spacing[5],
     },
     amisRenewLink: {
       fontSize: 13,

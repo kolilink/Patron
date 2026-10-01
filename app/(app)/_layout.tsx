@@ -2,6 +2,8 @@ import { useEffect, useRef, useState } from 'react';
 import { Alert, AppState, Pressable, View } from 'react-native';
 import NetInfo from '@react-native-community/netinfo';
 import { shouldKickOnConnectivityChange } from '@/lib/netInfoKick';
+import { trackEvent } from '@/lib/analytics';
+import { flushFunnelOutbox } from '@/lib/funnel';
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
 import { Redirect, Stack, router } from 'expo-router';
 import { BusinessDrawer } from '@/src/components/BusinessDrawer';
@@ -410,7 +412,12 @@ export default function AppLayout() {
         // just because this same tick also redirects to verrouille first.
         if (bgStart !== null && Date.now() - bgStart >= FRESH_SESSION_BACKGROUND_MS) {
           useAuthStore.setState(s => ({ freshSessionToken: s.freshSessionToken + 1 }));
+          // Same 10-minute bar as "fresh session": a real return to the app,
+          // not a quick switch to WhatsApp and back. Cold starts fire from
+          // app/_layout.tsx.
+          trackEvent('app_opened', null, null, { source: 'foreground' });
         }
+        void flushFunnelOutbox();
 
         if (bgStart !== null && Date.now() - bgStart >= BACKGROUND_MS) {
           void useAuthStore.getState().lock();

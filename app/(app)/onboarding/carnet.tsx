@@ -9,7 +9,6 @@ import {
   TextInput,
   View,
 } from 'react-native';
-import * as Haptics from 'expo-haptics';
 import { router } from 'expo-router';
 import { Screen } from '@/src/components/ui/Screen';
 import { Button } from '@/src/components/ui/Button';
@@ -21,6 +20,7 @@ import { useAuthStore } from '@/stores/auth';
 import { useSalesStore } from '@/stores/sales';
 import { generateId } from '@/lib/id';
 import { supabase } from '@/lib/supabase';
+import { haptics } from '@/lib/haptics';
 
 interface CarnetEntry {
   id: string;
@@ -61,7 +61,7 @@ export default function CarnetScreen() {
     setEntries(prev => [...prev, { id: generateId(), name: trimmedName, amountCents: parsed * 100 }]);
     setName('');
     setAmount('');
-    Haptics.impactAsync(Haptics.ImpactFeedbackStyle.Light);
+    haptics.tap();
     setTimeout(() => nameRef.current?.focus(), 30);
   };
 
@@ -118,7 +118,7 @@ export default function CarnetScreen() {
         {/* Header */}
         <View style={styles.header}>
           <Text variant="h3">Mes dettes en cours</Text>
-          <Pressable onPress={() => router.replace('/(app)/(tabs)/') } hitSlop={12}>
+          <Pressable onPress={() => router.replace('/(app)/(tabs)/')} hitSlop={12}>
             <Text variant="body" color="secondary">Passer</Text>
           </Pressable>
         </View>
@@ -218,8 +218,8 @@ export default function CarnetScreen() {
 
 function makeStyles(p: Palette) {
   return StyleSheet.create({
-    safe:    { flex: 1, backgroundColor: p.background },
-    header:  {
+    safe: { flex: 1, backgroundColor: p.background },
+    header: {
       flexDirection: 'row', alignItems: 'center', justifyContent: 'space-between',
       paddingHorizontal: spacing[5], paddingTop: spacing[4], paddingBottom: spacing[3],
     },
@@ -242,7 +242,7 @@ function makeStyles(p: Palette) {
       alignItems: 'center', justifyContent: 'center',
     },
     divider: { height: 1, backgroundColor: 'rgba(0,0,0,0.1)', marginHorizontal: spacing[5] },
-    list:      { paddingBottom: spacing[4] },
+    list: { paddingBottom: spacing[4] },
     emptyList: { flex: 1, alignItems: 'center', justifyContent: 'center', padding: spacing[8] },
     entryRow: {
       flexDirection: 'row', alignItems: 'center', gap: spacing[3],

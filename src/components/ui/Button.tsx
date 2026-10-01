@@ -1,6 +1,7 @@
-import React, { useMemo } from 'react';
+import React, { useMemo, useRef } from 'react';
 import {
   ActivityIndicator,
+  Animated,
   Pressable,
   PressableProps,
   PressableStateCallbackType,
@@ -44,10 +45,22 @@ export function Button({
   disabled,
   style,
   labelStyle,
+  onPressIn,
+  onPressOut,
   ...props
 }: ButtonProps) {
   const { palette } = useTheme();
   const styles = useMemo(() => makeStyles(palette), [palette]);
+  const scale = useRef(new Animated.Value(1)).current;
+
+  const handlePressIn = (event: Parameters<NonNullable<PressableProps['onPressIn']>>[0]) => {
+    Animated.timing(scale, { toValue: 0.97, duration: 90, useNativeDriver: true }).start();
+    onPressIn?.(event);
+  };
+  const handlePressOut = (event: Parameters<NonNullable<PressableProps['onPressOut']>>[0]) => {
+    Animated.timing(scale, { toValue: 1, duration: 110, useNativeDriver: true }).start();
+    onPressOut?.(event);
+  };
 
   const isDisabled = disabled || loading;
   const sizeStyle = size === 'sm' ? styles.size_sm : size === 'lg' ? styles.size_lg : styles.size_md;
@@ -57,6 +70,7 @@ export function Button({
     styles[variant],
     sizeStyle,
     fullWidth ? styles.fullWidth : null,
+    { transform: [{ scale }] },
     pressed ? styles.pressed : null,
     isDisabled ? styles.disabled : null,
     style,
@@ -69,7 +83,13 @@ export function Button({
       : palette.textInverse;
 
   return (
-    <Pressable disabled={isDisabled} style={getStyle} {...props}>
+    <Pressable
+      disabled={isDisabled}
+      style={getStyle}
+      onPressIn={handlePressIn}
+      onPressOut={handlePressOut}
+      {...props}
+    >
       {loading ? (
         <ActivityIndicator
           size="small"
@@ -109,17 +129,17 @@ function makeStyles(p: Palette) {
     },
     icon: { marginRight: 2 },
     fullWidth: { width: '100%' },
-    pressed:   { opacity: 0.82 },
-    disabled:  { opacity: 0.45 },
+    pressed: { opacity: 0.82 },
+    disabled: { opacity: 0.45 },
 
-    primary:   { backgroundColor: p.primary },
+    primary: { backgroundColor: p.primary },
     secondary: { backgroundColor: p.border },
-    outline:   { backgroundColor: 'transparent', borderWidth: 1.5, borderColor: p.primary },
-    ghost:     { backgroundColor: 'transparent' },
-    danger:    { backgroundColor: p.danger },
+    outline: { backgroundColor: 'transparent', borderWidth: 1.5, borderColor: p.primary },
+    ghost: { backgroundColor: 'transparent' },
+    danger: { backgroundColor: p.danger },
 
-    size_sm: { paddingHorizontal: spacing[3],  paddingVertical: spacing[2],   minHeight: 44 },
-    size_md: { paddingHorizontal: spacing[5],  paddingVertical: spacing[3],   minHeight: 48 },
-    size_lg: { paddingHorizontal: spacing[6],  paddingVertical: spacing[4],   minHeight: 56 },
+    size_sm: { paddingHorizontal: spacing[3], paddingVertical: spacing[2], minHeight: 44 },
+    size_md: { paddingHorizontal: spacing[5], paddingVertical: spacing[3], minHeight: 48 },
+    size_lg: { paddingHorizontal: spacing[6], paddingVertical: spacing[4], minHeight: 56 },
   });
 }

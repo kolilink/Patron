@@ -1,4 +1,5 @@
 import { create } from 'zustand';
+import { trackEvent } from '@/lib/analytics';
 import { supabase } from '@/lib/supabase';
 import { translateError } from '@/lib/errors';
 import { isNetworkError, withTimeout, withNetworkRetry, reportOfflineFallback } from '@/lib/sync';
@@ -110,6 +111,8 @@ export const useAlphaStore = create<AlphaStore>((set, get) => ({
       if (error) throw error;
 
       const realMsg = data as AlphaMessage;
+      // No message content in the event — only that a question was asked.
+      trackEvent('alpha_queried', businessId, null, { length: trimmed.length });
       set(state => ({
         messages: dedupeAppend(state.messages.filter(m => m.id !== localId), realMsg),
         offline: false,

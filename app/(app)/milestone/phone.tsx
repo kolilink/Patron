@@ -38,6 +38,7 @@ export default function MilestonePhoneScreen() {
     if (result) {
       verificationIdRef.current = result.verificationId;
       phoneRef.current = normalized;
+      trackEvent('otp_sent', null, null, { flow: 'milestone' });
       setStep('otp');
     } else {
       trackEvent('auth_phone_submit_failed', null, null, {
@@ -49,12 +50,14 @@ export default function MilestonePhoneScreen() {
   const handleOtpComplete = async (code: string) => {
     const ok = await verifyPhoneCode(phoneRef.current, code, verificationIdRef.current);
     if (ok) {
+      trackEvent('otp_verified', null, null, { flow: 'milestone' });
       await upgradePhone(phoneRef.current);
       if (!useAuthStore.getState().error) {
         router.back();
       }
     } else {
-      trackEvent('auth_failed', null, null, {
+      trackEvent('otp_failed', null, null, {
+        flow: 'milestone',
         reason: classifyAuthError(useAuthStore.getState().error),
       });
     }

@@ -191,7 +191,7 @@ export default function AccueilScreen() {
       }
       const link = buildInviteLink(invite.token);
       const message = buildInviteMessage(link, invite.code);
-      trackEvent('invite_shared', businessId, userId, { source: 'accueil_header' });
+      trackEvent('invite_sent', businessId, userId, { source: 'accueil_header' });
       await Share.share({ message });
     } catch {
       toast.warning("Impossible d'ouvrir le partage");

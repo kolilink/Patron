@@ -87,7 +87,7 @@ export function FirstRunHeroOverlay({ businessId, userId, currency, onDone }: Pr
   const stampedRef = useRef(draftMatches && initialDraft!.phase === 'payoff');
 
   useEffect(() => {
-    AccessibilityInfo.isReduceMotionEnabled().then(setReduceMotion).catch(() => {});
+    AccessibilityInfo.isReduceMotionEnabled().then(setReduceMotion).catch(() => { });
     const sub = AccessibilityInfo.addEventListener('reduceMotionChanged', setReduceMotion);
     return () => sub.remove();
   }, []);
@@ -114,10 +114,12 @@ export function FirstRunHeroOverlay({ businessId, userId, currency, onDone }: Pr
     Animated.timing(fadeAnim, { toValue: 1, duration: 220, useNativeDriver: true }).start();
   };
 
-  const stampCompleted = () => {
+  const stampCompleted = (outcome: 'hero_saved' | 'hero_skipped') => {
     if (stampedRef.current) return;
     stampedRef.current = true;
     void markFirstRunHeroCompleted(businessId);
+    // Once per business, whichever exit came first.
+    trackEvent('onboarding_completed', businessId, userId, { outcome });
   };
 
   const clearDraft = () => {
@@ -131,7 +133,7 @@ export function FirstRunHeroOverlay({ businessId, userId, currency, onDone }: Pr
 
   const handleSkip = () => {
     trackEvent('first_run_hero_skipped', businessId, userId);
-    stampCompleted();
+    stampCompleted('hero_skipped');
     clearDraft();
     onDone();
   };
@@ -173,9 +175,9 @@ export function FirstRunHeroOverlay({ businessId, userId, currency, onDone }: Pr
       return;
     }
 
-    haptics.heavy();
-    trackEvent('first_run_hero_completed', businessId, userId, { amount_cents: amountCents });
-    stampCompleted();
+    haptics.success();
+    trackEvent('first_run_hero_completed', businessId, userId, { has_debt: true });
+    stampCompleted('hero_saved');
     setTotalCents(c => c + amountCents);
     setLastEntry({ name: trimmedName, amountCents });
     crossfadeTo('payoff');
@@ -330,9 +332,9 @@ export function FirstRunHeroOverlay({ businessId, userId, currency, onDone }: Pr
 
 function makeStyles(p: Palette) {
   return StyleSheet.create({
-    safe:          { flex: 1, backgroundColor: p.background },
-    header:        { flexDirection: 'row', paddingHorizontal: spacing[6], paddingTop: spacing[3] },
-    skip:          { minHeight: 48, minWidth: 48, alignItems: 'flex-end', justifyContent: 'center' },
+    safe: { flex: 1, backgroundColor: p.background },
+    header: { flexDirection: 'row', paddingHorizontal: spacing[6], paddingTop: spacing[3] },
+    skip: { minHeight: 48, minWidth: 48, alignItems: 'flex-end', justifyContent: 'center' },
     // Top-aligned, not centered — load-bearing for the crossfade. Both
     // phases share this same container and the identical top padding in
     // `content`/`payoffContent` below, so their title blocks land at the
@@ -341,27 +343,27 @@ function makeStyles(p: Palette) {
     // content height, which is exactly what produced the downward jump on
     // the shorter payoff screen.
     scrollContent: { flexGrow: 1 },
-    content:       { paddingHorizontal: spacing[6], paddingVertical: spacing[8], gap: spacing[8] },
+    content: { paddingHorizontal: spacing[6], paddingVertical: spacing[8], gap: spacing[8] },
     // Same horizontal/top padding as `content` above (deliberately, see the
     // scrollContent comment) but flex: 1 + the trailing payoffSpacer instead
     // of a single top-to-bottom gap — that's what lets the button block
     // settle in the lower third instead of following the text immediately.
     payoffContent: { flex: 1, paddingHorizontal: spacing[6], paddingTop: spacing[8], paddingBottom: spacing[8] },
-    titleBlock:    { gap: spacing[3] },
-    payoffHeader:  { gap: spacing[3] },
+    titleBlock: { gap: spacing[3] },
+    payoffHeader: { gap: spacing[3] },
     // Sits below payoffHeader with its own larger top margin — the debt
     // line and the running total are two different weights of information
     // (what just happened vs. a quieter cumulative fact), not one paragraph.
-    totalLine:     { marginTop: spacing[6] },
-    payoffSpacer:  { flex: 1 },
+    totalLine: { marginTop: spacing[6] },
+    payoffSpacer: { flex: 1 },
     // No hardcoded color here — every caller passes its own `color` prop
     // ("secondary" for both subtitles, the default "primary" for the ink
     // debt line) and relies on it actually taking effect. A hardcoded color
     // in this style object would sit after Text's own color-prop style in
     // the merge order and silently win regardless of what's passed in —
     // exactly the bug this shape had until now.
-    sub:           { lineHeight: 22 },
-    form:          { gap: spacing[4] },
+    sub: { lineHeight: 22 },
+    form: { gap: spacing[4] },
     amountBox: {
       flexDirection: 'row', alignItems: 'center', justifyContent: 'space-between',
       borderWidth: 1.5, borderRadius: radius.md, paddingHorizontal: spacing[4], paddingVertical: spacing[4],

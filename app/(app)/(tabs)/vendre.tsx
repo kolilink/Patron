@@ -211,7 +211,7 @@ function CartRow({ line, currency, onInc, onDec, onRemove, onToggleBulk, onSetQt
         </View>
       </View>
       <View style={styles.qtyControl}>
-        <Pressable onPress={() => { haptics.selection(); onDec(); }} style={styles.qtyBtn} hitSlop={10}>
+        <Pressable onPress={() => { haptics.throttledSelect(); onDec(); }} style={styles.qtyBtn} hitSlop={10}>
           <Text variant="label" style={{ color: line.qty === 1 ? palette.danger : palette.textPrimary }}>−</Text>
         </Pressable>
         {editing ? (
@@ -236,7 +236,7 @@ function CartRow({ line, currency, onInc, onDec, onRemove, onToggleBulk, onSetQt
           const atMax = line.qty >= (line.variant_id ? (line.variant_stock_qty ?? Infinity) : line.product.stock_qty);
           return (
             <Pressable
-              onPress={() => { if (atMax) return; haptics.selection(); onInc(); }}
+              onPress={() => { if (atMax) return; haptics.throttledSelect(); onInc(); }}
               style={[styles.qtyBtn, atMax && { opacity: 0.3 }]}
               hitSlop={10}
             >
@@ -1286,7 +1286,7 @@ function VariantPickerSheet({ visible, product, variants, cartQtyByVariant, curr
                 key={v.id}
                 onPress={() => {
                   if (!outOfStock && !atMax && !isEditing) {
-                    haptics.selection();
+                    haptics.throttledSelect();
                     changeQty(v.id, 1, remaining);
                   }
                 }}
@@ -1304,7 +1304,7 @@ function VariantPickerSheet({ visible, product, variants, cartQtyByVariant, curr
                 </View>
                 <View style={styles.qtyControl}>
                   <Pressable
-                    onPress={() => { if (!outOfStock && qty > 0) { haptics.selection(); changeQty(v.id, -1, remaining); } }}
+                    onPress={() => { if (!outOfStock && qty > 0) { haptics.throttledSelect(); changeQty(v.id, -1, remaining); } }}
                     style={[styles.qtyBtn, (outOfStock || qty === 0) && { opacity: 0.3 }]}
                     hitSlop={10}
                   >
@@ -1332,7 +1332,7 @@ function VariantPickerSheet({ visible, product, variants, cartQtyByVariant, curr
                     </Pressable>
                   )}
                   <Pressable
-                    onPress={() => { if (!outOfStock && !atMax) { haptics.selection(); changeQty(v.id, 1, remaining); } }}
+                    onPress={() => { if (!outOfStock && !atMax) { haptics.throttledSelect(); changeQty(v.id, 1, remaining); } }}
                     style={[styles.qtyBtn, (outOfStock || atMax) && { opacity: 0.3 }]}
                     hitSlop={10}
                   >
@@ -1865,7 +1865,7 @@ export default function VendreScreen() {
         {QUICK_PAY_METHODS.map(m => (
           <Pressable
             key={m.key}
-            onPress={() => { haptics.selection(); setQuickPayMethod(m.key); }}
+            onPress={() => { haptics.throttledSelect(); setQuickPayMethod(m.key); }}
             style={[styles.payMethodChip, quickPayMethod === m.key && styles.payMethodChipActive]}
           >
             <Text
@@ -2144,7 +2144,7 @@ export default function VendreScreen() {
               }
               if (item.has_variants) {
                 setLastReceipt(null);
-                haptics.selection();
+                haptics.throttledSelect();
                 Keyboard.dismiss();
                 setVariantPickerProduct(item);
                 return;
@@ -2152,11 +2152,11 @@ export default function VendreScreen() {
               const inCart = cartQtyMap[item.id]?.unit ?? 0;
               if (inCart >= item.stock_qty) { haptics.warning(); return; }
               setLastReceipt(null);
-              if (inCart + 1 >= item.stock_qty) haptics.warning(); else haptics.selection();
+              if (inCart + 1 >= item.stock_qty) haptics.warning(); else haptics.throttledSelect();
               Keyboard.dismiss();
               addToCart(item, false);
             }}
-            onAddBulk={item.has_variants ? undefined : () => { setLastReceipt(null); haptics.selection(); Keyboard.dismiss(); addToCart(item, true); }}
+            onAddBulk={item.has_variants ? undefined : () => { setLastReceipt(null); haptics.throttledSelect(); Keyboard.dismiss(); addToCart(item, true); }}
           />
         )}
         ListEmptyComponent={
@@ -2295,7 +2295,7 @@ export default function VendreScreen() {
         onPickMany={selections => {
           if (!variantPickerProduct || selections.length === 0) return;
           setLastReceipt(null);
-          haptics.selection();
+          haptics.throttledSelect();
           for (const { variant, qty } of selections) {
             addToCartVariant(variantPickerProduct, variant, qty);
           }

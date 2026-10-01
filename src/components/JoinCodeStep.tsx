@@ -7,6 +7,7 @@ import { radius, spacing } from '@/src/theme';
 import type { Palette } from '@/src/theme';
 import { useTheme } from '@/src/theme';
 import { useAuthStore } from '@/stores/auth';
+import { haptics } from '@/lib/haptics';
 
 interface JoinCodeStepProps {
   loading: boolean;
@@ -45,10 +46,12 @@ export function JoinCodeStep({ loading, error, onSubmit, autoFocus }: JoinCodeSt
   const handleSubmit = () => {
     const trimmed = code.trim();
     if (trimmed.length < 4) {
+      haptics.warning();
       setCodeError('Code trop court');
       return;
     }
     setCodeError(null);
+    haptics.tap();
     onSubmit(trimmed);
   };
 

@@ -362,6 +362,7 @@ async function loadSession(userId: string, authPhone?: string | null, skipCache 
     language: p.language ?? 'fr',
     recovery_email: p.recovery_email ?? null,
     notify_on_every_sale: p.notify_on_every_sale ?? true,
+    is_test: p.is_test ?? false,
     created_at: p.created_at,
     updated_at: p.updated_at,
   };
@@ -837,7 +838,7 @@ export const useAuthStore = create<AuthStore>((set, get) => ({
         showTrialWelcome: true,
         loading: false,
       });
-      trackEvent('business_created', businessId, session.user.id, { currency, business_type: type ?? null });
+      trackEvent('commerce_created', businessId, session.user.id, { currency, business_type: type ?? null });
     } catch (err) {
       set({ error: translateError(err, 'Impossible de créer le commerce'), loading: false });
     }
@@ -971,6 +972,8 @@ export const useAuthStore = create<AuthStore>((set, get) => ({
 
       set({ session: appSession, loading: false });
       trackEvent('business_joined', business_id, session.user.id);
+      // A member who joins never sees the first-run gate — joining IS their onboarding.
+      trackEvent('onboarding_completed', business_id, session.user.id, { outcome: 'joined' });
     } catch (err) {
       const raw = err instanceof Error ? err.message : (err as Record<string, unknown>)?.message as string | undefined;
       set({ error: translateError(err, raw ?? 'Erreur lors de la jonction'), loading: false });

@@ -90,7 +90,7 @@ function FournisseurForm({ visible, editing, products, onClose, onSave, saving }
       Animated.sequence([
         Animated.delay(3000),
         Animated.timing(pulseAnim, { toValue: 1.08, duration: 300, easing: Easing.inOut(Easing.ease), useNativeDriver: true }),
-        Animated.timing(pulseAnim, { toValue: 1.0,  duration: 300, easing: Easing.inOut(Easing.ease), useNativeDriver: true }),
+        Animated.timing(pulseAnim, { toValue: 1.0, duration: 300, easing: Easing.inOut(Easing.ease), useNativeDriver: true }),
       ])
     );
     if (visible) { pulseAnim.setValue(1); loop.start(); }
@@ -172,92 +172,92 @@ function FournisseurForm({ visible, editing, products, onClose, onSave, saving }
         </View>
       }
     >
-            <Input label="Nom du fournisseur" value={name} onChangeText={setName} placeholder="Diallo Import" />
-            <PhoneInput label="Téléphone" onChange={(e164) => setPhone(e164)} strict={false} />
+      <Input label="Nom du fournisseur" value={name} onChangeText={setName} placeholder="Diallo Import" />
+      <PhoneInput label="Téléphone" onChange={(e164) => setPhone(e164)} strict={false} />
 
-            <View style={{ gap: spacing[2] }}>
-              <Text variant="label">Produits fournis</Text>
+      <View style={{ gap: spacing[2] }}>
+        <Text variant="label">Produits fournis</Text>
 
-              {/* Selector row */}
-              <View style={{ flexDirection: 'row', alignItems: 'center', justifyContent: 'space-between', width: '100%', gap: 10 }}>
-                {/* Dropdown trigger — flex: 1 */}
-                <Pressable
-                  onPress={() => {
-                    LayoutAnimation.configureNext(LayoutAnimation.Presets.easeInEaseOut);
-                    if (showCreate) { setShowCreate(false); setNewProductName(''); }
-                    setDropdownOpen(prev => !prev);
-                  }}
-                  style={styles.dropdownTrigger}>
-                  <Text variant="body" numberOfLines={1} style={{ flex: 1, color: linkedIds.size > 0 ? palette.textPrimary : palette.textDisabled }}>
-                    {linkedIds.size === 0
-                      ? 'Sélectionner des produits'
-                      : linkedIds.size === 1
-                        ? allProducts.find(p => linkedIds.has(p.id))?.name ?? '1 produit'
-                        : `${linkedIds.size} produits liés`}
-                  </Text>
-                  <Ionicons name={dropdownOpen ? 'chevron-up' : 'chevron-down'} size={16} color={palette.textSecondary} />
-                </Pressable>
+        {/* Selector row */}
+        <View style={{ flexDirection: 'row', alignItems: 'center', justifyContent: 'space-between', width: '100%', gap: 10 }}>
+          {/* Dropdown trigger — flex: 1 */}
+          <Pressable
+            onPress={() => {
+              LayoutAnimation.configureNext(LayoutAnimation.Presets.easeInEaseOut);
+              if (showCreate) { setShowCreate(false); setNewProductName(''); }
+              setDropdownOpen(prev => !prev);
+            }}
+            style={styles.dropdownTrigger}>
+            <Text variant="body" numberOfLines={1} style={{ flex: 1, color: linkedIds.size > 0 ? palette.textPrimary : palette.textDisabled }}>
+              {linkedIds.size === 0
+                ? 'Sélectionner des produits'
+                : linkedIds.size === 1
+                  ? allProducts.find(p => linkedIds.has(p.id))?.name ?? '1 produit'
+                  : `${linkedIds.size} produits liés`}
+            </Text>
+            <Ionicons name={dropdownOpen ? 'chevron-up' : 'chevron-down'} size={16} color={palette.textSecondary} />
+          </Pressable>
 
-                {/* Pulsing circular + badge — right side, never moves */}
-                <Pressable
-                  onPress={() => {
-                    LayoutAnimation.configureNext(LayoutAnimation.Presets.easeInEaseOut);
-                    if (dropdownOpen) setDropdownOpen(false);
-                    setShowCreate(prev => !prev);
-                    if (showCreate) setNewProductName('');
-                  }}>
-                  <Animated.View style={[styles.addBadge, showCreate && styles.addBadgeActive, { transform: [{ scale: pulseAnim }] }]}>
-                    <Text style={[styles.addBadgePlus, showCreate && { color: palette.textInverse }]}>+</Text>
-                  </Animated.View>
-                </Pressable>
+          {/* Pulsing circular + badge — right side, never moves */}
+          <Pressable
+            onPress={() => {
+              LayoutAnimation.configureNext(LayoutAnimation.Presets.easeInEaseOut);
+              if (dropdownOpen) setDropdownOpen(false);
+              setShowCreate(prev => !prev);
+              if (showCreate) setNewProductName('');
+            }}>
+            <Animated.View style={[styles.addBadge, showCreate && styles.addBadgeActive, { transform: [{ scale: pulseAnim }] }]}>
+              <Text style={[styles.addBadgePlus, showCreate && { color: palette.textInverse }]}>+</Text>
+            </Animated.View>
+          </Pressable>
+        </View>
+
+        {/* Dropdown list — slides in below the row */}
+        {dropdownOpen && (
+          <ScrollView style={styles.prodDropdown} nestedScrollEnabled keyboardShouldPersistTaps="handled">
+            {allProducts.length === 0 ? (
+              <View style={{ padding: spacing[3] }}>
+                <Text variant="caption" color="secondary">Utilisez + pour créer votre premier produit.</Text>
               </View>
+            ) : allProducts.map(p => {
+              const selected = linkedIds.has(p.id);
+              return (
+                <Pressable
+                  key={p.id}
+                  onPress={() => {
+                    toggleProduct(p.id);
+                    LayoutAnimation.configureNext(LayoutAnimation.Presets.easeInEaseOut);
+                    setDropdownOpen(false);
+                  }}
+                  style={styles.prodDropdownItem}>
+                  <Text variant="body" numberOfLines={1} style={{ flex: 1 }}>{p.name}</Text>
+                  {selected && <Ionicons name="checkmark" size={16} color={palette.primary} />}
+                </Pressable>
+              );
+            })}
+          </ScrollView>
+        )}
 
-              {/* Dropdown list — slides in below the row */}
-              {dropdownOpen && (
-                <ScrollView style={styles.prodDropdown} nestedScrollEnabled keyboardShouldPersistTaps="handled">
-                  {allProducts.length === 0 ? (
-                    <View style={{ padding: spacing[3] }}>
-                      <Text variant="caption" color="secondary">Utilisez + pour créer votre premier produit.</Text>
-                    </View>
-                  ) : allProducts.map(p => {
-                    const selected = linkedIds.has(p.id);
-                    return (
-                      <Pressable
-                        key={p.id}
-                        onPress={() => {
-                          toggleProduct(p.id);
-                          LayoutAnimation.configureNext(LayoutAnimation.Presets.easeInEaseOut);
-                          setDropdownOpen(false);
-                        }}
-                        style={styles.prodDropdownItem}>
-                        <Text variant="body" numberOfLines={1} style={{ flex: 1 }}>{p.name}</Text>
-                        {selected && <Ionicons name="checkmark" size={16} color={palette.primary} />}
-                      </Pressable>
-                    );
-                  })}
-                </ScrollView>
-              )}
-
-              {/* Slide-in create row — anchored below the + button */}
-              {showCreate && (
-                <View style={styles.newProdRow}>
-                  <TextInput
-                    style={styles.newProdInput}
-                    value={newProductName}
-                    onChangeText={setNewProductName}
-                    placeholder="Nom du produit"
-                    placeholderTextColor={palette.textDisabled}
-                    autoFocus
-                    returnKeyType="done"
-                    onSubmitEditing={confirmNew}
-                  />
-                  <Pressable onPress={confirmNew} style={styles.confirmBtn}>
-                    <Ionicons name="checkmark" size={20}
-                      color={newProductName.trim() ? palette.success : palette.textDisabled} />
-                  </Pressable>
-                </View>
-              )}
-            </View>
+        {/* Slide-in create row — anchored below the + button */}
+        {showCreate && (
+          <View style={styles.newProdRow}>
+            <TextInput
+              style={styles.newProdInput}
+              value={newProductName}
+              onChangeText={setNewProductName}
+              placeholder="Nom du produit"
+              placeholderTextColor={palette.textDisabled}
+              autoFocus
+              returnKeyType="done"
+              onSubmitEditing={confirmNew}
+            />
+            <Pressable onPress={confirmNew} style={styles.confirmBtn}>
+              <Ionicons name="checkmark" size={20}
+                color={newProductName.trim() ? palette.success : palette.textDisabled} />
+            </Pressable>
+          </View>
+        )}
+      </View>
     </FormSheet>
   );
 }
@@ -338,17 +338,17 @@ function DebtModal({ visible, fournisseur, currency, saving, onClose, onSave }: 
         ) : undefined
       }
     >
-          {fournisseur && (
-            <View style={[styles.debtCtx, { borderLeftWidth: 3, borderLeftColor: palette.danger }]}>
-              <Text variant="caption" color="secondary">Vous devez à</Text>
-              <Text variant="label">{fournisseur.name}</Text>
-            </View>
-          )}
-          <Input label={`Montant (${currency})`} value={amount} onChangeText={v => setAmount(formatAmountInput(v, currency))}
-            keyboardType="decimal-pad" inputAccessoryViewID={Platform.OS === 'ios' ? DEBT_MODAL_SILENT_ACCESSORY_ID : undefined} />
-          <Input label="Description (optionnel)" value={description} onChangeText={setDescription}
-            placeholder="50 sacs de riz, livraison du 5 juin" />
-          <DatePickerField label="Date" value={date} onChange={setDate} maxToday />
+      {fournisseur && (
+        <View style={[styles.debtCtx, { borderLeftWidth: 3, borderLeftColor: palette.danger }]}>
+          <Text variant="caption" color="secondary">Vous devez à</Text>
+          <Text variant="label">{fournisseur.name}</Text>
+        </View>
+      )}
+      <Input label={`Montant (${currency})`} value={amount} onChangeText={v => setAmount(formatAmountInput(v, currency))}
+        keyboardType="decimal-pad" inputAccessoryViewID={Platform.OS === 'ios' ? DEBT_MODAL_SILENT_ACCESSORY_ID : undefined} />
+      <Input label="Description (optionnel)" value={description} onChangeText={setDescription}
+        placeholder="50 sacs de riz, livraison du 5 juin" />
+      <DatePickerField label="Date" value={date} onChange={setDate} maxToday />
     </FormSheet>
   );
 }
@@ -534,19 +534,19 @@ export default function FournisseursScreen() {
     }
   };
 
-  const fabScale   = useRef(new Animated.Value(1)).current;
+  const fabScale = useRef(new Animated.Value(1)).current;
   const fabOpacity = useRef(new Animated.Value(1)).current;
   useEffect(() => {
     const easing = Easing.inOut(Easing.sin);
     const loop = Animated.loop(
       Animated.sequence([
         Animated.parallel([
-          Animated.timing(fabScale,   { toValue: 1.06, duration: 2000, easing, useNativeDriver: true }),
+          Animated.timing(fabScale, { toValue: 1.06, duration: 2000, easing, useNativeDriver: true }),
           Animated.timing(fabOpacity, { toValue: 0.85, duration: 2000, easing, useNativeDriver: true }),
         ]),
         Animated.parallel([
-          Animated.timing(fabScale,   { toValue: 1,    duration: 2000, easing, useNativeDriver: true }),
-          Animated.timing(fabOpacity, { toValue: 1,    duration: 2000, easing, useNativeDriver: true }),
+          Animated.timing(fabScale, { toValue: 1, duration: 2000, easing, useNativeDriver: true }),
+          Animated.timing(fabOpacity, { toValue: 1, duration: 2000, easing, useNativeDriver: true }),
         ]),
       ])
     );
@@ -623,15 +623,18 @@ export default function FournisseursScreen() {
                 onLongPress={() => Alert.alert(item.name, '', [
                   { text: 'Modifier', onPress: () => { setEditF(item); setShowForm(true); } },
                   { text: 'Enregistrer une dette', onPress: () => openDebt(item) },
-                  { text: 'Supprimer', style: 'destructive', onPress: () =>
-                    Alert.alert('Supprimer ?', 'Les produits liés seront dissociés.', [
-                      { text: 'Annuler', style: 'cancel' },
-                      { text: 'Supprimer', style: 'destructive', onPress: async () => {
-                        haptics.error();
-                        const ok = await deleteFournisseur(item.id, businessId);
-                        if (!ok) Alert.alert('Ce fournisseur a des livraisons enregistrées — retirez-les d\'abord :)');
-                      }},
-                    ])
+                  {
+                    text: 'Supprimer', style: 'destructive', onPress: () =>
+                      Alert.alert('Supprimer ?', 'Les produits liés seront dissociés.', [
+                        { text: 'Annuler', style: 'cancel' },
+                        {
+                          text: 'Supprimer', style: 'destructive', onPress: async () => {
+                            haptics.destructive();
+                            const ok = await deleteFournisseur(item.id, businessId);
+                            if (!ok) Alert.alert('Ce fournisseur a des livraisons enregistrées — retirez-les d\'abord :)');
+                          }
+                        },
+                      ])
                   },
                   { text: 'Annuler', style: 'cancel' },
                 ])}

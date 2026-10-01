@@ -96,7 +96,7 @@ export default function InvitationsScreen() {
             }
             const link = buildInviteLink(invite.token);
             const message = buildInviteMessage(link, invite.code);
-            trackEvent('invite_shared', businessId, userId, { source: 'invitations_screen' });
+            trackEvent('invite_sent', businessId, userId, { source: 'invitations_screen' });
             await Share.share({ message });
         } catch {
             toast.warning("Impossible d'ouvrir le partage");
@@ -115,6 +115,7 @@ export default function InvitationsScreen() {
                     text: 'Révoquer',
                     style: 'destructive',
                     onPress: async () => {
+                        haptics.destructive();
                         setRevokingId(invite.id);
                         const ok = await revokeInvite(invite.id);
                         setRevokingId(null);

@@ -4,6 +4,7 @@ import { Text } from './Text';
 import { useTheme } from '@/src/theme';
 import type { Palette } from '@/src/theme';
 import { addSmsReceivedListener, startSmsRetriever, stopSmsRetriever } from '@/modules/sms-retriever';
+import { haptics } from '@/lib/haptics';
 
 interface Props {
   length?: number;
@@ -27,8 +28,14 @@ export function OtpInput({ length = 6, onComplete, disabled = false, autoFocus =
   function handleChange(text: string) {
     // Strip non-digits and cap at length — handles both typing and full-string paste
     const cleaned = text.replace(/\D/g, '').slice(0, length);
+    if (cleaned.length === length) {
+      // Completion is the single meaningful outcome — one success, no per-digit tick on the last box.
+      haptics.success();
+      onComplete(cleaned);
+    } else if (cleaned.length > value.length) {
+      haptics.select();
+    }
     setValue(cleaned);
-    if (cleaned.length === length) onComplete(cleaned);
   }
 
   useEffect(() => {
@@ -63,7 +70,7 @@ export function OtpInput({ length = 6, onComplete, disabled = false, autoFocus =
       <View style={styles.boxes}>
         {digits.map((digit, i) => {
           const isFocused = !disabled && i === value.length && value.length < length;
-          const isFilled  = i < value.length;
+          const isFilled = i < value.length;
           return (
             <View key={i} style={[styles.box, isFilled && styles.boxFilled, isFocused && styles.boxFocused]}>
               {/* Single glyph in a fixed 48×56 box, no room to grow — pinned regardless of OS text-size setting. */}
@@ -96,19 +103,19 @@ const BOX = 48;
 
 function makeStyles(p: Palette) {
   return StyleSheet.create({
-    container:   { alignItems: 'center' },
+    container: { alignItems: 'center' },
     // Cover the full Pressable area — a 1×1 input is ignored by OPPO/Xiaomi keyboards
     hiddenInput: { position: 'absolute', top: 0, left: 0, right: 0, bottom: 0, opacity: 0 },
-    boxes:       { flexDirection: 'row', gap: 10 },
+    boxes: { flexDirection: 'row', gap: 10 },
     box: {
       width: BOX, height: BOX + 8, borderRadius: 12,
       borderWidth: 1.5, borderColor: p.border,
       backgroundColor: p.surface,
       alignItems: 'center', justifyContent: 'center',
     },
-    boxFilled:  { borderColor: p.primary, backgroundColor: p.primaryLight },
+    boxFilled: { borderColor: p.primary, backgroundColor: p.primaryLight },
     boxFocused: { borderColor: p.primary, borderWidth: 2 },
-    digit:      { textAlign: 'center', letterSpacing: 0 },
+    digit: { textAlign: 'center', letterSpacing: 0 },
     digitEmpty: { opacity: 0 },
     cursor: {
       position: 'absolute', bottom: 10,

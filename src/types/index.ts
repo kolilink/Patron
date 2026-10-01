@@ -50,6 +50,8 @@ export interface User {
   // member) without touching any other notification type. See CLAUDE.md /
   // the notification-fatigue research this was added against.
   notify_on_every_sale: boolean;
+  // Team/test account — excluded from every founder KPI (migration_v209).
+  is_test?: boolean;
   created_at: string;
   updated_at: string;
 }
@@ -75,6 +77,8 @@ export interface Business {
   referred_by_business_id: string | null;
   referral_code: string | null;
   first_run_hero_completed_at: string | null;
+  // Team/test business — excluded from every founder KPI (migration_v209).
+  is_test?: boolean;
   created_at: string;
   updated_at: string;
   created_by: string;

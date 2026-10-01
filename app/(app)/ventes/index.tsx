@@ -288,50 +288,50 @@ function PaymentSheet({ visible, sale, currency, onClose, onConfirm, saving }: P
         ) : undefined
       }
     >
-          {/* Debt context card */}
-          <Card style={[styles.contextCard, { borderLeftColor: palette.warning, borderLeftWidth: 3 }]}>
-            <Text variant="caption" color="secondary">{clientName} vous doit</Text>
-            <Text variant="amountLarge" style={{ color: palette.warning }}>{fmt(remaining, currency)}</Text>
-          </Card>
+      {/* Debt context card */}
+      <Card style={[styles.contextCard, { borderLeftColor: palette.warning, borderLeftWidth: 3 }]}>
+        <Text variant="caption" color="secondary">{clientName} vous doit</Text>
+        <Text variant="amountLarge" style={{ color: palette.warning }}>{fmt(remaining, currency)}</Text>
+      </Card>
 
-          {/* Amount */}
-          <View style={{ gap: spacing[2] }}>
-            <Text variant="label">Combien {clientName} vous donne ?</Text>
-            <View style={styles.amountRow}>
-              <TextInput
-                style={styles.amountInput}
-                value={amountStr}
-                onChangeText={v => setAmountStr(formatAmountInput(v, currency))}
-                keyboardType="numeric"
-                placeholderTextColor={palette.textSecondary}
-                selectTextOnFocus
-                inputAccessoryViewID={Platform.OS === 'ios' ? PAYMENT_SHEET_SILENT_ACCESSORY_ID : undefined}
-              />
-              <Pressable
-                style={styles.solderBtn}
-                onPress={() => setAmountStr(formatAmountInput(String(Math.round(remaining)), currency))}
-              >
-                <Text variant="label" style={{ color: palette.primary }}>Tout régler</Text>
-              </Pressable>
-            </View>
-          </View>
+      {/* Amount */}
+      <View style={{ gap: spacing[2] }}>
+        <Text variant="label">Combien {clientName} vous donne ?</Text>
+        <View style={styles.amountRow}>
+          <TextInput
+            style={styles.amountInput}
+            value={amountStr}
+            onChangeText={v => setAmountStr(formatAmountInput(v, currency))}
+            keyboardType="numeric"
+            placeholderTextColor={palette.textSecondary}
+            selectTextOnFocus
+            inputAccessoryViewID={Platform.OS === 'ios' ? PAYMENT_SHEET_SILENT_ACCESSORY_ID : undefined}
+          />
+          <Pressable
+            style={styles.solderBtn}
+            onPress={() => setAmountStr(formatAmountInput(String(Math.round(remaining)), currency))}
+          >
+            <Text variant="label" style={{ color: palette.primary }}>Tout régler</Text>
+          </Pressable>
+        </View>
+      </View>
 
-          {/* Method */}
-          <View style={{ gap: spacing[2] }}>
-            <Text variant="label">Payé par :</Text>
-            <View style={styles.methodRow}>
-              {PAY_METHODS.map(m => (
-                <Pressable key={m.key} onPress={() => setMethod(m.key)}
-                  style={[styles.chip, method === m.key && styles.chipActive]}>
-                  <Text variant="caption" style={{ color: method === m.key ? palette.textInverse : palette.textPrimary }}>
-                    {m.label}
-                  </Text>
-                </Pressable>
-              ))}
-            </View>
-          </View>
+      {/* Method */}
+      <View style={{ gap: spacing[2] }}>
+        <Text variant="label">Payé par :</Text>
+        <View style={styles.methodRow}>
+          {PAY_METHODS.map(m => (
+            <Pressable key={m.key} onPress={() => setMethod(m.key)}
+              style={[styles.chip, method === m.key && styles.chipActive]}>
+              <Text variant="caption" style={{ color: method === m.key ? palette.textInverse : palette.textPrimary }}>
+                {m.label}
+              </Text>
+            </Pressable>
+          ))}
+        </View>
+      </View>
 
-          <DatePickerField label="Date" value={date} onChange={setDate} maxToday />
+      <DatePickerField label="Date" value={date} onChange={setDate} maxToday />
     </FormSheet>
   );
 }
@@ -419,23 +419,23 @@ function DetailModal({ sale, currency, businessName, singleVendor, role, onClose
 
   const receiptData: ReceiptData | null = sale?.lines?.length
     ? {
-        businessName,
-        businessPhone: businessPhone,
-        currency,
-        items: sale.lines.map((l): ReceiptItem => ({
-          name: l.variant_name ? `${l.product_name} · ${l.variant_name}` : l.product_name,
-          qty: l.qty,
-          unit_price: l.unit_price,
-          is_bulk: false,
-        })),
-        total: sale.total_amount,
-        discountAmount: sale.discount_amount ?? 0,
-        amountPaid: sale.amount_paid,
-        payment: sale.is_credit ? null : (sale.payments?.[0] ? { method: sale.payments[0].method, amount: sale.payments[0].amount } : null),
-        customerName: sale.customer_name ?? undefined,
-        date: new Date(sale.created_at),
-        receiptId: sale.id.slice(0, 8).toUpperCase(),
-      }
+      businessName,
+      businessPhone: businessPhone,
+      currency,
+      items: sale.lines.map((l): ReceiptItem => ({
+        name: l.variant_name ? `${l.product_name} · ${l.variant_name}` : l.product_name,
+        qty: l.qty,
+        unit_price: l.unit_price,
+        is_bulk: false,
+      })),
+      total: sale.total_amount,
+      discountAmount: sale.discount_amount ?? 0,
+      amountPaid: sale.amount_paid,
+      payment: sale.is_credit ? null : (sale.payments?.[0] ? { method: sale.payments[0].method, amount: sale.payments[0].amount } : null),
+      customerName: sale.customer_name ?? undefined,
+      date: new Date(sale.created_at),
+      receiptId: sale.id.slice(0, 8).toUpperCase(),
+    }
     : null;
 
   useEffect(() => {
@@ -499,7 +499,7 @@ function DetailModal({ sale, currency, businessName, singleVendor, role, onClose
       'Le stock sera restauré. Cette action est irréversible.',
       [
         { text: 'Retour', style: 'cancel' },
-        { text: 'Annuler la vente', style: 'destructive', onPress: () => { haptics.error(); onCancel(cancelReason); } },
+        { text: 'Annuler la vente', style: 'destructive', onPress: () => { haptics.destructive(); onCancel(cancelReason); } },
       ],
     );
   };
@@ -650,109 +650,109 @@ function DetailModal({ sale, currency, businessName, singleVendor, role, onClose
 
   return (
     <>
-    <FormSheet
-      visible
-      onClose={onClose}
-      title={`Vente du ${headerDate}`}
-      cancelLabel="Fermer"
-      contentContainerStyle={styles.pad}
-      headerRight={showMenuButton ? (
-        <Pressable onPress={showMenu} style={{ minWidth: 40, alignItems: 'flex-end' }}>
-          <Text variant="body" color="secondary">⋯</Text>
-        </Pressable>
-      ) : (
-        <View style={{ minWidth: 40 }} />
-      )}
-    >
+      <FormSheet
+        visible
+        onClose={onClose}
+        title={`Vente du ${headerDate}`}
+        cancelLabel="Fermer"
+        contentContainerStyle={styles.pad}
+        headerRight={showMenuButton ? (
+          <Pressable onPress={showMenu} style={{ minWidth: 40, alignItems: 'flex-end' }}>
+            <Text variant="body" color="secondary">⋯</Text>
+          </Pressable>
+        ) : (
+          <View style={{ minWidth: 40 }} />
+        )}
+      >
         {toast ? (
           <View style={styles.toast}>
             <Text variant="label" style={{ color: palette.textInverse }}>{toast}</Text>
           </View>
         ) : null}
 
-          {/* Status banner */}
-          {displayState === 'paye' && (
-            <View style={[styles.banner, styles.bannerGreen]}>
-              <Text variant="label" style={{ color: palette.success }}>✓ Payé en entier</Text>
-            </View>
-          )}
+        {/* Status banner */}
+        {displayState === 'paye' && (
+          <View style={[styles.banner, styles.bannerGreen]}>
+            <Text variant="label" style={{ color: palette.success }}>✓ Payé en entier</Text>
+          </View>
+        )}
 
-          {(displayState === 'credit' || displayState === 'partiel') && (
-            <View style={styles.heroCredit}>
-              <Text variant="caption" color="secondary">Reste à payer</Text>
-              <Text
-                variant="amountLarge"
-                style={styles.heroCreditAmount}
-                adjustsFontSizeToFit
-                numberOfLines={1}
-              >
-                {fmt(displayState === 'partiel' ? remaining : sale.total_amount - discount, currency)}
+        {(displayState === 'credit' || displayState === 'partiel') && (
+          <View style={styles.heroCredit}>
+            <Text variant="caption" color="secondary">Reste à payer</Text>
+            <Text
+              variant="amountLarge"
+              style={styles.heroCreditAmount}
+              adjustsFontSizeToFit
+              numberOfLines={1}
+            >
+              {fmt(displayState === 'partiel' ? remaining : sale.total_amount - discount, currency)}
+            </Text>
+            {displayState === 'partiel' && (
+              <Text variant="caption" color="secondary">
+                sur {fmt(sale.total_amount - discount, currency)}
               </Text>
-              {displayState === 'partiel' && (
+            )}
+            <Button
+              label="Enregistrer un paiement"
+              onPress={() => setShowPaymentSheet(true)}
+              fullWidth
+              size="lg"
+              style={{ marginTop: spacing[2] }}
+            />
+          </View>
+        )}
+
+        {displayState === 'annule' && (
+          <View style={[styles.banner, styles.bannerRed]}>
+            <Text variant="label" style={{ color: palette.danger }}>
+              {[
+                '✕',
+                sale.cancelled_by_name ? `Annulée par ${sale.cancelled_by_name}` : 'Annulée',
+                sale.cancellation_reason,
+              ].filter(Boolean).join(' · ')}
+            </Text>
+          </View>
+        )}
+
+        {sale.edit_count > 0 && sale.edits && sale.edits.length > 0 && (
+          <Pressable onPress={() => setShowHistory(v => !v)} style={[styles.banner, styles.bannerAmber]}>
+            <Text variant="label" style={{ color: palette.warning, flex: 1 }}>
+              {[
+                '✎',
+                `Modifiée par ${sale.edits[0].edited_by_name}`,
+                relativeTime(sale.edits[0].edited_at),
+                sale.edits[0].reason,
+              ].filter(Boolean).join(' · ')}
+            </Text>
+            <Text variant="caption" style={{ color: palette.warning }}>{showHistory ? '▲' : '▼'}</Text>
+          </Pressable>
+        )}
+
+        {showHistory && sale.edits && (
+          <Card style={{ gap: spacing[3] }}>
+            <Text variant="label" color="secondary">Historique des modifications</Text>
+            {sale.edits.map(edit => (
+              <View key={edit.id} style={{ gap: spacing[2] }}>
                 <Text variant="caption" color="secondary">
-                  sur {fmt(sale.total_amount - discount, currency)}
+                  {edit.edited_by_name} · {relativeTime(edit.edited_at)}
                 </Text>
-              )}
-              <Button
-                label="Enregistrer un paiement"
-                onPress={() => setShowPaymentSheet(true)}
-                fullWidth
-                size="lg"
-                style={{ marginTop: spacing[2] }}
-              />
-            </View>
-          )}
+                {diffFields(edit).map((row, i) => (
+                  <View key={i} style={styles.lineRow}>
+                    <Text variant="body" style={{ flex: 1 }}>{row.label}</Text>
+                    <Text variant="caption" color="secondary" style={styles.strikeThrough}>{row.from}</Text>
+                    <Text variant="label">→ {row.to}</Text>
+                  </View>
+                ))}
+                {edit.reason && (
+                  <Text variant="caption" color="secondary">Motif : {edit.reason}</Text>
+                )}
+              </View>
+            ))}
+          </Card>
+        )}
 
-          {displayState === 'annule' && (
-            <View style={[styles.banner, styles.bannerRed]}>
-              <Text variant="label" style={{ color: palette.danger }}>
-                {[
-                  '✕',
-                  sale.cancelled_by_name ? `Annulée par ${sale.cancelled_by_name}` : 'Annulée',
-                  sale.cancellation_reason,
-                ].filter(Boolean).join(' · ')}
-              </Text>
-            </View>
-          )}
-
-          {sale.edit_count > 0 && sale.edits && sale.edits.length > 0 && (
-            <Pressable onPress={() => setShowHistory(v => !v)} style={[styles.banner, styles.bannerAmber]}>
-              <Text variant="label" style={{ color: palette.warning, flex: 1 }}>
-                {[
-                  '✎',
-                  `Modifiée par ${sale.edits[0].edited_by_name}`,
-                  relativeTime(sale.edits[0].edited_at),
-                  sale.edits[0].reason,
-                ].filter(Boolean).join(' · ')}
-              </Text>
-              <Text variant="caption" style={{ color: palette.warning }}>{showHistory ? '▲' : '▼'}</Text>
-            </Pressable>
-          )}
-
-          {showHistory && sale.edits && (
-            <Card style={{ gap: spacing[3] }}>
-              <Text variant="label" color="secondary">Historique des modifications</Text>
-              {sale.edits.map(edit => (
-                <View key={edit.id} style={{ gap: spacing[2] }}>
-                  <Text variant="caption" color="secondary">
-                    {edit.edited_by_name} · {relativeTime(edit.edited_at)}
-                  </Text>
-                  {diffFields(edit).map((row, i) => (
-                    <View key={i} style={styles.lineRow}>
-                      <Text variant="body" style={{ flex: 1 }}>{row.label}</Text>
-                      <Text variant="caption" color="secondary" style={styles.strikeThrough}>{row.from}</Text>
-                      <Text variant="label">→ {row.to}</Text>
-                    </View>
-                  ))}
-                  {edit.reason && (
-                    <Text variant="caption" color="secondary">Motif : {edit.reason}</Text>
-                  )}
-                </View>
-              ))}
-            </Card>
-          )}
-
-          {!sale.lines ? <DetailSkeleton /> : (
+        {!sale.lines ? <DetailSkeleton /> : (
           <View style={[{ gap: spacing[2] }, displayState === 'annule' && { opacity: 0.5 }]}>
             {/* Single unified card — articles, info, payments, profit */}
             <Card style={{ gap: 0, overflow: 'hidden', padding: 0 }}>
@@ -965,20 +965,20 @@ function DetailModal({ sale, currency, businessName, singleVendor, role, onClose
               </Card>
             )}
           </View>
-          )}
+        )}
 
-          {/* Receipt lives behind this button — tapping it opens the preview
+        {/* Receipt lives behind this button — tapping it opens the preview
               sheet the merchant shares from, instead of duplicating the sale
               inline on this scroll. */}
-          {receiptData && (
-            <View style={styles.receiptSection}>
-              <View style={styles.receiptDivider} />
-              <View style={{ paddingHorizontal: spacing[5] }}>
-                <Button label="Partager le reçu" onPress={() => setShowReceipt(true)} fullWidth variant="outline" />
-              </View>
+        {receiptData && (
+          <View style={styles.receiptSection}>
+            <View style={styles.receiptDivider} />
+            <View style={{ paddingHorizontal: spacing[5] }}>
+              <Button label="Partager le reçu" onPress={() => setShowReceipt(true)} fullWidth variant="outline" />
             </View>
-          )}
-    </FormSheet>
+          </View>
+        )}
+      </FormSheet>
 
       <PaymentSheet
         visible={showPaymentSheet}
@@ -1113,7 +1113,7 @@ export default function VentesScreen() {
   const isInvestisseur = role === 'investisseur';
   const canSell = !isInvestisseur;
 
-  const fabScale   = useRef(new Animated.Value(1)).current;
+  const fabScale = useRef(new Animated.Value(1)).current;
   const fabOpacity = useRef(new Animated.Value(1)).current;
 
   useEffect(() => {
@@ -1121,12 +1121,12 @@ export default function VentesScreen() {
     const loop = Animated.loop(
       Animated.sequence([
         Animated.parallel([
-          Animated.timing(fabScale,   { toValue: 1.06, duration: 2000, easing, useNativeDriver: true }),
+          Animated.timing(fabScale, { toValue: 1.06, duration: 2000, easing, useNativeDriver: true }),
           Animated.timing(fabOpacity, { toValue: 0.85, duration: 2000, easing, useNativeDriver: true }),
         ]),
         Animated.parallel([
-          Animated.timing(fabScale,   { toValue: 1,    duration: 2000, easing, useNativeDriver: true }),
-          Animated.timing(fabOpacity, { toValue: 1,    duration: 2000, easing, useNativeDriver: true }),
+          Animated.timing(fabScale, { toValue: 1, duration: 2000, easing, useNativeDriver: true }),
+          Animated.timing(fabOpacity, { toValue: 1, duration: 2000, easing, useNativeDriver: true }),
         ]),
       ])
     );
@@ -1546,110 +1546,110 @@ export default function VentesScreen() {
 
 function makeStyles(p: Palette) {
   return StyleSheet.create({
-  safe: { flex: 1, backgroundColor: p.background },
-  header: { flexDirection: 'row', alignItems: 'center', justifyContent: 'space-between', paddingHorizontal: spacing[5], paddingVertical: spacing[4] },
-  filterIconBtn: { width: 60, alignItems: 'flex-end', justifyContent: 'center' },
-  filterDot: { position: 'absolute', top: -3, right: -3, width: 7, height: 7, borderRadius: 3.5, backgroundColor: p.primary },
-  summaryLine: { paddingHorizontal: spacing[5], paddingBottom: spacing[2] },
-  filterRow: { flexDirection: 'row', paddingHorizontal: spacing[5], gap: spacing[2], marginBottom: spacing[3] },
-  filterTab: { flex: 1, alignItems: 'center', paddingHorizontal: spacing[2], paddingVertical: spacing[1.5], borderRadius: radius.full, backgroundColor: p.surface, borderWidth: 1, borderColor: p.border },
-  filterTabActive: { backgroundColor: p.primary, borderColor: p.primary },
-  list: { paddingHorizontal: spacing[5], paddingBottom: spacing[10] },
-  dayHeader: {
-    flexDirection: 'row',
-    alignItems: 'center',
-    paddingTop: spacing[4],
-    paddingBottom: spacing[3],
-    paddingHorizontal: spacing[1],
-    gap: spacing[2],
-  },
-  dayLabel: { marginBottom: 2 },
-  saleRow: { paddingVertical: spacing[3], backgroundColor: p.surface },
-  saleTop: { flexDirection: 'row', alignItems: 'center', gap: spacing[2] },
-  offlineBanner: { alignItems: 'center', justifyContent: 'center', paddingVertical: spacing[1], borderBottomWidth: StyleSheet.hairlineWidth, borderBottomColor: p.border },
-  emptyState: { flex: 1, alignItems: 'center', justifyContent: 'center' },
-  center: { textAlign: 'center', marginTop: spacing[10] },
-  fabContainer: { position: 'absolute', bottom: 194, right: spacing[4], zIndex: 10 },
-  fabExtended: {
-    flexDirection: 'row', alignItems: 'center', gap: spacing[2],
-    height: 56, paddingHorizontal: spacing[5], borderRadius: radius.full,
-    backgroundColor: p.primary,
-    shadowColor: p.textPrimary,
-    shadowOffset: { width: 0, height: 4 }, shadowOpacity: 0.18, shadowRadius: 8,
-    elevation: 8,
-  },
-  fabExtendedLabel: { fontSize: 15, fontWeight: '600' as const, color: p.textInverse },
+    safe: { flex: 1, backgroundColor: p.background },
+    header: { flexDirection: 'row', alignItems: 'center', justifyContent: 'space-between', paddingHorizontal: spacing[5], paddingVertical: spacing[4] },
+    filterIconBtn: { width: 60, alignItems: 'flex-end', justifyContent: 'center' },
+    filterDot: { position: 'absolute', top: -3, right: -3, width: 7, height: 7, borderRadius: 3.5, backgroundColor: p.primary },
+    summaryLine: { paddingHorizontal: spacing[5], paddingBottom: spacing[2] },
+    filterRow: { flexDirection: 'row', paddingHorizontal: spacing[5], gap: spacing[2], marginBottom: spacing[3] },
+    filterTab: { flex: 1, alignItems: 'center', paddingHorizontal: spacing[2], paddingVertical: spacing[1.5], borderRadius: radius.full, backgroundColor: p.surface, borderWidth: 1, borderColor: p.border },
+    filterTabActive: { backgroundColor: p.primary, borderColor: p.primary },
+    list: { paddingHorizontal: spacing[5], paddingBottom: spacing[10] },
+    dayHeader: {
+      flexDirection: 'row',
+      alignItems: 'center',
+      paddingTop: spacing[4],
+      paddingBottom: spacing[3],
+      paddingHorizontal: spacing[1],
+      gap: spacing[2],
+    },
+    dayLabel: { marginBottom: 2 },
+    saleRow: { paddingVertical: spacing[3], backgroundColor: p.surface },
+    saleTop: { flexDirection: 'row', alignItems: 'center', gap: spacing[2] },
+    offlineBanner: { alignItems: 'center', justifyContent: 'center', paddingVertical: spacing[1], borderBottomWidth: StyleSheet.hairlineWidth, borderBottomColor: p.border },
+    emptyState: { flex: 1, alignItems: 'center', justifyContent: 'center' },
+    center: { textAlign: 'center', marginTop: spacing[10] },
+    fabContainer: { position: 'absolute', bottom: 194, right: spacing[4], zIndex: 10 },
+    fabExtended: {
+      flexDirection: 'row', alignItems: 'center', gap: spacing[2],
+      height: 56, paddingHorizontal: spacing[5], borderRadius: radius.full,
+      backgroundColor: p.primary,
+      shadowColor: p.textPrimary,
+      shadowOffset: { width: 0, height: 4 }, shadowOpacity: 0.18, shadowRadius: 8,
+      elevation: 8,
+    },
+    fabExtendedLabel: { fontSize: 15, fontWeight: '600' as const, color: p.textInverse },
 
-  // Detail modal
-  modalSafe: { flex: 1, backgroundColor: p.background },
-  receiptSection: { marginHorizontal: -spacing[5], paddingBottom: spacing[6], gap: spacing[3] },
-  receiptDivider: { height: 1, backgroundColor: p.border },
-  modalHeader: {
-    flexDirection: 'row', alignItems: 'center', justifyContent: 'space-between',
-    paddingHorizontal: spacing[5], paddingVertical: spacing[4],
-    borderBottomWidth: 1, borderBottomColor: p.border,
-  },
-  pad: { padding: spacing[5], gap: spacing[4], paddingBottom: spacing[10] },
+    // Detail modal
+    modalSafe: { flex: 1, backgroundColor: p.background },
+    receiptSection: { marginHorizontal: -spacing[5], paddingBottom: spacing[6], gap: spacing[3] },
+    receiptDivider: { height: 1, backgroundColor: p.border },
+    modalHeader: {
+      flexDirection: 'row', alignItems: 'center', justifyContent: 'space-between',
+      paddingHorizontal: spacing[5], paddingVertical: spacing[4],
+      borderBottomWidth: 1, borderBottomColor: p.border,
+    },
+    pad: { padding: spacing[5], gap: spacing[4], paddingBottom: spacing[10] },
 
-  banner: {
-    borderRadius: radius.lg, padding: spacing[4], gap: spacing[3],
-    flexDirection: 'row', alignItems: 'center', justifyContent: 'space-between',
-  },
-  bannerGreen: { backgroundColor: p.success + '20', borderWidth: 1, borderColor: p.success + '40' },
-  bannerRed: { backgroundColor: p.danger + '15', borderWidth: 1, borderColor: p.danger + '40' },
-  bannerAmber: { backgroundColor: p.warning + '15', borderWidth: 1, borderColor: p.warning + '40' },
+    banner: {
+      borderRadius: radius.lg, padding: spacing[4], gap: spacing[3],
+      flexDirection: 'row', alignItems: 'center', justifyContent: 'space-between',
+    },
+    bannerGreen: { backgroundColor: p.success + '20', borderWidth: 1, borderColor: p.success + '40' },
+    bannerRed: { backgroundColor: p.danger + '15', borderWidth: 1, borderColor: p.danger + '40' },
+    bannerAmber: { backgroundColor: p.warning + '15', borderWidth: 1, borderColor: p.warning + '40' },
 
-  heroCredit: {
-    alignItems: 'center', gap: spacing[1], paddingVertical: spacing[3],
-  },
-  heroCreditAmount: {
-    fontSize: 44, lineHeight: 56, color: p.textPrimary, textAlign: 'center',
-  },
+    heroCredit: {
+      alignItems: 'center', gap: spacing[1], paddingVertical: spacing[3],
+    },
+    heroCreditAmount: {
+      fontSize: 44, lineHeight: 56, color: p.textPrimary, textAlign: 'center',
+    },
 
-  toast: {
-    backgroundColor: p.primary, paddingHorizontal: spacing[5], paddingVertical: spacing[3],
-    alignItems: 'center',
-  },
+    toast: {
+      backgroundColor: p.primary, paddingHorizontal: spacing[5], paddingVertical: spacing[3],
+      alignItems: 'center',
+    },
 
-  row: { flexDirection: 'row', alignItems: 'center', justifyContent: 'space-between' },
-  lineRow: { flexDirection: 'row', alignItems: 'center', gap: spacing[3] },
-  strikeThrough: { textDecorationLine: 'line-through' },
-  divider: { height: 1, backgroundColor: p.border, marginVertical: spacing[1] },
-  cardSection: { padding: spacing[4] },
-  cardSectionBorder: { borderTopWidth: 1, borderTopColor: p.border },
+    row: { flexDirection: 'row', alignItems: 'center', justifyContent: 'space-between' },
+    lineRow: { flexDirection: 'row', alignItems: 'center', gap: spacing[3] },
+    strikeThrough: { textDecorationLine: 'line-through' },
+    divider: { height: 1, backgroundColor: p.border, marginVertical: spacing[1] },
+    cardSection: { padding: spacing[4] },
+    cardSectionBorder: { borderTopWidth: 1, borderTopColor: p.border },
 
-  textInput: {
-    paddingHorizontal: spacing[4], paddingVertical: spacing[3],
-    borderRadius: radius.md, borderWidth: 1, borderColor: p.border,
-    backgroundColor: p.surface, color: p.textPrimary, fontSize: 16,
-  },
+    textInput: {
+      paddingHorizontal: spacing[4], paddingVertical: spacing[3],
+      borderRadius: radius.md, borderWidth: 1, borderColor: p.border,
+      backgroundColor: p.surface, color: p.textPrimary, fontSize: 16,
+    },
 
-  // Payment sheet
-  sheetHeader: {
-    flexDirection: 'row', alignItems: 'center', justifyContent: 'space-between',
-    paddingHorizontal: spacing[5], paddingVertical: spacing[4],
-    borderBottomWidth: 1, borderBottomColor: p.border,
-  },
-  sheetContent: { padding: spacing[5], gap: spacing[4] },
-  sheetFooter: {
-    padding: spacing[5], borderTopWidth: 1, borderTopColor: p.border,
-    backgroundColor: p.surface,
-  },
-  contextCard: { gap: spacing[1] },
-  amountRow: { flexDirection: 'row', gap: spacing[3], alignItems: 'center' },
-  amountInput: {
-    flex: 1, paddingHorizontal: spacing[4], paddingVertical: spacing[3],
-    borderRadius: radius.md, borderWidth: 1, borderColor: p.border,
-    backgroundColor: p.surface, color: p.textPrimary,
-    fontSize: 28, fontWeight: '700',
-  },
-  solderBtn: {
-    paddingHorizontal: spacing[3], paddingVertical: spacing[3],
-    borderRadius: radius.md, borderWidth: 1, borderColor: p.primary,
-  },
-  methodRow: { flexDirection: 'row', flexWrap: 'wrap', gap: spacing[2] },
-  chipWrap: { flexDirection: 'row', flexWrap: 'wrap', gap: spacing[2] },
-  chip: { paddingHorizontal: spacing[3], paddingVertical: spacing[1.5], borderRadius: radius.full, borderWidth: 1, borderColor: p.border, backgroundColor: p.surface },
-  chipActive: { backgroundColor: p.primary, borderColor: p.primary },
+    // Payment sheet
+    sheetHeader: {
+      flexDirection: 'row', alignItems: 'center', justifyContent: 'space-between',
+      paddingHorizontal: spacing[5], paddingVertical: spacing[4],
+      borderBottomWidth: 1, borderBottomColor: p.border,
+    },
+    sheetContent: { padding: spacing[5], gap: spacing[4] },
+    sheetFooter: {
+      padding: spacing[5], borderTopWidth: 1, borderTopColor: p.border,
+      backgroundColor: p.surface,
+    },
+    contextCard: { gap: spacing[1] },
+    amountRow: { flexDirection: 'row', gap: spacing[3], alignItems: 'center' },
+    amountInput: {
+      flex: 1, paddingHorizontal: spacing[4], paddingVertical: spacing[3],
+      borderRadius: radius.md, borderWidth: 1, borderColor: p.border,
+      backgroundColor: p.surface, color: p.textPrimary,
+      fontSize: 28, fontWeight: '700',
+    },
+    solderBtn: {
+      paddingHorizontal: spacing[3], paddingVertical: spacing[3],
+      borderRadius: radius.md, borderWidth: 1, borderColor: p.primary,
+    },
+    methodRow: { flexDirection: 'row', flexWrap: 'wrap', gap: spacing[2] },
+    chipWrap: { flexDirection: 'row', flexWrap: 'wrap', gap: spacing[2] },
+    chip: { paddingHorizontal: spacing[3], paddingVertical: spacing[1.5], borderRadius: radius.full, borderWidth: 1, borderColor: p.border, backgroundColor: p.surface },
+    chipActive: { backgroundColor: p.primary, borderColor: p.primary },
   });
 }
