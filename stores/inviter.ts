@@ -1,4 +1,5 @@
 import { create } from 'zustand';
+import { trackEvent } from '@/lib/analytics';
 import { supabase } from '@/lib/supabase';
 import { translateError } from '@/lib/errors';
 import { isNetworkError, withTimeout } from '@/lib/sync';
@@ -197,6 +198,10 @@ export const useInviterStore = create<InviterStore>((set, get) => ({
                 set({ error: translateError(error, 'Invitation invalide') });
                 return null;
             }
+            // No inviter name in the event (spec §0) — the id alone links the loop.
+            trackEvent('invite_signup_completed', null, null, {
+                inviter_id: (data as { inviter_id: string }).inviter_id,
+            });
             return data as { inviter_id: string; inviter_name: string };
         } catch (err) {
             set({ error: isNetworkError(err) ? 'Erreur de réseau. Vérifiez votre connexion.' : 'Invitation invalide' });
