@@ -1,0 +1,14 @@
+[
+    {
+        "relation": [
+            "delegate_permission/common.handle_all_urls"
+        ],
+        "target": {
+            "namespace": "android_app",
+            "package_name": "com.awall.patron",
+            "sha256_cert_fingerprints": [
+                "77:A4:00:19:BA:76:01:58:67:B2:54:4A:DC:7F:DF:55:82:87:C4:67:75:86:FE:F4:A9:A9:21:31:90:A4:17:46"
+            ]
+        }
+    }
+]

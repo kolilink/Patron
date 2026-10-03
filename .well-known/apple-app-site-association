@@ -1,0 +1,11 @@
+{
+  "applinks": {
+    "apps": [],
+    "details": [
+      {
+        "appID": "HVK4ZZZ3A2.com.awall.patron",
+        "paths": ["/invite", "/invite/*"]
+      }
+    ]
+  }
+}
