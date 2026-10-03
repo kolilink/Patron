@@ -648,7 +648,6 @@ export default function ParametresScreen() {
                         Ceci est votre monnaie officielle
                       </Text>
                     </View>
-                    <Ionicons name="lock-closed-outline" size={16} color={palette.textDisabled} />
                   </View>
                 )}
               </View>

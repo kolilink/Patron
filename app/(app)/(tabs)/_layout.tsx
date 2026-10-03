@@ -82,7 +82,6 @@ function CustomTabBar({ state, descriptors, navigation, insets }: BottomTabBarPr
       onSelect={onSelect}
       bottomInset={insets.bottom}
       width={barWidthFor(visibleRoutes.length)}
-      showLabels
     />
   );
 }

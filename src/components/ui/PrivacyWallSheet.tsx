@@ -30,7 +30,6 @@ export function PrivacyWallSheet({ visible, onClose }: { visible: boolean; onClo
         <FormSheet visible={visible} onClose={onClose} title="Vos données restent privées" cancelLabel="Fermer">
             <View style={{ gap: spacing[4] }}>
                 <View style={[styles.promise, { backgroundColor: palette.primaryLight }]}>
-                    <Ionicons name="lock-closed-outline" size={18} color={palette.primary} />
                     <Text variant="body" style={{ color: palette.primary, flex: 1, fontWeight: '600' }}>
                         {PRIVACY_PROMISE}
                     </Text>

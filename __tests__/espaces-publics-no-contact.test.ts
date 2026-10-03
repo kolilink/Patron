@@ -3,8 +3,8 @@
 // The three public spaces (Amis / Mon commerce / Le Marché) must expose zero
 // contact surface: no wa.me link, no tel: link, no WhatsApp deep-link, no
 // Linking.openURL/Share.share action, and no phone number rendered anywhere.
-// The "Mon commerce" card must be strictly read-only (name, activity, currency,
-// logo) with no interactive contact element.
+// The "Mon commerce" card must be strictly read-only (name, activity, logo)
+// with no interactive contact element.
 //
 // This is a source-level audit: it reads the public-space components as plain
 // text and asserts the forbidden patterns are absent. It is hermetic (no
@@ -67,7 +67,7 @@ describe('espaces publics — aucun moyen de contact', () => {
 });
 
 describe('carte "Mon commerce" — strictement read-only', () => {
-    it('affiche uniquement nom, activité, monnaie et logo — aucun élément interactif de contact', () => {
+    it('affiche uniquement nom, activité et logo — aucun élément interactif de contact', () => {
         const src = readSource('app/(app)/discussions.tsx');
         // Isolate the "Mon commerce" card block, from its opening <View> to the
         // first `chatOffline` marker that follows it.
@@ -82,11 +82,10 @@ describe('carte "Mon commerce" — strictement read-only', () => {
         expect(card).not.toMatch(/onPress/);
         expect(card).not.toMatch(/accessibilityRole/);
 
-        // Read-only content: name, activity, currency, logo — and no contact
-        // channel of any kind.
+        // Read-only content: name, activity, logo — and no contact channel of
+        // any kind (currency line removed in the social-spaces cleanup).
         expect(card).toMatch(/businessName/);
         expect(card).toMatch(/businessType/);
-        expect(card).toMatch(/currencyLabel/);
         expect(card).toMatch(/businessLogo/);
         expect(card).not.toMatch(/wa\.me|tel:|whatsapp|openURL|Share\.share/i);
         expect(card).not.toMatch(SEPARATED_PHONE);

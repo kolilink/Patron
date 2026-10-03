@@ -91,7 +91,6 @@ export function ConductRulesSheet({ visible, onClose }: { visible: boolean; onCl
                     </View>
                 ))}
                 <View style={[styles.promise, { backgroundColor: palette.primaryLight }]}>
-                    <Ionicons name="lock-closed-outline" size={16} color={palette.primary} />
                     <Text variant="caption" style={{ color: palette.primary, flex: 1 }}>{PRIVACY_PROMISE}</Text>
                 </View>
             </View>

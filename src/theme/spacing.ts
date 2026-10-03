@@ -22,11 +22,11 @@ export const spacing = {
 } as const;
 
 export const radius = {
-  sm:   6,
-  md:   10,
-  lg:   14,
+  sm: 6,
+  md: 10,
+  lg: 14,
   card: 16,   // canonical card radius — slightly more generous than lg
-  xl:   20,
+  xl: 20,
   full: 9999,
 } as const;
 
@@ -47,6 +47,18 @@ export const radius = {
 export const FLOATING_TAB_BAR_HEIGHT = 64;
 export const FLOATING_TAB_BAR_GAP = 12; // gap between the pill's bottom edge and the safe-area inset
 export const FLOATING_TAB_BAR_CLEARANCE = FLOATING_TAB_BAR_HEIGHT + FLOATING_TAB_BAR_GAP + 12; // + a little breathing room above the pill
+
+// The floating pill renders at `bottom: bottomInset + FLOATING_TAB_BAR_GAP`
+// (see FloatingTabBar.tsx), so its top edge sits at `bottomInset + GAP + HEIGHT`
+// from the screen bottom. `FLOATING_TAB_BAR_CLEARANCE` alone omits that safe-area
+// inset, which is exactly the bug that let the home FAB overlap the pill on
+// devices with a home indicator (insets.bottom ≈ 34 → bar top = 110, old FAB
+// bottom = 88 + 16 = 104 → 6px overlap). Any bottom-anchored element (FABs,
+// checkout bars) must add the live inset back via this helper, never a stale
+// magic number.
+export function floatingTabBarClearance(bottomInset: number): number {
+  return bottomInset + FLOATING_TAB_BAR_CLEARANCE;
+}
 
 // Below this many items, a list is short enough to scan at a glance — the
 // search bar above it is just clutter, not a shortcut. Shared across every

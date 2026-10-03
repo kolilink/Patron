@@ -15,7 +15,7 @@ import { Button } from '@/src/components/ui/Button';
 import { Card } from '@/src/components/ui/Card';
 import { Pill } from '@/src/components/ui/Pill';
 import { Text } from '@/src/components/ui/Text';
-import { useTheme, radius, spacing, FLOATING_TAB_BAR_CLEARANCE } from '@/src/theme';
+import { useTheme, radius, spacing, floatingTabBarClearance } from '@/src/theme';
 import type { Palette } from '@/src/theme';
 import { trackEvent } from '@/lib/analytics';
 import { useAuthStore } from '@/stores/auth';
@@ -138,7 +138,7 @@ function KpiCard({ label, value, sub, onPress, tone, icon }: {
 export default function AccueilScreen() {
   const { palette } = useTheme();
   const insets = useSafeAreaInsets();
-  const styles = useMemo(() => makeStyles(palette), [palette]);
+  const styles = useMemo(() => makeStyles(palette, insets.bottom), [palette, insets.bottom]);
   const session = useAuthStore(s => s.session);
   const openBusinessPicker = useAuthStore(s => s.openBusinessDrawer);
   const business = session?.activeBusiness;
@@ -1130,7 +1130,7 @@ export default function AccueilScreen() {
   );
 }
 
-function makeStyles(p: Palette) {
+function makeStyles(p: Palette, bottomInset: number) {
   return StyleSheet.create({
     safe: { flex: 1, backgroundColor: p.background },
     edgeSwipeCatcher: {
@@ -1144,7 +1144,7 @@ function makeStyles(p: Palette) {
     },
     content: { padding: spacing[5], gap: spacing[4], paddingBottom: spacing[10] },
     quickCaptureFab: {
-      position: 'absolute', bottom: FLOATING_TAB_BAR_CLEARANCE + spacing[4], right: spacing[4], zIndex: 10,
+      position: 'absolute', bottom: floatingTabBarClearance(bottomInset) + spacing[4], right: spacing[4], zIndex: 10,
       flexDirection: 'row', alignItems: 'center', gap: spacing[2],
       height: 56, paddingHorizontal: spacing[5], borderRadius: radius.full,
       backgroundColor: p.primary,

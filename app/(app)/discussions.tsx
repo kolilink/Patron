@@ -53,9 +53,7 @@ import { generateFallbackName } from '@/lib/id';
 import { friendlyMessage } from '@/lib/errors';
 import { PostActionsMenu } from '@/src/components/ui/PostActionsMenu';
 import { ConductBanner, ComposerReminder } from '@/src/components/ui/ConductBanner';
-import { PrivacyWallSheet } from '@/src/components/ui/PrivacyWallSheet';
 import { PseudoSheet } from '@/src/components/ui/PseudoSheet';
-import { CURRENCY_LIST } from '@/src/constants/currency';
 import type { ChatMessage, MarketPost, MarketCategory } from '@/src/types';
 
 // expo-av's native module only exists once the app has been rebuilt with this
@@ -71,7 +69,11 @@ function getAudio(): typeof Audio | null {
 
 // ─── Forum constants ──────────────────────────────────────────────────────────
 
-const MARKET_CATS: MarketCategory[] = ['suggestion', 'entraide', 'general', 'annonce'];
+// Only two categories survive in the Le Marché UI — Entraide and Annonce were
+// retired. Existing posts in those categories are remapped to 'general' at
+// read time in stores/market.ts (see normalizePostCategory there) so they
+// neither disappear nor become orphaned behind a filter that no longer exists.
+const MARKET_CATS: MarketCategory[] = ['general', 'suggestion'];
 
 const CAT_LABEL: Record<string, string> = {
   tout: 'Tout',
@@ -449,14 +451,10 @@ export default function DiscussionsScreen() {
   const userName = session?.user.name || generateFallbackName(userId);
   const businessName = session?.activeBusiness?.name ?? '';
   // Jobs de lancement - "Mon commerce (public card)": a read-only identity
-  // card for the active business. No catalogue/prices here (HORS SCOPE).
-  const businessCurrency = session?.activeBusiness?.currency ?? 'GNF';
+  // card for the active business (nom + avatar + activité). No catalogue,
+  // prices, currency or contact surface here (HORS SCOPE).
   const businessType = session?.activeBusiness?.type ?? null;
   const businessLogo = session?.activeBusiness?.logo_url ?? null;
-  const currencyLabel = useMemo(() => {
-    const found = CURRENCY_LIST.find(c => c.code === businessCurrency);
-    return found ? `${found.flag} ${found.name}` : businessCurrency;
-  }, [businessCurrency]);
   const role = session?.activeMembership?.role;
   const isAdminOrManager = role === 'administrateur' || role === 'manager';
   const membres = useEquipeStore(s => s.membres);
@@ -545,7 +543,6 @@ export default function DiscussionsScreen() {
   const [newContent, setNewContent] = useState('');
   const [newCategory, setNewCategory] = useState<MarketCategory | null>(null);
   const [postError, setPostError] = useState('');
-  const [showPrivacy, setShowPrivacy] = useState(false);
   // Phase 5 — no anonymous posts: if the account has no confirmed pseudo yet,
   // the composer is gated behind this identity sheet.
   const [showPseudo, setShowPseudo] = useState(false);
@@ -1037,15 +1034,9 @@ export default function DiscussionsScreen() {
             <Text variant="body" color="secondary">‹ Retour</Text>
           </Pressable>
           <Text variant="h4">Discussions</Text>
-          <Pressable
-            onPress={() => setShowPrivacy(true)}
-            hitSlop={10}
-            style={{ width: 60, alignItems: 'flex-end' }}
-            accessibilityLabel="Vos données restent privées"
-            accessibilityRole="button"
-          >
-            <Ionicons name="lock-closed-outline" size={20} color={palette.textSecondary} />
-          </Pressable>
+          {/* Invisible spacer keeps "Discussions" centered now that the lock
+              icon has been removed from the header. */}
+          <View style={{ width: 60 }} />
         </View>
 
         <View style={styles.tabRow}>
@@ -1086,8 +1077,9 @@ export default function DiscussionsScreen() {
         </View>
 
         <Animated.View style={[{ flex: 1 }, contentStyle]}>
-          {/* Phase 2 — code de conduite pinned atop each social space */}
-          <ConductBanner compact />
+          {/* Phase 2 — code de conduite pinned only atop the public Le Marché
+              space (Ma Boutique and Amis are private and stay clean). */}
+          {activeTab === 'marche' && <ConductBanner compact />}
 
           {/* Category chips — outside KAV so they sit flush under the tab row */}
           {activeTab === 'marche' && marketOffline && (
@@ -1165,15 +1157,8 @@ export default function DiscussionsScreen() {
                           </Text>
                         </View>
                       ) : null}
-                      <Text variant="caption" color="secondary" numberOfLines={1}>{currencyLabel}</Text>
                     </View>
                   </View>
-                  <Ionicons name="lock-closed-outline" size={18} color={palette.textSecondary} />
-                </View>
-                <View style={styles.commerceCardNote}>
-                  <Text variant="caption" color="secondary" style={{ lineHeight: 18 }}>
-                    Votre fiche reste privée. Personne ne voit votre commerce ici sans votre accord.
-                  </Text>
                 </View>
               </View>
 
@@ -1722,9 +1707,6 @@ export default function DiscussionsScreen() {
           </View>
         </FormSheet>
 
-        {/* ── Phase 4 — privacy wall info screen ── */}
-        <PrivacyWallSheet visible={showPrivacy} onClose={() => setShowPrivacy(false)} />
-
         {/* ── Phase 5 — stable visible identity gate (no anonymous posts) ── */}
         <PseudoSheet
           visible={showPseudo}
@@ -1975,15 +1957,15 @@ function makeStyles(p: Palette) {
     },
     catScroll: { flex: 1 },
     composeBtn: {
-      width: 44,
+      width: 48,
       height: 44,
       alignItems: 'center' as const,
       justifyContent: 'center' as const,
-      paddingRight: spacing[1],
+      paddingRight: spacing[2],
     },
     catScrollContent: {
       paddingHorizontal: spacing[4],
-      paddingRight: spacing[8],
+      paddingRight: spacing[4],
       gap: spacing[2],
       flexDirection: 'row' as const,
       alignItems: 'center' as const,
@@ -2166,11 +2148,6 @@ function makeStyles(p: Palette) {
       borderRadius: radius.full,
       maxWidth: 160,
     },
-    commerceCardNote: {
-      paddingHorizontal: spacing[4],
-      paddingBottom: spacing[3],
-    },
-
     // Amis tab
     amisHeader: {
       flexDirection: 'row' as const,
