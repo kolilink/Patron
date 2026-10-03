@@ -297,6 +297,24 @@ export const useVentesStore = create<VentesStore>((set, get) => ({
     if (fetchErr) {
       if (isNetworkError(fetchErr)) {
         reportOfflineFallback('ventes.fetchSales', fetchErr);
+        if (isDefaultScope) {
+          // A network failure must NOT overwrite `sales` with the raw cache:
+          // refreshPendingOverlay already merged the outbox at the top of
+          // fetchSales, so just-written offline sales are already in `sales`
+          // and would be wiped if we re-seeded from the (stale, outbox-free)
+          // cache here. Re-apply the overlay instead — its baseline is the
+          // untouched cache, so this also stays self-consistent — then set
+          // only the offline flags.
+          await get().refreshPendingOverlay();
+          if (isStaleBusiness(businessId)) return;
+          const ts = await getCacheTimestamp('ventes_cache', cacheKey);
+          if (isStaleBusiness(businessId)) return;
+          set({ loading: false, offline: true, offlineSince: ts, error: null, salesFetchedFor: businessId });
+          return;
+        }
+        // Non-default scope (status-filtered fetches): keep the raw-cache
+        // behavior — the overlay is scope-specific and must not leak into
+        // filtered views.
         const cached = await getVentesCache(cacheKey) as Vente[] | null;
         if (isStaleBusiness(businessId)) return;
         if (cached) {

@@ -2,8 +2,10 @@
 // SyncStatusLine's pure state-selection logic, extracted specifically so
 // it's testable without a component-rendering setup (this codebase's own
 // convention — see CLAUDE.md — is mocked-Supabase unit tests, not UI
-// tests). Covers the exact four states the approved spec names, plus the
-// "nothing to say yet" null case and the 7-day escalation boundary.
+// tests). Final spec: online renders nothing in the clean state (null,
+// zero height); offline renders nothing from SyncStatusLine (null —
+// OfflineNotice owns the single "Hors ligne"); only the syncing and 7-day
+// escalation lines render while online.
 
 import { computeSyncStatusLabel } from '@/src/components/ui/syncStatusLabel';
 
@@ -19,17 +21,22 @@ describe('computeSyncStatusLabel', () => {
       .toBe('Synchronisation…');
   });
 
-  it('clean state shows the checkmark with a formatted time when lastSyncedAt is set', () => {
+  it('clean state (online + fully synced) → null: no "Tout est synchronisé ✓", no timestamp', () => {
     const label = computeSyncStatusLabel({
       syncing: false, pendingCount: 0, lastSyncedAt: '2026-09-28T10:30:00.000Z', oldestQueuedAt: null, now: NOW,
     });
-    expect(label).toMatch(/^Tout est synchronisé ✓ · /);
+    expect(label).toBeNull();
   });
 
-  it('pending, under 7 days: the safety-reassurance copy, no count, no alarm wording', () => {
+  it('offline with items waiting to sync → null: OfflineNotice owns the single "Hors ligne"', () => {
     const sixDaysAgo = new Date(NOW - 6 * 24 * 60 * 60 * 1000).toISOString();
-    const label = computeSyncStatusLabel({ syncing: false, pendingCount: 4, lastSyncedAt: null, oldestQueuedAt: sixDaysAgo, now: NOW });
-    expect(label).toBe('En attente de connexion — vos données sont en sécurité sur ce téléphone.');
+    expect(computeSyncStatusLabel({ syncing: false, pendingCount: 4, lastSyncedAt: null, oldestQueuedAt: sixDaysAgo, now: NOW }))
+      .toBeNull();
+  });
+
+  it('offline with empty queue → null: OfflineNotice still owns the single "Hors ligne"', () => {
+    expect(computeSyncStatusLabel({ syncing: false, pendingCount: 0, lastSyncedAt: '2026-09-28T10:30:00.000Z', oldestQueuedAt: null, now: NOW }))
+      .toBeNull();
   });
 
   it('pending, exactly at the 7-day boundary: escalates', () => {
@@ -38,18 +45,18 @@ describe('computeSyncStatusLabel', () => {
     expect(label).toBe('7 jours sans connexion — connectez-vous pour sauvegarder vos données.');
   });
 
-  it('pending, just under 7 days: still the reassurance copy, not the escalation', () => {
+  it('pending, just under 7 days: still offline-owned null, not the escalation', () => {
     const almostSevenDays = new Date(NOW - (7 * 24 * 60 * 60 * 1000 - 1000)).toISOString();
     const label = computeSyncStatusLabel({ syncing: false, pendingCount: 1, lastSyncedAt: null, oldestQueuedAt: almostSevenDays, now: NOW });
-    expect(label).toBe('En attente de connexion — vos données sont en sécurité sur ce téléphone.');
+    expect(label).toBeNull();
   });
 
-  it('pending with no known oldestQueuedAt yet (still resolving): falls back to the reassurance copy, never crashes', () => {
+  it('pending with no known oldestQueuedAt yet (still resolving): offline-owned null, never crashes', () => {
     const label = computeSyncStatusLabel({ syncing: false, pendingCount: 2, lastSyncedAt: null, oldestQueuedAt: null, now: NOW });
-    expect(label).toBe('En attente de connexion — vos données sont en sécurité sur ce téléphone.');
+    expect(label).toBeNull();
   });
 
-  it('never mentions a raw pending count anywhere — the standing "zero sync noise" rule (a clock time in the clean state is intentional and distinct — see the spec: "the timestamp doubles as the staleness signal")', () => {
+  it('never mentions a raw pending count anywhere — the standing "zero sync noise" rule', () => {
     // pendingCount is deliberately a large, distinctive number in every
     // case — if it ever leaked into a label, it would show up verbatim.
     const cases = [
@@ -58,7 +65,10 @@ describe('computeSyncStatusLabel', () => {
       { syncing: false, pendingCount: 4321, lastSyncedAt: null, oldestQueuedAt: new Date(NOW - 1000).toISOString(), now: NOW },
     ];
     for (const c of cases) {
-      expect(computeSyncStatusLabel(c)).not.toContain('4321');
+      const label = computeSyncStatusLabel(c);
+      // Offline branches now return null (nothing renders) — trivially no
+      // count leak. Only assert on the labels that actually render.
+      if (label !== null) expect(label).not.toContain('4321');
     }
   });
 });

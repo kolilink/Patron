@@ -74,6 +74,7 @@ export const useAportsStore = create<AportsStore>((set, get) => ({
   offlineSince: null,
 
   fetchApports: async (businessId) => {
+    if (isStaleBusiness(businessId)) return;
     if (get().apports.length === 0) {
       const cached = await getApportsCache(businessId) as Apport[] | null;
       if (isStaleBusiness(businessId)) return;
@@ -94,7 +95,7 @@ export const useAportsStore = create<AportsStore>((set, get) => ({
         .order('injected_at', { ascending: false }),
     ).catch(err => ({ data: null, error: err }));
 
-    if (isStaleBusiness(businessId)) return;
+    if (isStaleBusiness(businessId)) { set({ loading: false }); return; }
     if (error) {
       if (isNetworkError(error)) {
         reportOfflineFallback('apports.fetchApports', error);
@@ -133,7 +134,7 @@ export const useAportsStore = create<AportsStore>((set, get) => ({
     }));
 
     void saveApportsCache(businessId, apports as unknown[]);
-    if (isStaleBusiness(businessId)) return;
+    if (isStaleBusiness(businessId)) { set({ loading: false }); return; }
     set({ apports, loading: false, offline: false, offlineSince: null });
   },
 
@@ -142,12 +143,12 @@ export const useAportsStore = create<AportsStore>((set, get) => ({
 
     try {
       const { data, error } = await supabase.rpc('record_injection', {
-        p_business_id:    businessId,
-        p_amount:         Math.round(amount * 100),
+        p_business_id: businessId,
+        p_amount: Math.round(amount * 100),
         p_injected_by_id: injectedById ?? null,
-        p_source_name:    sourceName ?? null,
-        p_note:           note ?? null,
-        p_injected_at:    injectedAt,
+        p_source_name: sourceName ?? null,
+        p_note: note ?? null,
+        p_injected_at: injectedAt,
       });
 
       if (error) {
@@ -169,12 +170,12 @@ export const useAportsStore = create<AportsStore>((set, get) => ({
 
     try {
       const { error } = await supabase.rpc('edit_injection', {
-        p_id:             id,
-        p_amount:         Math.round(amount * 100),
+        p_id: id,
+        p_amount: Math.round(amount * 100),
         p_injected_by_id: injectedById ?? null,
-        p_source_name:    sourceName ?? null,
-        p_note:           note ?? null,
-        p_injected_at:    injectedAt,
+        p_source_name: sourceName ?? null,
+        p_note: note ?? null,
+        p_injected_at: injectedAt,
       });
 
       if (error) {
@@ -196,12 +197,12 @@ export const useAportsStore = create<AportsStore>((set, get) => ({
 
     try {
       const { data, error } = await supabase.rpc('record_withdrawal', {
-        p_business_id:    businessId,
-        p_amount:         Math.round(amount * 100),
+        p_business_id: businessId,
+        p_amount: Math.round(amount * 100),
         p_injected_by_id: injectedById ?? null,
-        p_source_name:    sourceName ?? null,
-        p_note:           note ?? null,
-        p_withdrawn_at:   withdrawnAt,
+        p_source_name: sourceName ?? null,
+        p_note: note ?? null,
+        p_withdrawn_at: withdrawnAt,
       });
 
       if (error) {

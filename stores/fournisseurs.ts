@@ -153,6 +153,7 @@ export const useFournisseursStore = create<FournisseursStore>((set, get) => ({
   offlineSince: null,
 
   fetchFournisseurs: async (businessId) => {
+    if (isStaleBusiness(businessId)) return;
     set({ loading: true });
     const [suppliersRes, debtsRes] = await Promise.all([
       withNetworkRetry(() => supabase.from('suppliers').select('*').eq('business_id', businessId).order('name'))
@@ -160,7 +161,7 @@ export const useFournisseursStore = create<FournisseursStore>((set, get) => ({
       withTimeout(supabase.from('supplier_debts').select('*').eq('business_id', businessId).order('date', { ascending: false }))
         .catch(err => ({ data: null, error: err })),
     ]);
-    if (isStaleBusiness(businessId)) return;
+    if (isStaleBusiness(businessId)) { set({ loading: false }); return; }
     if (suppliersRes.error) {
       if (isNetworkError(suppliersRes.error)) {
         reportOfflineFallback('fournisseurs.fetchFournisseurs', suppliersRes.error);
@@ -286,6 +287,7 @@ export const useFournisseursStore = create<FournisseursStore>((set, get) => ({
   },
 
   fetchCommandes: async (businessId) => {
+    if (isStaleBusiness(businessId)) return;
     set({ loading: true });
     const { data, error } = await withNetworkRetry(() =>
       supabase
@@ -295,7 +297,7 @@ export const useFournisseursStore = create<FournisseursStore>((set, get) => ({
         .order('ordered_at', { ascending: false }),
     ).catch(err => ({ data: null, error: err }));
 
-    if (isStaleBusiness(businessId)) return;
+    if (isStaleBusiness(businessId)) { set({ loading: false }); return; }
     if (error) {
       if (isNetworkError(error)) {
         reportOfflineFallback('fournisseurs.fetchCommandes', error);
@@ -319,7 +321,7 @@ export const useFournisseursStore = create<FournisseursStore>((set, get) => ({
       supplier_name: (c.supplier as { name: string } | null)?.name ?? '—',
     } as CommandeAchat));
     void saveCommandeCache(businessId, commandes as unknown[]);
-    if (isStaleBusiness(businessId)) return;
+    if (isStaleBusiness(businessId)) { set({ loading: false }); return; }
     set({ commandes, loading: false, offline: false, offlineSince: null });
   },
 

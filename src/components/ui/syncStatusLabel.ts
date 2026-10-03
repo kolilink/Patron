@@ -24,15 +24,16 @@ export function computeSyncStatusLabel(args: {
   if (syncing) return 'Synchronisation…';
 
   if (pendingCount === 0) {
-    const time = lastSyncedAt
-      ? new Date(lastSyncedAt).toLocaleTimeString('fr-FR', { hour: '2-digit', minute: '2-digit' })
-      : '';
-    return `Tout est synchronisé ✓${time ? ` · ${time}` : ''}`;
+    // Clean branch: online + fully synced → nothing renders (zero height).
+    // No "Tout est synchronisé ✓", no timestamp.
+    return null;
   }
 
   if (oldestQueuedAt && now - new Date(oldestQueuedAt).getTime() >= SEVEN_DAYS_MS) {
     return '7 jours sans connexion — connectez-vous pour sauvegarder vos données.';
   }
 
-  return 'En attente de connexion — vos données sont en sécurité sur ce téléphone.';
+  // Offline with items waiting to sync: OfflineNotice owns the single
+  // "Hors ligne" — SyncStatusLine renders nothing here.
+  return null;
 }

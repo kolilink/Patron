@@ -26,6 +26,7 @@ import { useRapportsStore } from './rapports';
 import { useAportsStore } from './apports';
 import { useInvestorStore } from './investor';
 import { usePartnershipsStore } from './partnerships';
+import { useSupportChatStore } from './supportChat';
 import { trackEvent, identifyUser, resetAnalytics } from '@/lib/analytics';
 import { loginPurchases } from '@/lib/purchases';
 import { notifyEvent } from '@/src/utils/notifications';
@@ -160,6 +161,7 @@ function resetAllStores() {
   useAportsStore.getState().reset();
   useInvestorStore.getState().reset();
   usePartnershipsStore.getState().reset();
+  useSupportChatStore.getState().reset();
 }
 
 interface PendingPhoneVerification {

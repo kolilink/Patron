@@ -329,8 +329,8 @@ export default function AppLayout() {
         // drainQueue() directly — this is what fires the PostHog
         // sync-health events (§3/§4's SyncHealthEvent wiring, done in
         // stores/sync.ts specifically because lib/sync.ts itself can't
-        // safely import analytics) and updates lastSyncedAt (the quiet
-        // sync line's "Tout est synchronisé ✓ · HH:MM" timestamp, §8).
+        // safely import analytics) and updates lastSyncedAt (kept for
+        // observability now — the sync line is silent when online, §8).
         // Calling drainQueue() directly here — the pre-existing shape —
         // meant every drain triggered by this foreground listener silently
         // skipped both; only a kick()-triggered drain (from a write) ever

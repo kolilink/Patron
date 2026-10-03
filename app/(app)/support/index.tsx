@@ -148,6 +148,12 @@ export default function SupportScreen() {
           <View style={styles.empty}>
             <Text variant="body" color="secondary">Chargement…</Text>
           </View>
+        ) : !loading && messages.length === 0 && offline ? (
+          <View style={styles.empty}>
+            <Text variant="body" color="secondary" style={{ textAlign: 'center', lineHeight: 22 }}>
+              Données non disponibles hors ligne. Ouvrez l'application en ligne une première fois pour activer le mode hors ligne.
+            </Text>
+          </View>
         ) : messages.length === 0 ? (
           <View style={styles.empty}>
             <Text variant="body" color="secondary" style={{ textAlign: 'center', lineHeight: 22 }}>
@@ -157,7 +163,7 @@ export default function SupportScreen() {
         ) : (
           <FlatList
             ref={listRef}
-            onScrollToIndexFailed={() => {}}
+            onScrollToIndexFailed={() => { }}
             data={listItems}
             keyExtractor={item => item.id}
             inverted

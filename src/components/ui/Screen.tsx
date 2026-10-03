@@ -37,20 +37,27 @@ interface ScreenProps {
 export function Screen({ children, tab = false, style, edges }: ScreenProps) {
   const { palette } = useTheme();
   const isDemoMode = useAuthStore(s => s.session?.isDemoMode ?? false);
-  const hasPendingSync = useSyncStore(s => s.pendingCount > 0);
+  const syncLineVisible = useSyncStore(s => s.pendingCount > 0);
 
-  // DemoBanner and SyncBanner (both mounted above <Stack/> in (app)/_layout.tsx,
-  // outside any Screen) each already consume insets.top for themselves when
-  // visible — don't add it again here or every screen underneath gets a
-  // double gap between the banner and its own content. Only applies to the
-  // default edge logic; an explicit `edges` prop always takes full precedence.
+  // DemoBanner and SyncStatusLine (both mounted above <Stack/> in
+  // (app)/_layout.tsx, outside any Screen) each already consume insets.top for
+  // themselves when visible — don't add it again here or every screen
+  // underneath gets a double gap between the header and its own content. Only
+  // applies to the default edge logic; an explicit `edges` prop always takes
+  // full precedence.
   //
-  // `tab` no longer adds any extra bottom padding beyond the real OS safe
-  // area (see the doc comment on the prop above) — content is deliberately
-  // allowed to sit underneath the floating pill and reveal itself on scroll.
+  // The sync line is silent when online (returns null — zero height), so the
+  // top inset is dropped only while one of those two strips is actually
+  // rendering above the Stack (demo banner, or pending sync items). When
+  // neither is visible, the screen keeps insets.top so its own first content
+  // clears the status bar / Dynamic Island — no dead space, no overlap. `tab`
+  // adds no extra bottom padding beyond the real OS safe area (content is
+  // meant to sit underneath the floating pill and reveal itself on scroll —
+  // see the prop's doc comment); the top inset is now governed solely by
+  // header visibility.
   const defaultEdges: Edge[] = ['top', 'bottom'];
   const resolvedEdges: Edge[] = edges ?? (
-    (isDemoMode || hasPendingSync) ? defaultEdges.filter((e): e is Edge => e !== 'top') : defaultEdges
+    (isDemoMode || syncLineVisible) ? defaultEdges.filter((e): e is Edge => e !== 'top') : defaultEdges
   );
 
   return (

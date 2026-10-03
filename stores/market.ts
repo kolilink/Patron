@@ -9,6 +9,18 @@ import type { MarketPost, MarketComment, MarketCategory } from '@/src/types';
 
 const MARKET_VISIT_KEY = 'market_last_visit';
 
+// Entraide and Annonce were retired from the Le Marché UI. Existing posts in
+// those categories are folded into 'general' at read time (query-level
+// fallback rather than a data migration) so they never disappear or become
+// orphaned behind a filter that no longer exists. Applied to every ingestion
+// point — network fetch, cache read, realtime prepend, and post detail — so
+// the store's `posts` array only ever holds the two surviving categories.
+function normalizePostCategory(post: MarketPost): MarketPost {
+  return post.category === 'entraide' || post.category === 'annonce'
+    ? { ...post, category: 'general' }
+    : post;
+}
+
 interface MarketStore {
   posts: MarketPost[];
   loading: boolean;
@@ -68,7 +80,7 @@ export const useMarketStore = create<MarketStore>((set, get) => ({
     if (get().posts.length === 0) {
       const cached = await getMarketCache() as MarketPost[] | null;
       if (cached) {
-        set({ posts: cached, loading: false, error: null });
+        set({ posts: cached.map(normalizePostCategory), loading: false, error: null });
       } else {
         set({ loading: true, error: null });
       }
@@ -83,7 +95,13 @@ export const useMarketStore = create<MarketStore>((set, get) => ({
         .order('is_pinned', { ascending: false })
         .order('created_at', { ascending: false })
         .limit(50);
-      if (category) q = q.eq('category', category);
+      if (category === 'general') {
+        // Retired categories are folded into 'general' — fetch all three and
+        // remap below so the Général filter shows every remapped post.
+        q = q.in('category', ['general', 'entraide', 'annonce']);
+      } else if (category) {
+        q = q.eq('category', category);
+      }
 
       // Custom isFailure: a Promise.all's own resolved value is an array, not
       // a {error} object, so the default check would never fire — retry
@@ -103,6 +121,7 @@ export const useMarketStore = create<MarketStore>((set, get) => ({
       if (postsRes.error) throw postsRes.error;
 
       let posts = (postsRes.data ?? []) as MarketPost[];
+      posts = posts.map(normalizePostCategory);
 
       // Resolve current author names so old posts reflect name changes
       const authorIds = [...new Set(posts.map(p => p.author_id))];
@@ -143,7 +162,7 @@ export const useMarketStore = create<MarketStore>((set, get) => ({
         const cached = await getMarketCache() as MarketPost[] | null;
         if (cached) {
           const ts = await getCacheTimestamp('market_cache');
-          set({ posts: cached, loading: false, error: null, offline: true, offlineSince: ts });
+          set({ posts: cached.map(normalizePostCategory), loading: false, error: null, offline: true, offlineSince: ts });
           return;
         }
         set({ loading: false, error: null, offline: true, offlineSince: null }); // show empty state, not an error
@@ -154,8 +173,9 @@ export const useMarketStore = create<MarketStore>((set, get) => ({
   },
 
   prependPost: (post) => {
+    const normalized = normalizePostCategory(post);
     set(state => ({
-      posts: [post, ...state.posts.filter(p => p.id !== post.id)],
+      posts: [normalized, ...state.posts.filter(p => p.id !== post.id)],
     }));
   },
 
@@ -264,7 +284,7 @@ export const useMarketStore = create<MarketStore>((set, get) => ({
       }
 
       set({
-        activePost: postRes.data as MarketPost,
+        activePost: normalizePostCategory(postRes.data as MarketPost),
         comments,
         likedCommentIds: (commentLikesRes.data ?? []).map(l => l.comment_id),
         likedPostIds: (postLikesRes.data ?? []).map(l => l.post_id),

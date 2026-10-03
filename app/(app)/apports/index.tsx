@@ -177,168 +177,168 @@ function ApportFormModal({ visible, mode, editing, businessId, currency, saving,
 
   return (
     <>
-    <FormSheet
-      visible={visible}
-      onClose={handleClose}
-      title={FORM_TITLES[mode]}
-      cancelLabel={isViewMode ? 'Fermer' : 'Annuler'}
-      presentationStyle="formSheet"
-      contentContainerStyle={styles.formContent}
-      /* Détails (view mode) is read-only — there is no "Modifier" here
-         either, since a withdrawal (the only kind of entry ever opened in
-         this mode) has no edit RPC/flow anywhere in this app. No footer at
-         all, per the design brief, rather than a button with nowhere real
-         to go. */
-      footer={!isViewMode ? (
-        <View style={styles.modalFooter}>
-          <Button
-            label={saving ? 'Enregistrement…' : FORM_SAVE_LABELS[mode]}
-            onPress={handleSave}
-            loading={saving}
-            fullWidth
-            size="lg"
-          />
-        </View>
-      ) : undefined}
-      accessory={
-        Platform.OS === 'ios' ? (
-          <InputAccessoryView nativeID={APPORT_FORM_SILENT_ACCESSORY_ID}>
-            <View style={{ height: 0 }} />
-          </InputAccessoryView>
-        ) : undefined
-      }
-    >
-          {isViewMode ? (
-            /* An existing entry (usually a withdrawal, which can't be edited)
-               opened only to see it and attach a photo. Money is read-only.
-               Clean, spacious composition — the amount is the hero, everything
-               else is a quiet label/value pair. Order: amount, person, note,
-               date, photo last. */
-            <View style={styles.viewWrap}>
-              <View style={styles.viewHero}>
-                <Text style={styles.viewMicroLabel}>{(editing?.amount ?? 0) < 0 ? 'Montant retiré' : 'Montant apporté'}</Text>
-                {/* Same direction encoding as the list row — signed and
+      <FormSheet
+        visible={visible}
+        onClose={handleClose}
+        title={FORM_TITLES[mode]}
+        cancelLabel={isViewMode ? 'Fermer' : 'Annuler'}
+        presentationStyle="formSheet"
+        contentContainerStyle={styles.formContent}
+        /* Détails (view mode) is read-only — there is no "Modifier" here
+           either, since a withdrawal (the only kind of entry ever opened in
+           this mode) has no edit RPC/flow anywhere in this app. No footer at
+           all, per the design brief, rather than a button with nowhere real
+           to go. */
+        footer={!isViewMode ? (
+          <View style={styles.modalFooter}>
+            <Button
+              label={saving ? 'Enregistrement…' : FORM_SAVE_LABELS[mode]}
+              onPress={handleSave}
+              loading={saving}
+              fullWidth
+              size="lg"
+            />
+          </View>
+        ) : undefined}
+        accessory={
+          Platform.OS === 'ios' ? (
+            <InputAccessoryView nativeID={APPORT_FORM_SILENT_ACCESSORY_ID}>
+              <View style={{ height: 0 }} />
+            </InputAccessoryView>
+          ) : undefined
+        }
+      >
+        {isViewMode ? (
+          /* An existing entry (usually a withdrawal, which can't be edited)
+             opened only to see it and attach a photo. Money is read-only.
+             Clean, spacious composition — the amount is the hero, everything
+             else is a quiet label/value pair. Order: amount, person, note,
+             date, photo last. */
+          <View style={styles.viewWrap}>
+            <View style={styles.viewHero}>
+              <Text style={styles.viewMicroLabel}>{(editing?.amount ?? 0) < 0 ? 'Montant retiré' : 'Montant apporté'}</Text>
+              {/* Same direction encoding as the list row — signed and
                     colored, never a neutral unsigned amount. */}
-                <Text style={[styles.viewAmount, { color: (editing?.amount ?? 0) < 0 ? palette.apportsAmber : palette.apportsGreen }]}>
-                  {(editing?.amount ?? 0) < 0 ? '− ' : '+ '}{formatAmount(Math.abs(editing?.amount ?? 0), currency)}
-                </Text>
-              </View>
+              <Text style={[styles.viewAmount, { color: (editing?.amount ?? 0) < 0 ? palette.apportsAmber : palette.apportsGreen }]}>
+                {(editing?.amount ?? 0) < 0 ? '− ' : '+ '}{formatAmount(Math.abs(editing?.amount ?? 0), currency)}
+              </Text>
+            </View>
 
-              <View style={styles.viewDetails}>
-                {contributorLabel ? (
-                  <View style={styles.viewDetailRow}>
-                    <Text style={styles.viewMicroLabel}>{(editing?.amount ?? 0) < 0 ? 'Versé à' : 'Reçu de'}</Text>
-                    <Text style={styles.viewValue}>{contributorLabel}</Text>
-                  </View>
-                ) : null}
-                {note.trim() ? (
-                  <View style={styles.viewDetailRow}>
-                    <Text style={styles.viewMicroLabel}>Note</Text>
-                    <Text style={styles.viewValue}>{note}</Text>
-                  </View>
-                ) : null}
+            <View style={styles.viewDetails}>
+              {contributorLabel ? (
                 <View style={styles.viewDetailRow}>
-                  <Text style={styles.viewMicroLabel}>Date</Text>
-                  <Text style={styles.viewValue}>{fmtDate(date)}</Text>
+                  <Text style={styles.viewMicroLabel}>{(editing?.amount ?? 0) < 0 ? 'Versé à' : 'Reçu de'}</Text>
+                  <Text style={styles.viewValue}>{contributorLabel}</Text>
                 </View>
+              ) : null}
+              {note.trim() ? (
+                <View style={styles.viewDetailRow}>
+                  <Text style={styles.viewMicroLabel}>Note</Text>
+                  <Text style={styles.viewValue}>{note}</Text>
+                </View>
+              ) : null}
+              <View style={styles.viewDetailRow}>
+                <Text style={styles.viewMicroLabel}>Date</Text>
+                <Text style={styles.viewValue}>{fmtDate(date)}</Text>
               </View>
+            </View>
 
-              {/* Photo — one compact row unless a photo exists, never the
+            {/* Photo — one compact row unless a photo exists, never the
                   large add/edit dropzone; picking one here attaches
                   immediately (see handleViewPickPhoto), no save step. */}
-              {existingProof ? (
-                <View style={styles.viewPhotoRow}>
-                  <ProofThumbnail url={existingProof} />
-                  <Text variant="body" style={{ color: palette.apportsSecondary }}>Photo</Text>
-                </View>
-              ) : photo ? (
-                <View style={styles.viewPhotoRow}>
-                  <ProofThumbnail url={photo.uri} />
-                  <Text variant="body" style={{ color: palette.apportsSecondary }}>Photo ajoutée</Text>
-                </View>
-              ) : (
-                <Pressable onPress={handleViewPickPhoto} style={styles.viewPhotoAddRow}>
-                  <Ionicons name="camera-outline" size={18} color={palette.apportsSecondary} />
-                  <Text variant="body" style={{ color: palette.apportsSecondary }}>Ajouter une photo (optionnel)</Text>
-                </Pressable>
-              )}
-            </View>
-          ) : (
-            <>
-              {/* Amount */}
-              <View style={{ gap: spacing[2] }}>
-                <Text variant="label">{mode === 'withdraw' ? 'Montant retiré' : 'Montant apporté'}</Text>
-                <View style={styles.amountRow}>
-                  <TextInput
-                    style={styles.amountInput}
-                    value={amountStr}
-                    onChangeText={v => setAmountStr(formatAmountInput(v, currency))}
-                    keyboardType="numeric"
-                    placeholder="0"
-                    placeholderTextColor={palette.textDisabled}
-                    selectTextOnFocus
-                    inputAccessoryViewID={Platform.OS === 'ios' ? APPORT_FORM_SILENT_ACCESSORY_ID : undefined}
-                  />
-                  <Text variant="label" style={{ color: palette.textSecondary }}>{currency}</Text>
-                </View>
+            {existingProof ? (
+              <View style={styles.viewPhotoRow}>
+                <ProofThumbnail url={existingProof} />
+                <Text variant="body" style={{ color: palette.apportsSecondary }}>Photo</Text>
               </View>
-
-              {/* Contributor — only shown when there are multiple members */}
-              {multiMember && (
-                <View style={{ gap: spacing[2] }}>
-                  <Text variant="label">{mode === 'withdraw' ? 'Retiré à' : 'De la part de'}</Text>
-                  <Pressable
-                    style={[styles.pickerBtn, { borderColor: palette.border }]}
-                    onPress={() => setShowMemberPicker(true)}
-                  >
-                    <Ionicons name="person-outline" size={16} color={palette.textSecondary} />
-                    <Text variant="body" style={{ flex: 1, color: contributorLabel ? palette.textPrimary : palette.textDisabled }}>
-                      {contributorLabel ?? (mode === 'withdraw' ? 'Optionnel — à qui a-t-on repris l\'argent ?' : 'Optionnel — qui a apporté ?')}
-                    </Text>
-                    <Ionicons name="chevron-down" size={16} color={palette.textSecondary} />
-                  </Pressable>
-                  {!selectedMemberId && (
-                    <TextInput
-                      style={styles.textInput}
-                      value={sourceName}
-                      onChangeText={setSourceName}
-                      placeholder="Ou saisissez un nom libre…"
-                      placeholderTextColor={palette.textDisabled}
-                    />
-                  )}
-                </View>
-              )}
-
-              {/* Note */}
-              <View style={{ gap: spacing[2] }}>
-                <Text variant="label">Note <Text variant="caption" color="secondary">(optionnel)</Text></Text>
+            ) : photo ? (
+              <View style={styles.viewPhotoRow}>
+                <ProofThumbnail url={photo.uri} />
+                <Text variant="body" style={{ color: palette.apportsSecondary }}>Photo ajoutée</Text>
+              </View>
+            ) : (
+              <Pressable onPress={handleViewPickPhoto} style={styles.viewPhotoAddRow}>
+                <Ionicons name="camera-outline" size={18} color={palette.apportsSecondary} />
+                <Text variant="body" style={{ color: palette.apportsSecondary }}>Ajouter une photo (optionnel)</Text>
+              </Pressable>
+            )}
+          </View>
+        ) : (
+          <>
+            {/* Amount */}
+            <View style={{ gap: spacing[2] }}>
+              <Text variant="label">{mode === 'withdraw' ? 'Montant retiré' : 'Montant apporté'}</Text>
+              <View style={styles.amountRow}>
                 <TextInput
-                  style={styles.textInput}
-                  value={note}
-                  onChangeText={setNote}
-                  placeholder=""
+                  style={styles.amountInput}
+                  value={amountStr}
+                  onChangeText={v => setAmountStr(formatAmountInput(v, currency))}
+                  keyboardType="numeric"
+                  placeholder="0"
                   placeholderTextColor={palette.textDisabled}
+                  selectTextOnFocus
+                  inputAccessoryViewID={Platform.OS === 'ios' ? APPORT_FORM_SILENT_ACCESSORY_ID : undefined}
                 />
+                <Text variant="label" style={{ color: palette.textSecondary }}>{currency}</Text>
               </View>
+            </View>
 
-              <DatePickerField label="Date" value={date} onChange={setDate} maxToday />
-            </>
-          )}
+            {/* Contributor — only shown when there are multiple members */}
+            {multiMember && (
+              <View style={{ gap: spacing[2] }}>
+                <Text variant="label">{mode === 'withdraw' ? 'Retiré à' : 'De la part de'}</Text>
+                <Pressable
+                  style={[styles.pickerBtn, { borderColor: palette.border }]}
+                  onPress={() => setShowMemberPicker(true)}
+                >
+                  <Ionicons name="person-outline" size={16} color={palette.textSecondary} />
+                  <Text variant="body" style={{ flex: 1, color: contributorLabel ? palette.textPrimary : palette.textDisabled }}>
+                    {contributorLabel ?? (mode === 'withdraw' ? 'Optionnel — à qui a-t-on repris l\'argent ?' : 'Optionnel — qui a apporté ?')}
+                  </Text>
+                  <Ionicons name="chevron-down" size={16} color={palette.textSecondary} />
+                </Pressable>
+                {!selectedMemberId && (
+                  <TextInput
+                    style={styles.textInput}
+                    value={sourceName}
+                    onChangeText={setSourceName}
+                    placeholder="Ou saisissez un nom libre…"
+                    placeholderTextColor={palette.textDisabled}
+                  />
+                )}
+              </View>
+            )}
 
-          {/* Photo well — the receipt as a natural field of the form. Not
+            {/* Note */}
+            <View style={{ gap: spacing[2] }}>
+              <Text variant="label">Note <Text variant="caption" color="secondary">(optionnel)</Text></Text>
+              <TextInput
+                style={styles.textInput}
+                value={note}
+                onChangeText={setNote}
+                placeholder=""
+                placeholderTextColor={palette.textDisabled}
+              />
+            </View>
+
+            <DatePickerField label="Date" value={date} onChange={setDate} maxToday />
+          </>
+        )}
+
+        {/* Photo well — the receipt as a natural field of the form. Not
               rendered in view mode, which has its own compact photo row
               above (inside the isViewMode branch). */}
-          {!isViewMode && (
-            <ProofPhotoField
-              existingUrl={existingProof}
-              existingWidth={editing?.proof_image_width}
-              existingHeight={editing?.proof_image_height}
-              value={photo}
-              onChange={setPhoto}
-              disabled={offline}
-            />
-          )}
-    </FormSheet>
+        {!isViewMode && (
+          <ProofPhotoField
+            existingUrl={existingProof}
+            existingWidth={editing?.proof_image_width}
+            existingHeight={editing?.proof_image_height}
+            value={photo}
+            onChange={setPhoto}
+            disabled={offline}
+          />
+        )}
+      </FormSheet>
 
       {/* Member picker overlay — no keyboard field of its own, but shares
           this component with one (the amount/source TextInputs above), so
@@ -567,6 +567,12 @@ export default function AportsScreen() {
 
       {loading && apports.length === 0 ? (
         <SkeletonList count={4} />
+      ) : !loading && apports.length === 0 && offline ? (
+        <View style={styles.empty}>
+          <Text variant="body" color="secondary" style={{ textAlign: 'center' }}>
+            Données non disponibles hors ligne. Ouvrez l'application en ligne une première fois pour activer le mode hors ligne.
+          </Text>
+        </View>
       ) : (
         <FlatList
           data={filtered}
@@ -782,19 +788,19 @@ function makeStyles(p: Palette) {
     },
     // View mode (read-only entry + image) — Ive-clean: hero amount, quiet
     // micro-labels, generous rhythm.
-    viewWrap:       { gap: spacing[7] },
-    viewHero:       { gap: spacing[2] },
+    viewWrap: { gap: spacing[7] },
+    viewHero: { gap: spacing[2] },
     // No lineHeight was set here before — it silently inherited the default
     // Text variant's 24px line box on an 11px label, ~2x looser leading than
     // intended, on top of fontWeight being a no-op. 16 matches this app's
     // own `overline` variant (typography.ts), the closest existing style to
     // this uppercase micro-label's actual size/intent.
     viewMicroLabel: { fontFamily: fontFamily.semibold, fontSize: 11, lineHeight: 16, color: p.apportsSecondary, letterSpacing: 0.8, textTransform: 'uppercase' as const },
-    viewAmount:     { fontFamily: fontFamily.bold, fontSize: 36, color: p.apportsInk, letterSpacing: -0.5, lineHeight: 46 },
-    viewDetails:    { gap: spacing[5] },
-    viewDetailRow:  { gap: spacing[1] },
-    viewValue:      { fontFamily: fontFamily.medium, fontSize: 17, color: p.apportsInk, lineHeight: 24 },
-    viewPhotoRow:    { flexDirection: 'row', alignItems: 'center', gap: spacing[3] },
+    viewAmount: { fontFamily: fontFamily.bold, fontSize: 36, color: p.apportsInk, letterSpacing: -0.5, lineHeight: 46 },
+    viewDetails: { gap: spacing[5] },
+    viewDetailRow: { gap: spacing[1] },
+    viewValue: { fontFamily: fontFamily.medium, fontSize: 17, color: p.apportsInk, lineHeight: 24 },
+    viewPhotoRow: { flexDirection: 'row', alignItems: 'center', gap: spacing[3] },
     viewPhotoAddRow: { flexDirection: 'row', alignItems: 'center', gap: spacing[2], paddingVertical: spacing[1] },
 
     amountRow: { flexDirection: 'row', alignItems: 'center', gap: spacing[3] },

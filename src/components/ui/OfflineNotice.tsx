@@ -27,20 +27,17 @@ const RETRY_INTERVAL_MS = 15000;
 // still want it) — just "Hors ligne", nothing else.
 //
 // §8 of the offline-first rewrite: recolored from amber (palette.warning)
-// to the same quiet gray treatment as SyncStatusLine, and the old
-// suppress-while-SyncBanner-is-up condition (`if (pendingCount > 0) return
-// null`) is dropped. That condition relied on SyncBanner and this notice
-// being mutually exclusive by construction — SyncBanner only ever rendered
-// when pendingCount > 0, this only when pendingCount === 0 — which broke
-// the moment SyncStatusLine (SyncBanner's replacement) started rendering
-// in the CLEAN state too ("Tout est synchronisé ✓"), a state this notice
-// can legitimately coexist with: a screen's own read can be stale
-// (offline: true, this notice's actual trigger) while the write queue is
-// genuinely empty (pendingCount === 0, SyncStatusLine's clean state) — two
-// different, both-true signals, not a contradiction, once neither is
-// alarm-colored. Keeping the old suppression would have hidden a real,
-// separate signal (this screen's own data may be stale) for no reason
-// other than an accident of the old component's specific trigger shape.
+// to the same quiet gray treatment as SyncStatusLine. Final ownership rule
+// — exactly one status line ever renders, and it's never a double-up:
+//   • online  → SyncStatusLine owns display (usually nothing at all — it
+//     returns null in the clean state and only shows the syncing or 7-day
+//     escalation lines while online);
+//   • offline → this notice owns display ("Hors ligne", nothing else),
+//     regardless of whether any items are waiting to sync.
+// No mutual-exclusion logic is needed here: SyncStatusLine never renders
+// while offline, so this notice is the sole voice in that state. The
+// pending-vs-empty distinction is engineering state the vendor can't act
+// on, so it's collapsed into the single two-word line.
 export function OfflineNotice({ offlineSince: _offlineSince, onRetry }: Props) {
   const { palette } = useTheme();
   const onRetryRef = useRef(onRetry);

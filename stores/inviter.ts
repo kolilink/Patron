@@ -119,18 +119,23 @@ export const useInviterStore = create<InviterStore>((set, get) => ({
                 used_by_name: string | null;
                 revoked_at: string | null;
             }>;
+            // Revoked invites no longer exist from the user's point of view —
+            // they are deleted server-side by revoke_consumer_invite, so any
+            // stale row the RPC still returns is dropped here.
             set({
                 loading: false,
-                invites: rows.map(r => ({
-                    id: r.id,
-                    status: r.status as ConsumerInvite['status'],
-                    created_at: r.created_at,
-                    expires_at: r.expires_at,
-                    used_at: r.used_at,
-                    used_by: r.used_by,
-                    used_by_name: r.used_by_name,
-                    revoked_at: r.revoked_at,
-                })),
+                invites: rows
+                    .map(r => ({
+                        id: r.id,
+                        status: r.status as ConsumerInvite['status'],
+                        created_at: r.created_at,
+                        expires_at: r.expires_at,
+                        used_at: r.used_at,
+                        used_by: r.used_by,
+                        used_by_name: r.used_by_name,
+                        revoked_at: r.revoked_at,
+                    }))
+                    .filter(i => i.status !== 'revoked'),
             });
         } catch (err) {
             set({ loading: false, error: isNetworkError(err) ? 'Erreur de réseau. Vérifiez votre connexion.' : 'Impossible de charger vos invitations' });
@@ -174,8 +179,11 @@ export const useInviterStore = create<InviterStore>((set, get) => ({
             }
             const revoked = Boolean(data);
             if (revoked) {
+                // Revoked means deleted: drop the row entirely so it leaves the
+                // screen the instant the user revokes it — not a "Révoquée"
+                // badge lingering behind.
                 set(state => ({
-                    invites: state.invites.map(i => (i.id === inviteId ? { ...i, status: 'revoked', revoked_at: new Date().toISOString() } : i)),
+                    invites: state.invites.filter(i => i.id !== inviteId),
                 }));
             }
             return revoked;

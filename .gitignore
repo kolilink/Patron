@@ -46,3 +46,6 @@ yarn-error.*
 
 # MCP config (contains secrets)
 .mcp.json
+
+# supabase CLI generated temp files (tracked by mistake earlier — ignore, don't delete)
+supabase/.temp/

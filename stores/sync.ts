@@ -14,11 +14,12 @@ interface SyncStore {
   pendingCount: number;
   syncing: boolean;
   lastResult: SyncResult | null;
-  // Set whenever a sync pass leaves the queue genuinely empty — drives the
-  // quiet sync line's "Tout est synchronisé ✓ · HH:MM" timestamp (§8).
+  // Set whenever a sync pass leaves the queue genuinely empty. No longer
+  // drives any UI — the sync line (§8) is silent when online — but kept as
+  // the last moment everything was actually confirmed synced (observability).
   // Never set on a pass that still leaves items pending, so it always
-  // reflects the last moment everything was actually confirmed synced,
-  // not just "the last time sync() happened to run."
+  // reflects the last confirmed-synced instant, not just "the last time
+  // sync() happened to run."
   lastSyncedAt: string | null;
   refreshCount: () => Promise<void>;
   sync: () => Promise<SyncResult>;

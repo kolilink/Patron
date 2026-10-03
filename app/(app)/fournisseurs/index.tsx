@@ -365,7 +365,7 @@ export default function FournisseursScreen() {
 
   const { products, fetchProducts } = useProductStore();
   const {
-    fournisseurs, commandes, debts, loading, saving, error, offline, offlineSince,
+    fournisseurs, commandes, debts, loading, saving, offline, offlineSince,
     fetchFournisseurs, updateFournisseur, deleteFournisseur,
     fetchCommandes, fetchDebts, createDebt,
   } = useFournisseursStore();
@@ -597,8 +597,8 @@ export default function FournisseursScreen() {
 
       {loading && fournisseurs.length === 0 ? (
         <SkeletonList count={6} />
-      ) : !loading && fournisseurs.length === 0 && error ? (
-        <View style={styles.empty}><Text variant="body" color="secondary" style={{ textAlign: 'center' }}>Données non disponibles hors ligne</Text></View>
+      ) : !loading && fournisseurs.length === 0 && offline ? (
+        <View style={styles.empty}><Text variant="body" color="secondary" style={{ textAlign: 'center' }}>Données non disponibles hors ligne. Ouvrez l'application en ligne une première fois pour activer le mode hors ligne.</Text></View>
       ) : fournisseurs.length === 0 ? (
         <EmptyState
           icon="cube-outline"
