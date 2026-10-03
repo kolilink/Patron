@@ -10,6 +10,15 @@ jest.mock('@/lib/sync', () => ({
     isNetworkError: jest.fn(() => false),
     withTimeout: jest.fn((p: unknown) => p),
 }));
+// stores/inviter.ts now imports notifyEvent (→ supabase functions invoke) and
+// useAuthStore (→ auth store graph incl. expo-linking) for the B1 push on a
+// fresh redemption. Neither is exercised by these tests — stub them out.
+jest.mock('@/src/utils/notifications', () => ({ notifyEvent: jest.fn() }));
+jest.mock('@/stores/auth', () => ({
+    useAuthStore: {
+        getState: jest.fn(() => ({ session: { activeBusiness: { id: null } } })),
+    },
+}));
 
 const mockRpc = jest.fn();
 jest.mock('@/lib/supabase', () => ({ supabase: { rpc: mockRpc } }));

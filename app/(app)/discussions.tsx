@@ -24,7 +24,6 @@ import Animated, {
   runOnJS,
 } from 'react-native-reanimated';
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
-import { Image } from 'expo-image';
 import { Screen } from '@/src/components/ui/Screen';
 import { FormSheet } from '@/src/components/ui/FormSheet';
 import { EmptyState } from '@/src/components/ui/EmptyState';
@@ -450,11 +449,6 @@ export default function DiscussionsScreen() {
   const userId = session?.user.id ?? '';
   const userName = session?.user.name || generateFallbackName(userId);
   const businessName = session?.activeBusiness?.name ?? '';
-  // Jobs de lancement - "Mon commerce (public card)": a read-only identity
-  // card for the active business (nom + avatar + activité). No catalogue,
-  // prices, currency or contact surface here (HORS SCOPE).
-  const businessType = session?.activeBusiness?.type ?? null;
-  const businessLogo = session?.activeBusiness?.logo_url ?? null;
   const role = session?.activeMembership?.role;
   const isAdminOrManager = role === 'administrateur' || role === 'manager';
   const membres = useEquipeStore(s => s.membres);
@@ -568,6 +562,14 @@ export default function DiscussionsScreen() {
   const [addPartnerLoading, setAddPartnerLoading] = useState(false);
   const [addPartnerError, setAddPartnerError] = useState('');
   const [addPartnerSuccess, setAddPartnerSuccess] = useState('');
+  // Phase 5 — "J'ai un code": typed entry of a friend's 10-char consumer invite
+  // code (distinct from the business partnership code above). Reached from the
+  // quiet "J'ai un code" link under "+ Inviter" on the empty Amis state.
+  const [showRedeemCode, setShowRedeemCode] = useState(false);
+  const [redeemCodeInput, setRedeemCodeInput] = useState('');
+  const [redeemCodeError, setRedeemCodeError] = useState('');
+  const [redeemCodeLoading, setRedeemCodeLoading] = useState(false);
+  const redeemCode = useInviterStore(s => s.redeemCode);
 
   // ─── Fade transition between tabs ─────────────────────────────────────────
   const contentAlpha = useSharedValue(1);
@@ -817,13 +819,42 @@ export default function DiscussionsScreen() {
     }
   }, [businessId, businessName, userId, acceptRequest, loadPartnerships]);
 
-  const handleDeclineRequest = useCallback(async (partnershipId: string) => {
+  const handleDeclineRequest = useCallback(async (partnershipId: string, requesterBusinessId: string) => {
     try {
-      await declineRequest(partnershipId, businessId);
+      // B4 — decline is no longer a silent permanent block: declineRequest
+      // now notifies the requester (partnership_declined) and, via
+      // migration_v216, the requester may re-request after the 7-day cooldown.
+      await declineRequest(partnershipId, businessId, businessName, requesterBusinessId);
     } catch {
       // silent
     }
-  }, [businessId, declineRequest]);
+  }, [businessId, businessName, declineRequest]);
+
+  // Phase 5 — "J'ai un code" typed redemption. Every failure (wrong code,
+  // expired, already-redeemed, self-redeem) resolves to the same single "tu"
+  // message the spec prescribes — the server intentionally does not
+  // distinguish codes for anti-enumeration.
+  const handleRedeemCode = useCallback(async () => {
+    if (!redeemCodeInput.trim()) return;
+    setRedeemCodeLoading(true);
+    setRedeemCodeError('');
+    try {
+      const result = await redeemCode(redeemCodeInput);
+      if (!result) {
+        setRedeemCodeError('Ce code ne fonctionne pas. Vérifie et réessaie.');
+        return;
+      }
+      // Success: the joiner now sees the inviter. Refetch the friend list so
+      // the inviter appears immediately, then close the sheet.
+      await fetchMyFriends();
+      setRedeemCodeInput('');
+      setShowRedeemCode(false);
+    } catch {
+      setRedeemCodeError('Ce code ne fonctionne pas. Vérifie et réessaie.');
+    } finally {
+      setRedeemCodeLoading(false);
+    }
+  }, [redeemCodeInput, redeemCode, fetchMyFriends]);
 
   const startRecording = async () => {
     try {
@@ -1127,41 +1158,6 @@ export default function DiscussionsScreen() {
           {activeTab === 'boutique' ? (
             /* ── Ma Boutique ── */
             <>
-              {/* Jobs de lancement — "Mon commerce (public card)": a read-only
-                  identity card (nom, activité, monnaie, logo) pinned above the
-                  private team chat. Public visibility stays off by default; no
-                  catalogue or prices here (HORS SCOPE). */}
-              <View style={styles.commerceCard}>
-                <View style={styles.commerceCardTop}>
-                  <View style={styles.commerceAvatar}>
-                    {businessLogo ? (
-                      <Image
-                        source={{ uri: businessLogo }}
-                        style={styles.commerceLogo}
-                        contentFit="cover"
-                        transition={150}
-                      />
-                    ) : (
-                      <Text style={styles.commerceAvatarText} allowFontScaling={false}>
-                        {(businessName || 'P').charAt(0).toUpperCase()}
-                      </Text>
-                    )}
-                  </View>
-                  <View style={{ flex: 1, minWidth: 0 }}>
-                    <Text variant="h4" numberOfLines={1}>{businessName || 'Mon commerce'}</Text>
-                    <View style={styles.commerceMetaRow}>
-                      {businessType ? (
-                        <View style={[styles.commercePill, { backgroundColor: palette.primaryLight }]}>
-                          <Text variant="caption" style={{ color: palette.primaryDark }} numberOfLines={1}>
-                            {businessType}
-                          </Text>
-                        </View>
-                      ) : null}
-                    </View>
-                  </View>
-                </View>
-              </View>
-
               {chatOffline && (
                 <View style={{ paddingHorizontal: spacing[4], paddingTop: spacing[1] }}>
                   <Text variant="caption" color="secondary">Hors ligne — dernières données connues</Text>
@@ -1353,7 +1349,7 @@ export default function DiscussionsScreen() {
                   accessibilityLabel="Ajouter un ami"
                   accessibilityRole="button"
                 >
-                  <Ionicons name="person-add-outline" size={22} color={palette.primary} />
+                  <Ionicons name="person-add-outline" size={18} color={palette.primary} />
                 </Pressable>
               </View>
 
@@ -1368,6 +1364,8 @@ export default function DiscussionsScreen() {
                   subtitle="Invitez un commerçant ami pour discuter ici."
                   actionLabel="+ Inviter"
                   onAction={() => setShowShareCode(true)}
+                  linkLabel="J'ai un code"
+                  onLink={() => { setShowRedeemCode(true); setRedeemCodeError(''); }}
                 />
               ) : (
                 /* ── Has partners or consumer friends ── */
@@ -1419,7 +1417,7 @@ export default function DiscussionsScreen() {
                               <Text variant="caption" style={{ color: palette.textInverse, fontWeight: '600' }}>Accepter</Text>
                             </Pressable>
                             <Pressable
-                              onPress={() => handleDeclineRequest(req.id)}
+                              onPress={() => handleDeclineRequest(req.id, req.requester_business_id)}
                               style={({ pressed }) => [styles.amisDeclineBtn, pressed && { opacity: 0.6 }]}
                             >
                               <Text variant="caption" color="secondary">Refuser</Text>
@@ -1704,6 +1702,50 @@ export default function DiscussionsScreen() {
                 </Text>
               </Pressable>
             </View>
+          </View>
+        </FormSheet>
+
+        {/* ── "J'ai un code" typed redemption modal — reached from the quiet
+          "J'ai un code" link under "+ Inviter" on the empty Amis state. This
+          is the consumer invite-code path (stores/inviter.redeemCode): a
+          friend pastes/typs the 10-char code they received; on success their
+          inviter appears in Amis. Distinct from "Ajouter un ami" above, which
+          is the B2B partnership code. ── */}
+        <FormSheet
+          visible={showRedeemCode}
+          onClose={() => { setShowRedeemCode(false); setRedeemCodeInput(''); setRedeemCodeError(''); }}
+          title="J'ai un code"
+          cancelLabel="Fermer"
+        >
+          <View style={styles.modalContent}>
+            <TextInput
+              style={styles.amisCodeInput}
+              value={redeemCodeInput}
+              onChangeText={t => { setRedeemCodeInput(t.toUpperCase()); setRedeemCodeError(''); }}
+              placeholder="Code reçu (10 caractères)"
+              placeholderTextColor={palette.textSecondary}
+              autoCapitalize="characters"
+              autoCorrect={false}
+              autoFocus
+              returnKeyType="send"
+              onSubmitEditing={handleRedeemCode}
+            />
+            {redeemCodeError ? (
+              <Text variant="caption" style={{ color: palette.warning }}>{redeemCodeError}</Text>
+            ) : null}
+            <Pressable
+              onPress={handleRedeemCode}
+              disabled={redeemCodeLoading || !redeemCodeInput.trim()}
+              style={({ pressed }) => [
+                styles.amisModalBtn,
+                (redeemCodeLoading || !redeemCodeInput.trim()) && { opacity: 0.4 },
+                pressed && { opacity: 0.75 },
+              ]}
+            >
+              <Text style={{ color: palette.textInverse, fontWeight: '600', fontSize: 16 }}>
+                {redeemCodeLoading ? 'Vérification…' : 'Utiliser ce code'}
+              </Text>
+            </Pressable>
           </View>
         </FormSheet>
 
@@ -2099,55 +2141,6 @@ function makeStyles(p: Palette) {
     },
     modalCatChipActive: { backgroundColor: p.primary, borderColor: p.primary },
 
-    // Mon commerce (public card) — Jobs de lancement
-    commerceCard: {
-      marginHorizontal: spacing[4],
-      marginTop: spacing[3],
-      marginBottom: spacing[1],
-      backgroundColor: p.surface,
-      borderRadius: radius.lg,
-      borderWidth: 1,
-      borderColor: p.border,
-      overflow: 'hidden' as const,
-    },
-    commerceCardTop: {
-      flexDirection: 'row' as const,
-      alignItems: 'center' as const,
-      gap: spacing[3],
-      paddingHorizontal: spacing[4],
-      paddingVertical: spacing[4],
-    },
-    commerceAvatar: {
-      width: 48,
-      height: 48,
-      borderRadius: 24,
-      backgroundColor: p.primaryLight,
-      alignItems: 'center' as const,
-      justifyContent: 'center' as const,
-      overflow: 'hidden' as const,
-      flexShrink: 0,
-    },
-    commerceLogo: {
-      width: '100%' as const,
-      height: '100%' as const,
-    },
-    commerceAvatarText: {
-      fontSize: 20,
-      fontWeight: '700' as const,
-      color: p.primary,
-    },
-    commerceMetaRow: {
-      flexDirection: 'row' as const,
-      alignItems: 'center' as const,
-      gap: spacing[2],
-      marginTop: spacing[1],
-    },
-    commercePill: {
-      paddingHorizontal: spacing[2],
-      paddingVertical: 2,
-      borderRadius: radius.full,
-      maxWidth: 160,
-    },
     // Amis tab
     amisHeader: {
       flexDirection: 'row' as const,
@@ -2159,8 +2152,8 @@ function makeStyles(p: Palette) {
       backgroundColor: p.background,
     },
     amisIconBtn: {
-      width: 40,
-      height: 40,
+      width: 44,
+      height: 44,
       alignItems: 'center' as const,
       justifyContent: 'center' as const,
     },

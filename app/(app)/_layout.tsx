@@ -19,11 +19,14 @@ import { ActivationPrimingSheet } from '@/src/components/ActivationPrimingSheet'
 import { Text } from '@/src/components/ui/Text';
 import { useTheme, spacing } from '@/src/theme';
 import { useAuthStore } from '@/stores/auth';
+import { useInviterStore } from '@/stores/inviter';
+import { getPendingInviteToken, clearPendingInviteToken } from '@/lib/inviteLink';
 import { useChatStore } from '@/stores/chat';
 import { useProductStore } from '@/stores/products';
 import { useVentesStore } from '@/stores/ventes';
 import { useExpensesStore } from '@/stores/expenses';
 import { useSyncStore } from '@/stores/sync';
+import { useSupportChatStore } from '@/stores/supportChat';
 import { toast } from '@/stores/toast';
 import { debounceAppStateHandler } from '@/lib/sync';
 import { SyncStatusLine } from '@/src/components/ui/SyncStatusLine';
@@ -210,6 +213,29 @@ export default function AppLayout() {
       router.replace('/(app)/acces-supprime');
     }
   }, [removedBusinessName]);
+
+  // B3 — cold-start race: a pending invite token (captured on this device
+  // before/while the session was being restored) must be redeemed as soon as
+  // the restored session has an active business, instead of being orphaned
+  // while the app silently lands on Home. Runs once per restored business id;
+  // redemption is idempotent server-side so a re-fire clears the token
+  // without double-pushing.
+  const coldStartInviteHandledFor = useRef<string | null>(null);
+  useEffect(() => {
+    const businessId = session?.activeBusiness?.id;
+    if (!businessId || !session) return;
+    if (coldStartInviteHandledFor.current === businessId) return;
+    coldStartInviteHandledFor.current = businessId;
+    (async () => {
+      const token = await getPendingInviteToken();
+      if (!token) return;
+      const resolved = await useInviterStore.getState().resolveInvite(token, '');
+      if (resolved) {
+        await clearPendingInviteToken();
+        router.replace('/(app)/discussions?tab=amis');
+      }
+    })();
+  }, [session?.activeBusiness?.id]);
 
   useEffect(() => {
     if (!dismissedFromBusiness) return;
@@ -465,6 +491,11 @@ export default function AppLayout() {
       const isConnected = state.isConnected === true;
       if (shouldKickOnConnectivityChange(wasConnected, isConnected)) {
         useSyncStore.getState().kick();
+        // A reconnect is also the moment to flush any support messages the
+        // merchant wrote while offline — drainSupportQueue otherwise only
+        // runs from load() on screen focus, so a queued message would sit
+        // undelivered until the next refocus.
+        void useSupportChatStore.getState().drainSupportQueue();
       }
       wasConnected = isConnected;
     });

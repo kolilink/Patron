@@ -1,55 +1,40 @@
 import { useEffect, useMemo, useRef, useState } from 'react';
-import { Animated, InteractionManager, Platform, Pressable, StyleSheet, View } from 'react-native';
+import { Animated, InteractionManager, Platform, Pressable, StyleSheet, View, useWindowDimensions } from 'react-native';
 import { router } from 'expo-router';
 import { Screen } from '@/src/components/ui/Screen';
 import { Text } from '@/src/components/ui/Text';
 import { useTheme, spacing, fontFamily } from '@/src/theme';
 import type { Palette } from '@/src/theme';
-import { useAuthStore, getLastPhone, getLastBusinessName } from '@/stores/auth';
+import { useAuthStore, getLastBusinessName } from '@/stores/auth';
 
-// Biometric-only re-entry: Face ID/Touch ID fires automatically on mount, no
-// tap required. A soft failure (accidental cancel, an interrupted prompt, a
-// bad read, or a restore-after-success network hiccup) shows one calm inline
-// line and lets the same tap-anywhere gesture retry; there is no PIN in this
-// app, so "Utiliser le code" is the WhatsApp OTP re-login already used
-// elsewhere (stores/auth.ts has never had a device-passcode fallback here —
-// see unlockWithBiometric's disableDeviceFallback — this button is the real,
-// always-available escape hatch that fills the same role). A hard failure
-// (no hardware, not enrolled) skips this screen's UI entirely and goes
-// straight there too, per the same function.
-type Phase = 'prompting' | 'failed' | 'offline';
-
+// OS-native re-entry only: Face ID/Touch ID (or the OS's own device-credential
+// fallback, since unlockWithBiometric uses disableDeviceFallback: false) fires
+// automatically on mount. The OS renders its own retry/fallback UI ("Try
+// Again" / "Enter Passcode" / the Android system prompt), so the app shows no
+// error copy and no "use a code instead" escape hatch — there is no app-level
+// code fallback anymore. If the device has neither a biometric nor a device
+// credential enrolled, unlockWithBiometric restores the local session cache
+// and the routing guard passes straight through, so a dead lock screen is
+// never shown. The full-screen opaque Screen below is also the recent-apps
+// privacy shield, even when auth itself is skipped.
 export default function VerrouilleScreen() {
   const { palette } = useTheme();
-  const styles = useMemo(() => makeStyles(palette), [palette]);
+  const { height } = useWindowDimensions();
+  const styles = useMemo(() => makeStyles(palette, height), [palette, height]);
   const unlockWithBiometric = useAuthStore(s => s.unlockWithBiometric);
 
-  const [phase, setPhase] = useState<Phase>('prompting');
-  const [lastPhone, setLastPhone] = useState<string | null>(null);
   const [businessName, setBusinessName] = useState<string | null>(null);
   // Session is cleared while locked (see stores/auth.ts's lock()), so the
   // business name shown here can't come from the live session — it's read
-  // from the same small SecureStore cache getLastPhone already established
-  // for exactly this "screen has no session yet" situation.
+  // from the small SecureStore cache established for exactly this "screen has
+  // no session yet" situation.
   const fadeOpacity = useRef(new Animated.Value(1)).current;
 
   useEffect(() => {
-    getLastPhone().then(setLastPhone);
     getLastBusinessName().then(setBusinessName);
   }, []);
 
-  async function degradeToCode() {
-    // Deliberately NOT logout(): that would wipe the SecureStore session cache
-    // and bio refresh token, forcing a full WhatsApp OTP re-login even though
-    // the account is still valid. degradeLockToCode() clears only the
-    // in-memory session + soft-lock flag; the persisted session stays intact
-    // until a NEW login actually succeeds.
-    await useAuthStore.getState().degradeLockToCode();
-    router.replace({ pathname: '/(welcome)/connexion', params: lastPhone ? { prefillPhone: lastPhone } : {} });
-  }
-
   async function attemptBiometric() {
-    setPhase('prompting');
     const result = await unlockWithBiometric();
     if (result === 'unlocked') {
       // Fast fade, no intermediate success/checkmark screen — the OS already
@@ -58,43 +43,27 @@ export default function VerrouilleScreen() {
         const activeBusiness = useAuthStore.getState().session?.activeBusiness;
         router.replace(activeBusiness ? '/(app)/(tabs)/' : '/(app)/onboarding/');
       });
-      return;
     }
-    // 'unavailable' (no hardware/enrollment, or a hard failure) is the only
-    // case that skips this screen's UI entirely — no usable biometric means
-    // the one real fallback is the code flow.
-    if (result === 'unavailable') { degradeToCode(); return; }
-    // 'restore-failed-offline' — biometric SUCCEEDED but the session couldn't
-    // be restored because the device was offline and there was no encrypted
-    // cache. Honest copy: "Hors ligne", never "Non reconnu".
-    if (result === 'restore-failed-offline') { setPhase('offline'); return; }
-    setPhase('failed'); // 'retryable' or 'restore-failed' (genuine auth rejection)
+    // 'retryable' (a cancel/interruption) leaves the screen as-is — the OS owns
+    // the retry surface, so the app shows no duplicated error copy and simply
+    // waits for the next tap.
   }
 
   useEffect(() => {
     // Firing authenticateAsync while this screen's own mount/route transition
     // is still animating makes the OS silently reject the prompt with no
     // native UI at all — waiting for interactions to finish avoids racing it.
-    // But a stuck/never-resolving interaction handle (seen intermittently on
-    // both platforms) would then delay the prompt indefinitely with no
-    // visible sign anything is wrong — race it against a flat timeout so the
-    // attempt always fires within ~600ms either way.
+    // A stuck/never-resolving interaction handle would then delay the prompt
+    // indefinitely, so it's raced against a flat timeout: the attempt always
+    // fires within ~600ms either way.
     //
     // Android needs a longer ceiling than iOS: on the background-return path
     // (app/(app)/_layout.tsx's AppState listener calling lock() the instant
-    // AppState reports 'active'), Android's own window-focus restoration
-    // after returning from background runs on a native timeline separate
-    // from this InteractionManager check — on a low-end/low-memory device
-    // it can still be settling once the 600ms fallback used to fire,
-    // and BiometricPrompt auto-cancels (surfaces as error: 'user_cancel',
-    // indistinguishable from a real dismissal) if invoked before the window
-    // actually has focus. Confirmed via a production Sentry event
-    // (Samsung Galaxy A14 5G, Android 15, "device.class: low", 985MB free)
-    // where the user reported the fingerprint itself succeeded yet still
-    // landed back on this retry screen. This is a probabilistic OS race,
-    // not something a fixed delay eliminates outright — just widens the
-    // margin. iOS hasn't shown this failure mode, so it keeps the tighter
-    // bound instead of slowing every unlock down for everyone.
+    // AppState reports 'active'), Android's own window-focus restoration runs
+    // on a native timeline separate from this InteractionManager check, and
+    // BiometricPrompt auto-cancels (error: 'user_cancel') if invoked before
+    // the window actually has focus. iOS hasn't shown this failure mode, so it
+    // keeps the tighter bound.
     let fired = false;
     const fire = () => {
       if (fired) return;
@@ -112,16 +81,11 @@ export default function VerrouilleScreen() {
   return (
     <Screen>
       <Animated.View style={[styles.content, { opacity: fadeOpacity }]}>
-        {/* Tapping anywhere in the failed state retries — "réessayez" needs
-            a real, generous gesture behind it, not a hidden button. Inert
-            while genuinely prompting, so it can't double-fire a native
-            sheet that may already be up (unlockWithBiometric's own
-            in-flight guard would just no-op it anyway, but disabling here
-            avoids a confusing extra tap doing nothing visible). */}
-        <Pressable
-          style={styles.centerBlock}
-          onPress={phase === 'failed' || phase === 'offline' ? attemptBiometric : undefined}
-        >
+        {/* Tapping anywhere re-invokes the OS prompt (a cancel/interruption
+            leaves the user here with no duplicated error text). unlockWithBiometric's
+            own in-flight guard drops a stacked call while a native sheet is
+            already up, so this can't double-fire a prompt. */}
+        <Pressable style={styles.centerBlock} onPress={attemptBiometric}>
           <View style={styles.mark}>
             <Text style={styles.markLetter}>P</Text>
           </View>
@@ -130,33 +94,24 @@ export default function VerrouilleScreen() {
           <Text variant="body" color="secondary" style={styles.centerText}>
             Regardez votre téléphone pour continuer.
           </Text>
-          {phase === 'failed' && (
-            <Text variant="bodySmall" color="secondary" style={[styles.centerText, styles.inlineNotice]}>
-              Non reconnu — réessayez ou utilisez le code.
-            </Text>
-          )}
-          {phase === 'offline' && (
-            <Text variant="bodySmall" color="secondary" style={[styles.centerText, styles.inlineNotice]}>
-              Hors ligne — reconnectez-vous à Internet, puis réessayez.
-            </Text>
-          )}
-        </Pressable>
-
-        <Pressable onPress={degradeToCode} style={styles.codeButton} hitSlop={12}>
-          <Text variant="labelLarge" color="secondary">Utiliser le code</Text>
         </Pressable>
       </Animated.View>
     </Screen>
   );
 }
 
-function makeStyles(p: Palette) {
+function makeStyles(p: Palette, viewportHeight: number) {
   return StyleSheet.create({
-    content: {
-      flex: 1, alignItems: 'center', paddingHorizontal: spacing[6],
-      paddingTop: spacing[20], paddingBottom: spacing[8],
+    content: { flex: 1 },
+    // The content block (mark → "Bon retour" → instruction) is centered in the
+    // remaining space above an ~8% viewport-height bottom reserve, which lifts
+    // its optical center to ~42-44% of viewport height — visually centered,
+    // not top-aligned.
+    centerBlock: {
+      flex: 1, alignItems: 'center', justifyContent: 'center', gap: spacing[2],
+      paddingHorizontal: spacing[6],
+      paddingBottom: Math.round(viewportHeight * 0.08),
     },
-    centerBlock: { flex: 1, alignItems: 'center', justifyContent: 'center', gap: spacing[2] },
     // Brand purple lives here only — nowhere else on this screen.
     mark: {
       width: 72, height: 72, borderRadius: 20,
@@ -167,12 +122,9 @@ function makeStyles(p: Palette) {
     // are set explicitly and together — never fontSize/fontWeight alone.
     // This app's fonts are separate files per weight (see FF in
     // src/theme/typography.ts), so a bare `fontWeight` does nothing; and an
-    // enlarged fontSize with no matching lineHeight clips the glyph's top,
-    // which is exactly the bug that shipped here the first time.
+    // enlarged fontSize with no matching lineHeight clips the glyph's top.
     markLetter: { fontFamily: fontFamily.bold, fontSize: 32, lineHeight: 40, color: p.textInverse },
     businessName: { fontFamily: fontFamily.semibold, fontSize: 17, lineHeight: 28, color: p.textPrimary, marginBottom: spacing[1] },
     centerText: { textAlign: 'center' },
-    inlineNotice: { marginTop: spacing[4] },
-    codeButton: { minHeight: 48, alignItems: 'center', justifyContent: 'center', paddingHorizontal: spacing[6] },
   });
 }

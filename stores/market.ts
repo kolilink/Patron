@@ -44,6 +44,7 @@ interface MarketStore {
   createPost: (title: string, content: string, category: MarketCategory) => Promise<void>;
   editPost: (postId: string, title: string, content: string) => Promise<void>;
   removePost: (postId: string) => void;
+  removePostsByAuthor: (authorId: string) => void;
 
   fetchPostDetail: (postId: string, userId: string) => Promise<void>;
   addComment: (postId: string, parentId: string | null, content: string) => Promise<void>;
@@ -217,6 +218,20 @@ export const useMarketStore = create<MarketStore>((set, get) => ({
       posts: state.posts.filter(p => p.id !== postId),
       activePost: state.activePost?.id === postId ? null : state.activePost,
     }));
+  },
+
+  // "Bloquer l'auteur" must hide the author's posts in-session, not just on
+  // the next fetch. block_user() only rewrites the server-side RLS wall; the
+  // already-loaded `posts` array would still show them until a refetch, so a
+  // block has to re-filter locally too (same principle as removePost).
+  removePostsByAuthor: (authorId) => {
+    set(state => {
+      const posts = state.posts.filter(p => p.author_id !== authorId);
+      const activePost = state.activePost && state.activePost.author_id === authorId
+        ? null
+        : state.activePost;
+      return { posts, activePost };
+    });
   },
 
   editPost: async (postId, title, content) => {

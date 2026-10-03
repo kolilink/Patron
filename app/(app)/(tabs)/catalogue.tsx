@@ -1701,15 +1701,13 @@ export default function CatalogueScreen() {
             onAction={() => { setEditingProduct(null); setPrefillProductName(undefined); setShowForm(true); }}
           />
         ) : (
-          <View style={styles.emptyState}>
-            <Ionicons name={offline ? 'cloud-offline-outline' : 'cube-outline'} size={72} color={palette.textDisabled} />
-            <Text variant="h4">{offline ? 'Catalogue non disponible hors ligne' : 'Catalogue vide'}</Text>
-            <Text variant="body" color="secondary" style={styles.emptyDesc}>
-              {offline
-                ? 'Ouvrez l\'application en ligne une première fois pour activer le mode hors ligne.'
-                : 'Votre responsable ajoutera les produits bientôt.'}
-            </Text>
-          </View>
+          <EmptyState
+            icon={offline ? 'cloud-offline-outline' : 'cube-outline'}
+            title={offline ? 'Catalogue non disponible hors ligne' : 'Catalogue vide'}
+            subtitle={offline
+              ? 'Ouvrez l\'application en ligne une première fois pour activer le mode hors ligne.'
+              : 'Votre responsable ajoutera les produits bientôt.'}
+          />
         )
       ) : tab === 'archives' && archivedFiltered.length === 0 ? (
         // Two distinct states, never conflated: a search with no match must
@@ -2017,8 +2015,6 @@ function makeStyles(p: Palette) {
       fontFamily: FF.semibold, fontSize: 15, color: p.textPrimary,
       fontVariant: ['tabular-nums'] as ['tabular-nums'],
     },
-    emptyState: { flex: 1, alignItems: 'center', justifyContent: 'center', padding: spacing[8], gap: spacing[3] },
-    emptyDesc: { textAlign: 'center', maxWidth: 260 },
     // 194 was tuned against the old flush tab bar's flex space; the floating
     // pill no longer reserves that space, so the same clearance is added
     // here too to keep this FAB sitting exactly where it did before.

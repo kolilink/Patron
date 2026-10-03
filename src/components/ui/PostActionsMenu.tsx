@@ -29,6 +29,7 @@ export function PostActionsMenu({ post, isOwnPost }: { post: MarketPost; isOwnPo
 
     const { deletePost, blockUser, reportPost } = useModerationStore();
     const removePost = useMarketStore(s => s.removePost);
+    const removePostsByAuthor = useMarketStore(s => s.removePostsByAuthor);
 
     const [showActions, setShowActions] = useState(false);
     const [showReport, setShowReport] = useState(false);
@@ -62,6 +63,10 @@ export function PostActionsMenu({ post, isOwnPost }: { post: MarketPost; isOwnPo
         setShowActions(false);
         try {
             await blockUser(post.author_id);
+            // Hide the author's posts in-session too — block_user only
+            // rewrites the server RLS wall, so the already-loaded list
+            // would keep showing them until the next fetch.
+            removePostsByAuthor(post.author_id);
             toast.success('Auteur bloqué. Vous ne verrez plus ses publications.');
         } catch {
             // The store already surfaced a toast with the translated error.
@@ -73,6 +78,10 @@ export function PostActionsMenu({ post, isOwnPost }: { post: MarketPost; isOwnPo
         setReporting(true);
         try {
             await reportPost(post.id, motif, detail);
+            // Hide the post from the reporter immediately — it stays
+            // visible until the founder acts otherwise, which reads as
+            // "nothing happened" after the success toast.
+            removePost(post.id);
             setShowReport(false);
         } catch {
             // The store already surfaced a toast with the translated error.

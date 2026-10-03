@@ -98,7 +98,7 @@ export const useChatStore = create<ChatStore>((set, get) => ({
       if (cached) {
         const [bTs, mTs] = await Promise.all([getKV(boutiqueKey(businessId)), getKV(MARCHE_KEY)]);
         const boutiqueLastRead = bTs ? new Date(bTs) : new Date(0);
-        const marcheLastRead   = mTs ? new Date(mTs) : new Date(0);
+        const marcheLastRead = mTs ? new Date(mTs) : new Date(0);
         set({
           boutiqueRoom: cached.boutiqueRoom,
           globalRoom: cached.globalRoom,
@@ -127,7 +127,7 @@ export const useChatStore = create<ChatStore>((set, get) => ({
       if (roomsErr) throw roomsErr;
 
       const boutiqueRoom = (rooms ?? []).find(r => !r.is_global && r.business_id === businessId) ?? null;
-      const globalRoom   = (rooms ?? []).find(r => r.is_global) ?? null;
+      const globalRoom = (rooms ?? []).find(r => r.is_global) ?? null;
 
       // 2. Fetch last-read timestamps from KV store
       const [bTs, mTs] = await Promise.all([
@@ -135,7 +135,7 @@ export const useChatStore = create<ChatStore>((set, get) => ({
         getKV(MARCHE_KEY),
       ]);
       const boutiqueLastRead = bTs ? new Date(bTs) : new Date(0);
-      const marcheLastRead   = mTs ? new Date(mTs) : new Date(0);
+      const marcheLastRead = mTs ? new Date(mTs) : new Date(0);
 
       // 3. Fetch recent messages for both rooms
       const roomIds = [boutiqueRoom?.id, globalRoom?.id].filter(Boolean) as string[];
@@ -151,26 +151,6 @@ export const useChatStore = create<ChatStore>((set, get) => ({
         );
         if (msgsErr) throw msgsErr;
         messages = msgs ?? [];
-
-        // Resolve current profile names so old messages reflect name changes
-        const senderIds = [...new Set(messages.map(m => m.sender_id))];
-        if (senderIds.length > 0) {
-          const { data: profiles } = await withNetworkRetry(() =>
-            supabase
-              .from('profiles')
-              .select('id, name')
-              .in('id', senderIds),
-          );
-          if (profiles && profiles.length > 0) {
-            const nameMap: Record<string, string | null> = Object.fromEntries(
-              profiles.map(p => [p.id, (p.name as string | null) ?? null]),
-            );
-            messages = messages.map(m => ({
-              ...m,
-              sender_name: nameMap[m.sender_id] ?? m.sender_name,
-            }));
-          }
-        }
       }
 
       // 4. Compute unread counts
@@ -197,6 +177,40 @@ export const useChatStore = create<ChatStore>((set, get) => ({
         offline: false,
         offlineSince: null,
       });
+
+      // 5. Resolve current profile names AFTER first paint. This used to sit on
+      // the critical path as a third sequential round-trip (rooms → messages →
+      // profiles), so messages could not render until name resolution also
+      // returned — on a cold start with no cache that was the difference between
+      // two round-trips and three. Name freshness is pure polish; it must never
+      // block the messages, so it now runs fire-and-forget and patches only the
+      // sender_name field (functional set, so a message optimistically appended
+      // while this resolves is never clobbered).
+      const senderIds = [...new Set(messages.map(m => m.sender_id))];
+      if (senderIds.length > 0) {
+        void (async () => {
+          try {
+            const { data: profiles } = await withNetworkRetry(() =>
+              supabase
+                .from('profiles')
+                .select('id, name')
+                .in('id', senderIds),
+            );
+            if (profiles && profiles.length > 0) {
+              const nameMap: Record<string, string | null> = Object.fromEntries(
+                profiles.map(p => [p.id, (p.name as string | null) ?? null]),
+              );
+              const resolved = get().messages.map(m =>
+                nameMap[m.sender_id] ? { ...m, sender_name: nameMap[m.sender_id] as string } : m,
+              );
+              set({ messages: resolved });
+              void saveChatCache(businessId, { boutiqueRoom, globalRoom, messages: resolved });
+            }
+          } catch {
+            // Best-effort name freshness — never fail or alter the load outcome.
+          }
+        })();
+      }
     } catch (err) {
       if (isNetworkError(err)) {
         reportOfflineFallback('chat.load', err);
@@ -211,7 +225,7 @@ export const useChatStore = create<ChatStore>((set, get) => ({
             getKV(MARCHE_KEY),
           ]);
           const boutiqueLastRead = bTs ? new Date(bTs) : new Date(0);
-          const marcheLastRead   = mTs ? new Date(mTs) : new Date(0);
+          const marcheLastRead = mTs ? new Date(mTs) : new Date(0);
           const boutiqueUnread = cached.boutiqueRoom
             ? countUnread(cached.messages, cached.boutiqueRoom.id, boutiqueLastRead, currentUserId)
             : 0;

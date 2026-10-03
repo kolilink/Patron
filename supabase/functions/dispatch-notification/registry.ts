@@ -104,6 +104,32 @@ export const EVENT_REGISTRY: Record<string, EventDef> = {
     urgent: false,
     allowedDataKeys: ['business'],
   },
+  // B4 — the recipient's refusal is pushed back to the requester so a decline
+  // is never a silent permanent block.
+  partnership_declined: {
+    built: true,
+    category: 'ordinary',
+    subtitle: null,
+    body: (p) => `${p.business ?? 'Une boutique'} a refusé votre demande.`,
+    route: () => '/(app)/discussions',
+    urgent: false,
+    allowedDataKeys: ['business'],
+  },
+
+  // ── consumer invites (B1) ─────────────────────────────────────────────
+  // Sent to the INVITER when the invited friend redeems and lands in Amis.
+  // Recipient resolution is special-cased in index.ts (CONSUMER_EVENTS): the
+  // target is the inviter_id of the caller's redeemed invite, not a business
+  // member.
+  consumer_invite_accepted: {
+    built: true,
+    category: 'ordinary',
+    subtitle: null,
+    body: generic('Ton ami a rejoint Patron. Touchez pour voir.'),
+    route: () => '/(app)/discussions',
+    urgent: false,
+    allowedDataKeys: [],
+  },
 
   // ── 8-9 support ──────────────────────────────────────────────────────────
   support_message: {

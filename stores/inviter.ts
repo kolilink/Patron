@@ -3,6 +3,8 @@ import { trackEvent } from '@/lib/analytics';
 import { supabase } from '@/lib/supabase';
 import { translateError } from '@/lib/errors';
 import { isNetworkError, withTimeout } from '@/lib/sync';
+import { notifyEvent } from '@/src/utils/notifications';
+import { useAuthStore } from '@/stores/auth';
 
 // ─── "Inviter" — consumer invite-a-friend journey ───────────────────────────
 // Distinct from the team invite (stores/equipe.ts), the B2B partnership invite
@@ -47,6 +49,18 @@ export function buildInviteMessage(link: string, code: string): string {
     return `Je note mes ventes et mes crédits avec Patron, même sans internet. C'est gratuit : ${link}\nCode : ${code}, au cas où.`;
 }
 
+/**
+ * Normalize a typed invite code for submission. The server hashes
+ * `upper(btrim(code))` — it uppercases and trims outer whitespace, but NOT
+ * internal spaces. The codes we mint are space-free (alphabet
+ * 0123456789ABCDEFGHJKMNPQRSTVWXYZ), so a human typing one may insert spaces
+ * (or paste a "1 2 3 4" display form). Stripping every whitespace run before
+ * the RPC makes typed entry match exactly what the server hashes.
+ */
+export function normalizeInviteCode(raw: string): string {
+    return raw.replace(/\s+/g, '').toUpperCase();
+}
+
 interface InviterStore {
     invites: ConsumerInvite[];
     friends: ConsumerFriend[];
@@ -57,8 +71,10 @@ interface InviterStore {
     fetchMyInvites: () => Promise<void>;
     fetchMyFriends: () => Promise<void>;
     revokeInvite: (inviteId: string) => Promise<boolean>;
-    resolveInvite: (token: string, code: string) => Promise<{ inviter_id: string; inviter_name: string } | null>;
+    resolveInvite: (token: string, code: string) => Promise<{ inviter_id: string; inviter_name: string; newly_used?: boolean } | null>;
+    redeemCode: (rawCode: string) => Promise<{ inviter_id: string; inviter_name: string; newly_used?: boolean } | null>;
     clearError: () => void;
+    reset: () => void;
 }
 
 export const useInviterStore = create<InviterStore>((set, get) => ({
@@ -206,16 +222,41 @@ export const useInviterStore = create<InviterStore>((set, get) => ({
                 set({ error: translateError(error, 'Invitation invalide') });
                 return null;
             }
+            const result = data as { inviter_id: string; inviter_name: string; newly_used?: boolean };
             // No inviter name in the event (spec §0) — the id alone links the loop.
             trackEvent('invite_signup_completed', null, null, {
-                inviter_id: (data as { inviter_id: string }).inviter_id,
+                inviter_id: result.inviter_id,
             });
-            return data as { inviter_id: string; inviter_name: string };
+            // B1 — on a FRESH redemption (not an idempotent re-fire), tell the
+            // inviter via push that their friend joined. The inviter is not a
+            // member of the joiner's business, so the edge function resolves
+            // the recipient from the redeemed invite itself (CONSUMER_EVENTS).
+            if (result.newly_used !== false) {
+                const businessId = useAuthStore.getState().session?.activeBusiness?.id;
+                if (businessId) {
+                    notifyEvent({
+                        businessId,
+                        eventType: 'consumer_invite_accepted',
+                        payload: {},
+                        targetUserIds: [result.inviter_id],
+                    });
+                }
+            }
+            return result;
         } catch (err) {
             set({ error: isNetworkError(err) ? 'Erreur de réseau. Vérifiez votre connexion.' : 'Invitation invalide' });
             return null;
         }
     },
 
+    redeemCode: async (rawCode) => {
+        // Typed entry path: a code (not a smart-link token) goes in p_code, with
+        // the token slot empty. Normalization is client-side because the server
+        // only uppercases + trims — it does not strip internal spaces.
+        return get().resolveInvite('', normalizeInviteCode(rawCode));
+    },
+
     clearError: () => set({ error: null }),
+
+    reset: () => set({ invites: [], friends: [], loading: false, error: null }),
 }));

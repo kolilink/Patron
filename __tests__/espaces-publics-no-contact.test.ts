@@ -66,29 +66,17 @@ describe('espaces publics — aucun moyen de contact', () => {
     }
 });
 
-describe('carte "Mon commerce" — strictement read-only', () => {
-    it('affiche uniquement nom, activité et logo — aucun élément interactif de contact', () => {
+describe('carte "Mon commerce" — supprimée', () => {
+    it('la carte identité du commerce (avatar + nom) n\'existe plus dans l\'onglet Ma Boutique', () => {
         const src = readSource('app/(app)/discussions.tsx');
-        // Isolate the "Mon commerce" card block, from its opening <View> to the
-        // first `chatOffline` marker that follows it.
-        const cardStart = src.indexOf('<View style={styles.commerceCard}>');
-        expect(cardStart).toBeGreaterThanOrEqual(0);
-        const cardEnd = src.indexOf('chatOffline', cardStart);
-        expect(cardEnd).toBeGreaterThan(cardStart);
-        const card = src.slice(cardStart, cardEnd);
-
-        // Read-only card: no touch targets, no press handlers, no buttons.
-        expect(card).not.toMatch(/Pressable|Button|Touchable/);
-        expect(card).not.toMatch(/onPress/);
-        expect(card).not.toMatch(/accessibilityRole/);
-
-        // Read-only content: name, activity, logo — and no contact channel of
-        // any kind (currency line removed in the social-spaces cleanup).
-        expect(card).toMatch(/businessName/);
-        expect(card).toMatch(/businessType/);
-        expect(card).toMatch(/businessLogo/);
-        expect(card).not.toMatch(/wa\.me|tel:|whatsapp|openURL|Share\.share/i);
-        expect(card).not.toMatch(SEPARATED_PHONE);
-        expect(card).not.toMatch(CONTIGUOUS_PHONE);
+        // The business identity card (avatar + name + activity + logo) was
+        // removed entirely from the Ma Boutique tab: the tab now shows only the
+        // message input, with no name, no avatar, no card. Every trace of the
+        // card (its style keys and its logo/type data bindings) must be gone.
+        expect(src).not.toMatch(/commerceCard/);
+        expect(src).not.toMatch(/commerceAvatar/);
+        expect(src).not.toMatch(/commerceLogo/);
+        expect(src).not.toMatch(/businessLogo/);
+        expect(src).not.toMatch(/businessType/);
     });
 });

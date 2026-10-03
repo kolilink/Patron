@@ -327,13 +327,26 @@ export default function ParametresScreen() {
         {
           text: 'Quitter', style: 'destructive',
           onPress: async () => {
+            if (!business?.id) return;
             haptics.destructive();
-            const memId = session?.activeMembership?.id;
-            if (!memId) return;
-            const { error } = await supabase.from('memberships').delete().eq('id', memId);
-            if (error) { Alert.alert('Erreur', rpcErrorMessage(error, "Ça n'a pas fonctionné. Écrivez-nous si ça continue :)")); return; }
+            // Fix C(1): route EVERY role through leave_or_delete_business.
+            // The old memberships.delete() was blocked for vendeur/investisseur
+            // by the migration_v215 DELETE policy (admin/manager only), so
+            // non-admins could never actually leave. The RPC is SECURITY
+            // DEFINER, handles every role, and is what the admin flow already
+            // used.
+            let error: { code?: string; message?: string } | null;
+            try {
+              ({ error } = await supabase.rpc('leave_or_delete_business', { p_business_id: business.id }));
+            } catch (err) {
+              error = err instanceof Error ? { message: err.message } : { message: String(err) };
+            }
+            if (error) {
+              Alert.alert('Erreur', rpcErrorMessage(error, "Ça n'a pas fonctionné. Écrivez-nous si ça continue :)"));
+              return;
+            }
 
-            const remaining = (session?.memberships ?? []).filter(m => m.id !== memId);
+            const remaining = (session?.memberships ?? []).filter(m => m.business_id !== business.id);
             if (remaining.length > 0) {
               const first = remaining[0];
               useAuthStore.setState(state => {

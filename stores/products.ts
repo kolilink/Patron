@@ -64,6 +64,11 @@ interface ProductStore {
   archivedProducts: Product[];
   variantsByProduct: Record<string, ProductVariant[]>;
   vendeurProductScope: string[];  // product IDs; empty = unscoped (see all)
+  // Whether the vendeur's membership has scope_all_products=true. Distinguishes
+  // "allowed to sell everything" (flag true) from "restricted but zero products
+  // assigned" (flag false + empty scope). Both have an empty scope array, but
+  // only the former means "see all" — the latter means "see nothing".
+  vendeurScopeAll: boolean;
   // Business id fetchProducts last reached a terminal result for — null
   // until then. See app/(app)/_layout.tsx's showFork gate for why this
   // exists: `products.length === 0` is ambiguous between "confirmed no
@@ -104,6 +109,7 @@ export const useProductStore = create<ProductStore>((set, get) => ({
   archivedProducts: [],
   variantsByProduct: {},
   vendeurProductScope: [],
+  vendeurScopeAll: true,
   productsFetchedFor: null,
   loading: false,
   saving: false,
@@ -132,12 +138,12 @@ export const useProductStore = create<ProductStore>((set, get) => ({
         role === 'vendeur'
           ? supabase.rpc('get_products_for_vendeur', { p_business_id: businessId })
           : supabase
-              .from('products')
-              .select('*')
-              .eq('business_id', businessId)
-              .eq('archived', false)
-              .eq('is_system', false)
-              .order('name'),
+            .from('products')
+            .select('*')
+            .eq('business_id', businessId)
+            .eq('archived', false)
+            .eq('is_system', false)
+            .order('name'),
       );
 
       if (error) throw error;
@@ -153,8 +159,10 @@ export const useProductStore = create<ProductStore>((set, get) => ({
 
       // Low-stock detection: notify admins/managers for each product crossing its threshold.
       // Server-side 24h cooldown in dispatch-notification prevents notification floods on restart.
+      // Variant parents keep products.stock_qty = 0, so their real signal is on
+      // product_variants — handled in the separate variant pass below.
       const lowStock = products.filter(p =>
-        p.reorder_level > 0 && p.stock_qty <= p.reorder_level && !notifiedLowStockIds.has(p.id),
+        !p.has_variants && p.reorder_level > 0 && p.stock_qty <= p.reorder_level && !notifiedLowStockIds.has(p.id),
       );
       lowStock.forEach(p => {
         notifiedLowStockIds.add(p.id);
@@ -166,14 +174,56 @@ export const useProductStore = create<ProductStore>((set, get) => ({
         });
       });
 
-      // Load vendeur product scope (empty = unscoped, sees all products)
+      // Variant low-stock: the parent's stock_qty is always 0, so a variant
+      // product crossing its per-variant reorder level was previously never
+      // detected at all. Vendeur is excluded — this signal targets
+      // admin/manager, and a vendeur's variant read path omits cost fields.
+      if (role !== 'vendeur') {
+        for (const parent of products.filter(p => p.has_variants)) {
+          const variants = await get().fetchVariants(parent.id, businessId);
+          if (isStaleBusiness(businessId)) return;
+          for (const v of variants) {
+            if (!(v.reorder_level > 0 && v.stock_qty <= v.reorder_level)) continue;
+            const key = `variant:${v.id}`;
+            if (notifiedLowStockIds.has(key)) continue;
+            notifiedLowStockIds.add(key);
+            notifyEvent({
+              businessId,
+              eventType: 'low_stock',
+              payload: {
+                product: parent.name,
+                variant: v.name,
+                qty: v.stock_qty,
+                product_id: parent.id,
+                variant_id: v.id,
+              },
+              targetRoles: ['administrateur', 'manager'],
+            });
+          }
+        }
+      }
+
+      // Load vendeur product scope. Fix C(2): read the scope_all_products flag
+      // in the same pass, so "allowed to sell everything" (flag true) is no
+      // longer conflated with "restricted but zero products assigned" (flag
+      // false + empty array — which must show NOTHING, not everything).
       if (role === 'vendeur' && membershipId) {
+        const { data: membership } = await supabase
+          .from('memberships')
+          .select('scope_all_products')
+          .eq('id', membershipId)
+          .maybeSingle();
         const { data: scopeRows } = await supabase
           .from('membership_product_scope')
           .select('product_id')
           .eq('membership_id', membershipId);
         if (isStaleBusiness(businessId)) return;
-        set({ vendeurProductScope: (scopeRows ?? []).map((r: any) => r.product_id as string) });
+        set({
+          vendeurScopeAll: (membership as any)?.scope_all_products ?? true,
+          vendeurProductScope: (scopeRows ?? []).map((r: any) => r.product_id as string),
+        });
+      } else {
+        set({ vendeurScopeAll: true, vendeurProductScope: [] });
       }
     } catch (err) {
       if (isNetworkError(err)) {
@@ -452,12 +502,12 @@ export const useProductStore = create<ProductStore>((set, get) => ({
     const { data, error } = role === 'vendeur'
       ? await supabase.rpc('get_variants_for_vendeur', { p_product_id: productId, p_business_id: businessId })
       : await supabase
-          .from('product_variants')
-          .select('*')
-          .eq('product_id', productId)
-          .eq('business_id', businessId)
-          .eq('archived', false)
-          .order('name');
+        .from('product_variants')
+        .select('*')
+        .eq('product_id', productId)
+        .eq('business_id', businessId)
+        .eq('archived', false)
+        .order('name');
     if (error || !data) return [];
     const variants: ProductVariant[] = (data as ProductVariant[]).map(v => ({
       ...v,
@@ -487,8 +537,8 @@ export const useProductStore = create<ProductStore>((set, get) => ({
       }));
       const { error } = await supabase.rpc('upsert_product_variants', {
         p_business_id: businessId,
-        p_product_id:  productId,
-        p_variants:    payload,
+        p_product_id: productId,
+        p_variants: payload,
       });
       if (error) throw error;
       await get().fetchProducts(businessId, userId);
@@ -535,16 +585,16 @@ export const useProductStore = create<ProductStore>((set, get) => ({
     if (error || !data) return null;
     const d = data as any;
     return {
-      revenue:         d.revenue         / 100,
-      capital:         d.capital         / 100,
-      linkedExpenses:  d.linked_expenses / 100,
-      profit:          d.profit          / 100,
+      revenue: d.revenue / 100,
+      capital: d.capital / 100,
+      linkedExpenses: d.linked_expenses / 100,
+      profit: d.profit / 100,
     };
   },
 
   clearError: () => set({ error: null }),
   reset: () => {
     notifiedLowStockIds.clear();
-    set({ products: [], archivedProducts: [], variantsByProduct: {}, vendeurProductScope: [], productsFetchedFor: null, loading: false, error: null, offline: false, offlineSince: null });
+    set({ products: [], archivedProducts: [], variantsByProduct: {}, vendeurProductScope: [], vendeurScopeAll: true, productsFetchedFor: null, loading: false, error: null, offline: false, offlineSince: null });
   },
 }));

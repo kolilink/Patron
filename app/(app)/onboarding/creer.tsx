@@ -7,6 +7,8 @@ import { BusinessDetailsStep } from '@/src/components/BusinessDetailsStep';
 import { useTheme, radius, spacing } from '@/src/theme';
 import type { Palette } from '@/src/theme';
 import { useAuthStore } from '@/stores/auth';
+import { useInviterStore } from '@/stores/inviter';
+import { getPendingInviteToken, clearPendingInviteToken } from '@/lib/inviteLink';
 import { inferCurrency } from '@/src/constants/currency';
 import { isFounderPhone } from '@/src/utils/founder';
 
@@ -14,7 +16,7 @@ export default function CreerCommerceScreen() {
   const { palette } = useTheme();
   const styles = useMemo(() => makeStyles(palette), [palette]);
   const { createBusiness, loading, error, clearError } = useAuthStore();
-  const session     = useAuthStore(s => s.session);
+  const session = useAuthStore(s => s.session);
   const memberships = session?.memberships ?? [];
   // The founder can create as many test businesses as he wants — see
   // migration_v165.sql and the matching bypass in stores/auth.ts.
@@ -24,6 +26,19 @@ export default function CreerCommerceScreen() {
     clearError();
     await createBusiness({ name: data.name, currency: data.currency, referralCode: data.referralCode });
     if (!useAuthStore.getState().error) {
+      // B3 — an existing user who carried a pending invite token (universal
+      // link, install referrer, or clipboard handoff) into the "add a
+      // business" flow must redeem it here, not lose it. Mirrors the
+      // post-OTP arrival path in app/(welcome)/creer.tsx.
+      const token = await getPendingInviteToken();
+      if (token) {
+        const resolved = await useInviterStore.getState().resolveInvite(token, '');
+        if (resolved) {
+          await clearPendingInviteToken();
+          router.replace('/(app)/discussions?tab=amis');
+          return;
+        }
+      }
       router.replace('/(app)/(tabs)/');
     }
   };
@@ -64,13 +79,13 @@ export default function CreerCommerceScreen() {
 
 function makeStyles(p: Palette) {
   return StyleSheet.create({
-    safe:    { flex: 1, backgroundColor: p.background },
-    kav:     { flex: 1, backgroundColor: p.background },
+    safe: { flex: 1, backgroundColor: p.background },
+    kav: { flex: 1, backgroundColor: p.background },
     content: { flexGrow: 1, padding: spacing[6], gap: spacing[8] },
-    header:  { gap: spacing[2] },
+    header: { gap: spacing[2] },
     backBtn: { alignSelf: 'flex-start', marginBottom: spacing[2] },
 
-    lockedBox:  { backgroundColor: p.surface, borderRadius: radius.md, borderWidth: 1, borderColor: p.border, padding: spacing[5], gap: spacing[2], alignItems: 'center' },
+    lockedBox: { backgroundColor: p.surface, borderRadius: radius.md, borderWidth: 1, borderColor: p.border, padding: spacing[5], gap: spacing[2], alignItems: 'center' },
     lockedText: { textAlign: 'center', fontWeight: '600' as const },
   });
 }

@@ -405,8 +405,6 @@ export const useVentesStore = create<VentesStore>((set, get) => ({
     const sales = data.map((s: Record<string, unknown>) => {
       const discount = ((s.discount_amount as number) ?? 0) / 100;
       const totalAmount = (s.total_amount as number) / 100;
-      const hasDiscount = discount > 0;
-      const isCreditStatus = s.status === 'credit';
       // Revenue = total_amount (already reflects any above-catalog override) minus discount.
       // Subtract COGS to get true gross profit per sale.
       const profit = hasCostByOrder[s.id as string]
@@ -432,7 +430,11 @@ export const useVentesStore = create<VentesStore>((set, get) => ({
           ? (dm[s.last_edited_by as string] || pm[s.last_edited_by as string] || generateFallbackName(s.last_edited_by as string))
           : undefined,
         profit,
-        amount_paid: (isCreditStatus || hasDiscount) ? (paidByOrder[s.id as string] ?? 0) : undefined,
+        // Always set: a settled (paye) sale has its own atomic payment that
+        // nets to zero; credit sales and discounted sales carry whatever was
+        // actually paid. This makes every caller see the same truth and is
+        // what the carnet list/detail rely on for the unified "owed" formula.
+        amount_paid: paidByOrder[s.id as string] ?? 0,
       } as Vente;
     });
     void saveVentesCache(cacheKey, sales as unknown[]);
