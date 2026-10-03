@@ -54,6 +54,7 @@
         .card {
             max-width: 420px;
             width: 100%;
+            transform: translateY(-28px);
         }
 
         .logo {
@@ -118,6 +119,23 @@
             background: rgba(255, 255, 255, .12);
         }
 
+        .btn-play {
+            background: #fff;
+            color: #202124;
+            display: flex;
+            align-items: center;
+            justify-content: center;
+            gap: 9px;
+        }
+
+        .btn-play .play-icon {
+            flex-shrink: 0;
+        }
+
+        .btn-play:active {
+            opacity: .85;
+        }
+
         .store-row {
             display: flex;
             gap: 12px;
@@ -169,13 +187,18 @@
         <a class="btn btn-primary" id="cta-install" href="https://apps.apple.com/us/app/patron/id6772757310"
             target="_blank" rel="noopener">Installer Patron</a>
 
-        <!-- Store badges (always both, per spec) -->
+        <!-- Play Store badge (the App Store is the primary CTA above) -->
         <div class="store-row">
-            <a class="btn btn-ghost" id="store-apple" href="https://apps.apple.com/us/app/patron/id6772757310"
-                target="_blank" rel="noopener">App Store</a>
-            <a class="btn btn-ghost" id="store-play"
-                href="https://play.google.com/store/apps/details?id=com.awall.patron" target="_blank"
-                rel="noopener">Google Play</a>
+            <a class="btn btn-play" id="store-play"
+                href="https://play.google.com/store/apps/details?id=com.awall.patron" target="_blank" rel="noopener">
+                <svg class="play-icon" viewBox="0 0 24 24" width="20" height="20" aria-hidden="true">
+                    <path fill="#00D7FE" d="M3 12 12 7.5 12 12Z" />
+                    <path fill="#00F076" d="M3 12 12 12 12 16.5Z" />
+                    <path fill="#FFCE00" d="M12 7.5 21 3 21 12 12 12Z" />
+                    <path fill="#FF3A44" d="M12 12 21 12 21 21 12 16.5Z" />
+                </svg>
+                Télécharger sur Play Store
+            </a>
         </div>
 
         <!-- "Already have the app" — custom scheme deep link. Universal links do
