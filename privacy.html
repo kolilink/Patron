@@ -292,6 +292,43 @@
       font-weight: 500;
     }
 
+    /* Reading progress hairline */
+    .progress {
+      position: fixed;
+      top: 0;
+      left: 0;
+      width: 100%;
+      height: 2px;
+      background: var(--accent);
+      transform: scaleX(0);
+      transform-origin: 0 50%;
+      z-index: 100;
+    }
+
+    /* Calm scroll reveals */
+    .reveal {
+      opacity: 0;
+      transform: translateY(18px);
+      transition: opacity 0.7s cubic-bezier(0.22, 1, 0.36, 1),
+                  transform 0.7s cubic-bezier(0.22, 1, 0.36, 1);
+    }
+
+    .reveal.visible {
+      opacity: 1;
+      transform: none;
+    }
+
+    @media (prefers-reduced-motion: reduce) {
+      .reveal {
+        opacity: 1;
+        transform: none;
+        transition: none;
+      }
+      .progress {
+        display: none;
+      }
+    }
+
     /* Footer */
     footer {
       text-align: center;
@@ -306,40 +343,41 @@
   </style>
 </head>
 <body>
+  <div class="progress" aria-hidden="true"></div>
 
   <div class="container">
     <header class="hero">
-      <p class="kicker">Politique de confidentialité</p>
-      <h1>Vos données vous appartiennent.</h1>
-      <p class="subtitle">Notre promesse sur vos données, expliquée avec des mots simples.</p>
-      <p class="date">Mise à jour : 30 juin 2026</p>
-      <a class="scroll-link" href="#promesse">Lire les détails ↓</a>
+      <p class="kicker reveal">Politique de confidentialité</p>
+      <h1 class="reveal">Vos données vous appartiennent.</h1>
+      <p class="subtitle reveal">Notre promesse sur vos données, expliquée avec des mots simples.</p>
+      <p class="date reveal">Mise à jour : 30 juin 2026</p>
+      <a class="scroll-link reveal" href="#promesse">Lire les détails ↓</a>
     </header>
 
     <section class="promise" id="promesse" aria-label="La promesse en 5 points">
-      <h2>La promesse, en 5 points</h2>
+      <h2 class="reveal">La promesse, en 5 points</h2>
       <div class="cards">
-        <a class="card" href="#gardons">
+        <a class="card reveal" href="#gardons">
           <span class="card-num">01</span>
           <h3>Ce que nous gardons</h3>
           <p>Votre numéro, votre nom, et les infos de votre boutique. Rien d'autre.</p>
         </a>
-        <a class="card" href="#jamais">
+        <a class="card reveal" href="#jamais">
           <span class="card-num">02</span>
           <h3>Ce que nous ne faisons jamais</h3>
           <p>Pas de publicité. Pas de revente. Pas de surprise.</p>
         </a>
-        <a class="card" href="#alpha">
+        <a class="card reveal" href="#alpha">
           <span class="card-num">03</span>
           <h3>Alpha et vos données</h3>
           <p>Vos chiffres servent uniquement à vous répondre.</p>
         </a>
-        <a class="card" href="#hors-ligne">
+        <a class="card reveal" href="#hors-ligne">
           <span class="card-num">04</span>
           <h3>Sans internet</h3>
           <p>Vos données restent protégées dans votre téléphone.</p>
         </a>
-        <a class="card" href="#droits">
+        <a class="card reveal" href="#droits">
           <span class="card-num">05</span>
           <h3>Vos droits</h3>
           <p>Voir, changer, effacer — quand vous voulez.</p>
@@ -348,7 +386,7 @@
     </section>
 
     <main>
-      <section class="section" id="gardons">
+      <section class="section reveal" id="gardons">
         <h2>Ce que nous gardons, et pourquoi</h2>
         <table class="data-table">
           <tr>
@@ -371,13 +409,13 @@
       </section>
 
       <section class="section" id="jamais">
-        <h2>Ce que nous ne ferons jamais</h2>
-        <p class="never">Pas de publicité.</p>
-        <p class="never">Pas de revente de vos données.</p>
-        <p class="never">Pas de mauvaise surprise.</p>
+        <h2 class="reveal">Ce que nous ne ferons jamais</h2>
+        <p class="never reveal">Pas de publicité.</p>
+        <p class="never reveal">Pas de revente de vos données.</p>
+        <p class="never reveal">Pas de mauvaise surprise.</p>
       </section>
 
-      <section class="section" id="alpha">
+      <section class="section reveal" id="alpha">
         <h2>Alpha, notre assistant intelligent</h2>
         <ol class="steps">
           <li>Quand vous posez une question à Alpha, nous utilisons les chiffres de votre commerce (ventes, stock, dépenses) <strong>uniquement pour vous répondre</strong>.</li>
@@ -386,13 +424,13 @@
         </ol>
       </section>
 
-      <section class="section" id="hors-ligne">
+      <section class="section reveal" id="hors-ligne">
         <h2>Marche sans internet</h2>
         <p>Patron marche très bien même quand vous n'avez pas internet. Tout ce que vous écrivez (vos ventes, vos stocks, vos calculs) reste caché et protégé dans votre téléphone.</p>
         <p>Dès que votre téléphone retrouve internet, l'application remet tout à jour toute seule. Vos données ne quittent jamais votre téléphone sans être totalement protégées.</p>
       </section>
 
-      <section class="section" id="droits">
+      <section class="section reveal" id="droits">
         <h2>Vos droits</h2>
         <ol class="steps">
           <li><strong>Vous voyez tout :</strong> toutes vos ventes et tout votre argent sont écrits clairement dans l'application. Vous pouvez tout vérifier.</li>
@@ -401,7 +439,7 @@
         </ol>
       </section>
 
-      <section class="section" id="contact">
+      <section class="section reveal" id="contact">
         <h2>Nous contacter</h2>
         <p>Si vous avez une question sur vos informations :</p>
         <ul class="contact-list">
@@ -411,11 +449,59 @@
       </section>
     </main>
 
-    <footer>
+    <footer class="reveal">
       <p>Mise à jour : 30 juin 2026</p>
       <p>© 2026 — Patron. Tous droits réservés.</p>
     </footer>
   </div>
+
+  <script>
+    (function () {
+      var reduceMotion = window.matchMedia('(prefers-reduced-motion: reduce)').matches;
+
+      // Fine reading-progress hairline
+      var bar = document.querySelector('.progress');
+      var ticking = false;
+      function updateBar() {
+        var el = document.documentElement;
+        var max = el.scrollHeight - el.clientHeight;
+        var p = max > 0 ? (window.scrollY || el.scrollTop) / max : 0;
+        bar.style.transform = 'scaleX(' + Math.min(1, Math.max(0, p)) + ')';
+        ticking = false;
+      }
+      window.addEventListener('scroll', function () {
+        if (!ticking) { window.requestAnimationFrame(updateBar); ticking = true; }
+      }, { passive: true });
+      updateBar();
+
+      // Gentle stagger inside groups
+      function stagger(selector, stepMs) {
+        var items = document.querySelectorAll(selector);
+        for (var i = 0; i < items.length; i++) {
+          items[i].style.transitionDelay = (i * stepMs) + 'ms';
+        }
+      }
+      stagger('.hero .reveal', 90);
+      stagger('.cards .card', 80);
+      stagger('#jamais .reveal', 130);
+
+      // Reveal on scroll
+      var revealEls = document.querySelectorAll('.reveal');
+      if (reduceMotion || !('IntersectionObserver' in window)) {
+        for (var j = 0; j < revealEls.length; j++) revealEls[j].classList.add('visible');
+        return;
+      }
+      var io = new IntersectionObserver(function (entries) {
+        entries.forEach(function (entry) {
+          if (entry.isIntersecting) {
+            entry.target.classList.add('visible');
+            io.unobserve(entry.target);
+          }
+        });
+      }, { threshold: 0.12, rootMargin: '0px 0px -6% 0px' });
+      for (var k = 0; k < revealEls.length; k++) io.observe(revealEls[k]);
+    })();
+  </script>
 
 </body>
 </html>
