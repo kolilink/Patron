@@ -601,24 +601,28 @@ export default function AccueilScreen() {
   // "Local midnight" per the spec — toDateString() compares in device local
   // time, same technique the old isBusinessCreatedToday check already used.
   const isFirstSaleToday = hasEverSold && firstSaleAt.toDateString() === new Date().toDateString();
-  const deltaAmt = isPrivate ? `••••• ${currency}` : fmt(Math.abs(delta), currency);
+  const deltaAmt = isPrivate ? `••••• ${currency}` : fmt(Math.abs(delta), currency);
   // The ONLY conditional line here, deliberately — no time-of-day greeting
   // variants, no tips, no streaks. Once the first-sale day has passed, this
   // never says "Première vente" again for this business (falls through to
   // the ordinary Ce mois/Même niveau qu'hier comparison instead) — a
   // one-time acknowledgment, not a recurring one.
+  const monthRevenue = kpis?.revenue_month ?? 0;
+  const hasMonthRevenue = monthRevenue > 0;
   const comparisonText = !hasEverSold
     ? 'Bienvenue'
     : isFirstSaleToday
       ? 'Première vente notée ✓'
       : isEvening
-        ? `Ce mois : ${amtOrMask(kpis?.revenue_month ?? 0)}`
+        ? (hasMonthRevenue ? `Ce mois : ${amtOrMask(monthRevenue)}` : '')
         : "Même niveau qu'hier";
-  // Only a genuine directional signal earns the loud solid pill — a flat day
-  // stays plain text, same restraint as everywhere else in this app's color
-  // system. "Bienvenue"/"Première vente"/"Ce mois" aren't deltas at all, so
-  // they never pill.
-  const showDeltaPill = hasEverSold && !isFirstSaleToday && !isEvening && delta !== 0;
+  // Only a genuine GAIN earns the loud solid pill. A down day shows nothing
+  // at all — the hero amount already says it, and an extra red "de moins
+  // qu'hier" is just a frustrating reminder the owner doesn't need. A flat
+  // day stays plain text, and "Bienvenue"/"Première vente"/"Ce mois" aren't
+  // deltas at all, so they never pill.
+  const showDeltaPill = hasEverSold && !isFirstSaleToday && !isEvening && delta > 0;
+  const hideComparison = hasEverSold && !isFirstSaleToday && !isEvening && delta < 0;
 
   return (
     <KeyboardAvoidingView style={{ flex: 1, backgroundColor: palette.background }} behavior={Platform.OS === 'ios' ? 'padding' : undefined}>
@@ -887,19 +891,17 @@ export default function AccueilScreen() {
                     </View>
                   )}
                 </View>
-                <View style={styles.heroComparison}>
-                  {showDeltaPill ? (
-                    <Pill
-                      variant="solid"
-                      tone={delta > 0 ? 'success' : 'warning'}
-                      icon={delta > 0 ? 'arrow-up' : 'arrow-down'}
-                    >
-                      {delta > 0 ? `${deltaAmt} de plus qu'hier` : `${deltaAmt} de moins qu'hier`}
+                {showDeltaPill ? (
+                  <View style={styles.heroComparison}>
+                    <Pill variant="solid" tone="success" icon="arrow-up">
+                      {`${deltaAmt} de plus qu'hier`}
                     </Pill>
-                  ) : (
+                  </View>
+                ) : !hideComparison && comparisonText ? (
+                  <View style={styles.heroComparison}>
                     <Text variant="caption" color="secondary">{comparisonText}</Text>
-                  )}
-                </View>
+                  </View>
+                ) : null}
               </Card>
 
               {/* ── Zone 2: Attention. The debt card always renders — data
@@ -995,9 +997,9 @@ export default function AccueilScreen() {
 
 
               {/* ── Zone 3: Month context — hidden in evening/night (already in comparison) ── */}
-              {dayPart !== 'evening' && dayPart !== 'night' ? (
+              {dayPart !== 'evening' && dayPart !== 'night' && hasMonthRevenue ? (
                 <Text variant="caption" color="secondary" style={styles.monthLine}>
-                  Ce mois: {amtOrMask(kpis?.revenue_month ?? 0)}
+                  Ce mois: {amtOrMask(monthRevenue)}
                 </Text>
               ) : null}
             </>
