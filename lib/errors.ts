@@ -83,6 +83,9 @@ const SERVER_FRIENDLY_PREFIXES = [
   'acces refusé',
   'accès refusé',
   'maximum un niveau',
+  'ce fournisseur',
+  'seul un administrateur',
+  'impossible de rétrograder',
 ];
 
 /**

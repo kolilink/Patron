@@ -17,7 +17,7 @@ import { useAuthStore, getLastPhone, getLastBusinessName } from '@/stores/auth';
 // always-available escape hatch that fills the same role). A hard failure
 // (no hardware, not enrolled) skips this screen's UI entirely and goes
 // straight there too, per the same function.
-type Phase = 'prompting' | 'failed';
+type Phase = 'prompting' | 'failed' | 'offline';
 
 export default function VerrouilleScreen() {
   const { palette } = useTheme();
@@ -39,7 +39,12 @@ export default function VerrouilleScreen() {
   }, []);
 
   async function degradeToCode() {
-    await useAuthStore.getState().logout();
+    // Deliberately NOT logout(): that would wipe the SecureStore session cache
+    // and bio refresh token, forcing a full WhatsApp OTP re-login even though
+    // the account is still valid. degradeLockToCode() clears only the
+    // in-memory session + soft-lock flag; the persisted session stays intact
+    // until a NEW login actually succeeds.
+    await useAuthStore.getState().degradeLockToCode();
     router.replace({ pathname: '/(welcome)/connexion', params: lastPhone ? { prefillPhone: lastPhone } : {} });
   }
 
@@ -55,15 +60,15 @@ export default function VerrouilleScreen() {
       });
       return;
     }
-    // 'unavailable' (no hardware/enrollment, or a hard failure) and
-    // 'restore-failed' (biometric succeeded, session restore didn't) both
-    // collapse into the same visible outcome here: no dead-end screen, just
-    // the one real fallback this app has. Distinguishing them was only ever
-    // useful for the old "Se connecter via WhatsApp" vs "Réessayer" split —
-    // this screen no longer needs that split now that retry is a plain tap
-    // anywhere and the code fallback is always on screen regardless.
+    // 'unavailable' (no hardware/enrollment, or a hard failure) is the only
+    // case that skips this screen's UI entirely — no usable biometric means
+    // the one real fallback is the code flow.
     if (result === 'unavailable') { degradeToCode(); return; }
-    setPhase('failed'); // 'retryable' or 'restore-failed'
+    // 'restore-failed-offline' — biometric SUCCEEDED but the session couldn't
+    // be restored because the device was offline and there was no encrypted
+    // cache. Honest copy: "Hors ligne", never "Non reconnu".
+    if (result === 'restore-failed-offline') { setPhase('offline'); return; }
+    setPhase('failed'); // 'retryable' or 'restore-failed' (genuine auth rejection)
   }
 
   useEffect(() => {
@@ -115,7 +120,7 @@ export default function VerrouilleScreen() {
             avoids a confusing extra tap doing nothing visible). */}
         <Pressable
           style={styles.centerBlock}
-          onPress={phase === 'failed' ? attemptBiometric : undefined}
+          onPress={phase === 'failed' || phase === 'offline' ? attemptBiometric : undefined}
         >
           <View style={styles.mark}>
             <Text style={styles.markLetter}>P</Text>
@@ -128,6 +133,11 @@ export default function VerrouilleScreen() {
           {phase === 'failed' && (
             <Text variant="bodySmall" color="secondary" style={[styles.centerText, styles.inlineNotice]}>
               Non reconnu — réessayez ou utilisez le code.
+            </Text>
+          )}
+          {phase === 'offline' && (
+            <Text variant="bodySmall" color="secondary" style={[styles.centerText, styles.inlineNotice]}>
+              Hors ligne — reconnectez-vous à Internet, puis réessayez.
             </Text>
           )}
         </Pressable>

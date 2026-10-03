@@ -109,11 +109,11 @@ export default function FournisseurProfile() {
   const { palette } = useTheme();
   const styles = useMemo(() => makeStyles(palette), [palette]);
   const { id } = useLocalSearchParams<{ id: string }>();
-  const session    = useAuthStore(s => s.session);
+  const session = useAuthStore(s => s.session);
   const businessId = session?.activeBusiness?.id ?? '';
-  const currency   = session?.activeBusiness?.currency ?? 'GNF';
-  const userId     = session?.user.id ?? '';
-  const role       = session?.activeMembership?.role;
+  const currency = session?.activeBusiness?.currency ?? 'GNF';
+  const userId = session?.user.id ?? '';
+  const role = session?.activeMembership?.role;
 
   const { products, fetchProducts } = useProductStore();
   const {
@@ -144,9 +144,9 @@ export default function FournisseurProfile() {
     .filter(d => d.supplier_id === id)
     .reduce((s, d) => s + Math.max(0, d.amount - d.amount_paid), 0);
 
-  const [showPay, setShowPay]           = useState(false);
-  const [payAmount, setPayAmount]       = useState('');
-  const [paying, setPaying]             = useState(false);
+  const [showPay, setShowPay] = useState(false);
+  const [payAmount, setPayAmount] = useState('');
+  const [paying, setPaying] = useState(false);
   const [detailLivraison, setDetailLivraison] = useState<CommandeAchat | null>(null);
 
   useEffect(() => {
@@ -199,9 +199,9 @@ export default function FournisseurProfile() {
         {
           text: 'Supprimer', style: 'destructive',
           onPress: async () => {
-            const ok = await deleteFournisseur(id, businessId);
+            const { ok, message } = await deleteFournisseur(id, businessId);
             if (ok) router.back();
-            else Alert.alert('Ce fournisseur a des livraisons enregistrées — retirez-les d\'abord :)');
+            else Alert.alert(message ?? 'Impossible de supprimer le fournisseur');
           },
         },
       ]
@@ -279,13 +279,13 @@ export default function FournisseurProfile() {
           {fournisseur.phone ? (
             <View style={styles.contactRow}>
               <Pressable
-                onPress={() => Linking.openURL(`tel:${fournisseur.phone}`).catch(() => {})}
+                onPress={() => Linking.openURL(`tel:${fournisseur.phone}`).catch(() => { })}
                 style={styles.callBtn}>
                 <Ionicons name="call-outline" size={15} color={palette.primary} />
                 <Text style={styles.callText}>Appeler</Text>
               </Pressable>
               <Pressable
-                onPress={() => Linking.openURL(`https://wa.me/${digitsOnly(fournisseur.phone!)}`).catch(() => {})}
+                onPress={() => Linking.openURL(`https://wa.me/${digitsOnly(fournisseur.phone!)}`).catch(() => { })}
                 style={styles.callBtn}>
                 <Ionicons name="logo-whatsapp" size={15} color={palette.primary} />
                 <Text style={styles.callText}>WhatsApp</Text>
@@ -484,18 +484,18 @@ export default function FournisseurProfile() {
 
 function makeStyles(p: Palette) {
   return StyleSheet.create({
-    safe:      { flex: 1, backgroundColor: p.background },
-    header:    { flexDirection: 'row', alignItems: 'center', justifyContent: 'space-between', paddingHorizontal: spacing[5], paddingVertical: spacing[4], borderBottomWidth: StyleSheet.hairlineWidth, borderBottomColor: p.border },
+    safe: { flex: 1, backgroundColor: p.background },
+    header: { flexDirection: 'row', alignItems: 'center', justifyContent: 'space-between', paddingHorizontal: spacing[5], paddingVertical: spacing[4], borderBottomWidth: StyleSheet.hairlineWidth, borderBottomColor: p.border },
     headerBtn: { padding: 4 },
-    scroll:    { paddingBottom: 120 },
+    scroll: { paddingBottom: 120 },
 
     // Hero
-    hero:     { alignItems: 'center', paddingTop: spacing[8], paddingBottom: spacing[6], paddingHorizontal: spacing[5] },
-    avatar:   { width: 70, height: 70, borderRadius: 35, backgroundColor: p.primaryLight, alignItems: 'center', justifyContent: 'center' },
+    hero: { alignItems: 'center', paddingTop: spacing[8], paddingBottom: spacing[6], paddingHorizontal: spacing[5] },
+    avatar: { width: 70, height: 70, borderRadius: 35, backgroundColor: p.primaryLight, alignItems: 'center', justifyContent: 'center' },
     initials: { fontFamily: fontFamily.bold, fontSize: 26, lineHeight: 26, color: p.primary, includeFontPadding: false },
     heroName: { fontFamily: fontFamily.bold, fontSize: 22, color: p.textPrimary, marginTop: 12, textAlign: 'center' },
     contactRow: { flexDirection: 'row', gap: spacing[2], marginTop: 10 },
-    callBtn:  { flexDirection: 'row', alignItems: 'center', gap: 6, paddingHorizontal: 18, paddingVertical: 8, borderRadius: 20, borderWidth: 1.5, borderColor: p.primary },
+    callBtn: { flexDirection: 'row', alignItems: 'center', gap: 6, paddingHorizontal: 18, paddingVertical: 8, borderRadius: 20, borderWidth: 1.5, borderColor: p.primary },
     callText: { fontFamily: fontFamily.semibold, fontSize: 14, color: p.primary },
 
     // Sections
@@ -503,15 +503,15 @@ function makeStyles(p: Palette) {
 
     // Products
     chipWrap: { flexDirection: 'row', flexWrap: 'wrap', gap: spacing[2] },
-    chip:     { flexDirection: 'row' as const, alignItems: 'center' as const, backgroundColor: p.primaryLight, paddingHorizontal: 12, paddingVertical: 6, borderRadius: 16 },
+    chip: { flexDirection: 'row' as const, alignItems: 'center' as const, backgroundColor: p.primaryLight, paddingHorizontal: 12, paddingVertical: 6, borderRadius: 16 },
     chipText: { fontFamily: fontFamily.medium, fontSize: 13, color: p.primary },
 
     // Debt
     debtCard: { flexDirection: 'row', alignItems: 'center', justifyContent: 'space-between' },
-    debtAmt:  { fontFamily: fontFamily.bold, fontSize: 20, color: p.danger, marginTop: 2 },
+    debtAmt: { fontFamily: fontFamily.bold, fontSize: 20, color: p.danger, marginTop: 2 },
 
     // Livraisons
-    orderRow:   { flexDirection: 'row', alignItems: 'center', paddingVertical: spacing[3], borderBottomWidth: StyleSheet.hairlineWidth, borderBottomColor: p.border },
+    orderRow: { flexDirection: 'row', alignItems: 'center', paddingVertical: spacing[3], borderBottomWidth: StyleSheet.hairlineWidth, borderBottomColor: p.border },
 
     // Footer
     footer: {
@@ -523,13 +523,13 @@ function makeStyles(p: Palette) {
 
     // Shared modal styles
     modalSafe: { flex: 1, backgroundColor: p.background },
-    mhdr:      { flexDirection: 'row', alignItems: 'center', justifyContent: 'space-between', padding: spacing[5], borderBottomWidth: 1, borderBottomColor: p.border },
-    mpad:      { padding: spacing[5], gap: spacing[4], paddingBottom: spacing[10] },
+    mhdr: { flexDirection: 'row', alignItems: 'center', justifyContent: 'space-between', padding: spacing[5], borderBottomWidth: 1, borderBottomColor: p.border },
+    mpad: { padding: spacing[5], gap: spacing[4], paddingBottom: spacing[10] },
     // Soft upward shadow instead of a hard top border — matches catalogue.tsx's
     // product-form footer (see CLAUDE.md), which replaced the same harder-edged
     // bordered-panel look for the identical reason: it read as a stray
     // rectangle sitting behind the button rather than part of the sheet.
-    mfooter:   { padding: spacing[5], backgroundColor: p.background, ...shadow.md, shadowOffset: { width: 0, height: -2 } },
+    mfooter: { padding: spacing[5], backgroundColor: p.background, ...shadow.md, shadowOffset: { width: 0, height: -2 } },
 
     dr: { flexDirection: 'row', justifyContent: 'space-between', alignItems: 'center' },
   });

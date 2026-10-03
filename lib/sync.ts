@@ -66,6 +66,24 @@ export function isNetworkError(err: unknown): boolean {
   );
 }
 
+// A genuine business rejection is a RAISE EXCEPTION with ERRCODE P0001 — this
+// codebase's convention for French, user-facing rejections (see CLAUDE.md's
+// "Monetary amounts" / RPC notes; every RPC raises its business rules with
+// `USING ERRCODE = 'P0001'`). Supabase RPC errors are PostgrestError-shaped
+// plain objects carrying the SQLSTATE in `.code`, not thrown `Error` instances
+// — so this must read `.code`, not look for a class name. Everything else —
+// an HTTP 5xx (service unavailable, gateway timeout), a raw SQLSTATE like a
+// foreign-key/permission violation, or any other unexpected failure — is NOT
+// a business rejection: it may be transient (a deploy, a blip, a race), so it
+// must reschedule with backoff like a network error rather than silently drop
+// real, unsynced merchant data forever. Only P0001 is permanent.
+export function isBusinessRejection(err: unknown): boolean {
+  if (err && typeof err === 'object' && 'code' in err) {
+    return String((err as { code: unknown }).code) === 'P0001';
+  }
+  return false;
+}
+
 // Every store's offline-read-cache fallback (see CLAUDE.md's "Offline read
 // caches") only ever recognizes THAT it fell back to cache, never WHY the
 // live fetch actually failed — so every real recurrence (a device stuck on
@@ -286,11 +304,11 @@ async function executeOp(operation: string, payload: Record<string, unknown>): P
         };
         for (const p of payments) {
           const { error } = await supabase.rpc('record_payment', {
-            p_sale_id:     p.order_id,
+            p_sale_id: p.order_id,
             p_business_id: p.business_id,
-            p_amount:      p.amount,
-            p_method:      p.method,
-            p_date:        p.date,
+            p_amount: p.amount,
+            p_method: p.method,
+            p_date: p.date,
           });
           if (error) throw error;
         }
@@ -446,22 +464,31 @@ export async function drainQueue(): Promise<SyncResult> {
           result.syncHealthEvents.push({ name: 'sync_drain_failed_network', businessId, metadata: { operation: op.operation, attempts: op.attempts + 1 } });
           break; // still offline — stop trying the rest of this pass, preserves FIFO ordering
         }
-        // Not network-shaped and not a decrypt/parse failure — a real
-        // server-side rejection (or any other unexpected error). Per the
-        // approved classification, anything that isn't network-shaped is
-        // permanent immediately, not after N attempts: retrying a
-        // non-network failure blindly can only fail the same way again,
-        // which is exactly what "never retries blindly" exists to prevent.
-        // Supabase RPC errors (PostgrestError) are plain objects with a
-        // `.message`, not `Error` instances — extractErrorMessage already
-        // handles that (see its own doc comment above), unlike a bare
-        // String(e), which would stringify them as "[object Object]".
+        // Not network-shaped and not a decrypt/parse failure. Only a genuine
+        // business rejection — a RAISE EXCEPTION with ERRCODE P0001 (see
+        // isBusinessRejection above) — is permanent on the first failure:
+        // retrying it would only fail the same way forever. Every other
+        // non-network error (HTTP 5xx-shaped like "service unavailable",
+        // a raw SQLSTATE such as a foreign-key/permission violation, or any
+        // other unexpected failure) may be transient — a deploy, a blip, a
+        // race — so it reschedules with backoff exactly like a network
+        // error, and the real, unsynced merchant data is never dropped. Only
+        // P0001 may carry the label "failed permanently"; 5xx/unexpected is
+        // "still retrying, just not immediately."
         const msg = extractErrorMessage(e);
-        await markOpPermanentlyFailed(op.id, msg);
-        result.failed++;
-        result.syncHealthEvents.push({ name: 'sync_op_failed_permanent', businessId, metadata: { operation: op.operation, error: msg } });
-        if (op.operation === 'record_payment' || op.operation === 'record_client_payment') {
-          result.rejectedPayments.push(msg);
+        if (isBusinessRejection(e)) {
+          await markOpPermanentlyFailed(op.id, msg);
+          result.failed++;
+          result.syncHealthEvents.push({ name: 'sync_op_failed_permanent', businessId, metadata: { operation: op.operation, error: msg } });
+          if (op.operation === 'record_payment' || op.operation === 'record_client_payment') {
+            result.rejectedPayments.push(msg);
+          }
+        } else {
+          // 5xx / unexpected — backoff-reschedule, same as the network branch.
+          const nextAttemptAt = computeNextAttemptAt(op.attempts);
+          await rescheduleOp(op.id, nextAttemptAt, msg);
+          result.failed++;
+          result.syncHealthEvents.push({ name: 'sync_drain_failed_network', businessId, metadata: { operation: op.operation, attempts: op.attempts + 1 } });
         }
       }
 

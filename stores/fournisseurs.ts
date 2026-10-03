@@ -1,6 +1,6 @@
 import { create } from 'zustand';
 import { supabase } from '@/lib/supabase';
-import { translateError } from '@/lib/errors';
+import { translateError, friendlyMessage } from '@/lib/errors';
 import { generateId } from '@/lib/id';
 import { saveFournisseurCache, getFournisseurCache, saveCommandeCache, getCommandeCache, getCacheTimestamp } from '@/lib/db';
 import { isNetworkError, withTimeout, withNetworkRetry, reportOfflineFallback } from '@/lib/sync';
@@ -114,7 +114,7 @@ interface FournisseursStore {
   fetchFournisseurs: (businessId: string) => Promise<void>;
   createFournisseur: (businessId: string, userId: string, d: { name: string; phone?: string; country?: string; notes?: string; lead_days?: number | null }) => Promise<boolean>;
   updateFournisseur: (id: string, d: { name: string; phone?: string; country?: string; notes?: string; lead_days?: number | null }) => Promise<boolean>;
-  deleteFournisseur: (id: string, businessId: string) => Promise<boolean>;
+  deleteFournisseur: (id: string, businessId: string) => Promise<{ ok: boolean; message: string | null }>;
   payDebt: (businessId: string, supplierId: string, paymentAmount: number) => Promise<boolean>;
 
   fetchCommandes: (businessId: string) => Promise<void>;
@@ -243,15 +243,32 @@ export const useFournisseursStore = create<FournisseursStore>((set, get) => ({
 
   deleteFournisseur: async (id, businessId) => {
     try {
-      // Unlink products so their FK doesn't block deletion
-      await supabase.from('products').update({ supplier_id: null }).eq('supplier_id', id);
-      const { error } = await supabase.from('suppliers').delete().eq('id', id).eq('business_id', businessId);
-      if (error) { set({ error: translateError(error, 'Impossible de supprimer le fournisseur') }); return false; }
+      // Try the raw delete FIRST so the DB guard (unpaid debt / purchase
+      // orders) can block it with a truthful message and zero side effects.
+      // If a linked product's FK is what blocks it, unlink and retry.
+      const first = await supabase.from('suppliers').delete().eq('id', id).eq('business_id', businessId);
+      if (first.error) {
+        if (first.error.code === '23503') {
+          // Foreign-key violation from products.supplier_id — unlink then retry.
+          await supabase.from('products').update({ supplier_id: null }).eq('supplier_id', id);
+          const retry = await supabase.from('suppliers').delete().eq('id', id).eq('business_id', businessId);
+          if (retry.error) {
+            const message = friendlyMessage(retry.error, 'Impossible de supprimer le fournisseur');
+            set({ error: message });
+            return { ok: false, message };
+          }
+        } else {
+          const message = friendlyMessage(first.error, 'Impossible de supprimer le fournisseur');
+          set({ error: message });
+          return { ok: false, message };
+        }
+      }
       set(state => ({ fournisseurs: state.fournisseurs.filter(f => f.id !== id) }));
-      return true;
+      return { ok: true, message: null };
     } catch (err) {
-      set({ error: isNetworkError(err) ? 'Vérifiez votre connexion' : translateError(err, 'Impossible de supprimer le fournisseur') });
-      return false;
+      const message = isNetworkError(err) ? 'Vérifiez votre connexion' : friendlyMessage(err, 'Impossible de supprimer le fournisseur');
+      set({ error: message });
+      return { ok: false, message };
     }
   },
 

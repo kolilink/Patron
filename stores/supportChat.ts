@@ -331,7 +331,15 @@ export const useSupportChatStore = create<SupportChatStore>((set, get) => ({
         });
         if (error) throw error;
         const realMsg = data as SupportMessage;
-        get().appendMessage(realMsg);
+        // P1-4: this item was queued against whatever conversation was loaded
+        // when it was written. The merchant may have navigated away (or switched
+        // business) since — appending a drained message whose conversation_id no
+        // longer matches the currently loaded conversation would pollute the
+        // wrong thread. It was still sent successfully; only surface it when it
+        // belongs to the conversation actually on screen right now.
+        if (get().conversation?.id === realMsg.conversation_id) {
+          get().appendMessage(realMsg);
+        }
         void supabase.functions.invoke('generate-support-draft', {
           body: { conversation_id: realMsg.conversation_id },
         });

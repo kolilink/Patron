@@ -342,11 +342,29 @@ export default function AppLayout() {
         // off was already settled by another payment before this one synced) —
         // surface that instead of letting it disappear into the retry queue.
         if (result.rejectedPayments.length > 0) {
-          toast.warning(
-            result.rejectedPayments.length === 1
-              ? 'Un paiement enregistré hors ligne n\'a pas pu être appliqué : la dette était déjà soldée.'
-              : `${result.rejectedPayments.length} paiements enregistrés hors ligne n'ont pas pu être appliqués : les dettes étaient déjà soldées.`,
-          );
+          // Distinct copy for the two real rejection causes (P0-1): the
+          // targeted sale no longer exists, vs the debt was already settled
+          // by another payment before this queued one synced. The raw
+          // rejection message (extracted from the RPC's P0001 RAISE) is what
+          // distinguishes them — "Vente introuvable" vs "Le montant dépasse
+          // le solde restant dû".
+          const notFound = result.rejectedPayments.filter((m) => m.includes('Vente introuvable')).length;
+          const alreadySettled = result.rejectedPayments.length - notFound;
+
+          if (notFound > 0) {
+            toast.warning(
+              notFound === 1
+                ? 'Un paiement enregistré hors ligne n\'a pas pu être appliqué : la vente correspondante est introuvable.'
+                : `${notFound} paiements enregistrés hors ligne n'ont pas pu être appliqués : les ventes correspondantes sont introuvables.`,
+            );
+          }
+          if (alreadySettled > 0) {
+            toast.warning(
+              alreadySettled === 1
+                ? 'Un paiement enregistré hors ligne n\'a pas pu être appliqué : la dette était déjà soldée.'
+                : `${alreadySettled} paiements enregistrés hors ligne n'ont pas pu être appliqués : les dettes étaient déjà soldées.`,
+            );
+          }
         }
 
         const s = useAuthStore.getState().session;

@@ -9,8 +9,10 @@ jest.mock('@/lib/sync', () => ({
 }));
 
 const mockGetQueueCount = jest.fn().mockResolvedValue(0);
+const mockGetFailedQueueCount = jest.fn().mockResolvedValue(0);
 jest.mock('@/lib/db', () => ({
   getQueueCount: mockGetQueueCount,
+  getFailedQueueCount: mockGetFailedQueueCount,
 }));
 
 const mockTrackEvent = jest.fn();
@@ -82,5 +84,25 @@ describe('useSyncStore.sync()', () => {
     expect(result.synced).toBe(1);
     expect(useSyncStore.getState().pendingCount).toBe(3);
     expect(useSyncStore.getState().syncing).toBe(false);
+  });
+
+  it('P1-2: failedCount is a DISTINCT quiet state — parked failed rows never fold into pendingCount', async () => {
+    mockGetQueueCount.mockResolvedValueOnce(0);       // nothing still retrying
+    mockGetFailedQueueCount.mockResolvedValueOnce(4); // 4 rows parked as failed_permanent/corrupt
+    mockDrainQueue.mockResolvedValueOnce({
+      synced: 0, failed: 0, rejectedPayments: [],
+      syncHealthEvents: [],
+    });
+    await useSyncStore.getState().sync();
+    expect(useSyncStore.getState().pendingCount).toBe(0);
+    expect(useSyncStore.getState().failedCount).toBe(4);
+  });
+
+  it('P1-2: refreshCount updates failedCount alongside pendingCount', async () => {
+    mockGetQueueCount.mockResolvedValueOnce(2);
+    mockGetFailedQueueCount.mockResolvedValueOnce(1);
+    await useSyncStore.getState().refreshCount();
+    expect(useSyncStore.getState().pendingCount).toBe(2);
+    expect(useSyncStore.getState().failedCount).toBe(1);
   });
 });
