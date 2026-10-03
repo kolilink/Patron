@@ -26,6 +26,7 @@ import { FormSheet } from '@/src/components/ui/FormSheet';
 import { Ionicons } from '@expo/vector-icons';
 import { Button } from '@/src/components/ui/Button';
 import { NoResultsState } from '@/src/components/ui/NoResultsState';
+import { EmptyState } from '@/src/components/ui/EmptyState';
 import { Card } from '@/src/components/ui/Card';
 import { Input } from '@/src/components/ui/Input';
 import { Text } from '@/src/components/ui/Text';
@@ -513,8 +514,11 @@ function PaymentModal({
   const parsedAmount = parseAmountInput(amountInput, currency);
   const shortfall = total - parsedAmount;
   const isShort = shortfall > 0.5;
+  const isOverpay = parsedAmount > total + 0.5;
+  const changeDue = isOverpay ? parsedAmount - total : 0;
 
-  const creditDiscount = parseAmountInput(creditDiscountInput, currency);
+  // Cap a reduction at total-1 so a discount can never zero out (or exceed) a sale.
+  const creditDiscount = Math.min(parseAmountInput(creditDiscountInput, currency), Math.max(0, total - 1));
   const creditUpfront = parseAmountInput(creditUpfrontInput, currency);
   const creditEffectiveTotal = total - creditDiscount;
   const creditUpfrontCoversAll = creditUpfront >= creditEffectiveTotal - 0.01 && creditUpfront > 0;
@@ -539,12 +543,17 @@ function PaymentModal({
   };
 
   const requiresClient = disambig === 'credit';
-  const canConfirmPay = !isShort || (disambig !== null && (!requiresClient || clientName.trim().length > 0));
+  // A zero-amount «rabais» (nothing handed over) must never silently zero out a sale.
+  const isZeroAmountRabais = disambig === 'rabais' && parsedAmount <= 0.5 && total > 0.5;
+  const canConfirmPay = !isZeroAmountRabais && (!isShort || (disambig !== null && (!requiresClient || clientName.trim().length > 0)));
   const canConfirmCredit = creditUpfrontCoversAll || clientName.trim().length > 0;
 
   const handleConfirmPay = () => {
-    const discountAmount = disambig === 'rabais' ? shortfall : 0;
-    const payment: SalePayment = { method: payMethod, amount: parsedAmount };
+    // Overpay hands back change — the sale total stays the cart total; only a
+    // genuine shortfall treated as a «rabais» becomes a discount.
+    const discountAmount = disambig === 'rabais' && isShort ? shortfall : 0;
+    const amount = Math.min(parsedAmount, total);
+    const payment: SalePayment = { method: payMethod, amount };
     onConfirm(payment, clientName.trim() || undefined, discountAmount, clientId);
   };
 
@@ -650,22 +659,13 @@ function PaymentModal({
               searchHasNoMatch (handled further below, inside the populated
               branch). */}
       {step === 'credit' && creditPhase === 'client' && quickClients.length === 0 && (
-        <View style={styles.creditEmptyClients}>
-          <View style={styles.creditEmptyIconWrap}>
-            <Ionicons name="person-add-outline" size={28} color={palette.textSecondary} />
-          </View>
-          <Text variant="h4" style={{ textAlign: 'center' }}>Aucun client pour le moment.</Text>
-          <Text variant="body" color="secondary" style={{ textAlign: 'center' }}>
-            Ici, vous verrez qui vous doit de l'argent.
-          </Text>
-          <Button
-            label="+ Nouveau client"
-            onPress={() => setCreditPhase('newClient')}
-            fullWidth
-            size="lg"
-            style={{ marginTop: spacing[3], alignSelf: 'stretch' }}
-          />
-        </View>
+        <EmptyState
+          icon="person-add-outline"
+          title="Aucun client pour le moment."
+          subtitle="Ici, vous verrez qui vous doit de l'argent."
+          actionLabel="+ Nouveau client"
+          onAction={() => setCreditPhase('newClient')}
+        />
       )}
 
       {step === 'credit' && creditPhase === 'client' && quickClients.length > 0 && (
@@ -901,6 +901,13 @@ function PaymentModal({
                 selectTextOnFocus
                 inputAccessoryViewID={Platform.OS === 'ios' ? PAYMENT_SILENT_ACCESSORY_ID : undefined}
               />
+
+              {isOverpay && (
+                <View style={{ flexDirection: 'row', alignItems: 'center', justifyContent: 'space-between' }}>
+                  <Text variant="caption" color="secondary">Monnaie à rendre</Text>
+                  <Text variant="label" style={{ color: palette.primary }}>{formatAmount(changeDue, currency)}</Text>
+                </View>
+              )}
 
               <Pressable onPress={() => setDisambig('credit')} style={styles.radioRow}>
                 <View style={[styles.radio, disambig === 'credit' && styles.radioActive]}>
@@ -1417,13 +1424,15 @@ export default function VendreScreen() {
   const role = session?.activeMembership?.role;
   const isVendeur = role === 'vendeur';
 
-  const { products: allProducts, vendeurProductScope, variantsByProduct, loading, offline, offlineSince, fetchProducts, fetchVariants } = useProductStore();
+  const { products: allProducts, vendeurProductScope, vendeurScopeAll, variantsByProduct, loading, offline, offlineSince, fetchProducts, fetchVariants } = useProductStore();
 
-  // Apply vendeur product scope (empty = unscoped, sees everything)
+  // Apply vendeur product scope. Fix C(2): scope_all_products=true → see all;
+  // scope_all_products=false → ONLY the assigned products (so zero assigned =
+  // zero visible, matching the server's submit_sale enforcement).
   const products = useMemo(() => {
-    if (!isVendeur || vendeurProductScope.length === 0) return allProducts;
+    if (!isVendeur || vendeurScopeAll) return allProducts;
     return allProducts.filter(p => vendeurProductScope.includes(p.id));
-  }, [allProducts, vendeurProductScope, isVendeur]);
+  }, [allProducts, vendeurProductScope, vendeurScopeAll, isVendeur]);
   const { cart, submitting, error: saleError, addToCart, addToCartVariant, removeFromCart, setQty, toggleBulk, clearCart, submitSale, submitCarnetDebt, clearError } =
     useSalesStore();
 
@@ -1734,14 +1743,12 @@ export default function VendreScreen() {
       const total = cartTotal;
       const isCredit = payment === null;
 
-      // When merchant sells above catalog price, use their typed amount as the actual sale total
-      const effectiveTotal = payment && payment.amount > total + 0.5 ? payment.amount : total;
-      // Scale item unit prices so they sum to the effective total — avoids a mismatch on the receipt
-      const priceRatio = effectiveTotal > total + 0.5 && total > 0 ? effectiveTotal / total : 1;
+      // Never inflate the sale total when the customer hands over more than the
+      // cart total — the cart total IS the sale total; overage is returned as change.
       const receiptItems: ReceiptItem[] = cart.map(l => ({
         name: l.variant_name ? `${l.product.name} · ${l.variant_name}` : l.product.name,
         qty: l.qty,
-        unit_price: priceRatio !== 1 ? Math.round(l.unit_price * priceRatio) : l.unit_price,
+        unit_price: l.unit_price,
         is_bulk: l.is_bulk,
       }));
       pendingReceiptRef.current = {
@@ -1749,7 +1756,7 @@ export default function VendreScreen() {
         businessPhone: business?.phone ?? null,
         currency,
         items: receiptItems,
-        total: effectiveTotal,
+        total,
         discountAmount: discountAmount && discountAmount > 0 ? discountAmount : undefined,
         amountPaid: payment ? payment.amount : undefined,
         payment: payment ?? null,
@@ -1757,7 +1764,7 @@ export default function VendreScreen() {
         date: new Date(),
       };
 
-      const ok = await submitSale(businessId, userId, payment, customerName, undefined, discountAmount, clientId, effectiveTotal !== total ? effectiveTotal : undefined, dueDate ?? null);
+      const ok = await submitSale(businessId, userId, payment, customerName, undefined, discountAmount, clientId, undefined, dueDate ?? null);
       if (ok) {
         setLastReceipt(pendingReceiptRef.current);
         setShowPayment(false);
@@ -1778,7 +1785,7 @@ export default function VendreScreen() {
         // queued into pendingSaveConfirmationRef and only raised once the
         // sheet is dismissed (share or "Ignorer"), via the effect below.
         const saleId = lastSaleId;
-        const netAmount = effectiveTotal - (discountAmount ?? 0);
+        const netAmount = total - (discountAmount ?? 0);
         const confirmMessage = isCredit && customerName
           ? creditSaleConfirmation(customerName, netAmount, currency)
           : cashSaleConfirmation(netAmount, currency);
@@ -2045,15 +2052,13 @@ export default function VendreScreen() {
           the block right below) has its own real content now instead of
           silently relying on this branch's opposite condition. */}
       {mode === 'vente' && products.length === 0 && (offline || isVendeur) && (
-        <View style={styles.emptyFull}>
-          <Ionicons name={offline ? 'cloud-offline-outline' : 'receipt-outline'} size={48} color={palette.textDisabled} />
-          <Text variant="h4">{offline ? 'Catalogue non disponible hors ligne' : 'Point de vente'}</Text>
-          <Text variant="body" color="secondary" style={styles.emptyDesc}>
-            {offline
-              ? 'Ouvrez l\'application en ligne une première fois pour activer le mode hors ligne.'
-              : 'Le catalogue est vide — votre responsable prépare les produits.'}
-          </Text>
-        </View>
+        <EmptyState
+          icon={offline ? 'cloud-offline-outline' : 'receipt-outline'}
+          title={offline ? 'Catalogue non disponible hors ligne' : 'Point de vente'}
+          subtitle={offline
+            ? 'Ouvrez l\'application en ligne une première fois pour activer le mode hors ligne.'
+            : 'Le catalogue est vide — votre responsable prépare les produits.'}
+        />
       )}
 
       {/* Empty state — Vente mode, admin/manager, online, no products. Used
@@ -2065,23 +2070,15 @@ export default function VendreScreen() {
           sale directly, with catalog creation as the explicit second choice,
           not the only one. */}
       {mode === 'vente' && products.length === 0 && !offline && !isVendeur && (
-        <View style={styles.emptyFull}>
-          <Ionicons name="storefront-outline" size={48} color={palette.textDisabled} />
-          <Text variant="h4">Aucun produit pour le moment.</Text>
-          <Text variant="body" color="secondary" style={styles.emptyDesc}>
-            Pas besoin de catalogue pour vendre.
-          </Text>
-          <View style={styles.emptyActions}>
-            <Button label="Vente rapide" onPress={() => setShowQuickCapture(true)} fullWidth size="lg" />
-            <Button
-              label="Ajouter un produit"
-              variant="ghost"
-              onPress={() => router.push({ pathname: '/(app)/(tabs)/catalogue', params: { openForm: '1' } })}
-              fullWidth
-              size="lg"
-            />
-          </View>
-        </View>
+        <EmptyState
+          icon="storefront-outline"
+          title="Aucun produit pour le moment."
+          subtitle="Pas besoin de catalogue pour vendre."
+          actionLabel="Vente rapide"
+          onAction={() => setShowQuickCapture(true)}
+          linkLabel="Ajouter un produit"
+          onLink={() => router.push({ pathname: '/(app)/(tabs)/catalogue', params: { openForm: '1' } })}
+        />
       )}
 
       {searchVisible && (
@@ -2576,9 +2573,6 @@ function makeStyles(p: Palette) {
     },
     payMethodChipActive: { backgroundColor: p.primary, borderColor: p.primary },
 
-    emptyFull: { flex: 1, alignItems: 'center', justifyContent: 'center', padding: spacing[8], gap: spacing[3] },
-    emptyDesc: { textAlign: 'center', maxWidth: 260 },
-    emptyActions: { width: '100%', maxWidth: 320, gap: spacing[3], marginTop: spacing[2] },
     // 194 was tuned against the old flush tab bar's flex space; the floating
     // pill no longer reserves that space, so the same clearance is added
     // here too to keep this FAB sitting exactly where it did before.
@@ -2614,21 +2608,6 @@ function makeStyles(p: Palette) {
     totalBig: { fontFamily: fontFamily.bold, fontSize: 36, lineHeight: 50, letterSpacing: -0.5 },
 
     payContent: { padding: spacing[5], gap: spacing[4] },
-
-    // "Choisir le client" with zero clients — no search field, no list
-    // header, just the invitation to create the first one. Centered via the
-    // FormSheet's own flexGrow'd content container (see its
-    // contentContainerStyle above), not a fixed height guess.
-    creditEmptyClients: {
-      flex: 1, alignItems: 'center', justifyContent: 'center',
-      paddingHorizontal: spacing[8], paddingVertical: spacing[10], gap: spacing[3],
-    },
-    creditEmptyIconWrap: {
-      width: 64, height: 64, borderRadius: 32,
-      borderWidth: 1.5, borderColor: p.border,
-      alignItems: 'center', justifyContent: 'center',
-      marginBottom: spacing[2],
-    },
 
     // "Il devra 340 USD" agreement sentence — a plain, neutral card, not an
     // amber warning box: the big amber number above already carries the

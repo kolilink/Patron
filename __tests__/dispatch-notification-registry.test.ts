@@ -26,6 +26,24 @@ describe('notification registry — allowlist', () => {
     }
   });
 
+  it('B4/B1 — partnership_declined and consumer_invite_accepted are registered and built', () => {
+    expect(EVENT_REGISTRY.partnership_declined).toBeDefined();
+    expect(EVENT_REGISTRY.partnership_declined.built).toBe(true);
+    expect(EVENT_REGISTRY.consumer_invite_accepted).toBeDefined();
+    expect(EVENT_REGISTRY.consumer_invite_accepted.built).toBe(true);
+  });
+
+  it('consumer_invite_accepted carries no payload keys — inviter_id never leaves the server', () => {
+    expect(EVENT_REGISTRY.consumer_invite_accepted.allowedDataKeys).toEqual([]);
+    expect(sanitizeDataPayload('consumer_invite_accepted', { inviter_id: 'u-1', anything: 'x' })).toEqual({});
+  });
+
+  it('partnership_declined allows only {business} as its named exception', () => {
+    expect(sanitizeDataPayload('partnership_declined', {
+      business: 'Boutique Fatou', requester_name: 'Fatou', inviter_id: 'u-1',
+    })).toEqual({ business: 'Boutique Fatou' });
+  });
+
   it('price_changed is registered but never built — never sends a push', () => {
     expect(EVENT_REGISTRY.price_changed.built).toBe(false);
   });

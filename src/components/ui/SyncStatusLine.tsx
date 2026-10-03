@@ -1,5 +1,5 @@
-import { useEffect, useState } from 'react';
-import { StyleSheet, View } from 'react-native';
+import { useEffect, useRef, useState } from 'react';
+import { Animated, StyleSheet, View } from 'react-native';
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
 import { Text } from '@/src/components/ui/Text';
 import { useTheme, spacing } from '@/src/theme';
@@ -21,6 +21,18 @@ import { computeSyncStatusLabel } from '@/src/components/ui/syncStatusLabel';
 // listener). A manual "sync now" button was part of the old SyncBanner
 // and is deliberately not carried forward — it implied the merchant
 // needed to do something, which contradicts "never block capture."
+//
+// Layout-shift fix: this line sits in the normal flow above <Stack/> in
+// app/(app)/_layout.tsx. Returning null (clean) vs rendering a View
+// (syncing / 7-day) changed the header's height on every sync-state flip,
+// and a fast drain could bounce the whole screen. Two-part fix:
+//   (a) debounce BOTH edges — a state change shorter than this never
+//       renders, so a sub-second syncing blip (or a momentary clean flash
+//       between writes) produces no flicker at all;
+//   (b) keep the line mounted and animate its height smoothly instead of
+//       mounting/unmounting, so any reflow is a gentle slide, not a jump.
+const DEBOUNCE_MS = 500;
+const HEIGHT_ANIM_MS = 200;
 
 export function SyncStatusLine() {
   const { palette } = useTheme();
@@ -48,17 +60,47 @@ export function SyncStatusLine() {
   }, [pendingCount]);
 
   const label = computeSyncStatusLabel({ syncing, pendingCount, lastSyncedAt, oldestQueuedAt });
-  if (label === null) return null;
+
+  // (a) Debounce both edges onto a single committed label — a transient
+  // state change shorter than DEBOUNCE_MS never reaches the committed
+  // value, so the line neither flashes on nor flashes off.
+  const [committedLabel, setCommittedLabel] = useState<string | null>(label);
+  const commitTimer = useRef<ReturnType<typeof setTimeout> | null>(null);
+  useEffect(() => {
+    if (label === committedLabel) return;
+    if (commitTimer.current) clearTimeout(commitTimer.current);
+    commitTimer.current = setTimeout(() => setCommittedLabel(label), DEBOUNCE_MS);
+    return () => { if (commitTimer.current) clearTimeout(commitTimer.current); };
+  }, [label, committedLabel]);
+
+  // (b) Animate the line's height instead of mounting/unmounting it. The
+  // inner View is always laid out at full size (so onLayout reports the
+  // real target height, insets.top included), and the outer Animated.View
+  // clips it to the animated height — zero when clean, full when visible.
+  const visible = committedLabel !== null;
+  const [barHeight, setBarHeight] = useState(0);
+  const height = useRef(new Animated.Value(0)).current;
+  useEffect(() => {
+    if (barHeight === 0) return;
+    Animated.timing(height, {
+      toValue: visible ? barHeight : 0,
+      duration: HEIGHT_ANIM_MS,
+      useNativeDriver: false,
+    }).start();
+  }, [visible, barHeight, height]);
 
   return (
-    <View
-      style={[
-        styles.bar,
-        { paddingTop: (isDemoMode ? 0 : insets.top) + spacing[1], backgroundColor: palette.background },
-      ]}
-    >
-      <Text variant="caption" style={{ color: palette.textSecondary }}>{label}</Text>
-    </View>
+    <Animated.View style={{ height, overflow: 'hidden', backgroundColor: palette.background }}>
+      <View
+        onLayout={e => setBarHeight(e.nativeEvent.layout.height)}
+        style={[
+          styles.bar,
+          { paddingTop: (isDemoMode ? 0 : insets.top) + spacing[1] },
+        ]}
+      >
+        <Text variant="caption" style={{ color: palette.textSecondary }}>{committedLabel ?? ''}</Text>
+      </View>
+    </Animated.View>
   );
 }
 

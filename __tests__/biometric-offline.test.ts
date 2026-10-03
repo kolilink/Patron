@@ -1,11 +1,9 @@
-// P1-3 — lock screen offline: after a SUCCESSFUL biometric prompt, a failed
-// session restore must never be reported as "Non reconnu" when the real cause
-// is the network. These tests guard the three post-biometric outcomes in
-// loginWithBiometric ('authenticated' is the live path, 'offline-cached' the
-// encrypted-cache fallback, 'offline' the honest "Hors ligne…" case,
-// 'auth-failed' the only truthful "Non reconnu") plus the degradeLockToCode
-// escape hatch, which must clear in-memory state WITHOUT wiping the persisted
-// session cache / bio refresh token until a NEW login actually succeeds.
+// P1-3 — OS-native lock: unlockWithBiometric must restore the session from the
+// LOCAL encrypted cache after the OS prompt succeeds, and must NEVER require
+// network. A device with no biometric AND no device credential enrolled skips
+// the prompt and passes straight through (restores the cache), so a dead lock
+// screen is never shown. The OS owns all retry/fallback UI, so a failed prompt
+// is simply 'retryable' — the app shows no duplicated error copy.
 
 jest.mock('@/lib/supabase', () => ({
     supabase: {
@@ -35,12 +33,6 @@ jest.mock('@/lib/db', () => ({
 jest.mock('@/lib/analytics', () => ({ trackEvent: jest.fn() }));
 jest.mock('@/lib/posthog', () => ({ posthog: null }));
 
-import * as SecureStore from 'expo-secure-store';
-import { useAuthStore } from '@/stores/auth';
-import { supabase } from '@/lib/supabase';
-import { reportOfflineFallback } from '@/lib/sync';
-import type { AppSession, Business, Membership } from '@/src/types';
-
 jest.mock('@/lib/sync', () => {
     const actual = jest.requireActual('@/lib/sync');
     return {
@@ -49,8 +41,15 @@ jest.mock('@/lib/sync', () => {
     };
 });
 
+import * as SecureStore from 'expo-secure-store';
+import * as LocalAuthentication from 'expo-local-authentication';
+import { useAuthStore } from '@/stores/auth';
+import { supabase } from '@/lib/supabase';
+import { reportOfflineFallback } from '@/lib/sync';
+import type { AppSession, Business, Membership } from '@/src/types';
+
 const CACHE_KEY = 'patron_session_cache_v1';
-const BIO_REFRESH_KEY = 'patron_bio_refresh_token';
+const LOCKED_KEY = 'patron_locked_v1';
 
 function makeBusiness(id: string, name: string): Business {
     return {
@@ -96,9 +95,11 @@ async function seedSessionCache(session: AppSession): Promise<void> {
 async function resetSecureStore(): Promise<void> {
     await SecureStore.deleteItemAsync(`${CACHE_KEY}_count`);
     await SecureStore.deleteItemAsync(`${CACHE_KEY}_0`);
-    await SecureStore.deleteItemAsync(BIO_REFRESH_KEY);
+    await SecureStore.deleteItemAsync(LOCKED_KEY);
 }
 
+const isEnrolledMock = LocalAuthentication.isEnrolledAsync as jest.Mock;
+const authenticateMock = LocalAuthentication.authenticateAsync as jest.Mock;
 const refreshSessionMock = supabase.auth.refreshSession as jest.Mock;
 
 beforeEach(async () => {
@@ -109,84 +110,87 @@ beforeEach(async () => {
         locked: true,
         error: null,
     });
+    isEnrolledMock.mockResolvedValue(true);
+    authenticateMock.mockResolvedValue({ success: true });
     jest.clearAllMocks();
 });
 
-describe('loginWithBiometric — offline session restore', () => {
-    it('falls back to the encrypted session cache and returns "offline-cached" on a network-shaped refresh failure', async () => {
+describe('unlockWithBiometric — local session restore (OS-native auth)', () => {
+    it('unlocks from the encrypted session cache after a successful OS prompt, with zero network calls', async () => {
         const cached = makeSession();
         await seedSessionCache(cached);
-        // A plain fetch failure: isAuthRetryableFetchError sees no __isAuthError,
-        // but isNetworkError() matches the "fetch" substring.
-        refreshSessionMock.mockResolvedValue({ error: new Error('fetch failed'), data: { session: null } });
 
-        const result = await useAuthStore.getState().loginWithBiometric();
+        const result = await useAuthStore.getState().unlockWithBiometric();
 
-        expect(result).toBe('offline-cached');
+        expect(result).toBe('unlocked');
         expect(useAuthStore.getState().session).toEqual(cached);
-        expect(useAuthStore.getState().loading).toBe(false);
+        expect(useAuthStore.getState().locked).toBe(false);
+        expect(authenticateMock).toHaveBeenCalledTimes(1);
+        // The lock screen must NEVER require network.
+        expect(refreshSessionMock).not.toHaveBeenCalled();
         expect(reportOfflineFallback).not.toHaveBeenCalled();
     });
 
-    it('recognizes a Supabase AuthRetryableFetchError-shaped failure as network-shaped too', async () => {
+    it('uses disableDeviceFallback: false so iOS/Android own the device-credential fallback', async () => {
+        await seedSessionCache(makeSession());
+
+        await useAuthStore.getState().unlockWithBiometric();
+
+        expect(authenticateMock).toHaveBeenCalledWith(expect.objectContaining({
+            disableDeviceFallback: false,
+        }));
+    });
+
+    it('skips the prompt and passes through (unlocked) when no biometric/device credential is enrolled', async () => {
         const cached = makeSession();
         await seedSessionCache(cached);
-        refreshSessionMock.mockResolvedValue({
-            error: { __isAuthError: true, name: 'AuthRetryableFetchError', message: 'fetch failed' },
-            data: { session: null },
-        });
+        isEnrolledMock.mockResolvedValue(false);
 
-        const result = await useAuthStore.getState().loginWithBiometric();
+        const result = await useAuthStore.getState().unlockWithBiometric();
 
-        expect(result).toBe('offline-cached');
+        expect(result).toBe('unlocked');
         expect(useAuthStore.getState().session).toEqual(cached);
+        expect(useAuthStore.getState().locked).toBe(false);
+        // No dead lock screen: the native prompt must never even be shown.
+        expect(authenticateMock).not.toHaveBeenCalled();
+        expect(refreshSessionMock).not.toHaveBeenCalled();
     });
 
-    it('returns "offline" (never "auth-failed") when the network is down and no cache exists', async () => {
-        refreshSessionMock.mockResolvedValue({ error: new Error('network request failed'), data: { session: null } });
+    it('returns "retryable" and stays locked when the OS prompt does not succeed', async () => {
+        authenticateMock.mockResolvedValue({ success: false, error: 'user_cancel' });
 
-        const result = await useAuthStore.getState().loginWithBiometric();
+        const result = await useAuthStore.getState().unlockWithBiometric();
 
-        expect(result).toBe('offline');
+        expect(result).toBe('retryable');
         expect(useAuthStore.getState().session).toBeNull();
-        expect(reportOfflineFallback).toHaveBeenCalledWith('auth.loginWithBiometric', expect.anything());
+        expect(useAuthStore.getState().locked).toBe(true);
     });
 
-    it('returns "auth-failed" for a genuine non-network auth rejection — the only truthful "Non reconnu"', async () => {
-        const cached = makeSession();
-        await seedSessionCache(cached);
-        // A real invalid/revoked token rejection, NOT network-shaped: no
-        // AuthRetryableFetchError name, no network keyword in the message.
-        refreshSessionMock.mockResolvedValue({
-            error: { __isAuthError: true, name: 'AuthInvalidCredentialsError', message: 'Invalid Refresh Token' },
-            data: { session: null },
-        });
+    it('unlocks with a null session (still passes through) when OS auth succeeds but no cache exists', async () => {
+        const result = await useAuthStore.getState().unlockWithBiometric();
 
-        const result = await useAuthStore.getState().loginWithBiometric();
-
-        expect(result).toBe('auth-failed');
-        // A valid cache must NOT be used to paper over a genuine auth rejection.
-        expect(useAuthStore.getState().session).toBeNull();
-        expect(reportOfflineFallback).not.toHaveBeenCalled();
-    });
-});
-
-describe('degradeLockToCode', () => {
-    it('clears in-memory session/locked state without wiping the persisted session cache or bio refresh token', async () => {
-        const session = makeSession();
-        await seedSessionCache(session);
-        await SecureStore.setItemAsync(BIO_REFRESH_KEY, 'bio-token-123');
-        useAuthStore.setState({ session, locked: true });
-
-        await useAuthStore.getState().degradeLockToCode();
-
+        expect(result).toBe('unlocked');
         expect(useAuthStore.getState().session).toBeNull();
         expect(useAuthStore.getState().locked).toBe(false);
+        expect(refreshSessionMock).not.toHaveBeenCalled();
+    });
 
-        // The persisted session survives so the NEXT biometric attempt can still
-        // restore it for free — degradeToCode must never route through logout().
-        expect(await SecureStore.getItemAsync(`${CACHE_KEY}_count`)).toBe('1');
-        expect(await SecureStore.getItemAsync(`${CACHE_KEY}_0`)).toBe(JSON.stringify(session));
-        expect(await SecureStore.getItemAsync(BIO_REFRESH_KEY)).toBe('bio-token-123');
+    it('drops a stacked call while a native prompt is already in flight', async () => {
+        // First call leaves the in-flight guard held until the prompt settles.
+        let resolvePrompt: (v: unknown) => void = () => { };
+        authenticateMock.mockImplementation(() => new Promise(r => { resolvePrompt = r; }));
+
+        const first = useAuthStore.getState().unlockWithBiometric();
+
+        // Drain the microtask queue (import → isEnrolledAsync → authenticateAsync)
+        // so the first call is deterministically parked at the native prompt
+        // before the stacked call is attempted.
+        await new Promise(r => setTimeout(r, 0));
+
+        const second = await useAuthStore.getState().unlockWithBiometric();
+
+        expect(second).toBe('retryable');
+        resolvePrompt({ success: true });
+        await expect(first).resolves.toBe('unlocked');
     });
 });

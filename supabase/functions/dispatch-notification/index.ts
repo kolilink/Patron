@@ -26,6 +26,8 @@ const EVENT_TITLES: Record<string, string> = {
   low_stock: '📦 Stock bas', // product name is appended, e.g. "📦 Stock bas : Riz"
   partnership_request: '🤝 Demande de partenariat',
   partnership_accepted: '🤝 Partenariat accepté',
+  partnership_declined: '🤝 Demande refusée',
+  consumer_invite_accepted: '🎉 Un ami t\'a rejoint',
   support_message: '💬 Nouveau message',
   support_reply: '💬 Réponse du support',
   alpha_quota_reset: '✨ Alpha',
@@ -46,7 +48,10 @@ const SECOND_ACTION_TITLES: Record<string, string> = {
 
 function buildTitle(eventType: string, bizName: string, p: Record<string, unknown>): string {
   if (eventType === 'chat_message') return String(p.sender ?? bizName);
-  if (eventType === 'low_stock') return `📦 Stock bas : ${p.product ?? ''}`;
+  if (eventType === 'low_stock') {
+    const label = p.variant ? `${p.product ?? ''} · ${p.variant}` : (p.product ?? '');
+    return `📦 Stock bas : ${label}`;
+  }
   if (eventType === 'second_action_reminder') {
     return SECOND_ACTION_TITLES[String(p.action_type)] ?? '✅ Première action notée';
   }
@@ -78,7 +83,13 @@ interface ExpoTicket {
 // a member of — the two partnership handshake notifications, sent to the
 // *other* business in the relationship. Authorized instead via an actual
 // business_partnerships row linking that business to one of the caller's own.
-const CROSS_BUSINESS_EVENTS = new Set(['partnership_request', 'partnership_accepted']);
+const CROSS_BUSINESS_EVENTS = new Set(['partnership_request', 'partnership_accepted', 'partnership_declined']);
+
+// The joiner dispatches for their OWN business (so the standard membership
+// authorization passes), but the recipient is the INVITER — resolved from the
+// invite the caller redeemed, not from a membership row of the caller's
+// business. Recipient resolution is special-cased below.
+const CONSUMER_EVENTS = new Set(['consumer_invite_accepted']);
 
 // The founder replying to a support thread is never a member of the
 // merchant's business — authorized instead by matching profiles.phone,
@@ -231,15 +242,21 @@ serve(async (req) => {
       payload = { ...payload, business: bizName };
     }
 
-    // Low stock: 24h cooldown per product per business
+    // Low stock: 24h cooldown per product (or per variant when variant_id is
+    // present) per business. The cooldown key must include variant_id so a
+    // variant notification doesn't suppress (or get suppressed by) its sibling
+    // variants' notifications — previously keyed only on product_id, which is
+    // always the same parent id for every variant.
     if (event_type === 'low_stock' && payload.product_id) {
       const since = new Date(Date.now() - 24 * 60 * 60 * 1000).toISOString();
+      const cooldownKey: Record<string, unknown> = { product_id: payload.product_id };
+      if (payload.variant_id) cooldownKey.variant_id = payload.variant_id;
       const { count } = await supabase
         .from('notification_log')
         .select('*', { count: 'exact', head: true })
         .eq('business_id', business_id)
         .eq('event_type', 'low_stock')
-        .contains('payload', { product_id: payload.product_id })
+        .contains('payload', cooldownKey)
         .gte('sent_at', since);
       if ((count ?? 0) > 0) {
         return new Response(JSON.stringify({ skipped: 'cooldown' }), {
@@ -250,7 +267,24 @@ serve(async (req) => {
 
     // Resolve recipients
     let userIds: string[] = target_user_ids ?? [];
-    if (event_type === 'support_message') {
+    if (CONSUMER_EVENTS.has(event_type)) {
+      // consumer_invite_accepted: the target is the INVITER of the invite the
+      // caller just redeemed. They are NOT a member of the caller's business,
+      // so the memberships-based paths below can never find them. If the
+      // caller supplied explicit user ids, keep only those among the derived
+      // inviters (defense-in-depth against targeting an arbitrary user).
+      const { data: inviterRows } = await supabase
+        .from('consumer_invites')
+        .select('inviter_id')
+        .eq('used_by', callerUserId!)
+        .eq('status', 'used');
+      const derived = [...new Set(
+        ((inviterRows ?? []) as { inviter_id: string }[]).map(r => r.inviter_id),
+      )];
+      userIds = (target_user_ids && target_user_ids.length > 0)
+        ? derived.filter(id => (target_user_ids as string[]).includes(id))
+        : derived;
+    } else if (event_type === 'support_message') {
       // Always routes to the founder himself, regardless of any target_roles/
       // target_user_ids the caller passed — he is not a member of business_id,
       // so the memberships-based resolution below can never find him.

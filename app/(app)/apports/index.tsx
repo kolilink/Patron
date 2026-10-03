@@ -9,6 +9,7 @@ import { Text } from '@/src/components/ui/Text';
 import { Button } from '@/src/components/ui/Button';
 import { DatePickerField } from '@/src/components/ui/DatePickerField';
 import { SkeletonList } from '@/src/components/ui/SkeletonPlaceholder';
+import { EmptyState } from '@/src/components/ui/EmptyState';
 import { OfflineNotice } from '@/src/components/ui/OfflineNotice';
 import { ProofPhotoField, type PickedImage } from '@/src/components/ui/ProofPhotoField';
 import { ProofThumbnail } from '@/src/components/ui/ProofThumbnail';
@@ -619,25 +620,13 @@ export default function AportsScreen() {
           )}
           ListEmptyComponent={(
             apports.length === 0 ? (
-              <View style={styles.empty}>
-                <View style={[styles.emptyIconWrap, { backgroundColor: 'transparent', borderWidth: 1.5, borderColor: palette.border }]}>
-                  <Ionicons name="wallet-outline" size={32} color={palette.textSecondary} />
-                </View>
-                <Text variant="h4" style={styles.emptyTitle}>Aucun capital noté pour le moment.</Text>
-                <Text variant="body" color="secondary" style={{ textAlign: 'center', maxWidth: 300 }}>
-                  Notez l'argent que vous avez investi pour suivre votre commerce.
-                </Text>
-                {canWrite && (
-                  <Button
-                    label="+ Ajouter un capital"
-                    onPress={() => setShowAddChooser(true)}
-                    fullWidth
-                    size="lg"
-                    labelStyle={{ fontSize: 17 }}
-                    style={{ marginTop: spacing[6], alignSelf: 'stretch' }}
-                  />
-                )}
-              </View>
+              <EmptyState
+                icon="wallet-outline"
+                title="Aucun capital noté pour le moment."
+                subtitle="Notez l'argent que vous avez investi pour suivre votre commerce."
+                actionLabel={canWrite ? '+ Ajouter un capital' : undefined}
+                onAction={canWrite ? () => setShowAddChooser(true) : undefined}
+              />
             ) : (
               <View style={styles.empty}>
                 <Text variant="body" color="secondary" style={{ textAlign: 'center' }}>
@@ -771,8 +760,6 @@ function makeStyles(p: Palette) {
     rowAmount: { fontFamily: fontFamily.bold, fontSize: 17, letterSpacing: -0.4 },
     rowCurrency: { fontSize: 12 },
     empty: { flex: 1, alignItems: 'center', justifyContent: 'center', paddingHorizontal: spacing[8], paddingVertical: spacing[10] },
-    emptyIconWrap: { width: 72, height: 72, borderRadius: 36, alignItems: 'center', justifyContent: 'center', marginBottom: spacing[4] },
-    emptyTitle: { textAlign: 'center' as const, marginBottom: spacing[2] },
 
     // Form modal
     modalSafe: { flex: 1, backgroundColor: p.background },

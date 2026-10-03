@@ -10,7 +10,7 @@ import { syncKnownBusinesses } from '@/lib/knownBusinesses';
 import { getKV, setKV } from '@/lib/db';
 import { toast } from './toast';
 import { isLocked, setLocked } from '@/lib/lock';
-import { withTimeout, withNetworkRetry, reportOfflineFallback, isNetworkError } from '@/lib/sync';
+import { withTimeout, withNetworkRetry, reportOfflineFallback } from '@/lib/sync';
 import { isFounderPhone } from '@/src/utils/founder';
 import type { AppSession, Business, Membership, Role, User } from '@/src/types';
 import { useProductStore } from './products';
@@ -30,6 +30,8 @@ import { useSupportChatStore } from './supportChat';
 import { trackEvent, identifyUser, resetAnalytics } from '@/lib/analytics';
 import { loginPurchases } from '@/lib/purchases';
 import { notifyEvent } from '@/src/utils/notifications';
+import { useInviterStore } from './inviter';
+import { clearPendingInviteToken } from '@/lib/inviteLink';
 
 // ─── Last phone + biometric refresh token (quick-login) ──────────────────────
 
@@ -61,10 +63,6 @@ export async function getLastBusinessName(): Promise<string | null> {
 
 async function saveBioRefreshToken(token: string): Promise<void> {
   try { await SecureStore.setItemAsync(BIO_REFRESH_KEY, token); } catch { }
-}
-
-async function getBioRefreshToken(): Promise<string | null> {
-  try { return await SecureStore.getItemAsync(BIO_REFRESH_KEY); } catch { return null; }
 }
 
 async function clearBioRefreshToken(): Promise<void> {
@@ -116,25 +114,6 @@ async function clearSessionCache(): Promise<void> {
   } catch { }
 }
 
-// Result of a post-biometric session restore, so the lock screen can show
-// honest copy instead of collapsing every failure into "Non reconnu":
-// - 'authenticated': live refresh + profile load succeeded.
-// - 'offline-cached': live refresh failed for a network reason, but the
-//   encrypted session cache had a usable session — unlock offline.
-// - 'offline': live refresh failed for a network reason and there was no
-//   cached session — show "Hors ligne…", never "Non reconnu".
-// - 'auth-failed': genuine auth rejection (invalid/revoked token) — the only
-//   case where "Non reconnu" is truthful.
-type BiometricLoginResult = 'authenticated' | 'offline-cached' | 'offline' | 'auth-failed';
-
-// A refresh failure counts as "network-shaped" when it's either supabase's own
-// AuthRetryableFetchError (fetch/timeout/5xx — GoTrue's retryable bucket) or
-// our isNetworkError heuristic (a thrown AbortError / raw fetch failure).
-function isBiometricNetworkFailure(err: unknown): boolean {
-  if (err && isAuthRetryableFetchError(err)) return true;
-  return isNetworkError(err);
-}
-
 // If logout() couldn't reach the server to revoke the session (offline, or
 // killed before the background attempt finished), the access token it was
 // trying to revoke is stashed here so the next launch can retry — otherwise
@@ -181,6 +160,7 @@ function resetAllStores() {
   useInvestorStore.getState().reset();
   usePartnershipsStore.getState().reset();
   useSupportChatStore.getState().reset();
+  useInviterStore.getState().reset();
 }
 
 interface PendingPhoneVerification {
@@ -227,24 +207,13 @@ interface AuthStore {
   joinBusiness: (code: string) => Promise<void>;
   // Founder-only testing tool — see delete_business(), db/migration_v165.sql.
   deleteBusiness: (businessId: string) => Promise<boolean>;
-  loginWithBiometric: () => Promise<BiometricLoginResult>;
   lock: () => Promise<void>;
-  // 'retryable' covers cancels/interruptions (worth an immediate re-prompt);
-  // 'unavailable' means no usable biometric at all (hardware/enrollment
-  // missing, or a hard failure like lockout) — only this should fall back to
-  // a full WhatsApp OTP re-login. 'restore-failed' means biometric succeeded
-  // but the underlying session was genuinely rejected (invalid/revoked token)
-  // — the one case where "Non reconnu" is truthful. 'restore-failed-offline'
-  // means biometric succeeded but the session couldn't be restored because
-  // the device was offline AND no encrypted session cache existed — honest
-  // "Hors ligne…" copy, never "Non reconnu".
-  unlockWithBiometric: () => Promise<'unlocked' | 'retryable' | 'unavailable' | 'restore-failed' | 'restore-failed-offline'>;
-  // The "Utiliser le code" escape hatch. Deliberately NOT logout(): it must
-  // NOT wipe the persisted session (SecureStore session cache, bio refresh
-  // token, Supabase local storage) until a NEW login actually succeeds — if
-  // the OTP flow is abandoned or fails offline, biometric unlock must still
-  // be able to restore the session for free.
-  degradeLockToCode: () => Promise<void>;
+  // OS-native unlock only. 'retryable' covers cancels/interruptions — the OS
+  // sheet owns the retry/fallback UI, so the app shows no error copy. There is
+  // no 'unavailable' branch anymore: a device with no biometric AND no device
+  // credential enrolled (isEnrolledAsync() false) skips the lock entirely and
+  // restores the local session cache, so a dead lock screen is never shown.
+  unlockWithBiometric: () => Promise<'unlocked' | 'retryable'>;
   clearJustAuthenticated: () => void;
   createPhoneVerification: (phone: string) => Promise<{ verificationId: string } | null>;
   loginWithPhone: (phone: string) => Promise<{ verificationId: string } | null>;
@@ -700,6 +669,10 @@ export const useAuthStore = create<AuthStore>((set, get) => ({
     void clearBioRefreshToken();
     await setLocked(false);
     if (userId) setKV(`demo_mode_${userId}`, 'false').catch(() => { });
+    // B5 — a pending invite token (captured on this device before/while the
+    // previous account was signed in) must not leak into the next account on
+    // a shared device.
+    void clearPendingInviteToken();
     resetAllStores();
     set({ session: null, locked: false, justAuthenticated: false, error: null, pendingPhoneVerification: null });
 
@@ -760,6 +733,9 @@ export const useAuthStore = create<AuthStore>((set, get) => ({
     if (!membership) return;
 
     setKV(`last_business_${session.user.id}`, businessId).catch(() => { });
+    // B5 — switching account/business on a shared device must not carry the
+    // previous account's pending invite token into the next one.
+    void clearPendingInviteToken();
     resetAllStores();
 
     const nextSession: AppSession = {
@@ -1010,133 +986,52 @@ export const useAuthStore = create<AuthStore>((set, get) => ({
     }
   },
 
-  loginWithBiometric: async (): Promise<BiometricLoginResult> => {
-    set({ loading: true, error: null });
-    try {
-      // First try Supabase's own stored session.
-      let result = await supabase.auth.refreshSession();
-
-      // If that failed (Supabase storage was cleared/expired), fall back to our
-      // separately stored refresh token — it survives Supabase storage resets.
-      if (result.error || !result.data.session) {
-        const storedToken = await getBioRefreshToken();
-        if (storedToken) {
-          result = await supabase.auth.refreshSession({ refresh_token: storedToken });
-        }
-      }
-
-      if (result.error || !result.data.session) {
-        set({ loading: false });
-        // Biometric itself SUCCEEDED (we only reach here after the native
-        // prompt matched) — so a failed refresh must never be reported as a
-        // failed auth attempt ("Non reconnu"). Distinguish a network-shaped
-        // failure (offline — fall back to the encrypted session cache) from a
-        // genuine auth rejection (invalid/revoked token — the only truthful
-        // "Non reconnu").
-        const refreshError = result.error;
-        if (isBiometricNetworkFailure(refreshError)) {
-          const cached = await restoreSessionCache();
-          if (cached) {
-            // Offline unlock: the encrypted cache is the source of truth until
-            // connectivity returns. loadSession() can't run (it needs the
-            // network), so trust the cache exactly as initialize() does on an
-            // offline cold start.
-            set({ session: cached, loading: false });
-            return 'offline-cached';
-          }
-          reportOfflineFallback('auth.loginWithBiometric', refreshError);
-          return 'offline';
-        }
-        return 'auth-failed';
-      }
-
-      // Keep our stored token up to date with the newly rotated one.
-      void saveBioRefreshToken(result.data.session.refresh_token);
-
-      const appSession = await loadSession(result.data.session.user.id);
-      const removed = await syncKnownBusinesses(result.data.session.user.id, appSession.memberships);
-      if (removed.length > 0 && appSession.memberships.length === 0) {
-        set({ session: appSession, removedBusinessesOnLogin: removed, loading: false });
-      } else if (removed.length > 0 && appSession.memberships.length > 0) {
-        set({ session: appSession, dismissedFromBusiness: { name: removed[0].name }, loading: false });
-      } else {
-        set({ session: appSession, loading: false });
-      }
-      return 'authenticated';
-    } catch (err) {
-      set({ loading: false });
-      // A thrown error here is almost always a network failure (loadSession's
-      // fetch timing out / throwing) — never a biometric rejection. If the
-      // cache exists, unlock offline rather than showing "Non reconnu".
-      if (isBiometricNetworkFailure(err)) {
-        const cached = await restoreSessionCache();
-        if (cached) {
-          set({ session: cached, loading: false });
-          return 'offline-cached';
-        }
-        reportOfflineFallback('auth.loginWithBiometric', err);
-        return 'offline';
-      }
-      return 'auth-failed';
-    }
-  },
-
   // ─── Biometric-only soft lock ──────────────────────────────────────────────
   // "Verrouiller" is deliberately NOT logout(): it never touches SecureStore's
   // Supabase session, the bio refresh token, or any domain store — those are
   // exactly what let unlockWithBiometric restore the session for free below,
-  // with no WhatsApp OTP. logout() remains the only path that wipes all of
-  // that, for the "fully sign out / switch account" case — also the only
-  // fallback when biometric itself is unavailable, since there's no PIN.
+  // from the local session cache with no network and no WhatsApp OTP. logout()
+  // remains the only path that wipes all of that, for the "fully sign out /
+  // switch account" case.
 
   lock: async () => {
     await setLocked(true);
     set({ session: null, locked: true });
   },
 
-  unlockWithBiometric: async () => {
+  unlockWithBiometric: async (): Promise<'unlocked' | 'retryable'> => {
     // Dropped, not queued — a stacked call while one is already showing its
-    // native prompt gets silently rejected by the OS with no UI at all, which
-    // reads to the user as "nothing happens when I tap Réessayer."
+    // native prompt gets silently rejected by the OS with no UI at all.
     if (_biometricPromptInFlight) return 'retryable';
     _biometricPromptInFlight = true;
     try {
       const LocalAuthentication = await import('expo-local-authentication');
-      const [hasHardware, isEnrolled] = await Promise.all([
-        LocalAuthentication.hasHardwareAsync(),
-        LocalAuthentication.isEnrolledAsync(),
-      ]);
-      if (!hasHardware || !isEnrolled) return 'unavailable';
 
-      // Errors that mean "no usable biometric on this device/attempt ever" vs.
-      // ones that just mean "that particular attempt didn't land" (cancel,
-      // interruption, a single bad read) and deserve an immediate re-prompt
-      // rather than being forced straight to a full OTP re-login.
-      const HARD_FAIL = new Set(['not_enrolled', 'not_available', 'lockout', 'passcode_not_set', 'no_space']);
+      // OS-native auth only. A device with no biometric AND no device
+      // credential enrolled must never be shown a dead lock screen: skip the
+      // prompt entirely and restore the local session cache. The app never
+      // handles a fallback credential — iOS/Android own that.
+      const isEnrolled = await LocalAuthentication.isEnrolledAsync();
+      if (!isEnrolled) {
+        const cached = await restoreSessionCache();
+        await setLocked(false);
+        set({ session: cached, locked: false });
+        return 'unlocked';
+      }
+
       let result;
       try {
         result = await LocalAuthentication.authenticateAsync({
           promptMessage: 'Déverrouiller Patron',
           cancelLabel: 'Annuler',
-          // Reversed 2026-09-26 (was `true`, "no OS passcode escape hatch" —
-          // see the still-accurate reasoning further up this function for
-          // why biometric-vs-device-passcode was ever a distinction worth
-          // making). This screen re-locks after just 2 minutes backgrounded
-          // (BACKGROUND_MS, app/(app)/_layout.tsx) — routing every routine
-          // Face ID miss (sunglasses, bad angle, a hand in the way) through
-          // a full WhatsApp OTP re-login is disproportionate friction for
-          // that short a gap, and a real, recurring WhatsApp/Twilio send
-          // cost for something this frequent. `false` lets iOS/Android
-          // offer their own native "Enter Passcode" option inside the same
-          // sheet — free, instant, hardware-backed, no extra code needed
-          // here since a passcode success still flows through the exact
-          // same result.success branch below as a real biometric match.
-          // Deliberate tradeoff, not an oversight: anyone who knows the
-          // device's own screen-lock code can now unlock Patron too, not
-          // just whoever the device's biometrics are enrolled to — on a
-          // device shared between staff, that's a real, narrower security
-          // boundary than before. Accepted for the routine short-lock case;
-          // revisit if that boundary ever needs to be stricter again.
+          // `false` lets iOS/Android offer their own native device-credential
+          // fallback ("Enter Passcode" / system prompt) inside the same sheet.
+          // The app never sees or handles that fallback credential — a success
+          // flows through the same result.success branch below as a real
+          // biometric match. This screen re-locks after just 2 minutes
+          // backgrounded (BACKGROUND_MS, app/(app)/_layout.tsx), so routing a
+          // routine Face ID miss through a full re-login would be
+          // disproportionate friction.
           disableDeviceFallback: false,
         });
       } catch (err) {
@@ -1145,36 +1040,22 @@ export const useAuthStore = create<AuthStore>((set, get) => ({
       }
       if (!result.success) {
         // Logged because a bare boolean/'retryable' hides the actual native
-        // reason (e.g. 'missing_usage_description' — see "Biometric-only
-        // lock" in CLAUDE.md) — both present to the user as the prompt never
-        // appearing at all, but need different fixes.
+        // reason (e.g. 'missing_usage_description' — see "Biometric-only lock"
+        // in CLAUDE.md). The OS renders its own retry/fallback UI, so the app
+        // stays put with no duplicated error copy.
         Sentry.captureMessage('biometric_authenticate_failed', { extra: { error: result.error } });
-        return HARD_FAIL.has(result.error) ? 'unavailable' : 'retryable';
+        return 'retryable';
       }
 
-      const restored = await get().loginWithBiometric();
-      if (restored === 'auth-failed') return 'restore-failed';
-      if (restored === 'offline') return 'restore-failed-offline';
-      // 'authenticated' (live) or 'offline-cached' (encrypted session cache)
-      // both mean the session is now in memory — unlock for real.
+      // OS authentication succeeded — restore from the LOCAL session cache
+      // only. The lock screen must never require network.
+      const cached = await restoreSessionCache();
       await setLocked(false);
-      set({ locked: false });
+      set({ session: cached, locked: false });
       return 'unlocked';
     } finally {
       _biometricPromptInFlight = false;
     }
-  },
-
-  // The lock screen's "Utiliser le code" escape hatch. Deliberately NOT
-  // logout(): that path wipes the SecureStore session cache, the bio refresh
-  // token, and the Supabase local session — which would make the very next
-  // biometric attempt fall back to a full WhatsApp OTP even though the
-  // account is still perfectly valid. This only clears the in-memory session
-  // and the soft-lock flag and navigates to the code flow; the persisted
-  // session stays intact until a NEW login actually succeeds.
-  degradeLockToCode: async () => {
-    resetAllStores();
-    set({ session: null, locked: false, justAuthenticated: false, error: null, pendingPhoneVerification: null });
   },
 
   clearJustAuthenticated: () => set({ justAuthenticated: false }),

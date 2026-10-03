@@ -33,7 +33,7 @@ const INVITE_ORIGIN = 'patron.kolilink.com';
 // Both link forms carry the token as ?t=… :
 //   https://patron.kolilink.com/invite?t=<token>
 //   patron://invite?t=<token>
-function tokenFromUrl(url: string | null | undefined): string | null {
+export function tokenFromUrl(url: string | null | undefined): string | null {
     if (!url) return null;
     try {
         const parsed = new URL(url);
@@ -44,7 +44,10 @@ function tokenFromUrl(url: string | null | undefined): string | null {
         const hostOk = parsed.hostname === INVITE_ORIGIN;
         const schemeOk = parsed.protocol === 'patron:';
         if (!hostOk && !schemeOk) return null;
-        return t.length >= 16 ? t : null;
+        // B2(b) — a 10-char manual CODE also travels in the ?t= slot (the
+        // /invite/<CODE> link form). Accept 10+ so the shorter code survives
+        // deep-link capture, not only the 48-char hex token.
+        return t.length >= 10 ? t : null;
     } catch {
         return null;
     }
@@ -52,12 +55,12 @@ function tokenFromUrl(url: string | null | undefined): string | null {
 
 // Android Play Install Referrer payload is `patron_invite=<token>` (see the
 // invite edge function's playStoreUrl()).
-function tokenFromReferrer(referrer: string | null): string | null {
+export function tokenFromReferrer(referrer: string | null): string | null {
     if (!referrer) return null;
     try {
         const parsed = new URL(`https://x/?${referrer}`);
         const t = parsed.searchParams.get('patron_invite')?.trim();
-        return t && t.length >= 16 ? t : null;
+        return t && t.length >= 10 ? t : null;
     } catch {
         return null;
     }

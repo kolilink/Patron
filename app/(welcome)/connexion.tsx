@@ -14,6 +14,8 @@ import { PhoneInput } from '@/src/components/ui/PhoneInput';
 import { useTheme, radius, spacing } from '@/src/theme';
 import type { Palette } from '@/src/theme';
 import { useAuthStore } from '@/stores/auth';
+import { useInviterStore } from '@/stores/inviter';
+import { getPendingInviteToken, clearPendingInviteToken } from '@/lib/inviteLink';
 import { trackEvent, classifyAuthError } from '@/lib/analytics';
 import { useCountdown } from '@/src/hooks/useCountdown';
 import { formatCountdown } from '@/src/utils/format';
@@ -31,12 +33,12 @@ export default function ConnexionScreen() {
   const [step, setStep] = useState<'phone' | 'otp'>('phone');
   const [phone, setPhone] = useState('');
   const [phoneComplete, setPhoneComplete] = useState(false);
-  const [resetKey, setResetKey]   = useState(0);
-  const [otpKey, setOtpKey]       = useState(0);
-  const verificationIdRef         = useRef('');
-  const normalizedPhoneRef        = useRef('');
-  const otpValidity               = useCountdown();
-  const resendCooldown            = useCountdown();
+  const [resetKey, setResetKey] = useState(0);
+  const [otpKey, setOtpKey] = useState(0);
+  const verificationIdRef = useRef('');
+  const normalizedPhoneRef = useRef('');
+  const otpValidity = useCountdown();
+  const resendCooldown = useCountdown();
 
   const { autoOtp, prefillPhone } = useLocalSearchParams<{ autoOtp?: string; prefillPhone?: string }>();
   const [initialPhone, setInitialPhone] = useState(prefillPhone);
@@ -58,7 +60,7 @@ export default function ConnexionScreen() {
     const pv = useAuthStore.getState().pendingPhoneVerification;
     if (!pv) return;
     normalizedPhoneRef.current = pv.phone;
-    verificationIdRef.current  = pv.verificationId;
+    verificationIdRef.current = pv.verificationId;
     setStep('otp');
     otpValidity.start(OTP_VALIDITY_SECONDS);
     resendCooldown.start(RESEND_COOLDOWN_SECONDS);
@@ -66,11 +68,25 @@ export default function ConnexionScreen() {
 
   useEffect(() => {
     if (!session) return;
-    if (session.activeBusiness) {
-      router.replace('/(app)/(tabs)/');
-    } else {
-      router.replace('/(app)/onboarding/');
-    }
+    (async () => {
+      // B3 — a pending invite token is finally consumed on login, not orphaned:
+      // the user lands in Amis with the inviter listed instead of being
+      // silently dropped onto Home/onboarding while the token rots in KV.
+      const token = await getPendingInviteToken();
+      if (token) {
+        const resolved = await useInviterStore.getState().resolveInvite(token, '');
+        if (resolved) {
+          await clearPendingInviteToken();
+          router.replace('/(app)/discussions?tab=amis');
+          return;
+        }
+      }
+      if (session.activeBusiness) {
+        router.replace('/(app)/(tabs)/');
+      } else {
+        router.replace('/(app)/onboarding/');
+      }
+    })();
   }, [session]);
 
   const handleContinuer = async () => {
@@ -240,9 +256,9 @@ function makeStyles(p: Palette) {
     header: { gap: spacing[3] },
     back: { alignSelf: 'flex-start', marginBottom: spacing[1] },
     sub: { lineHeight: 22 },
-    form:        { gap: spacing[4] },
+    form: { gap: spacing[4] },
     formCentered: { alignItems: 'center' },
-    infoBlock:   { gap: spacing[3] },
-    infoText:    { textAlign: 'center', lineHeight: 20 },
+    infoBlock: { gap: spacing[3] },
+    infoText: { textAlign: 'center', lineHeight: 20 },
   });
 }

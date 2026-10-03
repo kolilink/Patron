@@ -78,6 +78,7 @@ export interface ConfirmReceptionInput {
   lines: ReceptionLine[];
   transportCostCents?: number;
   marginPercent?: number | null;
+  receivedDate?: string | null; // 'YYYY-MM-DD' real/backdated delivery date
 }
 
 export interface SupplierDebt {
@@ -392,6 +393,7 @@ export const useFournisseursStore = create<FournisseursStore>((set, get) => ({
         })),
         p_transport_cost_cents: input.transportCostCents ?? 0,
         p_margin_percent: input.marginPercent ?? null,
+        p_received_date: input.receivedDate ?? null,
       });
 
       if (error) {

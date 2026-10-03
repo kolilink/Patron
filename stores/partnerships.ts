@@ -32,7 +32,12 @@ interface PartnershipsStore {
     myBusinessName: string,
     requesterBusinessId: string,
   ) => Promise<void>;
-  declineRequest: (partnershipId: string, myBusinessId: string) => Promise<void>;
+  declineRequest: (
+    partnershipId: string,
+    myBusinessId: string,
+    myBusinessName: string,
+    requesterBusinessId: string,
+  ) => Promise<void>;
   updatePartnerSettings: (
     partnershipId: string,
     myBusinessId: string,
@@ -259,7 +264,7 @@ export const usePartnershipsStore = create<PartnershipsStore>((set, get) => ({
     });
   },
 
-  declineRequest: async (partnershipId, myBusinessId) => {
+  declineRequest: async (partnershipId, myBusinessId, myBusinessName, requesterBusinessId) => {
     const { error } = await supabase.rpc('decline_partnership_request', {
       p_partnership_id: partnershipId,
       p_my_business_id: myBusinessId,
@@ -268,6 +273,15 @@ export const usePartnershipsStore = create<PartnershipsStore>((set, get) => ({
     set(state => ({
       pending: state.pending.filter(p => p.id !== partnershipId),
     }));
+    // B4 — a decline is no longer a silent block: the requester is told their
+    // request was refused (and, via migration_v216, may re-request after the
+    // 7-day cooldown).
+    notifyEvent({
+      businessId: requesterBusinessId,
+      eventType: 'partnership_declined',
+      payload: { business: myBusinessName },
+      targetRoles: ['administrateur', 'manager'],
+    });
   },
 
   updatePartnerSettings: async (partnershipId, myBusinessId, nickname, shareStock) => {
@@ -282,10 +296,10 @@ export const usePartnershipsStore = create<PartnershipsStore>((set, get) => ({
       partners: state.partners.map(p =>
         p.partnership_id === partnershipId
           ? {
-              ...p,
-              display_name: nickname ?? p.partner_business_name,
-              i_share_stock: shareStock,
-            }
+            ...p,
+            display_name: nickname ?? p.partner_business_name,
+            i_share_stock: shareStock,
+          }
           : p,
       ),
     }));
@@ -297,9 +311,13 @@ export const usePartnershipsStore = create<PartnershipsStore>((set, get) => ({
       p_my_business_id: myBusinessId,
     });
     if (error) throw error;
-    set(state => ({
-      partners: state.partners.filter(p => p.partnership_id !== partnershipId),
-    }));
+    const partners = get().partners.filter(p => p.partnership_id !== partnershipId);
+    // remove_partnership DELETEs the row server-side (cascading to the DM
+    // room + messages), but the partnerships KV cache still holds the old
+    // partner list. Without this the dead partner — and its dm_room_id —
+    // reappears from cache on the next offline load (the "dead chat" bug).
+    void savePartnershipsCache(myBusinessId, { partners, pending: get().pending });
+    set({ partners });
   },
 
   getOrCreateDmRoom: async (partnershipId, myBusinessId) => {

@@ -345,9 +345,24 @@
                 ctaInstall.href = playStoreUrl;
                 ctaInstall.textContent = 'Télécharger sur Google Play';
                 storePlay.href = playStoreUrl;
-            } else if (isIOS) {
+            } else if (isIOS && !isWhatsAppInAppBrowser) {
                 ctaInstall.href = APP_STORE_URL;
                 ctaInstall.textContent = "Télécharger sur l'App Store";
+                // Plain iOS Safari (NOT WhatsApp's webview): universal links
+                // don't fire on same-domain navigation, so the token must
+                // survive the App Store install via the clipboard bridge —
+                // the app reads it once at first launch (B2(b)).
+                if (token) {
+                    bridge.classList.remove('hidden');
+                    ctaOpen.textContent = "Copier le lien d'invitation";
+                    ctaOpen.href = '#';
+                    ctaOpen.addEventListener('click', function (ev) {
+                        ev.preventDefault();
+                        copyText(inviteUrl).then(function (ok) {
+                            bridgeStatus.textContent = ok ? 'Lien copié ✓' : 'Copie impossible — copie-le manuellement : ' + inviteUrl;
+                        });
+                    });
+                }
             } else {
                 // Desktop / unknown: keep the App Store link; Play Store badge below.
                 ctaInstall.href = APP_STORE_URL;

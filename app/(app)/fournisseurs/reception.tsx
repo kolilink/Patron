@@ -17,6 +17,7 @@ import { haptics } from '@/lib/haptics';
 import { toast } from '@/stores/toast';
 import { trackEvent } from '@/lib/analytics';
 import { formatAmountInput, parseAmountInput } from '@/src/utils/format';
+import { DatePickerField } from '@/src/components/ui/DatePickerField';
 
 // ── "Nouvelle livraison" — replaces the old "commande" 2-phase flow. ────────
 // A livraison is what actually arrived, recorded once, atomically. There is
@@ -64,6 +65,7 @@ interface Draft {
   lines: DraftLine[];
   transportInput: string;
   marginInput: string;
+  receivedDate: string;      // 'YYYY-MM-DD' real/backdated delivery date ('' = today)
   createdAt: number;
 }
 
@@ -91,7 +93,7 @@ function emptyDraft(businessId: string, presetSupplier?: Fournisseur): Draft {
     supplierId: presetSupplier?.id ?? null,
     supplierName: presetSupplier?.name ?? '',
     poId: null,
-    lines: [emptyLine()], transportInput: '', marginInput: '',
+    lines: [emptyLine()], transportInput: '', marginInput: '', receivedDate: '',
     createdAt: Date.now(),
   };
 }
@@ -201,7 +203,7 @@ export default function ReceptionScreen() {
           const d: Draft = {
             businessId, supplierId: commande.supplier_id, supplierName: commande.supplier_name,
             poId: poIdParam, lines: lines.length ? lines : [emptyLine()],
-            transportInput: '', marginInput: '', createdAt: Date.now(),
+            transportInput: '', marginInput: '', receivedDate: '', createdAt: Date.now(),
           };
           setDraft(d);
           setReady(true);
@@ -366,6 +368,7 @@ export default function ReceptionScreen() {
     const poId = await confirmReception(businessId, userId, {
       supplierId: draft.supplierId, poId: draft.poId, lines: rpcLines,
       transportCostCents: transportCents, marginPercent: draft.marginInput ? marginPct : null,
+      receivedDate: draft.receivedDate || null,
     });
 
     if (!poId) {
@@ -767,6 +770,15 @@ function MargeStep({
             inputAccessoryViewID={Platform.OS === 'ios' ? ACCESSORY_ID : undefined}
           />
           <Text variant="caption" color="secondary">Ajouté au prix d'achat de chaque produit.</Text>
+        </View>
+
+        <View style={{ marginTop: spacing[4], gap: spacing[2] }}>
+          <Text variant="label">Date de réception <Text variant="caption" color="secondary">(aujourd'hui par défaut)</Text></Text>
+          <DatePickerField
+            value={draft.receivedDate}
+            onChange={iso => onUpdate({ receivedDate: iso })}
+            maxToday
+          />
         </View>
 
         <Pressable onPress={() => setShowPerLine(!showPerLine)} style={{ marginTop: spacing[6] }}>

@@ -8,6 +8,7 @@ import { router, useFocusEffect } from 'expo-router';
 import { AppSheet } from '@/src/components/ui/AppSheet';
 import { SkeletonList } from '@/src/components/ui/SkeletonPlaceholder';
 import { OfflineNotice } from '@/src/components/ui/OfflineNotice';
+import { EmptyState } from '@/src/components/ui/EmptyState';
 import { Button } from '@/src/components/ui/Button';
 import { Card } from '@/src/components/ui/Card';
 import { Input } from '@/src/components/ui/Input';
@@ -1139,7 +1140,7 @@ export default function EquipeScreen() {
           data={codes}
           keyExtractor={c => c.id}
           contentContainerStyle={styles.list}
-          ListEmptyComponent={<View style={styles.empty}><Text variant="body" color="secondary">Aucun code actif.</Text></View>}
+          ListEmptyComponent={<EmptyState icon="key-outline" title="Aucun code actif." />}
           ListFooterComponent={
             redeemedCodes.length > 0 ? (
               <View style={{ marginTop: spacing[5], gap: spacing[2] }}>

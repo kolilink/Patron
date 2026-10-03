@@ -6,11 +6,13 @@ import { Ionicons } from '@expo/vector-icons';
 import { Text } from '@/src/components/ui/Text';
 import { Input } from '@/src/components/ui/Input';
 import { NoResultsState } from '@/src/components/ui/NoResultsState';
+import { EmptyState } from '@/src/components/ui/EmptyState';
 import { useTheme, spacing, radius, fontFamily, AVATAR_PALETTE, SEARCH_VISIBILITY_THRESHOLD } from '@/src/theme';
 import { useAnimateLayoutChange } from '@/src/hooks/useAnimateLayoutChange';
 import type { Palette } from '@/src/theme';
 import { useAuthStore } from '@/stores/auth';
 import { useVentesStore } from '@/stores/ventes';
+import { supabase } from '@/lib/supabase';
 import { OfflineNotice } from '@/src/components/ui/OfflineNotice';
 import { SkeletonList } from '@/src/components/ui/SkeletonPlaceholder';
 import { buildDebtReminderMessage, formatDebtAge, debtAgeTier } from '@/src/utils/clientReminder';
@@ -50,6 +52,15 @@ interface Client {
   daysOldestDebt: number;
 }
 
+// Canonical client names from the clients table — a client created through the
+// carnet ("+ Crédit") has a row there, and its name is the source of truth the
+// detail screen already uses. The list must use the same name so the two
+// "Rappeler" WhatsApp drafts can never disagree.
+interface ClientNames {
+  byId: Record<string, string>;
+  byName: Record<string, string>;
+}
+
 type FilterType = 'tous' | 'doivent' | 'actifs';
 
 const FILTERS: { key: FilterType; label: string }[] = [
@@ -82,12 +93,35 @@ export default function ClientsScreen() {
   );
   const [search, setSearch] = useState('');
   const [refreshing, setRefreshing] = useState(false);
+  const [clientNames, setClientNames] = useState<ClientNames>({ byId: {}, byName: {} });
 
   useFocusEffect(
     useCallback(() => {
       if (businessId) fetchSales(businessId, isVendeur ? userId : undefined);
     }, [businessId]),
   );
+
+  // Load canonical names from the clients table (best-effort, never blocks
+  // the list — fallback is the sale's own customer_name).
+  useEffect(() => {
+    if (!businessId) return;
+    let cancelled = false;
+    (async () => {
+      const { data, error } = await supabase
+        .from('clients')
+        .select('id, name')
+        .eq('business_id', businessId);
+      if (error || cancelled) return;
+      const byId: Record<string, string> = {};
+      const byName: Record<string, string> = {};
+      for (const r of (data ?? []) as { id: string; name: string }[]) {
+        byId[r.id] = r.name;
+        byName[r.name] = r.name;
+      }
+      setClientNames({ byId, byName });
+    })();
+    return () => { cancelled = true; };
+  }, [businessId]);
 
   const onRefresh = useCallback(async () => {
     if (!businessId) return;
@@ -98,43 +132,54 @@ export default function ClientsScreen() {
 
   const sendWhatsAppReminder = (client: Client) => {
     const msg = buildDebtReminderMessage(client.name, fmt(client.totalCredit, currency));
-    Linking.openURL(`https://wa.me/?text=${encodeURIComponent(msg)}`).catch(() => {});
+    Linking.openURL(`https://wa.me/?text=${encodeURIComponent(msg)}`).catch(() => { });
   };
 
   const allClients = useMemo<Client[]>(() => {
     const map = new Map<string, Client>();
     for (const s of sales) {
-      const name = s.customer_name?.trim();
-      if (!name) continue;
+      const rawName = s.customer_name?.trim();
+      if (!rawName) continue;
+      // Canonical name from the clients table (matches the detail screen's
+      // displayName), falling back to the sale's own customer_name.
+      const name = clientNames.byId[s.client_id as string] ?? clientNames.byName[rawName] ?? rawName;
       // Key by client_id when available — prevents two "Mamadou"s from merging
-      const key = s.client_id ?? name;
+      const key = s.client_id ?? rawName;
       const existing = map.get(key) ?? {
         name, clientId: s.client_id ?? undefined, totalAchats: 0, totalCredit: 0, nbCommandes: 0,
         lastSaleDate: '', oldestDebtDate: '', daysOldestDebt: 0,
       };
+      // Unify with the detail screen's formula: owed = max(0, totalSold −
+      // totalPaid) across every non-annulé sale. Previously the list summed
+      // only remaining credit lines while the detail summed all sales minus
+      // all payments — the two "Rappeler" drafts therefore disagreed.
       if (s.status !== 'annule') {
         existing.totalAchats += s.total_amount - (s.discount_amount ?? 0);
+        existing.totalCredit -= s.amount_paid ?? 0;
         const sDate = s.sale_date ?? s.created_at.split('T')[0];
         if (!existing.lastSaleDate || sDate > existing.lastSaleDate) {
           existing.lastSaleDate = sDate;
         }
       }
       if (s.status === 'credit') {
-        const remaining = s.total_amount - (s.discount_amount ?? 0) - (s.amount_paid ?? 0);
-        if (remaining > 0.01) {
-          existing.totalCredit += remaining;
-          const saleDate = s.sale_date ?? s.created_at.split('T')[0];
-          if (!existing.oldestDebtDate || saleDate < existing.oldestDebtDate) {
-            existing.oldestDebtDate = saleDate;
-            existing.daysOldestDebt = getDaysAgo(saleDate);
-          }
+        const saleDate = s.sale_date ?? s.created_at.split('T')[0];
+        if (!existing.oldestDebtDate || saleDate < existing.oldestDebtDate) {
+          existing.oldestDebtDate = saleDate;
+          existing.daysOldestDebt = getDaysAgo(saleDate);
         }
       }
       existing.nbCommandes += 1;
       map.set(key, existing);
     }
-    return Array.from(map.values()).sort((a, b) => b.totalCredit - a.totalCredit || b.totalAchats - a.totalAchats);
-  }, [sales]);
+    // totalAchats accumulated the owed amount while totalCredit started at 0
+    // and subtracted payments — resolve the final clamped owed figure now.
+    const out: Client[] = [];
+    for (const c of map.values()) {
+      c.totalCredit = Math.max(0, c.totalAchats + c.totalCredit);
+      out.push(c);
+    }
+    return out.sort((a, b) => b.totalCredit - a.totalCredit || b.totalAchats - a.totalAchats);
+  }, [sales, clientNames]);
 
   const displayedClients = useMemo<Client[]>(() => {
     let list = allClients;
@@ -255,25 +300,17 @@ export default function ClientsScreen() {
           // Neutral here, deliberately — the header above already carries
           // the one "Tout est réglé ✓" green moment for this exact state;
           // repeating it here would put two green elements on screen at once.
-          <View style={styles.empty}>
-            <View style={[styles.emptyIconWrap, { backgroundColor: palette.border + '55' }]}>
-              <Ionicons name="checkmark-circle-outline" size={32} color={palette.textSecondary} />
-            </View>
-            <Text variant="h4" style={styles.emptyTitle}>Aucune dette</Text>
-            <Text variant="body" color="secondary" style={styles.emptyHint}>Aucun client ne vous doit.</Text>
-          </View>
+          <EmptyState
+            icon="checkmark-circle-outline"
+            title="Aucune dette"
+            subtitle="Aucun client ne vous doit."
+          />
         ) : (
-          <View style={styles.empty}>
-            <View style={[styles.emptyIconWrap, { backgroundColor: palette.primaryLight }]}>
-              <Ionicons name="people-outline" size={32} color={palette.primary} />
-            </View>
-            <Text variant="h4" style={styles.emptyTitle}>
-              {isVendeur ? 'Vos clients arrivent' : 'Personne encore'}
-            </Text>
-            <Text variant="body" color="secondary" style={styles.emptyHint}>
-              {isVendeur ? 'Faites votre première vente.' : 'Chaque vente crée un client.'}
-            </Text>
-          </View>
+          <EmptyState
+            icon="people-outline"
+            title={isVendeur ? 'Vos clients arrivent' : 'Personne encore'}
+            subtitle={isVendeur ? 'Faites votre première vente.' : 'Chaque vente crée un client.'}
+          />
         )
       ) : (
         <FlatList
@@ -386,9 +423,6 @@ function makeStyles(p: Palette) {
     },
     avatar: { width: 40, height: 40, borderRadius: 20, alignItems: 'center', justifyContent: 'center' },
     empty: { flex: 1, alignItems: 'center', justifyContent: 'center', paddingHorizontal: spacing[8] },
-    emptyIconWrap: { width: 72, height: 72, borderRadius: 36, alignItems: 'center', justifyContent: 'center', marginBottom: spacing[4] },
-    emptyTitle: { textAlign: 'center' as const, marginBottom: spacing[2] },
-    emptyHint: { textAlign: 'center' as const },
     center: { textAlign: 'center', marginTop: spacing[10] },
     waBtn: {
       flexDirection: 'row', alignItems: 'center', gap: 4,
