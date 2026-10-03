@@ -562,6 +562,14 @@ export default function DiscussionsScreen() {
   const [addPartnerLoading, setAddPartnerLoading] = useState(false);
   const [addPartnerError, setAddPartnerError] = useState('');
   const [addPartnerSuccess, setAddPartnerSuccess] = useState('');
+  // Phase 5 — "J'ai un code": typed entry of a friend's 10-char consumer invite
+  // code (distinct from the business partnership code above). Reached from the
+  // quiet "J'ai un code" link under "+ Inviter" on the empty Amis state.
+  const [showRedeemCode, setShowRedeemCode] = useState(false);
+  const [redeemCodeInput, setRedeemCodeInput] = useState('');
+  const [redeemCodeError, setRedeemCodeError] = useState('');
+  const [redeemCodeLoading, setRedeemCodeLoading] = useState(false);
+  const redeemCode = useInviterStore(s => s.redeemCode);
 
   // ─── Fade transition between tabs ─────────────────────────────────────────
   const contentAlpha = useSharedValue(1);
@@ -821,6 +829,32 @@ export default function DiscussionsScreen() {
       // silent
     }
   }, [businessId, businessName, declineRequest]);
+
+  // Phase 5 — "J'ai un code" typed redemption. Every failure (wrong code,
+  // expired, already-redeemed, self-redeem) resolves to the same single "tu"
+  // message the spec prescribes — the server intentionally does not
+  // distinguish codes for anti-enumeration.
+  const handleRedeemCode = useCallback(async () => {
+    if (!redeemCodeInput.trim()) return;
+    setRedeemCodeLoading(true);
+    setRedeemCodeError('');
+    try {
+      const result = await redeemCode(redeemCodeInput);
+      if (!result) {
+        setRedeemCodeError('Ce code ne fonctionne pas. Vérifie et réessaie.');
+        return;
+      }
+      // Success: the joiner now sees the inviter. Refetch the friend list so
+      // the inviter appears immediately, then close the sheet.
+      await fetchMyFriends();
+      setRedeemCodeInput('');
+      setShowRedeemCode(false);
+    } catch {
+      setRedeemCodeError('Ce code ne fonctionne pas. Vérifie et réessaie.');
+    } finally {
+      setRedeemCodeLoading(false);
+    }
+  }, [redeemCodeInput, redeemCode, fetchMyFriends]);
 
   const startRecording = async () => {
     try {
@@ -1330,6 +1364,8 @@ export default function DiscussionsScreen() {
                   subtitle="Invitez un commerçant ami pour discuter ici."
                   actionLabel="+ Inviter"
                   onAction={() => setShowShareCode(true)}
+                  linkLabel="J'ai un code"
+                  onLink={() => { setShowRedeemCode(true); setRedeemCodeError(''); }}
                 />
               ) : (
                 /* ── Has partners or consumer friends ── */
@@ -1666,6 +1702,50 @@ export default function DiscussionsScreen() {
                 </Text>
               </Pressable>
             </View>
+          </View>
+        </FormSheet>
+
+        {/* ── "J'ai un code" typed redemption modal — reached from the quiet
+          "J'ai un code" link under "+ Inviter" on the empty Amis state. This
+          is the consumer invite-code path (stores/inviter.redeemCode): a
+          friend pastes/typs the 10-char code they received; on success their
+          inviter appears in Amis. Distinct from "Ajouter un ami" above, which
+          is the B2B partnership code. ── */}
+        <FormSheet
+          visible={showRedeemCode}
+          onClose={() => { setShowRedeemCode(false); setRedeemCodeInput(''); setRedeemCodeError(''); }}
+          title="J'ai un code"
+          cancelLabel="Fermer"
+        >
+          <View style={styles.modalContent}>
+            <TextInput
+              style={styles.amisCodeInput}
+              value={redeemCodeInput}
+              onChangeText={t => { setRedeemCodeInput(t.toUpperCase()); setRedeemCodeError(''); }}
+              placeholder="Code reçu (10 caractères)"
+              placeholderTextColor={palette.textSecondary}
+              autoCapitalize="characters"
+              autoCorrect={false}
+              autoFocus
+              returnKeyType="send"
+              onSubmitEditing={handleRedeemCode}
+            />
+            {redeemCodeError ? (
+              <Text variant="caption" style={{ color: palette.warning }}>{redeemCodeError}</Text>
+            ) : null}
+            <Pressable
+              onPress={handleRedeemCode}
+              disabled={redeemCodeLoading || !redeemCodeInput.trim()}
+              style={({ pressed }) => [
+                styles.amisModalBtn,
+                (redeemCodeLoading || !redeemCodeInput.trim()) && { opacity: 0.4 },
+                pressed && { opacity: 0.75 },
+              ]}
+            >
+              <Text style={{ color: palette.textInverse, fontWeight: '600', fontSize: 16 }}>
+                {redeemCodeLoading ? 'Vérification…' : 'Utiliser ce code'}
+              </Text>
+            </Pressable>
           </View>
         </FormSheet>
 

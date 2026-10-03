@@ -49,6 +49,18 @@ export function buildInviteMessage(link: string, code: string): string {
     return `Je note mes ventes et mes crédits avec Patron, même sans internet. C'est gratuit : ${link}\nCode : ${code}, au cas où.`;
 }
 
+/**
+ * Normalize a typed invite code for submission. The server hashes
+ * `upper(btrim(code))` — it uppercases and trims outer whitespace, but NOT
+ * internal spaces. The codes we mint are space-free (alphabet
+ * 0123456789ABCDEFGHJKMNPQRSTVWXYZ), so a human typing one may insert spaces
+ * (or paste a "1 2 3 4" display form). Stripping every whitespace run before
+ * the RPC makes typed entry match exactly what the server hashes.
+ */
+export function normalizeInviteCode(raw: string): string {
+    return raw.replace(/\s+/g, '').toUpperCase();
+}
+
 interface InviterStore {
     invites: ConsumerInvite[];
     friends: ConsumerFriend[];
@@ -60,6 +72,7 @@ interface InviterStore {
     fetchMyFriends: () => Promise<void>;
     revokeInvite: (inviteId: string) => Promise<boolean>;
     resolveInvite: (token: string, code: string) => Promise<{ inviter_id: string; inviter_name: string; newly_used?: boolean } | null>;
+    redeemCode: (rawCode: string) => Promise<{ inviter_id: string; inviter_name: string; newly_used?: boolean } | null>;
     clearError: () => void;
     reset: () => void;
 }
@@ -234,6 +247,13 @@ export const useInviterStore = create<InviterStore>((set, get) => ({
             set({ error: isNetworkError(err) ? 'Erreur de réseau. Vérifiez votre connexion.' : 'Invitation invalide' });
             return null;
         }
+    },
+
+    redeemCode: async (rawCode) => {
+        // Typed entry path: a code (not a smart-link token) goes in p_code, with
+        // the token slot empty. Normalization is client-side because the server
+        // only uppercases + trims — it does not strip internal spaces.
+        return get().resolveInvite('', normalizeInviteCode(rawCode));
     },
 
     clearError: () => set({ error: null }),

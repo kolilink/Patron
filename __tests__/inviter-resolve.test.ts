@@ -23,7 +23,7 @@ jest.mock('@/stores/auth', () => ({
 const mockRpc = jest.fn();
 jest.mock('@/lib/supabase', () => ({ supabase: { rpc: mockRpc } }));
 
-import { useInviterStore } from '@/stores/inviter';
+import { useInviterStore, normalizeInviteCode } from '@/stores/inviter';
 
 beforeEach(() => {
     jest.clearAllMocks();
@@ -62,6 +62,40 @@ describe('resolveInvite — B1 push on fresh redemption only', () => {
 
         expect(result?.inviter_id).toBe('inviter-1');
         expect(notifyEvent).not.toHaveBeenCalled();
+    });
+});
+
+describe('redeemCode — typed code entry normalizes then resolves (Phase 5)', () => {
+    it('strips spaces and uppercases before calling resolveInvite', async () => {
+        mockRpc
+            .mockResolvedValueOnce({ data: null, error: null }) // record_invite_attempt
+            .mockResolvedValueOnce({
+                data: { inviter_id: 'inviter-1', inviter_name: 'Awa', newly_used: true },
+                error: null,
+            });
+
+        const result = await useInviterStore.getState().redeemCode(' aB3  kM9  Zx ');
+
+        expect(result?.inviter_id).toBe('inviter-1');
+        // The resolve RPC must receive the normalized code in p_code and an
+        // empty token slot — the typed path never sends the smart-link token.
+        expect(mockRpc).toHaveBeenNthCalledWith(2, 'resolve_consumer_invite', {
+            p_token: '',
+            p_code: 'AB3KM9ZX',
+        });
+    });
+
+});
+
+describe('normalizeInviteCode', () => {
+    it('collapses every whitespace run and uppercases', () => {
+        expect(normalizeInviteCode('ab3 km9 zx')).toBe('AB3KM9ZX');
+        expect(normalizeInviteCode('\t 7FGH\n JKMN  ')).toBe('7FGHJKMN');
+    });
+
+    it('returns an empty string for whitespace-only input so the UI handler can skip the RPC', () => {
+        expect(normalizeInviteCode('   ')).toBe('');
+        expect(normalizeInviteCode('\n\t')).toBe('');
     });
 });
 
