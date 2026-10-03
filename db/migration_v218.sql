@@ -214,6 +214,14 @@ END;
 $$;
 
 -- ─── 3. cancel_sale() — stamp variant_id on its restock move ───────────────
+-- NOTE (migration_v218 regression fix): this file originally carried a stale
+-- cancel_sale body that reverted two prior fixes when the numeric migration
+-- history is replayed from scratch — migration_v211's two-step sale
+-- resolution (p_sale_id may be the real row id OR the sale_orders
+-- .idempotency_key) and migration_v215's investor_balance reversal. It also
+-- dropped the get_role() IS NULL guard from migration_v196. The body below
+-- is the superset: v211 resolution + v215 investor reversal + v196 guards,
+-- plus this batch's own variant_id stamping on the restock stock move.
 
 CREATE OR REPLACE FUNCTION public.cancel_sale(
   p_sale_id     uuid,
@@ -226,21 +234,42 @@ SECURITY DEFINER
 SET search_path = public
 AS $$
 DECLARE
-  v_sale record;
-  v_line record;
+  v_sale        record;
+  v_sale_id     uuid;
+  v_line        record;
+  v_line_profit bigint;
+  v_investor    record;
 BEGIN
   IF get_role(p_business_id) IS NULL OR get_role(p_business_id) NOT IN ('administrateur', 'manager', 'vendeur') THEN
     RAISE EXCEPTION 'Accès refusé' USING ERRCODE = 'P0001';
   END IF;
 
-  SELECT id, seller_id, status INTO v_sale
+  -- Two-step resolution (migration_v211): p_sale_id may be the real row id OR
+  -- the idempotency_key of a queued sale that was projected into the pending
+  -- overlay before drain. Both scoped to p_business_id.
+  SELECT id INTO v_sale_id
   FROM sale_orders
   WHERE id = p_sale_id AND business_id = p_business_id;
+
+  IF v_sale_id IS NULL THEN
+    SELECT id INTO v_sale_id
+    FROM sale_orders
+    WHERE idempotency_key = p_sale_id AND business_id = p_business_id;
+  END IF;
+
+  IF v_sale_id IS NULL THEN
+    RAISE EXCEPTION 'Vente introuvable' USING ERRCODE = 'P0001';
+  END IF;
+
+  SELECT id, seller_id, status INTO v_sale
+  FROM sale_orders
+  WHERE id = v_sale_id AND business_id = p_business_id;
 
   IF NOT FOUND THEN
     RAISE EXCEPTION 'Vente introuvable' USING ERRCODE = 'P0001';
   END IF;
 
+  -- Idempotent: already cancelled — return without touching anything again.
   IF v_sale.status = 'annule' THEN
     RETURN true;
   END IF;
@@ -254,21 +283,23 @@ BEGIN
       cancelled_at        = now(),
       cancellation_reason = p_reason,
       cancelled_by_id     = auth.uid()
-  WHERE id = p_sale_id;
+  WHERE id = v_sale_id;
 
-  DELETE FROM payments WHERE order_id = p_sale_id;
+  DELETE FROM payments WHERE order_id = v_sale_id;
 
+  -- Restore stock for every line item (migration_v196 defense-in-depth
+  -- business scoping + migration_v218 variant_id stamping).
   BEGIN
     FOR v_line IN
       SELECT product_id, variant_id, qty
       FROM so_lines
-      WHERE order_id = p_sale_id
+      WHERE order_id = v_sale_id
     LOOP
       INSERT INTO stock_moves (
         id, business_id, product_id, variant_id, type, qty, ref_id, ref_type, note, created_by
       ) VALUES (
         gen_random_uuid(), p_business_id, v_line.product_id, v_line.variant_id,
-        'entree', v_line.qty, p_sale_id, 'annulation',
+        'entree', v_line.qty, v_sale_id, 'annulation',
         'Annulation: ' || coalesce(p_reason, ''), auth.uid()
       );
 
@@ -283,8 +314,42 @@ BEGIN
       END IF;
     END LOOP;
   EXCEPTION WHEN OTHERS THEN
-    NULL;
+    NULL; -- stock restore is best-effort; cancellation itself is committed
   END;
+
+  -- Reverse investor profit accrual (migration_v215), using submit_sale's
+  -- exact formula so the two are symmetric. Deliberately OUTSIDE the
+  -- best-effort stock-restore block: the money side must not be swallowed by
+  -- a stock error. GREATEST(0, …) keeps a CHECK (balance >= 0) violation
+  -- impossible and makes a re-cancel a harmless no-op.
+  FOR v_line IN
+    SELECT product_id, qty, unit_price, cost_price_at_sale
+    FROM so_lines
+    WHERE order_id = v_sale_id
+  LOOP
+    v_line_profit := GREATEST(0,
+      ((v_line.unit_price)::bigint - COALESCE(v_line.cost_price_at_sale, 0))
+      * (v_line.qty)::bigint
+    );
+
+    IF v_line_profit > 0 THEN
+      FOR v_investor IN
+        SELECT m.user_id, mps.profit_share
+        FROM membership_product_scope mps
+        JOIN memberships m ON m.id = mps.membership_id
+        WHERE mps.product_id  = v_line.product_id
+          AND m.business_id   = p_business_id
+          AND m.role          = 'investisseur'
+          AND mps.profit_share > 0
+      LOOP
+        UPDATE investor_balance
+        SET balance    = GREATEST(0, balance - ROUND(v_line_profit * v_investor.profit_share / 100.0)::bigint),
+            updated_at = now()
+        WHERE business_id = p_business_id
+          AND investor_id  = v_investor.user_id;
+      END LOOP;
+    END IF;
+  END LOOP;
 
   RETURN true;
 END;
@@ -486,8 +551,29 @@ BEGIN
         auth.uid()
       )
       RETURNING id INTO v_product_id;
-    ELSIF v_variant_id IS NULL AND nullif(v_item->>'sale_price_cents', '') IS NOT NULL THEN
-      UPDATE products SET sale_price = (v_item->>'sale_price_cents')::bigint WHERE id = v_product_id;
+    ELSE
+      -- Existing product/variant referenced by id — must belong to this
+      -- business (migration_v196 ownership validation, kept here so the
+      -- numeric replay doesn't reopen the cross-business write bug this
+      -- batch's stale body originally reverted). Without this, a caller
+      -- could splice a foreign product row into their own purchase order
+      -- and overwrite another business's sale_price.
+      IF NOT EXISTS (
+        SELECT 1 FROM products WHERE id = v_product_id AND business_id = p_business_id
+      ) THEN
+        RAISE EXCEPTION 'Produit introuvable' USING ERRCODE = 'P0001';
+      END IF;
+
+      IF v_variant_id IS NOT NULL AND NOT EXISTS (
+        SELECT 1 FROM product_variants WHERE id = v_variant_id AND business_id = p_business_id
+      ) THEN
+        RAISE EXCEPTION 'Produit introuvable' USING ERRCODE = 'P0001';
+      END IF;
+
+      IF v_variant_id IS NULL AND nullif(v_item->>'sale_price_cents', '') IS NOT NULL THEN
+        UPDATE products SET sale_price = (v_item->>'sale_price_cents')::bigint
+          WHERE id = v_product_id AND business_id = p_business_id;
+      END IF;
     END IF;
 
     INSERT INTO po_lines (po_id, product_id, variant_id, qty_ordered, qty_received, unit_cost)
