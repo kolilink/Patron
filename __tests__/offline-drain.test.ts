@@ -63,11 +63,11 @@ function makeCarnetDebtOp(id: number) {
     id,
     operation: 'submit_carnet_debt',
     payload: JSON.stringify({
-      p_business_id:     'biz-1',
-      p_seller_id:       'user-1',
-      p_customer_name:   'Mamadou',
-      p_amount:          500000,
-      p_client_id:       null,
+      p_business_id: 'biz-1',
+      p_seller_id: 'user-1',
+      p_customer_name: 'Mamadou',
+      p_amount: 500000,
+      p_client_id: null,
       p_idempotency_key: 'key-1',
     }),
     created_at: '2026-01-01T00:00:00Z',
@@ -135,10 +135,10 @@ describe('drainQueue', () => {
     }));
   });
 
-  it('a non-network (server-side) rejection is marked permanently failed immediately — not retried, continues to next item', async () => {
+  it('P1-2: a genuine business rejection (P0001) is marked permanently failed immediately — not retried, continues to next item', async () => {
     mockGetPendingOpsForDrain.mockResolvedValueOnce({ ok: [makeSaleOp(1), makeSaleOp(2)], corrupt: [] });
     (supabase.rpc as jest.Mock)
-      .mockResolvedValueOnce({ error: { message: 'invalid input syntax' } }) // item 1: server rejection
+      .mockResolvedValueOnce({ error: { code: 'P0001', message: 'Quantité insuffisante en stock' } }) // item 1: business rejection
       .mockResolvedValueOnce({ error: null }); // item 2: success
 
     const result = await drainQueue();
@@ -150,6 +150,39 @@ describe('drainQueue', () => {
     expect(mockDeleteQueueItem).toHaveBeenCalledWith(2);
     expect(result.syncHealthEvents).toContainEqual(expect.objectContaining({
       name: 'sync_op_failed_permanent', businessId: 'biz-1',
+    }));
+  });
+
+  it('P1-2: an unexpected non-network, non-P0001 error (e.g. invalid input syntax) reschedules with backoff — never failed_permanent on first failure', async () => {
+    mockGetPendingOpsForDrain.mockResolvedValueOnce({ ok: [makeSaleOp(1), makeSaleOp(2)], corrupt: [] });
+    (supabase.rpc as jest.Mock)
+      .mockResolvedValueOnce({ error: { message: 'invalid input syntax' } }) // item 1: unexpected, not P0001
+      .mockResolvedValueOnce({ error: null }); // item 2: success
+
+    const result = await drainQueue();
+
+    expect(result.synced).toBe(1);
+    expect(result.failed).toBe(1);
+    expect(mockMarkOpPermanentlyFailed).not.toHaveBeenCalled(); // never permanently dropped
+    expect(mockRescheduleOp).toHaveBeenCalledWith(1, expect.any(String), expect.any(String));
+    expect(mockDeleteQueueItem).toHaveBeenCalledWith(2);
+    expect(result.syncHealthEvents).toContainEqual(expect.objectContaining({
+      name: 'sync_drain_failed_network', businessId: 'biz-1',
+    }));
+  });
+
+  it('P1-2: an HTTP 5xx-shaped error reschedules with backoff like a network error — never failed_permanent on first failure', async () => {
+    mockGetPendingOpsForDrain.mockResolvedValueOnce({ ok: [makeSaleOp(1)], corrupt: [] });
+    (supabase.rpc as jest.Mock)
+      .mockResolvedValueOnce({ error: { code: '502', message: 'Service unavailable' } });
+
+    const result = await drainQueue();
+
+    expect(result.failed).toBe(1);
+    expect(mockMarkOpPermanentlyFailed).not.toHaveBeenCalled();
+    expect(mockRescheduleOp).toHaveBeenCalledWith(1, expect.any(String), expect.any(String));
+    expect(result.syncHealthEvents).toContainEqual(expect.objectContaining({
+      name: 'sync_drain_failed_network', businessId: 'biz-1',
     }));
   });
 
@@ -237,9 +270,9 @@ describe('drainQueue', () => {
 
     expect(result.synced).toBe(1);
     expect(supabase.rpc).toHaveBeenCalledWith('submit_carnet_debt', expect.objectContaining({
-      p_business_id:     'biz-1',
-      p_customer_name:   'Mamadou',
-      p_amount:          500000,
+      p_business_id: 'biz-1',
+      p_customer_name: 'Mamadou',
+      p_amount: 500000,
       p_idempotency_key: 'key-1',
     }));
     expect(mockDeleteQueueItem).toHaveBeenCalledWith(3);
@@ -267,7 +300,7 @@ describe('drainQueue', () => {
     };
     mockGetPendingOpsForDrain.mockResolvedValueOnce({ ok: [paymentOp], corrupt: [] });
     (supabase.rpc as jest.Mock).mockResolvedValueOnce({
-      error: { message: 'Le montant dépasse le solde restant dû' },
+      error: { code: 'P0001', message: 'Le montant dépasse le solde restant dû' },
     });
 
     const result = await drainQueue();

@@ -87,6 +87,17 @@ function tokenFrom(req: Request): string {
     return m ? m[1] : '';
 }
 
+// /invite/<CODE> — the 10-char manual code (unambiguous alphabet, no
+// I/L/O/U). Case-insensitive; canonicalised to upper case. Distinct from
+// the 32+ hex token path handled by tokenFrom().
+function codeFrom(req: Request): string {
+    const url = new URL(req.url);
+    const q = url.searchParams.get('c')?.trim() ?? '';
+    if (q) return q.toUpperCase();
+    const m = url.pathname.match(/\/invite\/([0-9A-Za-z]{10})$/);
+    return m ? m[1].toUpperCase() : '';
+}
+
 function userAgent(req: Request): string {
     return req.headers.get('user-agent') ?? '';
 }
@@ -134,11 +145,17 @@ function htmlResponse(html: string, status = 200): Response {
 
 // ─── og:tag builder ─────────────────────────────────────────
 
-async function resolveInviter(token: string): Promise<{ valid: boolean; name: string | null }> {
-    if (!token || !SUPABASE_URL || !SUPABASE_ANON_KEY) return { valid: false, name: null };
+async function resolveInviter(
+    credential: string,
+    isCode: boolean,
+): Promise<{ valid: boolean; name: string | null }> {
+    if (!credential || !SUPABASE_URL || !SUPABASE_ANON_KEY) return { valid: false, name: null };
     try {
         const client = createClient(SUPABASE_URL, SUPABASE_ANON_KEY);
-        const { data, error } = await client.rpc('preview_consumer_invite', { p_token: token });
+        const rpc = isCode
+            ? client.rpc('preview_consumer_invite_code', { p_code: credential })
+            : client.rpc('preview_consumer_invite', { p_token: credential });
+        const { data, error } = await rpc;
         if (error || !data) return { valid: false, name: null };
         return {
             valid: Boolean((data as { valid?: boolean }).valid),
@@ -273,7 +290,7 @@ serve(async (req: Request) => {
     // card is served instead (HTTP 200), never a broken image.
     if (url.pathname === OG_IMAGE_PATH || url.pathname === '/invite/og.png') {
         const token = tokenFrom(req);
-        const { valid, name } = token ? await resolveInviter(token) : { valid: false, name: null };
+        const { valid, name } = token ? await resolveInviter(token, false) : { valid: false, name: null };
         const png = await getOgImage(token, name, valid);
         if (!png) return new Response('Not found', { status: 404 });
         return new Response(png, {
@@ -288,17 +305,21 @@ serve(async (req: Request) => {
 
     const ua = userAgent(req);
     const token = tokenFrom(req);
-    const { valid, name } = await resolveInviter(token);
+    const code = codeFrom(req);
+    // Prefer the ?t= token; fall back to the /invite/<CODE> path form.
+    const credential = token || code;
+    const isCode = !token && !!code;
+    const { valid, name } = await resolveInviter(credential, isCode);
     const title = inviterTitle(valid, name);
     const description = TAGLINE;
-    // The crawler follows this absolute URL, so include the token so the
+    // The crawler follows this absolute URL, so include the credential so the
     // fetched image bakes in this inviter's name (same rule as the title).
-    const imageUrl = token
-        ? `${baseUrl(req)}${OG_IMAGE_PATH}?t=${encodeURIComponent(token)}`
+    const imageUrl = credential
+        ? `${baseUrl(req)}${OG_IMAGE_PATH}?t=${encodeURIComponent(credential)}`
         : `${baseUrl(req)}${OG_IMAGE_PATH}`;
-    const storeUrl = isAndroid(ua) && token ? playStoreUrl(token) : APP_STORE_URL;
-    const openAppHref = token
-        ? `${baseUrl(req)}/invite?t=${encodeURIComponent(token)}`
+    const storeUrl = isAndroid(ua) && credential ? playStoreUrl(credential) : APP_STORE_URL;
+    const openAppHref = credential
+        ? `${baseUrl(req)}/invite?t=${encodeURIComponent(credential)}`
         : CUSTOM_SCHEME;
 
     if (isCrawler(ua) && !isWhatsAppInAppBrowser(ua)) {
@@ -306,7 +327,7 @@ serve(async (req: Request) => {
     }
 
     if (isWhatsAppInAppBrowser(ua)) {
-        return htmlResponse(bridgePage({ title, description, imageUrl, storeUrl, token, isAndroid: isAndroid(ua), isIOS: isIOS(ua) }));
+        return htmlResponse(bridgePage({ title, description, imageUrl, storeUrl, token: credential, isAndroid: isAndroid(ua), isIOS: isIOS(ua) }));
     }
 
     return htmlResponse(landingPage({
@@ -315,7 +336,7 @@ serve(async (req: Request) => {
         imageUrl,
         storeUrl,
         openAppHref,
-        token,
+        token: credential,
         isIOS: isIOS(ua),
         isAndroid: isAndroid(ua),
     }));

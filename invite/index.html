@@ -215,7 +215,12 @@
             var DEFAULT_TITLE = "On t'invite sur Patron";
             var FALLBACK_NAME = 'Ton ami';
 
-            // ── Token from ?t=… ──────────────────────────────────────────────────
+            // ── Credential from ?t=… (link token) or /invite/<CODE> path ─────────
+            // Both forms feed the SAME redemption flow. A 10-char CODE is
+            // carried to the app in the ?t= slot (the app's only credential
+            // reader); the server resolves a code in the token slot server-side
+            // (migration_v212). The raw UUID token never leaves the server for
+            // the code form — it maps server-side to the invite record.
             function tokenFromQuery() {
                 try {
                     return new URLSearchParams(window.location.search).get('t') || '';
@@ -223,7 +228,36 @@
                     return '';
                 }
             }
-            var token = tokenFromQuery().trim();
+
+            // ?c=… — the manual code (set by 404.html when a /invite/<CODE>
+            // path is routed here). Kept separate from ?t= so the code-ness
+            // survives the redirect.
+            function codeFromQuery() {
+                try {
+                    return new URLSearchParams(window.location.search).get('c') || '';
+                } catch (e) {
+                    return '';
+                }
+            }
+
+            // /invite/<CODE> — 10-char manual code (unambiguous alphabet,
+            // no I/L/O/U). Case-insensitive.
+            function codeFromPath() {
+                try {
+                    var path = window.location.pathname.replace(/\/+$/, '');
+                    var m = path.match(/^\/invite\/([0-9A-Za-z]{10})$/);
+                    return m ? m[1] : '';
+                } catch (e) {
+                    return '';
+                }
+            }
+
+            var queryToken = tokenFromQuery().trim();
+            var pathCode = codeFromPath().trim().toUpperCase();
+            var queryCode = codeFromQuery().trim().toUpperCase();
+            // Prefer the ?t= token; then the ?c= code; then the path code.
+            var token = queryToken || queryCode || pathCode;
+            var isCode = !queryToken && !!(queryCode || pathCode);
             var inviteUrl = token
                 ? 'https://patron.kolilink.com/invite?t=' + encodeURIComponent(token)
                 : 'https://patron.kolilink.com/invite';
@@ -244,16 +278,18 @@
                 return (name && name.trim() ? name.trim() : FALLBACK_NAME) + " t'invite sur Patron";
             }
 
-            function resolveInviter(t) {
+            function resolveInviter(t, codeMode) {
                 if (!t) return Promise.resolve({ valid: false, name: null });
-                return fetch(SUPABASE_URL + '/rest/v1/rpc/preview_consumer_invite', {
+                var rpcName = codeMode ? 'preview_consumer_invite_code' : 'preview_consumer_invite';
+                var payload = codeMode ? { p_code: t } : { p_token: t };
+                return fetch(SUPABASE_URL + '/rest/v1/rpc/' + rpcName, {
                     method: 'POST',
                     headers: {
                         'Content-Type': 'application/json',
                         'apikey': ANON_KEY,
                         'Authorization': 'Bearer ' + ANON_KEY
                     },
-                    body: JSON.stringify({ p_token: t })
+                    body: JSON.stringify(payload)
                 })
                     .then(function (res) {
                         if (!res.ok) return { valid: false, name: null };
@@ -351,7 +387,7 @@
             }
 
             // Resolve the inviter name and update the headline (human visitors).
-            resolveInviter(token).then(function (r) {
+            resolveInviter(token, isCode).then(function (r) {
                 var t = titleFor(r.valid, r.name);
                 titleEl.textContent = t;
                 document.title = t;

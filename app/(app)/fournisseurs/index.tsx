@@ -625,13 +625,13 @@ export default function FournisseursScreen() {
                   { text: 'Enregistrer une dette', onPress: () => openDebt(item) },
                   {
                     text: 'Supprimer', style: 'destructive', onPress: () =>
-                      Alert.alert('Supprimer ?', 'Les produits liés seront dissociés.', [
+                      Alert.alert('Supprimer ?', 'Les produits liés seront dissociés. Cette action est irréversible.', [
                         { text: 'Annuler', style: 'cancel' },
                         {
                           text: 'Supprimer', style: 'destructive', onPress: async () => {
                             haptics.destructive();
-                            const ok = await deleteFournisseur(item.id, businessId);
-                            if (!ok) Alert.alert('Ce fournisseur a des livraisons enregistrées — retirez-les d\'abord :)');
+                            const { ok, message } = await deleteFournisseur(item.id, businessId);
+                            if (!ok) Alert.alert(message ?? 'Impossible de supprimer le fournisseur');
                           }
                         },
                       ])

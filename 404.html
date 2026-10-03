@@ -1,0 +1,46 @@
+<!doctype html>
+<html lang="fr">
+
+<head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1, maximum-scale=1" />
+
+    <title>On t'invite sur Patron</title>
+    <meta name="description" content="Tes ventes, tes crédits — même sans internet." />
+
+    <!-- Static Open Graph / Twitter tags (mirror invite/index.html) so link
+       crawlers that land on an unknown path (e.g. /invite/<CODE>, which
+       GitHub Pages routes to this 404.html) still get a valid card. -->
+    <meta property="og:title" content="On t'invite sur Patron" />
+    <meta property="og:description" content="Tes ventes, tes crédits — même sans internet." />
+    <meta property="og:type" content="website" />
+    <meta property="og:url" content="https://patron.kolilink.com/invite" />
+    <meta property="og:image" content="https://patron.kolilink.com/invite/og.png" />
+    <meta property="og:image:width" content="1200" />
+    <meta property="og:image:height" content="630" />
+    <meta name="twitter:card" content="summary_large_image" />
+
+    <script>
+        // GitHub Pages serves this 404.html for any unknown path. The new
+        // link form /invite/<CODE> (10-char manual code) has no static file,
+        // so we route it to the landing page carrying the code as ?c=…
+        // (the ?t= slot is reserved for the link token). Everything else
+        // falls back to the generic invite page.
+        (function () {
+            var path = (window.location.pathname || '').replace(/\/+$/, '');
+            var m = path.match(/^\/invite\/([0-9A-Za-z]{10})$/);
+            if (m) {
+                window.location.replace('/invite?c=' + encodeURIComponent(m[1].toUpperCase()));
+            } else {
+                window.location.replace('/invite');
+            }
+        })();
+    </script>
+</head>
+
+<body
+    style="font-family:system-ui,sans-serif;background:#6366F1;color:#fff;display:flex;min-height:100vh;align-items:center;justify-content:center;margin:0">
+    <p><a href="/invite" style="color:#fff">Ouvrir Patron →</a></p>
+</body>
+
+</html>

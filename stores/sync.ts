@@ -1,5 +1,5 @@
 import { create } from 'zustand';
-import { getQueueCount } from '@/lib/db';
+import { getQueueCount, getFailedQueueCount } from '@/lib/db';
 import { drainQueue, type SyncResult } from '@/lib/sync';
 // trackEvent (and its transitive posthog import) is safe to depend on
 // here — stores/sync.ts is a Zustand store, not a foundational utility
@@ -12,6 +12,13 @@ import { trackEvent } from '@/lib/analytics';
 
 interface SyncStore {
   pendingCount: number;
+  // Distinct from pendingCount by construction: rows parked as
+  // failed_permanent or failed_corrupt have STOPPED retrying — they are not
+  // "waiting to sync", so they must never be folded into pendingCount (that
+  // drives SyncStatusLine's "X jours sans connexion" copy). This is the quiet
+  // §9 number — a state field for the Paramètres/founder surface, not
+  // merchant-facing sync noise.
+  failedCount: number;
   syncing: boolean;
   lastResult: SyncResult | null;
   // Set whenever a sync pass leaves the queue genuinely empty. No longer
@@ -41,13 +48,14 @@ interface SyncStore {
 
 export const useSyncStore = create<SyncStore>((set, get) => ({
   pendingCount: 0,
+  failedCount: 0,
   syncing: false,
   lastResult: null,
   lastSyncedAt: null,
 
   refreshCount: async () => {
-    const count = await getQueueCount();
-    set({ pendingCount: count });
+    const [count, failedCount] = await Promise.all([getQueueCount(), getFailedQueueCount()]);
+    set({ pendingCount: count, failedCount });
     if (count === 0) set({ lastSyncedAt: new Date().toISOString() });
   },
 
@@ -60,11 +68,12 @@ export const useSyncStore = create<SyncStore>((set, get) => ({
     for (const event of result.syncHealthEvents) {
       trackEvent(event.name, event.businessId, null, event.metadata);
     }
-    const count = await getQueueCount();
+    const [count, failedCount] = await Promise.all([getQueueCount(), getFailedQueueCount()]);
     set({
       syncing: false,
       lastResult: result,
       pendingCount: count,
+      failedCount,
       ...(count === 0 ? { lastSyncedAt: new Date().toISOString() } : {}),
     });
     return result;
@@ -81,5 +90,5 @@ export const useSyncStore = create<SyncStore>((set, get) => ({
     get().sync().catch(err => console.error('[useSyncStore.kick] sync() rejected', err));
   },
 
-  reset: () => set({ pendingCount: 0, syncing: false, lastResult: null, lastSyncedAt: null }),
+  reset: () => set({ pendingCount: 0, failedCount: 0, syncing: false, lastResult: null, lastSyncedAt: null }),
 }));

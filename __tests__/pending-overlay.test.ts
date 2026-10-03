@@ -19,7 +19,7 @@ import {
   type OverlayContext,
 } from '@/lib/pendingOverlay';
 
-const ctx: OverlayContext = { currentUserId: 'user-1', currentUserName: 'Fatou' };
+const ctx: OverlayContext = { currentUserId: 'user-1', currentUserName: 'Fatou', currentBusinessId: 'biz-1' };
 
 function baseSale(overrides: Partial<OverlaySale> = {}): OverlaySale {
   return {
@@ -256,5 +256,30 @@ describe('rebuildPendingOverlay — the full fold, in queue order', () => {
     const result = await rebuildPendingOverlay([baseSale({ id: 'existing' })], ctx);
     expect(result.sales).toHaveLength(1);
     expect(result.sales[0].id).toBe('existing');
+  });
+
+  test('P1-1: a queued op for a DIFFERENT business is skipped — neither projected nor patched', async () => {
+    mockGetAll.mockResolvedValue({
+      ok: [
+        {
+          id: 6, operation: 'submit_quick_sale', status: 'pending', attempts: 0, last_error: null,
+          idempotency_key: 'qs-other-biz', entity_type: 'vente', queued_at: '2026-09-28T11:00:00.000Z', created_at: '2026-09-28T11:00:00.000Z',
+          payload: JSON.stringify({ p_business_id: 'biz-OTHER', p_seller_id: 'user-1', p_unit_price: 100000, p_qty: 1 }),
+        },
+        {
+          id: 7, operation: 'record_payment', status: 'pending', attempts: 0, last_error: null,
+          idempotency_key: null, entity_type: 'paiement', queued_at: '2026-09-28T11:05:00.000Z', created_at: '2026-09-28T11:05:00.000Z',
+          // record_payment's patch must not settle a sale in the ACTIVE business
+          payload: JSON.stringify({ p_business_id: 'biz-OTHER', p_sale_id: 'sale-1', p_amount: 10000, p_method: 'especes', p_date: '2026-09-28' }),
+        },
+      ],
+      corrupt: [],
+    });
+
+    const result = await rebuildPendingOverlay([baseSale({ id: 'sale-1', status: 'credit', amount_paid: 0 })], ctx);
+    expect(result.sales).toHaveLength(1);
+    expect(result.sales[0].id).toBe('sale-1');
+    expect(result.sales[0].status).toBe('credit'); // patch skipped, not settled
+    expect(result.sales[0].amount_paid).toBe(0);
   });
 });

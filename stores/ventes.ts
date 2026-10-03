@@ -171,6 +171,7 @@ function currentOverlayContext(): OverlayContext {
   return {
     currentUserId: session?.user.id ?? null,
     currentUserName: session?.user.name ?? '',
+    currentBusinessId: session?.activeBusiness?.id ?? null,
   };
 }
 

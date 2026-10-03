@@ -93,6 +93,11 @@ export interface OverlayContext {
   // whoever was logged in at the time.
   currentUserId: string | null;
   currentUserName: string;
+  // The active business the caller is currently viewing. Threaded in so the
+  // rebuild can skip queue items whose p_business_id belongs to a different
+  // business — a device switching businesses mid-drain must never leak one
+  // business's pending sales/payments into another business's list.
+  currentBusinessId: string | null;
 }
 
 const NEW_SALE_OPS = new Set(['submit_carnet_debt', 'submit_quick_sale', 'submit_sale']);
@@ -351,6 +356,16 @@ export async function rebuildPendingOverlay(baseline: OverlaySale[], ctx: Overla
       payload = JSON.parse(item.payload) as Record<string, unknown>;
     } catch {
       corrupt.push({ id: item.id, entityType: item.entity_type, queuedAt: item.queued_at });
+      continue;
+    }
+
+    // Business-scope guard (P1-1): a queued op for a DIFFERENT business than
+    // the one currently being viewed must never fold into this business's
+    // overlay — neither as a new-sale projection nor as a patch. This also
+    // keeps a still-queued payment against one business's sale from being
+    // allocated against a same-named customer in another business.
+    const opBusinessId = payload.p_business_id != null ? String(payload.p_business_id) : null;
+    if (ctx.currentBusinessId && opBusinessId && opBusinessId !== ctx.currentBusinessId) {
       continue;
     }
 

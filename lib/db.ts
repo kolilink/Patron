@@ -628,6 +628,21 @@ export async function getQueueCount(): Promise<number> {
   return row?.count ?? 0;
 }
 
+// Counts only non-'pending' rows — failed_permanent and failed_corrupt items
+// that have stopped retrying. Deliberately DISTINCT from getQueueCount (which
+// counts still-retrying 'pending' rows only): a failed row is not "waiting to
+// sync", it is "already failed and parked", so it must never be folded into
+// pendingCount (SyncStatusLine's "X jours sans connexion" copy would wrongly
+// count it as unsynced-in-flight). Kept as its own quiet number — a state
+// field for the §9 Paramètres/founder surface, not merchant-facing UI noise.
+export async function getFailedQueueCount(): Promise<number> {
+  const db = await openDb();
+  const row = await db.getFirstAsync<{ count: number }>(
+    `SELECT COUNT(*) as count FROM sync_queue WHERE status IN ('failed_permanent', 'failed_corrupt')`,
+  );
+  return row?.count ?? 0;
+}
+
 // ─── Outbox rework (offline-first rewrite) ─────────────────────────────────────
 // Everything below is new plumbing for the v19 columns above. None of it is
 // called from anywhere yet — lib/sync.ts and the UI still run entirely on
