@@ -1,7 +1,6 @@
 import { create } from 'zustand';
 import * as Sentry from '@sentry/react-native';
 import * as SecureStore from 'expo-secure-store';
-import * as Localization from 'expo-localization';
 import { isAuthRetryableFetchError } from '@supabase/supabase-js';
 import { supabase, clearSupabaseLocalSession, revokeAccessToken } from '@/lib/supabase';
 import { translateError } from '@/lib/errors';
@@ -96,7 +95,13 @@ async function restoreSessionCache(): Promise<AppSession | null> {
       if (!chunk) return null;
       json += chunk;
     }
-    return JSON.parse(json) as AppSession;
+    const parsed = JSON.parse(json) as AppSession & { isDemoMode?: boolean };
+    // Legacy: a session cached by the removed demo mode — never restore it.
+    if (parsed.isDemoMode) {
+      await clearSessionCache();
+      return null;
+    }
+    return parsed;
   } catch {
     return null;
   }
@@ -299,7 +304,6 @@ interface AuthStore {
   recoverByEmail: (email: string, code: string, verificationId: string) => Promise<void>;
   linkRecoveryEmail: (email: string, code: string, verificationId: string) => Promise<boolean>;
 
-  startDemoMode: () => Promise<void>;
 
   clearTrialWelcome: () => void;
   refreshActiveBusiness: () => Promise<void>;
@@ -483,20 +487,22 @@ export const useAuthStore = create<AuthStore>((set, get) => ({
         // abandoned anonymous/phone-verification session never gets persisted
         // and later restored offline as if it were a real logged-in user.
         const appSession = await loadSession(session.user.id, session.user.phone, true);
-        // Anonymous user with no phone = either still in the verification flow
-        // OR a returning demo user. Check KV to distinguish the two cases.
+        // Anonymous user with no phone = a verification flow still in
+        // progress (or abandoned mid-flow) — not a real login. Do not cache
+        // it: nothing is persisted, so an offline cold start later won't
+        // resurrect this half-finished login.
         if (session.user.is_anonymous && !appSession.user.phone) {
-          const demoFlag = await getKV(`demo_mode_${session.user.id}`).catch(() => null);
-          if (demoFlag === 'true') {
-            const demoSession = { ...appSession, isDemoMode: true };
-            void persistSessionCache(demoSession);
-            set({ session: demoSession, loading: false });
-          } else {
-            // Genuinely incomplete session (verification abandoned mid-flow) —
-            // do not cache it. Nothing is persisted, so an offline cold start
-            // later won't resurrect this half-finished login.
-            set({ session: null, loading: false });
+          // Legacy: the removed "Essayer Patron" demo mode left an anonymous
+          // user (with a seeded demo business) on devices that used it. Drop
+          // that identity so a later signup can't adopt the demo business
+          // through the "reuse the existing anonymous session" path.
+          const legacyDemoFlag = await getKV(`demo_mode_${session.user.id}`).catch(() => null);
+          if (legacyDemoFlag === 'true') {
+            await clearSupabaseLocalSession();
+            await clearSessionCache();
+            setKV(`demo_mode_${session.user.id}`, 'false').catch(() => { });
           }
+          set({ session: null, loading: false });
         } else {
           // User is anonymous but has already verified their phone (joined before
           // upgradePhone gained the RPC call, or session restored from storage).
@@ -662,7 +668,6 @@ export const useAuthStore = create<AuthStore>((set, get) => ({
     await clearSessionCache();
     void clearBioRefreshToken();
     await setLocked(false);
-    if (userId) setKV(`demo_mode_${userId}`, 'false').catch(() => { });
     // B5 — a pending invite token (captured on this device before/while the
     // previous account was signed in) must not leak into the next account on
     // a shared device.
@@ -1059,7 +1064,7 @@ export const useAuthStore = create<AuthStore>((set, get) => ({
     try {
       // If no Supabase session exists, create a fresh anonymous one so the Edge
       // Function can link the verification to a user_id. If one already exists
-      // (e.g., converting from demo mode), reuse it — no new anonymous user needed.
+      // (e.g., an earlier attempt that was abandoned), reuse it — no new anonymous user needed.
       const { data: { user: currentUser } } = await supabase.auth.getUser();
       if (!currentUser) {
         const { data, error: anonErr } = await supabase.auth.signInAnonymously();
@@ -1178,8 +1183,6 @@ export const useAuthStore = create<AuthStore>((set, get) => ({
       if (refreshData.session) void saveBioRefreshToken(refreshData.session.refresh_token);
 
       void saveLastPhone(phone.trim());
-      // Clear demo mode flag — this user is now a real account
-      setKV(`demo_mode_${user.id}`, 'false').catch(() => { });
       const appSession = await loadSession(user.id);
       identifyUser(appSession);
       if (appSession.activeBusiness) void loginPurchases(appSession.activeBusiness.id);
@@ -1349,55 +1352,6 @@ export const useAuthStore = create<AuthStore>((set, get) => ({
       const raw = err instanceof Error ? err.message : String(err);
       set({ error: translateError(err, raw), emailOtpLoading: false });
       return false;
-    }
-  },
-
-  startDemoMode: async () => {
-    set({ loading: true, error: null });
-    try {
-      const { data, error: anonErr } = await supabase.auth.signInAnonymously();
-      if (anonErr) throw anonErr;
-      if (!data.user) throw new Error('Connexion anonyme échouée');
-      const userId = data.user.id;
-
-      await supabase.from('profiles').upsert(
-        { id: userId, name: 'Démo', email: '', language: 'fr' },
-        { onConflict: 'id', ignoreDuplicates: true },
-      );
-
-      // Detect the device's local currency so the demo business reflects it.
-      const SUPPORTED_CURRENCIES = new Set([
-        'GNF', 'XOF', 'XAF', 'NGN', 'GHS', 'MAD', 'DZD', 'TND', 'EGP',
-        'KES', 'ZAR', 'ETB', 'AED', 'SAR', 'USD', 'EUR', 'GBP', 'CNY', 'CAD', 'CHF', 'INR',
-      ]);
-      let demoCurrency = 'USD'; // fallback for unrecognized locales
-      try {
-        const code = Localization.getLocales()[0]?.currencyCode;
-        if (code && SUPPORTED_CURRENCIES.has(code)) demoCurrency = code;
-      } catch { }
-
-      const { data: fnData, error: fnErr } = await supabase.functions.invoke('seed-demo-business', {
-        body: { currency: demoCurrency },
-      });
-      if (fnErr) {
-        try {
-          const body = await (fnErr as { context?: { json?: () => Promise<{ error?: string }> } }).context?.json?.();
-          if (body?.error) throw new Error(body.error);
-        } catch (extractErr) {
-          if (extractErr !== fnErr) throw extractErr;
-        }
-        throw fnErr;
-      }
-      if (fnData?.error) throw new Error(fnData.error);
-
-      const { businessId } = fnData as { businessId: string };
-      await setKV(`last_business_${userId}`, businessId).catch(() => { });
-      await setKV(`demo_mode_${userId}`, 'true').catch(() => { });
-
-      const appSession = await loadSession(userId);
-      set({ session: { ...appSession, isDemoMode: true }, loading: false });
-    } catch (err) {
-      set({ error: translateError(err, 'Erreur lors du démarrage de la démo'), loading: false });
     }
   },
 

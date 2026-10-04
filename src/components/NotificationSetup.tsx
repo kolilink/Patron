@@ -151,7 +151,7 @@ export async function requestNotificationPermission(): Promise<boolean> {
 // the only place that ever asks.
 async function setupAndRegister(): Promise<void> {
   const session = useAuthStore.getState().session;
-  if (!session || session.isDemoMode) return;
+  if (!session) return;
 
   const N = getNotifications();
   if (!N) return;
@@ -188,7 +188,7 @@ export async function getNotificationPermissionStatus(): Promise<'granted' | 'de
 // up granted, so the card can decide whether to treat the tap as "opted in."
 export async function requestNotificationPermissionAndRegister(): Promise<boolean> {
   const session = useAuthStore.getState().session;
-  if (!session || session.isDemoMode) return false;
+  if (!session) return false;
 
   const N = getNotifications();
   if (!N) return false;

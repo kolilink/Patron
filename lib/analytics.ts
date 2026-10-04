@@ -48,8 +48,8 @@ export function classifyAuthError(raw: string | null | undefined): AuthErrorReas
 // super properties (register) so autocaptured events ($screen, app
 // lifecycle) carry them too.
 //
-// is_test is true when the session is the founder's (phone match), a
-// profile/business flagged is_test server-side, or demo mode. With no
+// is_test is true when the session is the founder's (phone match) or a
+// profile/business flagged is_test server-side. With no
 // session (pre-login), it falls back to the last value seen on THIS device,
 // so a team phone stays test on the welcome/OTP screens. A real session
 // always overrides that sticky value — a merchant's own events are never
@@ -63,8 +63,7 @@ let deviceIsTest = false;
 
 export function isTestSession(session: AppSession | null | undefined): boolean {
   if (!session) return false;
-  return !!session.isDemoMode
-    || isFounderPhone(session.user.phone)
+  return isFounderPhone(session.user.phone)
     || !!session.user.is_test
     || !!session.activeBusiness?.is_test;
 }

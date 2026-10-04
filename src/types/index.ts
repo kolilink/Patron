@@ -494,7 +494,6 @@ export interface AppSession {
   activeBusiness: Business | null;
   activeMembership: Membership | null;
   memberships: Membership[];
-  isDemoMode?: boolean;
 }
 
 // ─── Business Partnerships (Amis) ─────────────────────────────────────────────

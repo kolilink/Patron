@@ -39,7 +39,7 @@ import {
 } from '@/lib/analytics';
 import type { AppSession } from '@/src/types';
 
-function session(opts: { phone?: string; userTest?: boolean; bizTest?: boolean; demo?: boolean } = {}): AppSession {
+function session(opts: { phone?: string; userTest?: boolean; bizTest?: boolean } = {}): AppSession {
   const business = {
     id: 'biz-1', name: 'Boutique Aïssatou', type: 'commerce', currency: 'GNF',
     subscription_status: 'trialing', is_test: opts.bizTest ?? false,
@@ -49,7 +49,6 @@ function session(opts: { phone?: string; userTest?: boolean; bizTest?: boolean; 
     activeBusiness: business,
     activeMembership: { role: 'administrateur' } as AppSession['activeMembership'],
     memberships: [],
-    isDemoMode: opts.demo,
   };
 }
 
@@ -85,7 +84,6 @@ describe('business_id + is_test on every event', () => {
     ['the founder phone', { phone: '+1 267-242-1843' }],
     ['a test profile', { userTest: true }],
     ['a test business', { bizTest: true }],
-    ['demo mode', { demo: true }],
   ])('%s → is_test true', (_label, opts) => {
     setAnalyticsSession(session(opts));
     trackEvent('sale_recorded', 'biz-1', 'user-1');

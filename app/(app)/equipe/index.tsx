@@ -978,7 +978,6 @@ export default function EquipeScreen() {
   const { palette } = useTheme();
   const styles = useMemo(() => makeStyles(palette), [palette]);
   const session = useAuthStore(s => s.session);
-  const isDemoMode = session?.isDemoMode ?? false;
   const businessId = session?.activeBusiness?.id ?? '';
   const userId = session?.user.id ?? '';
   const myMembershipId = session?.activeMembership?.id ?? '';
@@ -1001,7 +1000,6 @@ export default function EquipeScreen() {
 
   const [tab, setTab] = useState<'membres' | 'codes'>('membres');
   const [showNewCode, setShowNewCode] = useState(false);
-  const [showDemoGate, setShowDemoGate] = useState(false);
   const [revealData, setRevealData] = useState<{ code: string; role: Role } | null>(null);
   const [showManagerLimit, setShowManagerLimit] = useState(false);
   const [selectedMembre, setSelectedMembre] = useState<Membre | null>(null);
@@ -1063,7 +1061,7 @@ export default function EquipeScreen() {
       <View style={styles.hdr}>
         <Pressable onPress={() => router.back()}><Text variant="body" color="secondary">‹ Retour</Text></Pressable>
         <Text variant="h4">Équipe</Text>
-        <Pressable onPress={() => isDemoMode ? setShowDemoGate(true) : setShowNewCode(true)}>
+        <Pressable onPress={() => setShowNewCode(true)}>
           <Text variant="label" style={{ color: palette.primary }}>+ Inviter</Text>
         </Pressable>
       </View>
@@ -1107,7 +1105,7 @@ export default function EquipeScreen() {
               <Text variant="caption" color="secondary" style={{ textAlign: 'center', marginTop: spacing[1] }}>
                 Invitez un vendeur ou un gérant pour partager le travail
               </Text>
-              <Button label="+ Inviter quelqu'un" size="sm" onPress={() => isDemoMode ? setShowDemoGate(true) : setShowNewCode(true)} style={{ marginTop: spacing[3] }} />
+              <Button label="+ Inviter quelqu'un" size="sm" onPress={() => setShowNewCode(true)} style={{ marginTop: spacing[3] }} />
             </View>
           )
         ) : (
@@ -1275,14 +1273,6 @@ export default function EquipeScreen() {
         body="Bientôt, vous pourrez avoir plusieurs gérants dans votre commerce. Pour l'instant, invitez des vendeurs ou des observateurs."
       />
 
-      <AppSheet
-        visible={showDemoGate}
-        onClose={() => setShowDemoGate(false)}
-        icon="person-add-outline"
-        title="Créer mon compte pour inviter"
-        body="Créez votre compte pour générer des codes d'invitation et partager votre commerce avec votre équipe."
-        action={{ label: 'Créer mon compte →', onPress: () => router.push('/(welcome)/creer') }}
-      />
     </Screen>
   );
 }
