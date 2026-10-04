@@ -43,8 +43,8 @@ function parseE164(e164: string): { country: Country; local: string } | null {
 }
 
 const PINNED = PINNED_CODES.map(c => ALL_COUNTRIES.find(x => x.code === c)!).filter(Boolean);
-const REST   = ALL_COUNTRIES.filter(c => !PINNED_CODES.includes(c.code))
-                            .sort((a, b) => a.name.localeCompare(b.name, 'fr'));
+const REST = ALL_COUNTRIES.filter(c => !PINNED_CODES.includes(c.code))
+  .sort((a, b) => a.name.localeCompare(b.name, 'fr'));
 
 type ListItem = Country | { divider: true };
 
@@ -75,18 +75,18 @@ export function PhoneInput({ onChange, label, autoFocus, resetKey, strict = true
   // mounted more than once on screen at the same time.
   const accessoryId = `phoneInput-${useId()}`;
 
-  const defaultCode    = detectCountryCode();
+  const defaultCode = detectCountryCode();
   const defaultCountry = ALL_COUNTRIES.find(c => c.code === defaultCode) ?? PINNED[0];
 
   const parsed = initialValue ? parseE164(initialValue) : null;
-  const [country, setCountry]         = useState<Country>(parsed?.country ?? defaultCountry);
+  const [country, setCountry] = useState<Country>(parsed?.country ?? defaultCountry);
   const [localNumber, setLocalNumber] = useState(parsed?.local ?? '');
-  const [pickerOpen, setPickerOpen]   = useState(false);
-  const [search, setSearch]           = useState('');
+  const [pickerOpen, setPickerOpen] = useState(false);
+  const [search, setSearch] = useState('');
 
-  const inputRef      = useRef<TextInput>(null);
-  const blink         = useRef(new Animated.Value(1)).current;
-  const userTouched   = useRef(false);
+  const inputRef = useRef<TextInput>(null);
+  const blink = useRef(new Animated.Value(1)).current;
+  const userTouched = useRef(false);
 
   // IP-based country detection — only fires when no initialValue and user hasn't picked manually
   useEffect(() => {
@@ -172,7 +172,7 @@ export function PhoneInput({ onChange, label, autoFocus, resetKey, strict = true
   const renderSlots = () => {
     const slots: React.ReactElement[] = [];
     for (let i = 0; i < country.digits; i++) {
-      const char   = localNumber[i];
+      const char = localNumber[i];
       const isNext = i === localNumber.length && localNumber.length < country.digits;
       if (i > 0 && i % 3 === 0) slots.push(<Text key={`sep-${i}`} style={styles.sep}> </Text>);
       if (char) {
@@ -241,7 +241,7 @@ export function PhoneInput({ onChange, label, autoFocus, resetKey, strict = true
       >
         <View style={styles.searchWrap}>
           <Input
-            placeholder="Pays ou indicatif"
+            placeholder="Pays ou code du pays"
             value={search}
             onChangeText={setSearch}
             autoFocus={Platform.OS === 'ios'}
@@ -262,7 +262,7 @@ export function PhoneInput({ onChange, label, autoFocus, resetKey, strict = true
 function makeStyles(p: Palette) {
   return StyleSheet.create({
     container: { gap: spacing[1.5] },
-    label:     { marginBottom: 2 },
+    label: { marginBottom: 2 },
     inputRow: {
       flexDirection: 'row', alignItems: 'center',
       borderWidth: 1, borderColor: p.border,
@@ -274,19 +274,19 @@ function makeStyles(p: Palette) {
       paddingHorizontal: spacing[3], paddingVertical: spacing[3],
       gap: spacing[1],
     },
-    flagLarge:   { fontSize: 22 },
-    dialCode:    { color: p.textPrimary },
-    chevron:     { fontSize: 10, color: p.textSecondary, marginTop: 2 },
+    flagLarge: { fontSize: 22 },
+    dialCode: { color: p.textPrimary },
+    chevron: { fontSize: 10, color: p.textSecondary, marginTop: 2 },
     vertDivider: { width: 1, height: 28, backgroundColor: p.border },
     digitRow: {
       flex: 1, flexDirection: 'row', alignItems: 'center',
       paddingHorizontal: spacing[3], flexWrap: 'nowrap', overflow: 'hidden',
     },
     filledDigit: { fontSize: 18, fontWeight: '500', color: p.textPrimary },
-    emptyDigit:  { fontSize: 18, fontWeight: '400', color: p.textSecondary },
-    sep:         { fontSize: 18, color: p.textSecondary, width: 7, textAlign: 'center' },
+    emptyDigit: { fontSize: 18, fontWeight: '400', color: p.textSecondary },
+    sep: { fontSize: 18, color: p.textSecondary, width: 7, textAlign: 'center' },
     hiddenInput: { position: 'absolute', top: 0, left: 0, right: 0, bottom: 0, color: 'transparent', backgroundColor: 'transparent' },
-    searchWrap:  { paddingHorizontal: spacing[5], paddingVertical: spacing[3] },
+    searchWrap: { paddingHorizontal: spacing[5], paddingVertical: spacing[3] },
     countryRow: {
       flexDirection: 'row', alignItems: 'center',
       paddingHorizontal: spacing[5], paddingVertical: spacing[3],

@@ -55,14 +55,19 @@ function displayName(a: Apport, currentUserId?: string, membres?: Membre[]): str
 
 // ─── Form sheet ───────────────────────────────────────────────────────────────
 
-// 'view' = an existing entry (typically a withdrawal, which can't be edited)
-// opened only to see it and attach a photo — money fields are read-only.
-type FormMode = 'add' | 'edit' | 'withdraw' | 'view';
+// 'editWithdrawal' = an existing negative row (a withdrawal) opened to
+// correct a fat-fingered amount/contributor/note/date — same fields as
+// 'edit', but the amount label says "retiré" and saving goes through
+// edit_withdrawal() (which refuses to touch a positive row).
+// 'view' = read-only detail (kept for photo-attach only; not reachable
+// from the list since withdrawals are now editable).
+type FormMode = 'add' | 'edit' | 'withdraw' | 'editWithdrawal' | 'view';
 
 const FORM_TITLES: Record<FormMode, string> = {
   add: 'Nouvel apport',
   edit: 'Modifier l\'apport',
   withdraw: 'Retrait de capital',
+  editWithdrawal: 'Modifier le retrait',
   view: 'Détails',
 };
 
@@ -70,6 +75,7 @@ const FORM_SAVE_LABELS: Record<FormMode, string> = {
   add: 'Enregistrer',
   edit: 'Enregistrer',
   withdraw: 'Enregistrer',
+  editWithdrawal: 'Enregistrer',
   view: 'Enregistrer',
 };
 
@@ -107,7 +113,7 @@ function ApportFormModal({ visible, mode, editing, businessId, currency, saving,
   const [photo, setPhoto] = useState<PickedImage | null>(null);
 
   const isViewMode = mode === 'view';
-  const existingProof = (mode === 'edit' || mode === 'view') ? editing?.proof_image_url ?? null : null;
+  const existingProof = (mode === 'edit' || mode === 'editWithdrawal' || mode === 'view') ? editing?.proof_image_url ?? null : null;
 
   const reset = () => {
     setAmountStr('');
@@ -119,9 +125,9 @@ function ApportFormModal({ visible, mode, editing, businessId, currency, saving,
     setPhoto(null);
   };
 
-  // Prefill when opening on an existing entry (edit or view)
+  // Prefill when opening on an existing entry (edit, editWithdrawal or view)
   useEffect(() => {
-    if (visible && (mode === 'edit' || mode === 'view') && editing) {
+    if (visible && (mode === 'edit' || mode === 'editWithdrawal' || mode === 'view') && editing) {
       setAmountStr(formatAmountInput(String(Math.round(Math.abs(editing.amount))), currency));
       setSelectedMemberId(editing.injected_by_id);
       setSourceName(editing.source_name ?? '');
@@ -268,7 +274,7 @@ function ApportFormModal({ visible, mode, editing, businessId, currency, saving,
           <>
             {/* Amount */}
             <View style={{ gap: spacing[2] }}>
-              <Text variant="label">{mode === 'withdraw' ? 'Montant retiré' : 'Montant apporté'}</Text>
+              <Text variant="label">{(mode === 'withdraw' || mode === 'editWithdrawal') ? 'Montant retiré' : 'Montant apporté'}</Text>
               <View style={styles.amountRow}>
                 <TextInput
                   style={styles.amountInput}
@@ -287,14 +293,14 @@ function ApportFormModal({ visible, mode, editing, businessId, currency, saving,
             {/* Contributor — only shown when there are multiple members */}
             {multiMember && (
               <View style={{ gap: spacing[2] }}>
-                <Text variant="label">{mode === 'withdraw' ? 'Retiré à' : 'De la part de'}</Text>
+                <Text variant="label">{(mode === 'withdraw' || mode === 'editWithdrawal') ? 'Retiré à' : 'De la part de'}</Text>
                 <Pressable
                   style={[styles.pickerBtn, { borderColor: palette.border }]}
                   onPress={() => setShowMemberPicker(true)}
                 >
                   <Ionicons name="person-outline" size={16} color={palette.textSecondary} />
                   <Text variant="body" style={{ flex: 1, color: contributorLabel ? palette.textPrimary : palette.textDisabled }}>
-                    {contributorLabel ?? (mode === 'withdraw' ? 'Optionnel — à qui a-t-on repris l\'argent ?' : 'Optionnel — qui a apporté ?')}
+                    {contributorLabel ?? ((mode === 'withdraw' || mode === 'editWithdrawal') ? 'Optionnel — à qui a-t-on repris l\'argent ?' : 'Optionnel — qui a apporté ?')}
                   </Text>
                   <Ionicons name="chevron-down" size={16} color={palette.textSecondary} />
                 </Pressable>
@@ -356,7 +362,7 @@ function ApportFormModal({ visible, mode, editing, businessId, currency, saving,
         <Pressable style={styles.pickerBackdrop} onPress={() => setShowMemberPicker(false)}>
           <View style={[styles.pickerPanel, { backgroundColor: palette.surface }]}>
             <Text variant="label" style={{ marginBottom: spacing[3] }}>
-              {mode === 'withdraw' ? 'À qui a-t-on repris cet argent ?' : 'Qui a apporté cet argent ?'}
+              {(mode === 'withdraw' || mode === 'editWithdrawal') ? 'À qui a-t-on repris cet argent ?' : 'Qui a apporté cet argent ?'}
             </Text>
             <Pressable
               style={[styles.pickerOption, { borderBottomWidth: 1, borderBottomColor: palette.border }]}
@@ -393,7 +399,7 @@ export default function AportsScreen() {
   const userId = session?.user?.id;
   const canWrite = role === 'administrateur' || role === 'manager';
 
-  const { apports, loading, saving, offline, offlineSince, fetchApports, addApport, editApport, recordWithdrawal } = useAportsStore();
+  const { apports, loading, saving, offline, offlineSince, fetchApports, addApport, editApport, recordWithdrawal, editWithdrawal } = useAportsStore();
   const fetchMembres = useEquipeStore(s => s.fetchMembres);
   const [showForm, setShowForm] = useState(false);
   const [formMode, setFormMode] = useState<FormMode>('add');
@@ -445,6 +451,18 @@ export default function AportsScreen() {
       ok = await editApport({ id: editingApport.id, businessId, ...rest });
       targetId = editingApport.id;
       message = 'Apport modifié';
+    } else if (formMode === 'editWithdrawal' && editingApport) {
+      ok = await editWithdrawal({
+        id: editingApport.id,
+        businessId,
+        amount: rest.amount,
+        injectedById: rest.injectedById,
+        sourceName: rest.sourceName,
+        note: rest.note,
+        withdrawnAt: rest.injectedAt,
+      });
+      targetId = editingApport.id;
+      message = 'Retrait modifié';
     } else if (formMode === 'withdraw') {
       targetId = await recordWithdrawal({
         businessId,
@@ -490,16 +508,18 @@ export default function AportsScreen() {
     setEditingApport(apport);
     setShowForm(true);
   };
-  const openView = (apport: Apport) => {
-    setFormMode('view');
+  const openEditWithdrawal = (apport: Apport) => {
+    setFormMode('editWithdrawal');
     setEditingApport(apport);
     setShowForm(true);
   };
-  // Tapping a row opens its record: injections are editable; withdrawals
-  // (which can't be edited) open read-only, only to attach/view a photo.
+  // Tapping a row opens its record: injections and withdrawals are both
+  // editable (withdrawals via edit_withdrawal(), which refuses to touch a
+  // positive row). 'view' remains in the FormMode union for future
+  // read-only detail/photo-attach use, but nothing routes to it now.
   const openRow = (apport: Apport) => {
     if (!canWrite) return;
-    if (apport.amount < 0) openView(apport);
+    if (apport.amount < 0) openEditWithdrawal(apport);
     else openEdit(apport);
   };
 

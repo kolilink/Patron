@@ -174,13 +174,7 @@ interface AuthStore {
   locked: boolean;
   // True only right after a genuine fresh authentication (real login, brand
   // new registration, email recovery) — never set by initialize()'s silent
-  // session restore on cold start. This is what the routing guard uses to
-  // decide whether the mandatory PIN-creation screen should interrupt right
-  // now: an existing user whose session is just being silently restored must
-  // keep using the app normally and only get prompted for a PIN when they
-  // actually try to sign out (see plus.tsx) — forcing it on every cold start
-  // would ambush people mid-onboarding (anonymous session, no business yet)
-  // and interrupt already-logged-in users for no reason.
+  // session restore on cold start.
   justAuthenticated: boolean;
   emailOtpLoading: boolean;
   error: string | null;
@@ -428,9 +422,9 @@ export const useAuthStore = create<AuthStore>((set, get) => ({
 
     // A soft lock (see lock()) deliberately leaves the underlying Supabase
     // session/refresh token untouched — only a local flag says "don't show it
-    // yet, ask for the PIN first." Honor that before hydrating anything, so a
-    // killed-and-relaunched app lands on the PIN screen instead of silently
-    // back inside.
+    // yet, ask for biometric auth first." Honor that before hydrating
+    // anything, so a killed-and-relaunched app lands on the lock screen
+    // instead of silently back inside.
     if (await isLocked()) {
       set({ session: null, locked: true, loading: false });
       return;
@@ -1100,7 +1094,7 @@ export const useAuthStore = create<AuthStore>((set, get) => ({
       return { verificationId };
     } catch (err) {
       const raw = err instanceof Error ? err.message : String(err);
-      set({ error: raw, loading: false });
+      set({ error: translateError(err, raw), loading: false });
       return null;
     }
   },
@@ -1136,7 +1130,7 @@ export const useAuthStore = create<AuthStore>((set, get) => ({
       return { verificationId };
     } catch (err) {
       const raw = err instanceof Error ? err.message : String(err);
-      set({ error: raw, loading: false });
+      set({ error: translateError(err, raw), loading: false });
       return null;
     }
   },
@@ -1161,7 +1155,7 @@ export const useAuthStore = create<AuthStore>((set, get) => ({
       return true;
     } catch (err) {
       const raw = err instanceof Error ? err.message : String(err);
-      set({ error: raw, loading: false });
+      set({ error: translateError(err, raw), loading: false });
       return false;
     }
   },
@@ -1273,7 +1267,7 @@ export const useAuthStore = create<AuthStore>((set, get) => ({
       return { verificationId: (fnData as { verificationId: string }).verificationId };
     } catch (err) {
       const raw = err instanceof Error ? err.message : String(err);
-      set({ error: raw, emailOtpLoading: false });
+      set({ error: translateError(err, raw), emailOtpLoading: false });
       return null;
     }
   },
@@ -1353,7 +1347,7 @@ export const useAuthStore = create<AuthStore>((set, get) => ({
       return true;
     } catch (err) {
       const raw = err instanceof Error ? err.message : String(err);
-      set({ error: raw, emailOtpLoading: false });
+      set({ error: translateError(err, raw), emailOtpLoading: false });
       return false;
     }
   },

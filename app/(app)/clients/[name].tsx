@@ -8,6 +8,7 @@ import { router, useLocalSearchParams } from 'expo-router';
 import { Text } from '@/src/components/ui/Text';
 import { Button } from '@/src/components/ui/Button';
 import { Input } from '@/src/components/ui/Input';
+import { DatePickerField } from '@/src/components/ui/DatePickerField';
 import { useTheme, spacing, radius, fontFamily } from '@/src/theme';
 import type { Palette } from '@/src/theme';
 import { useAuthStore } from '@/stores/auth';
@@ -17,6 +18,7 @@ import { supabase } from '@/lib/supabase';
 import { formatAmountInput, parseAmountInput } from '@/src/utils/format';
 import { useSaveConfirmationStore } from '@/stores/saveConfirmation';
 import { repaymentConfirmation } from '@/src/utils/saveConfirmationCopy';
+import { paymentOverlayCopy } from '@/src/utils/paymentOverlayCopy';
 import { saveClientLedgerCache, getClientLedgerCache } from '@/lib/db';
 import { isNetworkError, withTimeout } from '@/lib/sync';
 import { OfflineNotice } from '@/src/components/ui/OfflineNotice';
@@ -125,7 +127,7 @@ function EditModal({
     <FormSheet
       visible={visible}
       onClose={onClose}
-      title="Modifier client"
+      title="Modifier le client"
       presentationStyle="formSheet"
       contentContainerStyle={styles.pad}
       footer={
@@ -208,38 +210,36 @@ function PayModal({
         ) : undefined
       }
     >
-          {/* Amount */}
-          <View style={{ gap: spacing[2] }}>
-            <Text variant="label">Combien {displayName} vous donne ?</Text>
-            <View style={styles.amountRow}>
-              <TextInput
-                style={styles.amountInput}
-                value={amountStr}
-                onChangeText={v => setAmountStr(formatAmountInput(v, currency))}
-                keyboardType="numeric"
-                placeholder="0"
-                placeholderTextColor={palette.textDisabled}
-                selectTextOnFocus
-                autoFocus
-                inputAccessoryViewID={Platform.OS === 'ios' ? PAYMENT_SHEET_SILENT_ACCESSORY_ID : undefined}
-              />
-              <Pressable
-                style={styles.solderBtn}
-                onPress={() => setAmountStr(formatAmountInput(String(Math.round(totalOwed)), currency))}
-              >
-                <Text variant="label" style={{ color: palette.primary }}>Tout régler : {fmt(totalOwed, currency)}</Text>
-              </Pressable>
-            </View>
-            {amount > 0 && (
-              <Text variant="caption" style={{ color: remaining > 0 ? palette.recouvrementPending : remaining < 0 ? palette.recouvrementOwed : palette.recouvrementPaid }}>
-                {remaining > 0
-                  ? `Il restera ${fmt(remaining, currency)} à régler.`
-                  : remaining < 0
-                    ? `C'est ${fmt(-remaining, currency)} de plus que la dette.`
-                    : 'Tout sera réglé.'}
-              </Text>
-            )}
-          </View>
+      {/* Amount */}
+      <View style={{ gap: spacing[2] }}>
+        <Text variant="label">Combien {displayName} vous donne ?</Text>
+        <View style={styles.amountRow}>
+          <TextInput
+            style={styles.amountInput}
+            value={amountStr}
+            onChangeText={v => setAmountStr(formatAmountInput(v, currency))}
+            keyboardType="numeric"
+            placeholder="0"
+            placeholderTextColor={palette.textDisabled}
+            selectTextOnFocus
+            autoFocus
+            inputAccessoryViewID={Platform.OS === 'ios' ? PAYMENT_SHEET_SILENT_ACCESSORY_ID : undefined}
+          />
+          <Pressable
+            style={styles.solderBtn}
+            onPress={() => setAmountStr(formatAmountInput(String(Math.round(totalOwed)), currency))}
+          >
+            <Text variant="label" style={{ color: palette.primary }}>Tout régler : {fmt(totalOwed, currency)}</Text>
+          </Pressable>
+        </View>
+        {amount > 0 && (
+          <Text variant="caption" style={{ color: remaining > 0 ? palette.recouvrementPending : palette.recouvrementPaid }}>
+            {remaining > 0
+              ? `Il restera ${fmt(remaining, currency)} à régler.`
+              : 'Tout sera réglé.'}
+          </Text>
+        )}
+      </View>
 
       {/* Method */}
       <View style={{ gap: spacing[2] }}>
@@ -255,6 +255,8 @@ function PayModal({
           ))}
         </View>
       </View>
+
+      <DatePickerField label="Date" value={date} onChange={setDate} maxToday />
     </FormSheet>
   );
 }
@@ -298,7 +300,7 @@ export default function ClientLedgerScreen() {
   const [showEditModal, setShowEditModal] = useState(false);
   const [showNewCreditSheet, setShowNewCreditSheet] = useState(false);
   const [detailEntry, setDetailEntry] = useState<LedgerEntry | null>(null);
-  const [successPayment, setSuccessPayment] = useState<{ amount: number } | null>(null);
+  const [successPayment, setSuccessPayment] = useState<{ amount: number; remaining: number } | null>(null);
   const checkScale = useRef(new Animated.Value(0)).current;
 
   useEffect(() => {
@@ -613,8 +615,6 @@ export default function ClientLedgerScreen() {
     if (result.ok) {
       setShowPayModal(false);
       haptics.success();
-      if (!result.fullySettled) setSuccessPayment({ amount });
-      loadLedgerPayments();
 
       // Remaining balance is read synchronously from the store's own
       // post-write state — recordPayment/recordClientPayment already applied
@@ -623,6 +623,8 @@ export default function ClientLedgerScreen() {
       const reste = useVentesStore.getState().sales
         .filter(s => s.business_id === businessId && s.customer_name === displayName && s.status === 'credit')
         .reduce((sum, s) => sum + (s.total_amount - (s.discount_amount ?? 0) - (s.amount_paid ?? 0)), 0);
+      setSuccessPayment({ amount, remaining: reste });
+      loadLedgerPayments();
       const { text, settled } = repaymentConfirmation(displayName, Math.max(0, reste), currency);
       // Undo via void_payment (migration_v157.sql), one call per payments
       // row this write actually created — specificSaleId creates exactly
@@ -647,7 +649,7 @@ export default function ClientLedgerScreen() {
   const openMenu = useCallback(() => {
     if (!canEdit) return;
     Alert.alert(displayName, undefined, [
-      { text: 'Modifier les infos', onPress: () => setShowEditModal(true) },
+      { text: 'Modifier le client', onPress: () => setShowEditModal(true) },
       { text: 'Annuler', style: 'cancel' },
     ]);
   }, [displayName, canEdit]);
@@ -753,7 +755,7 @@ export default function ClientLedgerScreen() {
                   // Generic wa.me link (no target number) — same pattern the
                   // list row already uses reliably. Targeting this contact's
                   // own number here previously failed to open WhatsApp at all.
-                  Linking.openURL(`https://wa.me/?text=${encodeURIComponent(msg)}`).catch(() => {});
+                  Linking.openURL(`https://wa.me/?text=${encodeURIComponent(msg)}`).catch(() => { });
                 }}
                 style={[styles.contactBtn, { borderColor: palette.border }]}
               >
@@ -762,7 +764,7 @@ export default function ClientLedgerScreen() {
               </Pressable>
             )}
             <Pressable
-              onPress={() => Linking.openURL(`tel:${clientRecord.phone}`).catch(() => {})}
+              onPress={() => Linking.openURL(`tel:${clientRecord.phone}`).catch(() => { })}
               style={[styles.contactBtn, { borderColor: palette.border }]}
             >
               <Ionicons name="call-outline" size={16} color={palette.primary} />
@@ -815,7 +817,7 @@ export default function ClientLedgerScreen() {
 
         {ledgerEntries.length === 0 && (
           <Text variant="body" color="secondary" style={{ textAlign: 'center', marginTop: spacing[6] }}>
-            Aucune vente enregistrée.
+            Aucun crédit pour le moment.
           </Text>
         )}
       </ScrollView>
@@ -897,23 +899,29 @@ export default function ClientLedgerScreen() {
       </FormSheet>
 
       {/* Payment success overlay */}
-      {successPayment && (
-        <View style={styles.successOverlay}>
-          <Animated.View style={[styles.successBadge, { transform: [{ scale: checkScale }] }]}>
-            <Ionicons name="checkmark" size={44} color={palette.textPrimary} />
-          </Animated.View>
-          <Text style={styles.successHeadline}>C'est réglé !</Text>
-          <Text style={styles.successSubtitle}>
-            {displayName} vous a payé {fmt(successPayment.amount, currency)}.
-          </Text>
-          <Pressable
-            style={({ pressed }) => [styles.successBtn, pressed && { opacity: 0.85 }]}
-            onPress={() => setSuccessPayment(null)}
-          >
-            <Text style={styles.successBtnText}>Continuer</Text>
-          </Pressable>
-        </View>
-      )}
+      {successPayment && (() => {
+        const overlayCopy = paymentOverlayCopy(successPayment.remaining, currency);
+        return (
+          <View style={styles.successOverlay}>
+            <Animated.View style={[styles.successBadge, { transform: [{ scale: checkScale }] }]}>
+              <Ionicons name="checkmark" size={44} color={palette.textPrimary} />
+            </Animated.View>
+            <Text style={styles.successHeadline}>{overlayCopy.headline}</Text>
+            <Text style={styles.successSubtitle}>
+              {displayName} vous a payé {fmt(successPayment.amount, currency)}.
+            </Text>
+            {overlayCopy.reste && (
+              <Text style={styles.successReste}>{overlayCopy.reste}</Text>
+            )}
+            <Pressable
+              style={({ pressed }) => [styles.successBtn, pressed && { opacity: 0.85 }]}
+              onPress={() => setSuccessPayment(null)}
+            >
+              <Text style={styles.successBtnText}>Continuer</Text>
+            </Pressable>
+          </View>
+        );
+      })()}
     </Screen>
   );
 }
@@ -1019,7 +1027,15 @@ function makeStyles(p: Palette) {
     },
     successSubtitle: {
       fontSize: 18, color: p.textPrimary,
-      textAlign: 'center', marginTop: 8, marginBottom: 40,
+      textAlign: 'center', marginTop: 8, marginBottom: 16,
+    },
+    // Plain remaining-balance line under the partial-payment celebration —
+    // same "Reste : …" wording the carnet lines already use, so a partial
+    // payment never reads as if the debt were settled.
+    successReste: {
+      fontSize: 18, fontWeight: '600', color: p.textSecondary,
+      textAlign: 'center', marginBottom: 40,
+      fontVariant: ['tabular-nums'],
     },
     successBtn: {
       width: '100%', backgroundColor: p.primary, borderRadius: 14,

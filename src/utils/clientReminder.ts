@@ -31,9 +31,9 @@ export function debtAgeTier(days: number): DebtAgeTier {
 // second, possibly-diverging formatting path just for this message.
 export function buildDebtReminderMessage(name: string, totalOwedFormatted: string): string {
   return [
-    `Salut ${name},`,
+    `Bonjour ${name},`,
     `Un petit point sur le carnet : il vous reste un solde de *${totalOwedFormatted}*.`,
-    `Vous pouvez passer à la boutique ou effectuer un dépôt directement.`,
+    `Vous pouvez passer au commerce ou effectuer un dépôt directement.`,
     `Bonne journée à vous !`,
   ].join('\n');
 }

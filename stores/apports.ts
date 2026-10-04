@@ -62,6 +62,15 @@ interface AportsStore {
     note?: string | null;
     withdrawnAt: string;
   }) => Promise<string | null>;   // new row id, or null on failure
+  editWithdrawal: (params: {
+    id: string;
+    businessId: string;
+    amount: number;             // display units (÷100 before sending), positive
+    injectedById?: string | null;
+    sourceName?: string | null;
+    note?: string | null;
+    withdrawnAt: string;
+  }) => Promise<boolean>;
   reset: () => void;
 }
 
@@ -216,6 +225,33 @@ export const useAportsStore = create<AportsStore>((set, get) => ({
     } catch (err) {
       set({ saving: false, error: isNetworkError(err) ? 'Vérifiez votre connexion' : translateError(err, 'Impossible d\'enregistrer le retrait') });
       return null;
+    }
+  },
+
+  editWithdrawal: async ({ id, businessId, amount, injectedById, sourceName, note, withdrawnAt }) => {
+    set({ saving: true, error: null });
+
+    try {
+      const { error } = await supabase.rpc('edit_withdrawal', {
+        p_id: id,
+        p_amount: Math.round(amount * 100),
+        p_injected_by_id: injectedById ?? null,
+        p_source_name: sourceName ?? null,
+        p_note: note ?? null,
+        p_withdrawn_at: withdrawnAt,
+      });
+
+      if (error) {
+        set({ saving: false, error: translateError(error, 'Impossible de modifier le retrait') });
+        return false;
+      }
+
+      set({ saving: false });
+      await get().fetchApports(businessId);
+      return true;
+    } catch (err) {
+      set({ saving: false, error: isNetworkError(err) ? 'Vérifiez votre connexion' : translateError(err, 'Impossible de modifier le retrait') });
+      return false;
     }
   },
 

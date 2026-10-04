@@ -108,10 +108,10 @@ function relativeTime(iso: string): string {
   const diffM = Math.floor(diffMs / 60_000);
   const diffH = Math.floor(diffMs / 3_600_000);
   const diffD = Math.floor(diffMs / 86_400_000);
-  if (diffM < 1) return 'maintenant';
-  if (diffM < 60) return `${diffM}min`;
-  if (diffH < 24) return `${diffH}h`;
-  if (diffD <= 7) return `${diffD}j`;
+  if (diffM < 1) return "À l'instant";
+  if (diffM < 60) return `Il y a ${diffM} min`;
+  if (diffH < 24) return `Il y a ${diffH} h`;
+  if (diffD <= 7) return `Il y a ${diffD} j`;
   return new Intl.DateTimeFormat('fr-FR', { day: 'numeric', month: 'short' }).format(d);
 }
 
@@ -119,12 +119,12 @@ function relativeTime(iso: string): string {
 // "à l'instant" rather than the forum's "maintenant".
 function friendTime(iso: string): string {
   const diffM = Math.floor((Date.now() - new Date(iso).getTime()) / 60_000);
-  if (diffM < 1) return "à l'instant";
-  if (diffM < 60) return `il y a ${diffM}min`;
+  if (diffM < 1) return "À l'instant";
+  if (diffM < 60) return `Il y a ${diffM} min`;
   const diffH = Math.floor(diffM / 60);
-  if (diffH < 24) return `il y a ${diffH}h`;
+  if (diffH < 24) return `Il y a ${diffH} h`;
   const diffD = Math.floor(diffH / 24);
-  if (diffD <= 7) return `il y a ${diffD}j`;
+  if (diffD <= 7) return `Il y a ${diffD} j`;
   return new Intl.DateTimeFormat('fr-FR', { day: 'numeric', month: 'short' }).format(new Date(iso));
 }
 
@@ -967,6 +967,7 @@ export default function DiscussionsScreen() {
         haptics.success();
       } catch {
         haptics.error();
+        toast.warning('Impossible de modifier le message. Réessayez.');
       }
       return;
     }
@@ -1303,7 +1304,7 @@ export default function DiscussionsScreen() {
                     style={styles.input}
                     value={text}
                     onChangeText={setText}
-                    placeholder="Écrivez une note…"
+                    placeholder="Écrire un message…"
                     placeholderTextColor={palette.textSecondary}
                     autoFocus
                     multiline
@@ -1338,9 +1339,17 @@ export default function DiscussionsScreen() {
                   <Text variant="caption" color="secondary">Hors ligne — dernières données connues</Text>
                 </View>
               )}
-              {/* Minimal toolbar: add partner only */}
+              {/* Toolbar: "Mon code" (always reachable) + add partner */}
               <View style={styles.amisHeader}>
-                <View style={styles.amisIconBtn} />
+                <Pressable
+                  onPress={() => setShowShareCode(true)}
+                  style={styles.amisIconBtn}
+                  hitSlop={8}
+                  accessibilityLabel="Mon code"
+                  accessibilityRole="button"
+                >
+                  <Ionicons name="key-outline" size={18} color={palette.primary} />
+                </Pressable>
                 <View style={{ flex: 1 }} />
                 <Pressable
                   onPress={() => { setShowAddPartner(true); setAddPartnerError(''); setAddPartnerSuccess(''); }}
@@ -1358,15 +1367,23 @@ export default function DiscussionsScreen() {
                   <Text variant="body" color="secondary">Chargement…</Text>
                 </View>
               ) : partners.length === 0 && partnerPending.length === 0 && consumerFriends.length === 0 ? (
-                <EmptyState
-                  icon="people-outline"
-                  title="Aucun ami pour le moment."
-                  subtitle="Invitez un commerçant ami pour discuter ici."
-                  actionLabel="+ Inviter"
-                  onAction={() => setShowShareCode(true)}
-                  linkLabel="J'ai un code"
-                  onLink={() => { setShowRedeemCode(true); setRedeemCodeError(''); }}
-                />
+                partnersOffline ? (
+                  <EmptyState
+                    icon="cloud-offline-outline"
+                    title="Vos amis apparaîtront à la reconnexion."
+                    subtitle="Revenez une fois la connexion rétablie."
+                  />
+                ) : (
+                  <EmptyState
+                    icon="people-outline"
+                    title="Aucun ami pour le moment."
+                    subtitle="Invitez un commerçant ami pour discuter ici."
+                    actionLabel="+ Inviter"
+                    onAction={() => setShowShareCode(true)}
+                    linkLabel="J'ai un code"
+                    onLink={() => { setShowRedeemCode(true); setRedeemCodeError(''); }}
+                  />
+                )
               ) : (
                 /* ── Has partners or consumer friends ── */
                 <ScrollView style={{ flex: 1 }} contentContainerStyle={{ paddingBottom: 32 }}>
@@ -1500,11 +1517,10 @@ export default function DiscussionsScreen() {
                   // A filtered category with no posts is a narrower state than
                   // "the whole forum is empty" — never conflate the two, or a
                   // real post elsewhere in the forum reads as if it vanished.
-                  <View style={styles.empty}>
-                    <Text variant="body" color="secondary" style={{ textAlign: 'center' }}>
-                      Aucun post dans cette catégorie.
-                    </Text>
-                  </View>
+                  <EmptyState
+                    icon="chatbubbles-outline"
+                    title="Aucun post dans cette catégorie."
+                  />
                 )
               ) : (
                 <FlatList<MarketPost>

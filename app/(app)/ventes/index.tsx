@@ -133,7 +133,7 @@ function buildSummaryLine(all: Vente[], filtered: Vente[], filter: string, curre
       const total = active.reduce((s, v) => s + v.total_amount - (v.discount_amount ?? 0), 0);
       const n = active.length;
       const c = creditSales.length;
-      return `${n} vente${n !== 1 ? 's' : ''} · ${fmt(total, currency)} · ${c} à payer`;
+      return `${n} vente${n !== 1 ? 's' : ''} · ${fmt(total, currency)} · ${c} en dette`;
     }
     case 'paye': {
       const paid = filtered;
@@ -144,7 +144,7 @@ function buildSummaryLine(all: Vente[], filtered: Vente[], filter: string, curre
     case 'credit': {
       const total = filtered.reduce((s, v) => s + (v.total_amount - (v.discount_amount ?? 0) - (v.amount_paid ?? 0)), 0);
       const n = filtered.length;
-      return `${n} vente${n !== 1 ? 's' : ''} à payer · ${fmt(total, currency)}`;
+      return `${n} vente${n !== 1 ? 's' : ''} en dette · ${fmt(total, currency)}`;
     }
     case 'annule': {
       const n = filtered.length;
@@ -242,9 +242,14 @@ function PaymentSheet({ visible, sale, currency, onClose, onConfirm, saving }: P
   const [method, setMethod] = useState('especes');
   const [date, setDate] = useState(todayISO());
 
+  // Starts empty, deliberately — "Tout régler" below is the explicit
+  // tap-to-fill shortcut for the common case. Prefilling the full amount by
+  // default made every payment silently assume "paid in full" unless the
+  // merchant noticed and edited it down (the same bug family as the "C'est
+  // réglé !" lie — the carnet payment sheet already fixed this one screen away).
   useEffect(() => {
     if (visible) {
-      setAmountStr(formatAmountInput(String(Math.round(remaining)), currency));
+      setAmountStr('');
       setMethod('especes');
       setDate(todayISO());
     }
@@ -311,7 +316,7 @@ function PaymentSheet({ visible, sale, currency, onClose, onConfirm, saving }: P
             style={styles.solderBtn}
             onPress={() => setAmountStr(formatAmountInput(String(Math.round(remaining)), currency))}
           >
-            <Text variant="label" style={{ color: palette.primary }}>Tout régler</Text>
+            <Text variant="label" style={{ color: palette.primary }}>Tout régler : {fmt(remaining, currency)}</Text>
           </Pressable>
         </View>
       </View>
@@ -462,8 +467,14 @@ function DetailModal({ sale, currency, businessName, singleVendor, role, onClose
   const saleIso = sale.sale_date ?? sale.created_at;
   const headerDate = fmtDate(saleIso);
 
-  const hasProfit = !!(sale.lines?.some(l => l.cost_price > 0));
-  const totalCost = sale.lines?.reduce((s, l) => s + l.cost_price * l.qty, 0) ?? 0;
+  // A sale's profit is only trustworthy when EVERY line has a known purchase
+  // cost. v221 makes a NULL products.cost_price possible, and quick-sales
+  // ("Vente rapide") always carry cost 0 — summing only the known lines in a
+  // mixed sale would overstate profit, so the detail renders "—" unless every
+  // line resolves to a real cost (the same `> 0` convention fetchSales uses).
+  const saleLines = sale.lines ?? [];
+  const allCostsKnown = saleLines.length > 0 && saleLines.every(l => l.cost_price > 0);
+  const totalCost = saleLines.reduce((s, l) => s + l.cost_price * l.qty, 0);
   // For fully-paid sales with amount_paid set (discounted/credit), use the actual payment.
   // Otherwise use sale.total_amount which reflects the actual sold price (including above-catalog overrides).
   const effectiveRevenue = sale.status === 'paye' && sale.amount_paid != null
@@ -483,7 +494,7 @@ function DetailModal({ sale, currency, businessName, singleVendor, role, onClose
       haptics.success();
       setShowPaymentSheet(false);
       const clientName = sale.customer_name ?? 'Client';
-      showToast(fullyPaid ? `${clientName} est soldé(e) ✓` : 'Paiement enregistré');
+      showToast(fullyPaid ? `${clientName} a tout payé ✓` : 'Paiement enregistré');
     } else {
       haptics.error();
     }
@@ -618,7 +629,7 @@ function DetailModal({ sale, currency, businessName, singleVendor, role, onClose
       options.push({ text: 'Annuler cette vente', onPress: () => setShowCancelForm(true), style: 'destructive' });
     }
     options.push({ text: 'Fermer', style: 'cancel' });
-    Alert.alert('Options', undefined, options);
+    Alert.alert(sale.customer_name ?? 'Cette vente', undefined, options);
   };
 
   const realPayments = sale.payments?.filter(p => p.method !== 'credit') ?? [];
@@ -809,20 +820,32 @@ function DetailModal({ sale, currency, businessName, singleVendor, role, onClose
                 </View>
               )}
 
-              {/* Bénéfice — only shown once the sale is fully paid */}
-              {hasProfit && displayState !== 'credit' && displayState !== 'partiel' && (
+              {/* Bénéfice — only shown once the sale is fully paid. Revenue stays
+                  visible above regardless; when any line's purchase cost is
+                  unknown (v221 / quick-sale), profit renders "—" instead of an
+                  overstated figure that treats unknown-cost revenue as 100% gain. */}
+              {displayState !== 'credit' && displayState !== 'partiel' && (
                 <View style={[styles.cardSection, styles.cardSectionBorder, { gap: spacing[2] }]}>
                   <Text variant="label" color="secondary">Bénéfice</Text>
-                  <View style={styles.row}>
-                    <Text variant="caption" color="secondary">Coût d'achat</Text>
-                    <Text variant="label">{fmt(totalCost, currency)}</Text>
-                  </View>
-                  <View style={[styles.row, { paddingTop: spacing[1], borderTopWidth: 1, borderTopColor: palette.border }]}>
-                    <Text variant="label">Bénéfice net</Text>
-                    <Text variant="label" style={{ color: totalProfit >= 0 ? palette.success : palette.warning }}>
-                      {totalProfit >= 0 ? '+' : ''}{fmt(totalProfit, currency)} ({margin.toFixed(0)}%)
-                    </Text>
-                  </View>
+                  {allCostsKnown ? (
+                    <>
+                      <View style={styles.row}>
+                        <Text variant="caption" color="secondary">Coût d'achat</Text>
+                        <Text variant="label">{fmt(totalCost, currency)}</Text>
+                      </View>
+                      <View style={[styles.row, { paddingTop: spacing[1], borderTopWidth: 1, borderTopColor: palette.border }]}>
+                        <Text variant="label">Bénéfice net</Text>
+                        <Text variant="label" style={{ color: totalProfit >= 0 ? palette.success : palette.warning }}>
+                          {totalProfit >= 0 ? '+' : ''}{fmt(totalProfit, currency)} ({margin.toFixed(0)}%)
+                        </Text>
+                      </View>
+                    </>
+                  ) : (
+                    <View style={styles.row}>
+                      <Text variant="caption" color="secondary">Prix d'achat inconnu</Text>
+                      <Text variant="label">—</Text>
+                    </View>
+                  )}
                 </View>
               )}
             </Card>
@@ -1116,23 +1139,6 @@ export default function VentesScreen() {
   const fabScale = useRef(new Animated.Value(1)).current;
   const fabOpacity = useRef(new Animated.Value(1)).current;
 
-  useEffect(() => {
-    const easing = Easing.inOut(Easing.sin);
-    const loop = Animated.loop(
-      Animated.sequence([
-        Animated.parallel([
-          Animated.timing(fabScale, { toValue: 1.06, duration: 2000, easing, useNativeDriver: true }),
-          Animated.timing(fabOpacity, { toValue: 0.85, duration: 2000, easing, useNativeDriver: true }),
-        ]),
-        Animated.parallel([
-          Animated.timing(fabScale, { toValue: 1, duration: 2000, easing, useNativeDriver: true }),
-          Animated.timing(fabOpacity, { toValue: 1, duration: 2000, easing, useNativeDriver: true }),
-        ]),
-      ])
-    );
-    loop.start();
-    return () => loop.stop();
-  }, []);
 
   const { sales, loading, saving, error, offline, offlineSince, fetchSales, loadDetail, recordPayment, cancelSale, updateSaleClient, editSale } = useVentesStore();
   const [selected, setSelected] = useState<Vente | null>(null);
@@ -1382,7 +1388,7 @@ export default function VentesScreen() {
           <Pressable key={f} onPress={() => setFilter(f)}
             style={[styles.filterTab, filter === f && styles.filterTabActive]}>
             <Text variant="caption" style={{ color: filter === f ? palette.textInverse : palette.textSecondary }}>
-              {f === 'all' ? 'Tout' : f === 'paye' ? 'Payés' : f === 'credit' ? 'À payer' : 'Annulés'}
+              {f === 'all' ? 'Tout' : f === 'paye' ? 'Payés' : f === 'credit' ? 'En dette' : 'Annulés'}
             </Text>
           </Pressable>
         ))}
@@ -1413,6 +1419,9 @@ export default function VentesScreen() {
             <Text variant="body" color="secondary" style={{ textAlign: 'center' }}>
               Aucune vente ne correspond à ce filtre.
             </Text>
+            <Pressable onPress={() => setFilter('all')} hitSlop={8} style={{ marginTop: spacing[3] }}>
+              <Text variant="label" style={{ color: palette.primary }}>Effacer</Text>
+            </Pressable>
           </View>
         )
       ) : (
@@ -1443,7 +1452,7 @@ export default function VentesScreen() {
                     <Text variant="caption" color="secondary">
                       {item.count === 1
                         ? `${item.soloName ? `${item.soloName} · ` : ''}${fmt(item.total, currency)}`
-                        : `${item.count} ventes pour ${fmt(item.total, currency)}`}
+                        : `${item.count} ventes · ${fmt(item.total, currency)}`}
                     </Text>
                   </View>
                   <Ionicons
@@ -1480,11 +1489,13 @@ export default function VentesScreen() {
                       {isCredit ? `Reste ${fmt(remaining, currency)}` : fmt(sale.total_amount - (sale.discount_amount ?? 0), currency)}
                     </Text>
                   </View>
-                  <View style={{ flexDirection: 'row', justifyContent: 'flex-end' }}>
-                    <Text variant="caption" style={{ color: rowColor, opacity: 0.85 }} numberOfLines={1}>
-                      Vendeur : {sale.seller_id === userId ? 'Vous' : sale.seller_name}
-                    </Text>
-                  </View>
+                  {!singleVendor && (
+                    <View style={{ flexDirection: 'row', justifyContent: 'flex-end' }}>
+                      <Text variant="caption" style={{ color: rowColor, opacity: 0.85 }} numberOfLines={1}>
+                        Vendeur : {sale.seller_id === userId ? 'Vous' : sale.seller_name}
+                      </Text>
+                    </View>
+                  )}
                 </View>
               </Pressable>
             );

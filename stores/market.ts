@@ -35,6 +35,7 @@ interface MarketStore {
   activePost: MarketPost | null;
   comments: MarketComment[];
   loadingDetail: boolean;
+  detailError: string | null;
   sendingComment: boolean;
   offline: boolean;
   offlineSince: number | null;
@@ -69,6 +70,7 @@ const initialState = {
   activePost: null,
   comments: [],
   loadingDetail: false,
+  detailError: null as string | null,
   sendingComment: false,
   offline: false,
   offlineSince: null as number | null,
@@ -253,7 +255,7 @@ export const useMarketStore = create<MarketStore>((set, get) => ({
   },
 
   fetchPostDetail: async (postId, userId) => {
-    set({ loadingDetail: true, activePost: null, comments: [] });
+    set({ loadingDetail: true, activePost: null, comments: [], detailError: null });
     try {
       const [postRes, commentsRes, commentLikesRes, postLikesRes] = await withTimeout(Promise.all([
         supabase.from('market_posts').select('*').eq('id', postId).single(),
@@ -304,9 +306,11 @@ export const useMarketStore = create<MarketStore>((set, get) => ({
         likedCommentIds: (commentLikesRes.data ?? []).map(l => l.comment_id),
         likedPostIds: (postLikesRes.data ?? []).map(l => l.post_id),
         loadingDetail: false,
+        detailError: null,
       });
     } catch (err) {
-      set({ loadingDetail: false });
+      const code = (err as { code?: string } | null)?.code;
+      set({ loadingDetail: false, detailError: code === 'PGRST116' ? 'not_found' : 'error' });
     }
   },
 
@@ -337,6 +341,7 @@ export const useMarketStore = create<MarketStore>((set, get) => ({
       set({ sendingComment: false });
     } catch (err) {
       set({ sendingComment: false });
+      toast.warning(translateError(err, 'Impossible de publier le commentaire'));
       throw err;
     }
   },
@@ -413,13 +418,20 @@ export const useMarketStore = create<MarketStore>((set, get) => ({
     try {
       const { error } = await supabase.rpc('toggle_comment_like', { p_comment_id: commentId });
       if (error) throw error;
-    } catch {
+    } catch (err) {
       // Revert all three on any error (including self-like exception from DB)
       set({
         likedCommentIds: prevLikedCommentIds,
         comments: prevComments,
         userPoints: prevUserPoints,
       });
+      // Same policy as toggleLike: silent only for the self-like guard, a
+      // user-facing toast for every real failure — the optimistic revert alone
+      // used to leave the tap feeling broken with no explanation.
+      const msg = err instanceof Error ? err.message : '';
+      if (!msg.includes('Auto-upvotes')) {
+        toast.warning('Impossible d\'enregistrer le like. Réessayez.');
+      }
     }
   },
 

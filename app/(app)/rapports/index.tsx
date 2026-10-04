@@ -13,6 +13,7 @@ import { useTheme, spacing, radius, fontFamily } from '@/src/theme';
 import type { Palette } from '@/src/theme';
 import { useAuthStore } from '@/stores/auth';
 import { useRapportsStore, type PeriodReport } from '@/stores/rapports';
+import { useExpensesStore } from '@/stores/expenses';
 
 function fmt(n: number, cur: string) {
   // `|| 0` normalizes a rounded negative zero (e.g. Math.round(-0.4) === -0)
@@ -81,8 +82,8 @@ function clampToToday(r: { start: string; end: string }): { start: string; end: 
 // heatmap via its own tap-tooltip (see YearHeatmap), not a separate filter.
 type FilterType = 'semaine' | 'mois' | 'personnalise';
 const FILTER_CHIPS: { key: FilterType; label: string }[] = [
-  { key: 'semaine',      label: 'Semaine' },
-  { key: 'mois',         label: 'Mois' },
+  { key: 'semaine', label: 'Semaine' },
+  { key: 'mois', label: 'Mois' },
   { key: 'personnalise', label: 'Personnalisé' },
 ];
 
@@ -147,12 +148,13 @@ function SectionSep({ label }: { label: string }) {
 export default function RapportsScreen() {
   const { palette } = useTheme();
   const styles = useMemo(() => makeStyles(palette), [palette]);
-  const session      = useAuthStore(s => s.session);
-  const businessId   = session?.activeBusiness?.id ?? '';
-  const userId       = session?.user.id ?? '';
-  const currency     = session?.activeBusiness?.currency ?? 'GNF';
-  const role           = session?.activeMembership?.role;
-  const isVendeur      = role === 'vendeur';
+  const session = useAuthStore(s => s.session);
+  const pendingExpenseCount = useExpensesStore(s => s.expenses.filter(e => e.status === 'en_attente').length);
+  const businessId = session?.activeBusiness?.id ?? '';
+  const userId = session?.user.id ?? '';
+  const currency = session?.activeBusiness?.currency ?? 'GNF';
+  const role = session?.activeMembership?.role;
+  const isVendeur = role === 'vendeur';
   // Title reflects scope, not what's shown: admin/manager run the whole shop
   // → "Les chiffres"; vendeur (own sales) and investisseur (their stake) → "Mes chiffres".
   const seesWholeBusiness = role === 'administrateur' || role === 'manager';
@@ -182,7 +184,7 @@ export default function RapportsScreen() {
   const [weekAnchor, setWeekAnchor] = useState(todayIso);
   const [monthAnchor, setMonthAnchor] = useState(todayIso);
   const [customStart, setCustomStart] = useState('');
-  const [customEnd, setCustomEnd]     = useState('');
+  const [customEnd, setCustomEnd] = useState('');
 
   // Picking a chip (or stepping/typing a new range) makes a sub-control
   // and/or the detail panel appear or change shape below the chips row.
@@ -314,13 +316,15 @@ export default function RapportsScreen() {
   }, [businessId, role, userId, filterRange?.start, filterRange?.end, fetchFilterReport, clearFilterReport]);
 
   // ── Headline (year-level) values ──────────────────────────────────────────
-  const cashOnHand        = yearReport?.cash_on_hand        ?? 0;
-  const yearProfit        = yearReport?.net_profit          ?? 0;
-  const yearSalesCount    = yearReport?.sales_count          ?? 0;
-  const yearUnitsSold     = yearReport?.units_sold           ?? 0;
+  const cashOnHand = yearReport?.cash_on_hand ?? 0;
+  const yearProfit = yearReport?.net_profit ?? 0;
+  const yearSalesCount = yearReport?.sales_count ?? 0;
+  const yearUnitsSold = yearReport?.units_sold ?? 0;
+  const yearWithoutCost = yearReport?.sales_without_cost ?? 0;
+  const yearCreditOwed = yearReport?.credit_outstanding ?? 0;
 
-  const myYearSalesCount  = yearReport?.my_sales_count       ?? 0;
-  const myYearUnitsSold   = yearReport?.my_units_sold        ?? 0;
+  const myYearSalesCount = yearReport?.my_sales_count ?? 0;
+  const myYearUnitsSold = yearReport?.my_units_sold ?? 0;
 
   // "vs l'an dernier" — same full-year profit, one year back. Only ever
   // rendered once a real previous-year figure has actually loaded, so a
@@ -440,7 +444,7 @@ export default function RapportsScreen() {
   // panel below, since both render the same fields off different sources.
   function renderVolumeRow(source: PeriodReport | null, loading: boolean) {
     const salesCount = isVendeur ? (source?.my_sales_count ?? 0) : (source?.sales_count ?? 0);
-    const unitsSold   = isVendeur ? (source?.my_units_sold  ?? 0) : (source?.units_sold  ?? 0);
+    const unitsSold = isVendeur ? (source?.my_units_sold ?? 0) : (source?.units_sold ?? 0);
     return (
       <View style={styles.gridRow}>
         <StatCard
@@ -574,6 +578,28 @@ export default function RapportsScreen() {
                 <Text variant="caption" color="secondary">Première année d'activité</Text>
               ) : null}
             </View>
+            {/* v220 — Bénéfice cumulé only counts lines with a real purchase
+                cost; unknown-cost sales are excluded from profit, so tell the
+                merchant exactly how many were left out rather than silently
+                presenting a lower figure. */}
+            {!yearReportLoading && yearWithoutCost > 0 && (
+              <Text variant="caption" color="secondary">
+                hors {yearWithoutCost} vente{yearWithoutCost > 1 ? 's' : ''} sans prix d'achat
+              </Text>
+            )}
+            {pendingExpenseCount > 0 && (
+              <Text variant="caption" color="secondary">
+                {pendingExpenseCount} dépense{pendingExpenseCount > 1 ? 's' : ''} en attente non incluse{pendingExpenseCount > 1 ? 's' : ''}
+              </Text>
+            )}
+            {/* Credit counted in full elsewhere — surface the live un-paid
+                balance as a second hero line so "Bénéfice cumulé" isn't read
+                as cash already in hand. */}
+            {!yearReportLoading && yearCreditOwed > 0 && (
+              <Text variant="caption" color="secondary">
+                dont {fmt(yearCreditOwed, currency)} de crédit pas encore payé
+              </Text>
+            )}
           </Card>
         )}
 
@@ -641,74 +667,74 @@ export default function RapportsScreen() {
 
 function makeStyles(p: Palette) {
   return StyleSheet.create({
-  hdr:     {
-    flexDirection: 'row', alignItems: 'center', justifyContent: 'space-between',
-    paddingHorizontal: spacing[5], paddingVertical: spacing[4],
-    backgroundColor: p.background,
-    borderBottomWidth: StyleSheet.hairlineWidth, borderBottomColor: p.border,
-  },
-  content: { padding: spacing[4], gap: spacing[4], paddingBottom: spacing[10] },
+    hdr: {
+      flexDirection: 'row', alignItems: 'center', justifyContent: 'space-between',
+      paddingHorizontal: spacing[5], paddingVertical: spacing[4],
+      backgroundColor: p.background,
+      borderBottomWidth: StyleSheet.hairlineWidth, borderBottomColor: p.border,
+    },
+    content: { padding: spacing[4], gap: spacing[4], paddingBottom: spacing[10] },
 
-  // Year selector — a bordered pill, not bare text, so it reads as a real
-  // control (the chevrons alone didn't signal "tappable" clearly enough).
-  yearRow: {
-    flexDirection: 'row', alignItems: 'center', justifyContent: 'center', gap: spacing[5],
-    alignSelf: 'center',
-    paddingVertical: spacing[2], paddingHorizontal: spacing[6],
-    borderRadius: radius.full, borderWidth: 1.5, borderColor: p.border,
-    backgroundColor: p.surface,
-  },
+    // Year selector — a bordered pill, not bare text, so it reads as a real
+    // control (the chevrons alone didn't signal "tappable" clearly enough).
+    yearRow: {
+      flexDirection: 'row', alignItems: 'center', justifyContent: 'center', gap: spacing[5],
+      alignSelf: 'center',
+      paddingVertical: spacing[2], paddingHorizontal: spacing[6],
+      borderRadius: radius.full, borderWidth: 1.5, borderColor: p.border,
+      backgroundColor: p.surface,
+    },
 
-  // Period / filter chips
-  periodRow:         { flexDirection: 'row', flexWrap: 'wrap', gap: spacing[2], justifyContent: 'center' },
-  periodChip:        { paddingVertical: spacing[2], paddingHorizontal: spacing[3], alignItems: 'center', borderRadius: radius.md, borderWidth: 1.5, borderColor: p.border, backgroundColor: p.surface },
-  // Brand purple, not a neutral black/white pill — the active period tab is
-  // exactly the kind of "genuinely important state" this app's purple is
-  // reserved for, and a stark black fill reads as an unrelated, ad-hoc
-  // accent next to the purple used everywhere else (Ventes, Produits vendus).
-  periodActive:      { backgroundColor: p.primary, borderColor: p.primary },
-  periodLabel:       { fontFamily: fontFamily.semibold, fontSize: 13, color: p.textSecondary },
-  periodLabelActive: { color: p.textInverse },
-  stepperRow:        { flexDirection: 'row', alignItems: 'center', justifyContent: 'space-between', paddingHorizontal: spacing[2] },
-  customRow:         { flexDirection: 'row', gap: spacing[3] },
+    // Period / filter chips
+    periodRow: { flexDirection: 'row', flexWrap: 'wrap', gap: spacing[2], justifyContent: 'center' },
+    periodChip: { paddingVertical: spacing[2], paddingHorizontal: spacing[3], alignItems: 'center', borderRadius: radius.md, borderWidth: 1.5, borderColor: p.border, backgroundColor: p.surface },
+    // Brand purple, not a neutral black/white pill — the active period tab is
+    // exactly the kind of "genuinely important state" this app's purple is
+    // reserved for, and a stark black fill reads as an unrelated, ad-hoc
+    // accent next to the purple used everywhere else (Ventes, Produits vendus).
+    periodActive: { backgroundColor: p.primary, borderColor: p.primary },
+    periodLabel: { fontFamily: fontFamily.semibold, fontSize: 13, color: p.textSecondary },
+    periodLabelActive: { color: p.textInverse },
+    stepperRow: { flexDirection: 'row', alignItems: 'center', justifyContent: 'space-between', paddingHorizontal: spacing[2] },
+    customRow: { flexDirection: 'row', gap: spacing[3] },
 
-  // Hero card (investisseur ROI) — currently unused, kept for a future pass
-  hero:        { gap: spacing[2], alignItems: 'center', paddingVertical: spacing[5], backgroundColor: p.surface },
-  heroCaption: { fontFamily: fontFamily.medium, fontSize: 14, color: p.textSecondary, textAlign: 'center' as const },
-  heroAmount:  { fontFamily: fontFamily.bold, fontSize: 34, color: p.textPrimary, letterSpacing: -0.5, lineHeight: 42 },
-  heroSub:     { fontSize: 13, color: p.textSecondary, textAlign: 'center' as const },
+    // Hero card (investisseur ROI) — currently unused, kept for a future pass
+    hero: { gap: spacing[2], alignItems: 'center', paddingVertical: spacing[5], backgroundColor: p.surface },
+    heroCaption: { fontFamily: fontFamily.medium, fontSize: 14, color: p.textSecondary, textAlign: 'center' as const },
+    heroAmount: { fontFamily: fontFamily.bold, fontSize: 34, color: p.textPrimary, letterSpacing: -0.5, lineHeight: 42 },
+    heroSub: { fontSize: 13, color: p.textSecondary, textAlign: 'center' as const },
 
-  // Profit hero — mirrors the dashboard's revenue-hero convention (left-
-  // aligned caption + big amount + a bottom comparison row divided by a
-  // hairline) so the two "hero number" moments in the app read as the same
-  // pattern, not two different ones.
-  profitHero:           { gap: spacing[2] },
-  profitHeroLabel:      { fontFamily: fontFamily.medium, fontSize: 13, color: p.textSecondary },
-  profitHeroAmount:      { fontFamily: fontFamily.bold, fontSize: 32, letterSpacing: -0.5, lineHeight: 38, fontVariant: ['tabular-nums'] as ['tabular-nums'] },
-  profitHeroComparison: {
-    flexDirection: 'row', alignItems: 'center',
-    paddingTop: spacing[3], marginTop: spacing[1],
-    borderTopWidth: StyleSheet.hairlineWidth, borderTopColor: p.border,
-    minHeight: 20,
-  },
+    // Profit hero — mirrors the dashboard's revenue-hero convention (left-
+    // aligned caption + big amount + a bottom comparison row divided by a
+    // hairline) so the two "hero number" moments in the app read as the same
+    // pattern, not two different ones.
+    profitHero: { gap: spacing[2] },
+    profitHeroLabel: { fontFamily: fontFamily.medium, fontSize: 13, color: p.textSecondary },
+    profitHeroAmount: { fontFamily: fontFamily.bold, fontSize: 32, letterSpacing: -0.5, lineHeight: 38, fontVariant: ['tabular-nums'] as ['tabular-nums'] },
+    profitHeroComparison: {
+      flexDirection: 'row', alignItems: 'center',
+      paddingTop: spacing[3], marginTop: spacing[1],
+      borderTopWidth: StyleSheet.hairlineWidth, borderTopColor: p.border,
+      minHeight: 20,
+    },
 
-  // 2-col grid
-  gridRow:   { flexDirection: 'row', gap: spacing[4] },
-  statCard:  { flex: 1, gap: spacing[1], minHeight: 90 },
-  statLabel: { fontFamily: fontFamily.medium, fontSize: 12, color: p.textSecondary },
-  statValue: { fontFamily: fontFamily.bold, fontSize: 16, lineHeight: 22, fontVariant: ['tabular-nums'] as ['tabular-nums'] },
-  statNote:  { fontSize: 11, color: p.textSecondary },
+    // 2-col grid
+    gridRow: { flexDirection: 'row', gap: spacing[4] },
+    statCard: { flex: 1, gap: spacing[1], minHeight: 90 },
+    statLabel: { fontFamily: fontFamily.medium, fontSize: 12, color: p.textSecondary },
+    statValue: { fontFamily: fontFamily.bold, fontSize: 16, lineHeight: 22, fontVariant: ['tabular-nums'] as ['tabular-nums'] },
+    statNote: { fontSize: 11, color: p.textSecondary },
 
-  // Section title
-  sectionTitle: { fontFamily: fontFamily.bold, fontSize: 14, color: p.textPrimary },
+    // Section title
+    sectionTitle: { fontFamily: fontFamily.bold, fontSize: 14, color: p.textPrimary },
 
-  // Section separator
-  sectionSep:      { flexDirection: 'row' as const, alignItems: 'center' as const, gap: spacing[3] },
-  sectionSepLine:  { flex: 1, height: StyleSheet.hairlineWidth, backgroundColor: p.border },
-  sectionSepLabel: { fontFamily: fontFamily.semibold, fontSize: 11, color: p.textSecondary, textTransform: 'uppercase' as const, letterSpacing: 0.8, fontVariant: ['tabular-nums'] as ['tabular-nums'] },
+    // Section separator
+    sectionSep: { flexDirection: 'row' as const, alignItems: 'center' as const, gap: spacing[3] },
+    sectionSepLine: { flex: 1, height: StyleSheet.hairlineWidth, backgroundColor: p.border },
+    sectionSepLabel: { fontFamily: fontFamily.semibold, fontSize: 11, color: p.textSecondary, textTransform: 'uppercase' as const, letterSpacing: 0.8, fontVariant: ['tabular-nums'] as ['tabular-nums'] },
 
-  // Heatmap legend
-  legendRow:    { flexDirection: 'row', alignItems: 'center', gap: spacing[1], alignSelf: 'flex-end' },
-  legendSwatch: { width: 10, height: 10, borderRadius: 2.5 },
+    // Heatmap legend
+    legendRow: { flexDirection: 'row', alignItems: 'center', gap: spacing[1], alignSelf: 'flex-end' },
+    legendSwatch: { width: 10, height: 10, borderRadius: 2.5 },
   });
 }

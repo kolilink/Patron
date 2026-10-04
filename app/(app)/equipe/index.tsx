@@ -257,8 +257,13 @@ function MemberDetailSheet({
 
   const handleToggleScopeAll = async (val: boolean) => {
     setScopeAll(val);
-    await updateScopeAll(membre.id, val);
-    haptics.success();
+    const ok = await updateScopeAll(membre.id, val);
+    if (ok) {
+      haptics.success();
+    } else {
+      haptics.error();
+      toast.warning(useEquipeStore.getState().error ?? 'Impossible de modifier l\'accès');
+    }
   };
 
   const handleSaveScope = async (ids: string[]) => {
@@ -276,6 +281,9 @@ function MemberDetailSheet({
       const draft: Record<string, string> = {};
       rows.forEach(r => { draft[r.product_id] = r.profit_share > 0 ? String(r.profit_share) : ''; });
       setDraftStakes(draft);
+    } else {
+      haptics.error();
+      toast.warning(useEquipeStore.getState().error ?? 'Erreur de mise à jour');
     }
   };
 
@@ -286,7 +294,12 @@ function MemberDetailSheet({
       profitShare: parseFloat(draftStakes[s.product_id] || '0') || 0,
     }));
     const ok = await setMemberScope(membre.id, stakes);
-    if (ok) haptics.success();
+    if (ok) {
+      haptics.success();
+    } else {
+      haptics.error();
+      toast.warning(useEquipeStore.getState().error ?? 'Erreur de mise à jour');
+    }
   };
 
   const handleRemoveProduct = (productId: string, productName: string) => {
@@ -297,9 +310,14 @@ function MemberDetailSheet({
         style: 'destructive',
         onPress: async () => {
           haptics.destructive();
-          await removeScopeProduct(membre.id, productId);
-          const rows = await fetchMemberScope(membre.id);
-          setScope(rows);
+          const ok = await removeScopeProduct(membre.id, productId);
+          if (ok) {
+            const rows = await fetchMemberScope(membre.id);
+            setScope(rows);
+          } else {
+            haptics.error();
+            toast.warning(useEquipeStore.getState().error ?? 'Erreur de suppression');
+          }
         },
       },
     ]);
@@ -307,12 +325,19 @@ function MemberDetailSheet({
 
   const handleChangeRole = () => {
     const otherRoles = ROLES.filter(r => r !== membre.role);
-    Alert.alert('Nouveau rôle', '', [
+    Alert.alert('Nouveau rôle', undefined, [
       ...otherRoles.map(r => ({
         text: ROLE_LABELS[r],
         onPress: () => {
           if (r === 'manager' && hasManager) return;
-          changeRole(membre.id, r).then(ok => { if (ok) onClose(); });
+          changeRole(membre.id, r).then(ok => {
+            if (ok) {
+              onClose();
+            } else {
+              haptics.error();
+              toast.warning(useEquipeStore.getState().error ?? 'Impossible de modifier le rôle');
+            }
+          });
         },
       })),
       { text: 'Annuler', style: 'cancel' },
@@ -320,14 +345,21 @@ function MemberDetailSheet({
   };
 
   const handleRemove = () => {
-    Alert.alert('Retirer ' + (membre.user_name || generateFallbackName(membre.user_id)) + ' ?', '', [
+    Alert.alert('Retirer ' + (membre.user_name || generateFallbackName(membre.user_id)) + ' ?', 'Ses ventes restent enregistrées dans le commerce.', [
       { text: 'Annuler', style: 'cancel' },
       {
         text: 'Retirer',
         style: 'destructive',
         onPress: () => {
           haptics.destructive();
-          removeMembre(membre.id).then(ok => { if (ok) onClose(); });
+          removeMembre(membre.id).then(ok => {
+            if (ok) {
+              onClose();
+            } else {
+              haptics.error();
+              toast.warning(useEquipeStore.getState().error ?? 'Impossible de retirer ce membre');
+            }
+          });
         },
       },
     ]);
@@ -1071,7 +1103,7 @@ export default function EquipeScreen() {
             </View>
           ) : (
             <View style={styles.empty}>
-              <Text variant="body" color="secondary">Personne d'autre n'utilise ce commerce</Text>
+              <Text variant="body" color="secondary">Vous êtes seul pour l'instant</Text>
               <Text variant="caption" color="secondary" style={{ textAlign: 'center', marginTop: spacing[1] }}>
                 Invitez un vendeur ou un gérant pour partager le travail
               </Text>
@@ -1183,11 +1215,11 @@ export default function EquipeScreen() {
                     <Text variant="caption" color="secondary">
                       {expired
                         ? 'Expiré'
-                        : `Valide · expire ${item.expires_at ? new Date(item.expires_at).toLocaleDateString('fr-FR') : '—'}`}
+                        : `Valide · Expire dans ${item.expires_at ? Math.max(1, Math.ceil((new Date(item.expires_at).getTime() - Date.now()) / 3600000)) : '—'} h`}
                     </Text>
                   </View>
-                  <Pressable onPress={() => Alert.alert('Annuler ce code ?', '', [{ text: 'Non', style: 'cancel' }, { text: 'Oui, annuler', style: 'destructive', onPress: () => { haptics.destructive(); revokeCode(item.id); } }])}>
-                    <Text variant="caption" color="danger">Supprimer</Text>
+                  <Pressable onPress={() => Alert.alert('Révoquer ce code ?', undefined, [{ text: 'Non', style: 'cancel' }, { text: 'Oui, révoquer', style: 'destructive', onPress: () => { haptics.destructive(); revokeCode(item.id).then(ok => { if (!ok) { haptics.error(); toast.warning(useEquipeStore.getState().error ?? 'Impossible de révoquer le code'); } }); } }])}>
+                    <Text variant="caption" color="danger">Révoquer</Text>
                   </Pressable>
                 </View>
                 {!expired && (

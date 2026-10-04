@@ -52,7 +52,6 @@ import { creditSaleConfirmation, cashSaleConfirmation } from '@/src/utils/saveCo
 import { supabase } from '@/lib/supabase';
 import { getKV, setKV } from '@/lib/db';
 import { haptics } from '@/lib/haptics';
-import { toast } from '@/stores/toast';
 import { SkeletonList } from '@/src/components/ui/SkeletonPlaceholder';
 import { trackEvent } from '@/lib/analytics';
 import { activationPriming } from '@/stores/activationPriming';
@@ -529,12 +528,12 @@ function PaymentModal({
   const creditSentence = (() => {
     const name = clientName.trim() || 'Le client';
     if (creditUpfront > 0 && !creditUpfrontCoversAll) {
-      return `${name} paie ${formatAmount(creditUpfront, currency)} maintenant et te devra ${formatAmount(creditRemaining, currency)}.`;
+      return `${name} paie ${formatAmount(creditUpfront, currency)} maintenant et vous devra ${formatAmount(creditRemaining, currency)}.`;
     }
     if (creditUpfrontCoversAll) {
       return `${name} paie ${formatAmount(creditUpfront, currency)} maintenant.`;
     }
-    return `${name} te devra ${formatAmount(creditRemaining, currency)}.`;
+    return `${name} vous devra ${formatAmount(creditRemaining, currency)}.`;
   })();
 
   const handleAmountChange = (val: string) => {
@@ -909,18 +908,27 @@ function PaymentModal({
                 </View>
               )}
 
-              <Pressable onPress={() => setDisambig('credit')} style={styles.radioRow}>
-                <View style={[styles.radio, disambig === 'credit' && styles.radioActive]}>
-                  {disambig === 'credit' && <View style={styles.radioDot} />}
-                </View>
-                <View style={{ flex: 1 }}>
-                  <Text variant="label" style={{ color: disambig === 'credit' ? palette.primary : palette.textPrimary }}>Un crédit</Text>
-                  <Text variant="caption" style={{ color: palette.textSecondary }}>
-                    <Text style={{ color: palette.textPrimary, fontFamily: fontFamily.semibold }}>{formatAmount(shortfall, currency)}</Text>
-                    {' '}de moins que le prix
-                  </Text>
-                </View>
-              </Pressable>
+              {isShort && (
+                <>
+                  <Pressable onPress={() => setDisambig('credit')} style={styles.radioRow}>
+                    <View style={[styles.radio, disambig === 'credit' && styles.radioActive]}>
+                      {disambig === 'credit' && <View style={styles.radioDot} />}
+                    </View>
+                    <View style={{ flex: 1 }}>
+                      <Text variant="label" style={{ color: disambig === 'credit' ? palette.primary : palette.textPrimary }}>Un crédit</Text>
+                      <Text variant="caption" style={{ color: palette.textSecondary }}>
+                        <Text style={{ color: palette.textPrimary, fontFamily: fontFamily.semibold }}>{formatAmount(shortfall, currency)}</Text>
+                        {' '}de moins que le prix
+                      </Text>
+                    </View>
+                  </Pressable>
+                  {disambig === 'rabais' && (
+                    <Text variant="caption" style={{ color: palette.textSecondary }}>
+                      La différence sera notée comme un rabais.
+                    </Text>
+                  )}
+                </>
+              )}
             </View>
 
             {/* Payment method grid — inside scroll so all 4 chips are always reachable */}
@@ -1498,13 +1506,6 @@ export default function VendreScreen() {
   const [showPayment, setShowPayment] = useState(false);
   const [payStep, setPayStep] = useState<PayStep>('pay');
   const [showConfirmSheet, setShowConfirmSheet] = useState(false);
-  // Whether the sale just confirmed was queued offline rather than synced —
-  // same confirm+share sheet either way, just a small "en attente" badge.
-  const [confirmQueued, setConfirmQueued] = useState(false);
-  // The just-confirmed sale's id, so "Annuler la vente" on the confirm sheet
-  // can cancel it directly, in the same modal — no second dialog to open.
-  // null for a queued/offline sale (no server row yet to cancel).
-  const [confirmSaleId, setConfirmSaleId] = useState<string | null>(null);
   const [variantPickerProduct, setVariantPickerProduct] = useState<Product | null>(null);
   const [lastReceipt, setLastReceipt] = useState<ReceiptData | null>(null);
   const receiptViewRef = useRef<View>(null);
@@ -1518,12 +1519,9 @@ export default function VendreScreen() {
 
   // Quick-checkout — just the visible, pre-selected payment method chip now.
   // This used to also carry its own inline post-sale confirmation
-  // (quickSaleResult) with its own "Annuler", extending cartPanel's mount
-  // condition open for it — removed on direct feedback: the full confirm
-  // sheet below already shows the amount AND has its own "Annuler la
-  // vente" (added the same night), so the inline block wasn't avoiding
-  // duplication, it was a second, weaker path missing the one thing the
-  // full sheet offers that it didn't — sharing the receipt. One
+  // (quickSaleResult) with its own "Annuler" — removed on direct feedback:
+  // the full confirm sheet below already shows the amount and offers the
+  // receipt share, so the inline block was a second, weaker path. One
   // confirmation surface for every sale, quick or not.
   const [quickPayMethod, setQuickPayMethod] = useState<'especes' | 'orange' | 'mtn'>('especes');
   // The product grid needs to reserve exactly this much bottom padding so
@@ -1559,8 +1557,6 @@ export default function VendreScreen() {
   // still-in-flight share — captureRef/Sharing.shareAsync need the sheet's
   // Modal to stay mounted until they finish, not close out from under them.
   const [sharingReceipt, setSharingReceipt] = useState(false);
-  const cancelSale = useVentesStore(s => s.cancelSale);
-
   useEffect(() => {
     if (!businessId) return;
     loadDefaultQuickPayMethod(businessId).then(setQuickPayMethod);
@@ -1705,13 +1701,13 @@ export default function VendreScreen() {
   // Nobody has to actively dismiss "Vente enregistrée" any more, for either
   // outcome — a plain fully-paid sale still gets the short window (it's the
   // common, low-stakes case), and credit/partial-payment sales get a longer
-  // one now that "Annuler la vente" below gives them a real, direct way to
-  // undo, the same safety net the quick-checkout path already relies on
-  // instead of a mandatory second look. Guarded on sharingReceipt so this
-  // can never fire mid-capture/mid-share — see handleShareReceipt.
+  // one because the SaveConfirmation undo ("Annuler") stays available as the
+  // same safety net the quick-checkout path already relies on instead of a
+  // mandatory second look. Guarded on sharingReceipt so this can never fire
+  // mid-capture/mid-share — see handleShareReceipt.
   useEffect(() => {
-    if (!showConfirmSheet || sharingReceipt) return;
-    const t = setTimeout(() => closeConfirmSheet(), confirmIsCredit ? 7000 : 2200);
+    if (!showConfirmSheet || sharingReceipt || confirmIsCredit) return;
+    const t = setTimeout(() => closeConfirmSheet(), 2200);
     return () => clearTimeout(t);
   }, [showConfirmSheet, confirmIsCredit, sharingReceipt]);
 
@@ -1772,10 +1768,6 @@ export default function VendreScreen() {
         setSearch('');
         const { lastSubmitQueued: queued, lastSaleId } = useSalesStore.getState();
         if (!queued) fetchProducts(businessId, userId, membershipId, role);
-        setConfirmQueued(queued);
-        // No real server row yet for a queued (offline) sale — cancel_sale
-        // has nothing to target, same rule handleQuickEncaisser follows.
-        setConfirmSaleId(queued ? null : (lastSaleId ?? null));
         if (!skipConfirmSheet) setShowConfirmSheet(true);
 
         // Reusable named-result confirmation banner (SaveConfirmation) — states
@@ -1898,30 +1890,6 @@ export default function VendreScreen() {
     </View>
   );
 
-  // Shared by both callers that can cancel a just-submitted sale in place —
-  // currently just the full confirm sheet's "Annuler la vente"
-  // (handleCancelFromConfirmSheet below), kept as its own function since
-  // this is real, load-bearing logic (the actual cancel_sale RPC call +
-  // toast + stock refresh) that shouldn't live inline in a JSX handler.
-  const cancelJustSubmittedSale = async (saleId: string) => {
-    const ok = await cancelSale(saleId, businessId, userId, 'Annulée juste après l\'enregistrement');
-    if (ok) {
-      toast.success('Vente annulée');
-      fetchProducts(businessId, userId, membershipId, role);
-    } else {
-      toast.warning('Connexion nécessaire pour annuler');
-    }
-  };
-
-  // "Annuler la vente" on the full confirm sheet — replaces the old plain
-  // "Ignorer" dismiss for a synced sale. Cancels right here, in the same
-  // modal, instead of closing this sheet and opening a separate one.
-  const handleCancelFromConfirmSheet = async () => {
-    const saleId = confirmSaleId;
-    closeConfirmSheet();
-    if (saleId) await cancelJustSubmittedSale(saleId);
-  };
-
   const handleShareReceipt = async () => {
     if (!receiptViewRef.current || !lastReceipt) return;
     // Blocks the confirm sheet's own auto-dismiss (below) for the rest of
@@ -1988,7 +1956,7 @@ export default function VendreScreen() {
       <View style={styles.header}>
         <Text variant="h3">Vendre</Text>
         {mode === 'vente' && cart.length > 0 && (
-          <Pressable onPress={() => Alert.alert('Vider le panier ?', '', [
+          <Pressable onPress={() => Alert.alert('Vider le panier ?', undefined, [
             { text: 'Annuler', style: 'cancel' },
             { text: 'Vider', style: 'destructive', onPress: clearCart },
           ])}>
@@ -2106,7 +2074,7 @@ export default function VendreScreen() {
         <View style={styles.hintBanner}>
           <Ionicons name="information-circle-outline" size={14} color={palette.warning} />
           <Text variant="caption" style={{ color: palette.warning, flex: 1 }}>
-            Maintenez un produit en gros pour l'ajouter en vente de gros
+            Maintenez un produit pour l'ajouter en gros.
           </Text>
         </View>
       )}
@@ -2222,7 +2190,7 @@ export default function VendreScreen() {
         keyboardShouldPersistTaps="handled"
         headerRight={
           <Pressable
-            onPress={() => Alert.alert('Vider le panier ?', '', [
+            onPress={() => Alert.alert('Vider le panier ?', undefined, [
               { text: 'Annuler', style: 'cancel' },
               { text: 'Vider', style: 'destructive', onPress: clearCart },
             ])}
@@ -2352,11 +2320,6 @@ export default function VendreScreen() {
               <Text variant="h3" style={{ textAlign: 'center' }}>
                 {confirmIsCredit ? 'Crédit enregistré' : 'Vente enregistrée'}
               </Text>
-              {confirmQueued && (
-                <Text variant="caption" color="secondary" style={{ textAlign: 'center' }}>
-                  En attente de synchronisation ⏳
-                </Text>
-              )}
               {lastReceipt && (
                 <Text variant="h4" style={{ color: palette.primary, textAlign: 'center' }}>
                   {formatAmount(confirmNet, lastReceipt.currency)}
@@ -2385,14 +2348,9 @@ export default function VendreScreen() {
                 </View>
               </View>
               <Button label="Partager le reçu" onPress={handleShareReceipt} fullWidth size="lg" />
-              {/* Replaces the old plain "Ignorer" — cancels right here, in
-                  this same sheet, instead of closing it to open a separate
-                  cancel dialog elsewhere. Falls back to a plain dismiss for
-                  a queued/offline sale, which has no server row yet to
-                  cancel (confirmSaleId is null in that case). */}
-              <Pressable onPress={handleCancelFromConfirmSheet} style={styles.ignorePressable}>
-                <Text variant="caption" style={{ color: confirmSaleId ? palette.warning : palette.textSecondary }}>
-                  {confirmSaleId ? 'Annuler la vente' : 'Ignorer'}
+              <Pressable onPress={closeConfirmSheet} style={styles.ignorePressable}>
+                <Text variant="caption" style={{ color: palette.textSecondary }}>
+                  Ignorer
                 </Text>
               </Pressable>
             </View>

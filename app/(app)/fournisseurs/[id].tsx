@@ -73,8 +73,10 @@ function LivraisonDetail({ livraison, fournisseurName, currency, businessId, can
             <Card key={l.id} style={{ gap: 2 }}>
               <Text variant="body">{l.product_name}</Text>
               <View style={styles.dr}>
-                <Text variant="caption" color="secondary">×{l.qty_ordered} · {fmt(l.unit_cost, currency)}/u</Text>
-                <Text variant="label">{fmt(l.qty_ordered * l.unit_cost, currency)}</Text>
+                <Text variant="caption" color="secondary">
+                  ×{l.qty_ordered} · {l.unit_cost !== null ? `${fmt(l.unit_cost, currency)}/u` : 'Prix inconnu'}
+                </Text>
+                <Text variant="label">{l.unit_cost !== null ? fmt(l.qty_ordered * l.unit_cost, currency) : '—'}</Text>
               </View>
             </Card>
           ))}
@@ -137,12 +139,20 @@ export default function FournisseurProfile() {
   // A livraison is a purchase_order that made it all the way to 'recu' — no
   // pending/partial order is ever created going forward under the new model,
   // so anything else simply isn't shown here.
-  const supplierLivraisons = commandes
-    .filter(c => c.supplier_id === id && c.status === 'recu')
+  const supplierCommandes = commandes.filter(c => c.supplier_id === id);
+  const supplierLivraisons = supplierCommandes
+    .filter(c => c.status === 'recu')
     .sort((a, b) => new Date(b.ordered_at).getTime() - new Date(a.ordered_at).getTime());
   const totalOwed = debts
     .filter(d => d.supplier_id === id)
     .reduce((s, d) => s + Math.max(0, d.amount - d.amount_paid), 0);
+  // v213 blocks deletion for any purchase order or unpaid debt. A fully-paid
+  // debt passes the trigger but its payment history is then erased by
+  // ON DELETE CASCADE — the dialog must name that consequence.
+  const hasHistory = supplierCommandes.length > 0;
+  const hasFullyPaidDebt = debts.some(
+    d => d.supplier_id === id && d.amount > 0 && d.amount_paid >= d.amount,
+  );
 
   const [showPay, setShowPay] = useState(false);
   const [payAmount, setPayAmount] = useState('');
@@ -191,9 +201,22 @@ export default function FournisseurProfile() {
   };
 
   const handleDelete = () => {
+    // Dead end guard: the v213 trigger refuses deletion when a purchase order
+    // exists, but no UI here can remove or reassign that history. Telling the
+    // truth up front beats a delete button that always fails.
+    if (hasHistory) {
+      Alert.alert(
+        'Suppression impossible',
+        `${fournisseur?.name ?? 'Ce fournisseur'} a un historique de commandes qui bloque la suppression.`,
+        [{ text: 'Compris' }],
+      );
+      return;
+    }
     Alert.alert(
       `Supprimer ${fournisseur?.name ?? ''} ?`,
-      'Les produits liés seront dissociés. Cette action est irréversible.',
+      hasFullyPaidDebt
+        ? 'Les produits liés seront dissociés et son historique de paiements sera effacé. Cette action est irréversible.'
+        : 'Les produits liés seront dissociés. Cette action est irréversible.',
       [
         { text: 'Annuler', style: 'cancel' },
         {
@@ -219,7 +242,7 @@ export default function FournisseurProfile() {
     const ok = await payDebt(businessId, id, amount);
     setPaying(false);
     if (ok) { setShowPay(false); setPayAmount(''); }
-    else Alert.alert('Le paiement n\'est pas passé :)');
+    else Alert.alert(useFournisseursStore.getState().error ?? 'Le paiement n\'est pas passé');
   };
 
   const openLivraisonDetail = async (livraison: CommandeAchat) => {
@@ -257,7 +280,7 @@ export default function FournisseurProfile() {
           <Text variant="body" color="secondary">‹ Retour</Text>
         </Pressable>
         <Pressable
-          onPress={() => Alert.alert('', '', [
+          onPress={() => Alert.alert(fournisseur?.name ?? 'Fournisseur', undefined, [
             { text: 'Supprimer', style: 'destructive', onPress: handleDelete },
             { text: 'Annuler', style: 'cancel' },
           ])}

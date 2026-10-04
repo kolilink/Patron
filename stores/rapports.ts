@@ -46,6 +46,10 @@ export interface PeriodReport {
   net_profit: number;
   sales_count: number;
   units_sold: number;
+  // Number of distinct paye/credit orders in the period with ≥1 line whose
+  // cost_price_at_sale is NULL — those lines' revenue is excluded from
+  // net_profit (see db/migration_v220.sql), surfaced as a caveat on the hero.
+  sales_without_cost: number;
   credit_outstanding: number;
   credit_count: number;
   daily: DailyPoint[];
@@ -153,44 +157,44 @@ function parseSnapshot(raw: Record<string, unknown>): ReportsSnapshot {
   const cents = (k: string) => ((raw[k] as number) ?? 0) / 100;
   const parseActivity = (key: string): ActivityPoint[] =>
     ((raw[key] as Array<{ date: string; amount: number }>) ?? []).map(pt => ({
-      date:   pt.date,
+      date: pt.date,
       amount: pt.amount / 100,
     }));
   const parseSellers = (): TopSeller[] =>
     ((raw['top_sellers'] as Array<{ name: string; revenue: number; count: number }>) ?? []).map(s => ({
-      name:    s.name,
+      name: s.name,
       revenue: s.revenue / 100,
-      count:   s.count,
+      count: s.count,
     }));
 
   return {
-    role:               (raw['role'] as string) ?? '',
-    period_days:        (raw['period_days'] as number) ?? 0,
-    period_start:       (raw['period_start'] as string) ?? '',
-    revenue:            cents('revenue'),
-    cogs:               cents('cogs'),
-    stock_losses:       cents('stock_losses'),
-    gross_profit:       cents('gross_profit'),
+    role: (raw['role'] as string) ?? '',
+    period_days: (raw['period_days'] as number) ?? 0,
+    period_start: (raw['period_start'] as string) ?? '',
+    revenue: cents('revenue'),
+    cogs: cents('cogs'),
+    stock_losses: cents('stock_losses'),
+    gross_profit: cents('gross_profit'),
     operating_expenses: cents('operating_expenses'),
-    shipping_expenses:  cents('shipping_expenses'),
-    net_profit:         cents('net_profit'),
+    shipping_expenses: cents('shipping_expenses'),
+    net_profit: cents('net_profit'),
     credit_outstanding: cents('credit_outstanding'),
-    credit_count:       (raw['credit_count'] as number) ?? 0,
+    credit_count: (raw['credit_count'] as number) ?? 0,
     period_order_count: (raw['period_order_count'] as number) ?? 0,
-    cash_on_hand:       cents('cash_on_hand'),
-    stock_value:        cents('stock_value'),
-    total_apports:      cents('total_apports'),
-    period_apports:     cents('period_apports'),
-    activity:           parseActivity('activity'),
-    top_sellers:        parseSellers(),
-    my_revenue:         cents('my_revenue'),
-    my_sales_count:     (raw['my_sales_count'] as number) ?? 0,
-    my_credit_pending:  cents('my_credit_pending'),
-    my_credit_count:    (raw['my_credit_count'] as number) ?? 0,
-    my_activity:        parseActivity('my_activity'),
-    investor_balance:   cents('investor_balance'),
-    my_total_invested:  cents('my_total_invested'),
-    my_period_apports:  cents('my_period_apports'),
+    cash_on_hand: cents('cash_on_hand'),
+    stock_value: cents('stock_value'),
+    total_apports: cents('total_apports'),
+    period_apports: cents('period_apports'),
+    activity: parseActivity('activity'),
+    top_sellers: parseSellers(),
+    my_revenue: cents('my_revenue'),
+    my_sales_count: (raw['my_sales_count'] as number) ?? 0,
+    my_credit_pending: cents('my_credit_pending'),
+    my_credit_count: (raw['my_credit_count'] as number) ?? 0,
+    my_activity: parseActivity('my_activity'),
+    investor_balance: cents('investor_balance'),
+    my_total_invested: cents('my_total_invested'),
+    my_period_apports: cents('my_period_apports'),
   };
 }
 
@@ -198,30 +202,31 @@ function parsePeriodReport(raw: Record<string, unknown>): PeriodReport {
   const cents = (k: string) => ((raw[k] as number) ?? 0) / 100;
   const parseDaily = (key: string): DailyPoint[] =>
     ((raw[key] as Array<{ date: string; amount: number; sales_count: number; units_sold: number }>) ?? []).map(pt => ({
-      date:        pt.date,
-      amount:      pt.amount / 100,
+      date: pt.date,
+      amount: pt.amount / 100,
       sales_count: pt.sales_count,
-      units_sold:  pt.units_sold,
+      units_sold: pt.units_sold,
     }));
 
   return {
-    role:                (raw['role'] as string) ?? '',
-    period_start:        (raw['period_start'] as string) ?? '',
-    period_end:          (raw['period_end'] as string) ?? '',
-    cash_on_hand:        cents('cash_on_hand'),
-    net_profit:          cents('net_profit'),
-    sales_count:         (raw['sales_count'] as number) ?? 0,
-    units_sold:          (raw['units_sold'] as number) ?? 0,
-    credit_outstanding:  cents('credit_outstanding'),
-    credit_count:        (raw['credit_count'] as number) ?? 0,
-    daily:               parseDaily('daily'),
-    my_sales_count:      (raw['my_sales_count'] as number) ?? 0,
-    my_units_sold:       (raw['my_units_sold'] as number) ?? 0,
-    my_credit_pending:   cents('my_credit_pending'),
-    my_credit_count:     (raw['my_credit_count'] as number) ?? 0,
-    my_daily:            parseDaily('my_daily'),
-    investor_balance:    cents('investor_balance'),
-    my_total_invested:   cents('my_total_invested'),
+    role: (raw['role'] as string) ?? '',
+    period_start: (raw['period_start'] as string) ?? '',
+    period_end: (raw['period_end'] as string) ?? '',
+    cash_on_hand: cents('cash_on_hand'),
+    net_profit: cents('net_profit'),
+    sales_count: (raw['sales_count'] as number) ?? 0,
+    units_sold: (raw['units_sold'] as number) ?? 0,
+    sales_without_cost: (raw['sales_without_cost'] as number) ?? 0,
+    credit_outstanding: cents('credit_outstanding'),
+    credit_count: (raw['credit_count'] as number) ?? 0,
+    daily: parseDaily('daily'),
+    my_sales_count: (raw['my_sales_count'] as number) ?? 0,
+    my_units_sold: (raw['my_units_sold'] as number) ?? 0,
+    my_credit_pending: cents('my_credit_pending'),
+    my_credit_count: (raw['my_credit_count'] as number) ?? 0,
+    my_daily: parseDaily('my_daily'),
+    investor_balance: cents('investor_balance'),
+    my_total_invested: cents('my_total_invested'),
   };
 }
 
@@ -234,17 +239,17 @@ async function loadPeriodReport(
   slot: 'year' | 'filter' | 'previousYear',
 ): Promise<void> {
   const loadingKey = slot === 'year' ? 'yearReportLoading' : slot === 'filter' ? 'filterReportLoading' : 'previousYearReportLoading';
-  const dataKey    = slot === 'year' ? 'yearReport'        : slot === 'filter' ? 'filterReport'        : 'previousYearReport';
+  const dataKey = slot === 'year' ? 'yearReport' : slot === 'filter' ? 'filterReport' : 'previousYearReport';
   set({ [loadingKey]: true } as Partial<RapportsState>);
 
   const cacheKey = `${businessId}:${role}:${userId}:${periodStart}:${periodEnd}`;
   const { data, error } = await withNetworkRetry(() =>
     supabase.rpc('get_period_report', {
-      p_business_id:  businessId,
+      p_business_id: businessId,
       p_period_start: periodStart,
-      p_period_end:   periodEnd,
-      p_role:         role,
-      p_user_id:      userId,
+      p_period_end: periodEnd,
+      p_role: role,
+      p_user_id: userId,
     }),
   ).catch(err => ({ data: null, error: err }));
   if (isStaleBusiness(businessId)) return;
@@ -312,9 +317,9 @@ export const useRapportsStore = create<RapportsState>((set) => ({
       supabase.rpc('get_reports_snapshot', {
         p_business_id: businessId,
         p_period_days: periodDays,
-        p_role:        role,
-        p_user_id:     userId,
-        p_today:       today ?? new Date().toISOString().split('T')[0],
+        p_role: role,
+        p_user_id: userId,
+        p_today: today ?? new Date().toISOString().split('T')[0],
       }),
     ).catch(err => ({ data: null, error: err }));
     if (isStaleBusiness(businessId)) return;
@@ -355,9 +360,9 @@ export const useRapportsStore = create<RapportsState>((set) => ({
     if (error || !data) { set({ velocityLoading: false }); return; }
     set({
       stockVelocity: (data as Record<string, unknown>[]).map(r => ({
-        item_id:        r['item_id'] as string,
-        item_name:      r['item_name'] as string,
-        stock_qty:      r['stock_qty'] as number,
+        item_id: r['item_id'] as string,
+        item_name: r['item_name'] as string,
+        stock_qty: r['stock_qty'] as number,
         days_remaining: r['days_remaining'] as number | null,
       })),
       velocityLoading: false,

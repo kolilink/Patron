@@ -986,7 +986,9 @@ export default function ParametresScreen() {
               </View>
             ) : (
               <View style={styles.deleteConfirmBox}>
-                <Text variant="label" style={{ color: palette.danger }}>Supprimer définitivement ?</Text>
+                <Text variant="label" style={{ color: palette.danger }}>
+                  {deleteTarget === 'business' ? 'Supprimer définitivement ?' : 'Supprimer mon compte ?'}
+                </Text>
                 <Text variant="bodySmall" color="secondary">
                   {deleteTarget === 'business'
                     ? `${business?.name ?? 'Ce commerce'} et toutes ses données seront supprimés pour toujours.`

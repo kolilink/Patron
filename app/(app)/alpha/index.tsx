@@ -6,6 +6,7 @@ import { Screen } from '@/src/components/ui/Screen';
 import { router, useFocusEffect, useLocalSearchParams } from 'expo-router';
 import { Ionicons } from '@expo/vector-icons';
 import { Text } from '@/src/components/ui/Text';
+import { EmptyState } from '@/src/components/ui/EmptyState';
 import { SkeletonList } from '@/src/components/ui/SkeletonPlaceholder';
 import { PaywallScreen } from '@/src/components/PaywallScreen';
 import { LiveWaveformBars } from '@/src/components/ui/VoiceMessageBubble';
@@ -342,11 +343,15 @@ export default function AlphaScreen() {
         {loading && messages.length === 0 ? (
           <SkeletonList count={4} />
         ) : messages.length === 0 ? (
-          <View style={styles.empty}>
-            <Text variant="h3" style={{ textAlign: 'center' }}>Parler avec Alpha</Text>
-            <View style={{ gap: spacing[2], width: '100%', marginTop: spacing[8] }}>
+          <View style={[styles.empty, { justifyContent: 'flex-start' }]}>
+            <EmptyState
+              icon="chatbubble-ellipses-outline"
+              title="Parler avec Alpha"
+              subtitle="Posez une question sur votre commerce."
+            />
+            <View style={{ gap: spacing[2], width: '100%', paddingBottom: spacing[3] }}>
               {SUGGESTIONS.map(s => (
-                <Pressable key={s} onPress={() => handleSend(s)} style={[styles.suggestion, { backgroundColor: palette.surface }]}>
+                <Pressable key={s} disabled={offline} onPress={() => handleSend(s)} style={[styles.suggestion, { backgroundColor: palette.surface }, offline && { opacity: 0.5 }]}>
                   <Text variant="bodySmall">{s}</Text>
                 </Pressable>
               ))}

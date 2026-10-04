@@ -1,5 +1,5 @@
 import { useMemo, useState, type ComponentProps } from 'react';
-import { Pressable, StyleSheet, TextInput, View } from 'react-native';
+import { Alert, Pressable, StyleSheet, TextInput, View } from 'react-native';
 import { Ionicons } from '@expo/vector-icons';
 import { FormSheet } from './FormSheet';
 import { Text } from './Text';
@@ -52,25 +52,49 @@ export function PostActionsMenu({ post, isOwnPost }: { post: MarketPost; isOwnPo
 
     const handleDelete = async () => {
         setShowActions(false);
-        const ok = await deletePost(post.id);
-        if (ok) {
-            removePost(post.id);
-            toast.success('Post supprimé.');
-        }
+        Alert.alert(
+            'Supprimer ce post ?',
+            'Cette action est définitive et ne peut pas être annulée.',
+            [
+                { text: 'Annuler', style: 'cancel' },
+                {
+                    text: 'Supprimer', style: 'destructive',
+                    onPress: async () => {
+                        const ok = await deletePost(post.id);
+                        if (ok) {
+                            removePost(post.id);
+                            toast.success('Post supprimé.');
+                        }
+                    },
+                },
+            ],
+        );
     };
 
     const handleBlock = async () => {
         setShowActions(false);
-        try {
-            await blockUser(post.author_id);
-            // Hide the author's posts in-session too — block_user only
-            // rewrites the server RLS wall, so the already-loaded list
-            // would keep showing them until the next fetch.
-            removePostsByAuthor(post.author_id);
-            toast.success('Auteur bloqué. Vous ne verrez plus ses publications.');
-        } catch {
-            // The store already surfaced a toast with the translated error.
-        }
+        Alert.alert(
+            `Bloquer ${authorName} ?`,
+            "Vous ne verrez plus ses publications et il ne pourra plus interagir avec vous.",
+            [
+                { text: 'Annuler', style: 'cancel' },
+                {
+                    text: 'Bloquer', style: 'destructive',
+                    onPress: async () => {
+                        try {
+                            await blockUser(post.author_id);
+                            // Hide the author's posts in-session too — block_user only
+                            // rewrites the server RLS wall, so the already-loaded list
+                            // would keep showing them until the next fetch.
+                            removePostsByAuthor(post.author_id);
+                            toast.success('Auteur bloqué. Vous ne verrez plus ses publications.');
+                        } catch {
+                            // The store already surfaced a toast with the translated error.
+                        }
+                    },
+                },
+            ],
+        );
     };
 
     const handleSubmitReport = async () => {

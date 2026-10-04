@@ -9,6 +9,8 @@ import { useMemo } from 'react';
 import { useTheme, spacing } from '@/src/theme';
 import type { Palette } from '@/src/theme';
 import { useAuthStore } from '@/stores/auth';
+import { useInviterStore } from '@/stores/inviter';
+import { getPendingInviteToken, clearPendingInviteToken } from '@/lib/inviteLink';
 
 export default function RejoindreScreen() {
   const { palette } = useTheme();
@@ -33,7 +35,7 @@ export default function RejoindreScreen() {
           </View>
           <Button
             label="Créer mon compte →"
-            onPress={() => router.push('/(welcome)/rejoindre')}
+            onPress={() => router.push('/(welcome)/creer')}
             fullWidth
           />
         </View>
@@ -45,6 +47,17 @@ export default function RejoindreScreen() {
     clearError();
     await joinBusiness(code);
     if (!useAuthStore.getState().error) {
+      // Consume a pending consumer-invite token (Amis) so the invitee keeps
+      // the Amis landing even when joining a business by code first.
+      const token = await getPendingInviteToken();
+      if (token) {
+        const resolved = await useInviterStore.getState().resolveInvite(token, '');
+        if (resolved) {
+          await clearPendingInviteToken();
+          router.replace('/(app)/discussions?tab=amis');
+          return;
+        }
+      }
       router.replace('/(app)/(tabs)/');
     }
   };

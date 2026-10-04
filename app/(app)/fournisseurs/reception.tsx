@@ -11,6 +11,7 @@ import type { Palette } from '@/src/theme';
 import type { Product } from '@/src/types';
 import { useAuthStore } from '@/stores/auth';
 import { useProductStore } from '@/stores/products';
+import { OfflineNotice } from '@/src/components/ui/OfflineNotice';
 import { useFournisseursStore, type Fournisseur, type ReceptionLine } from '@/stores/fournisseurs';
 import { getKV, setKV } from '@/lib/db';
 import { haptics } from '@/lib/haptics';
@@ -156,7 +157,7 @@ export default function ReceptionScreen() {
   const currency = session?.activeBusiness?.currency ?? 'GNF';
   const { poId: poIdParam, supplierId: supplierIdParam } = useLocalSearchParams<{ poId?: string; supplierId?: string }>();
 
-  const { fournisseurs, commandes, loadCommandeLines, confirmReception, updateReceptionSupplier, saving } = useFournisseursStore();
+  const { fournisseurs, commandes, loadCommandeLines, confirmReception, updateReceptionSupplier, saving, offline, offlineSince, fetchFournisseurs } = useFournisseursStore();
   const { products, variantsByProduct, fetchVariants } = useProductStore();
 
   const [step, setStep] = useState<Step>('quoi');
@@ -196,7 +197,8 @@ export default function ReceptionScreen() {
             variant_id: l.variant_id,
             name: l.variant_name ? `${l.product_name} · ${l.variant_name}` : l.product_name,
             qty: String(l.qty_ordered - l.qty_received),
-            unitCost: String(Math.round(l.unit_cost)),
+            // v221: unit_cost may be NULL ("Prix inconnu") — pre-fill blank.
+            unitCost: l.unit_cost !== null ? String(Math.round(l.unit_cost)) : '',
             salePriceCents: null, salePriceOverridden: false,
             hasVariants: false, variantSplits: null, dismissedMatchId: null,
           }));
@@ -249,7 +251,9 @@ export default function ReceptionScreen() {
   const linkProduct = (localId: string, product: Product) => {
     updateLine(localId, {
       product_id: product.id, name: product.name, hasVariants: product.has_variants,
-      unitCost: String(Math.round(product.cost_price)),
+      // NULL cost_price = "Prix inconnu" (v221) — pre-fill blank so the user
+      // can leave it unknown instead of inheriting a false 0.
+      unitCost: product.cost_price ? String(Math.round(product.cost_price)) : '',
     });
     if (product.has_variants) {
       fetchVariants(product.id, businessId).then(variants => {
@@ -275,7 +279,9 @@ export default function ReceptionScreen() {
   }, [draft, currency]);
 
   // ── Validation: find the first thing blocking "Tout est bon ✓" ──────────
-  function firstIssue(): { line: DraftLine; kind: 'name' | 'qty' | 'price' | 'variant' } | null {
+  // v221: a blank purchase cost is no longer an error — it means "Prix inconnu".
+  // Only name and qty (and variant-split arithmetic) block the next step.
+  function firstIssue(): { line: DraftLine; kind: 'name' | 'qty' | 'variant' } | null {
     if (!draft) return null;
     for (const l of draft.lines) {
       if (!l.name.trim()) return { line: l, kind: 'name' };
@@ -288,9 +294,6 @@ export default function ReceptionScreen() {
         continue;
       }
       if (parseQty(l.qty) === null) return { line: l, kind: 'qty' };
-      if (!parseAmountInput(l.unitCost, currency) || parseAmountInput(l.unitCost, currency) <= 0) {
-        return { line: l, kind: 'price' };
-      }
     }
     return null;
   }
@@ -302,7 +305,7 @@ export default function ReceptionScreen() {
         const sum = l.variantSplits.reduce((s, v) => s + (parseQty(v.qty) ?? 0), 0);
         return sum !== parseQty(l.qty);
       }
-      return parseQty(l.qty) === null || !(parseAmountInput(l.unitCost, currency) > 0);
+      return parseQty(l.qty) === null;
     }).length
     : 0;
 
@@ -339,11 +342,13 @@ export default function ReceptionScreen() {
     if (!draft) return;
     const rpcLines: ReceptionLine[] = [];
     for (const l of draft.lines) {
-      const unitCostDisplay = parseAmountInput(l.unitCost, currency) || 0;
-      const unitCostCents = Math.round(unitCostDisplay * 100);
+      // v221: blank cost → null (unknown), not 0. A sale price is only
+      // computed when a cost is actually known.
+      const unitCostDisplay = parseAmountInput(l.unitCost, currency);
+      const unitCostCents = unitCostDisplay > 0 ? Math.round(unitCostDisplay * 100) : null;
       const salePriceCents = l.salePriceOverridden && l.salePriceCents !== null
         ? l.salePriceCents
-        : computedSalePrice(unitCostDisplay);
+        : (unitCostCents !== null ? computedSalePrice(unitCostDisplay) : null);
 
       if (l.hasVariants && l.variantSplits) {
         for (const v of l.variantSplits) {
@@ -406,6 +411,9 @@ export default function ReceptionScreen() {
         </Text>
         <View style={{ width: 60 }} />
       </View>
+      {offline && (
+        <OfflineNotice offlineSince={offlineSince} onRetry={() => fetchFournisseurs(businessId)} />
+      )}
 
       {step === 'quoi' && (
         <QuoiStep
@@ -620,8 +628,9 @@ function QuoiStep({
                       value={line.unitCost}
                       onChangeText={v => onUpdateLine(line.localId, { unitCost: formatAmountInput(v, currency) })}
                       keyboardType="decimal-pad"
+                      placeholder="Prix inconnu"
                       placeholderTextColor={palette.textDisabled}
-                      style={[styles.fieldInput, !(parseAmountInput(line.unitCost, currency) > 0) && styles.fieldInputWarn, { color: palette.textPrimary }]}
+                      style={[styles.fieldInput, { color: palette.textPrimary }]}
                       inputAccessoryViewID={Platform.OS === 'ios' ? ACCESSORY_ID : undefined}
                     />
                   </View>
@@ -631,6 +640,12 @@ function QuoiStep({
               {parseQty(line.qty) && parseAmountInput(line.unitCost, currency) > 0 && !line.hasVariants && (
                 <Text variant="caption" color="secondary">
                   Total : {Math.round(parseQty(line.qty)! * parseAmountInput(line.unitCost, currency)).toLocaleString('fr-FR')} {currency}
+                </Text>
+              )}
+
+              {parseQty(line.qty) && !(parseAmountInput(line.unitCost, currency) > 0) && !line.hasVariants && (
+                <Text variant="caption" color="secondary">
+                  Prix inconnu — la marge ne sera pas calculée pour ce produit.
                 </Text>
               )}
             </View>
@@ -744,7 +759,7 @@ function MargeStep({
           <Text style={styles.marginPercentSign}>%</Text>
         </View>
 
-        {exampleCost > 0 && (
+        {exampleCost > 0 ? (
           <>
             <Text variant="body" color="secondary">
               Prix d'achat {Math.round(exampleCost).toLocaleString('fr-FR')} → vous vendez à{' '}
@@ -756,6 +771,10 @@ function MargeStep({
               Vous gagnez {exampleGain.toLocaleString('fr-FR')} {currency} par produit.
             </Text>
           </>
+        ) : (
+          <Text variant="body" color="secondary">
+            Marge non calculable — renseignez un prix d'achat pour la voir.
+          </Text>
         )}
 
         <View style={{ marginTop: spacing[6], gap: spacing[2] }}>

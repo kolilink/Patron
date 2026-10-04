@@ -38,7 +38,9 @@ export interface CommandeLigne {
   variant_name: string | null;
   qty_ordered: number;
   qty_received: number;
-  unit_cost: number;
+  // NULL = "Prix inconnu" — the merchant didn't record a purchase cost
+  // (see db/migration_v221.sql). Callers must handle null before dividing.
+  unit_cost: number | null;
 }
 
 export interface CommandeAchat {
@@ -68,7 +70,9 @@ export interface ReceptionLine {
   variant_id: string | null;
   name: string;
   qty: number;
-  unit_cost_cents: number;
+  // NULL = "Prix inconnu" — blank/absent cost is sent as null, not 0
+  // (db/migration_v221.sql treats 0 and null identically server-side).
+  unit_cost_cents: number | null;
   sale_price_cents: number | null;
 }
 
@@ -363,7 +367,7 @@ export const useFournisseursStore = create<FournisseursStore>((set, get) => ({
       variant_name: (l.variant as { name: string } | null)?.name ?? null,
       qty_ordered: l.qty_ordered as number,
       qty_received: l.qty_received as number,
-      unit_cost: l.unit_cost as number,
+      unit_cost: l.unit_cost as number | null,
     }));
 
     set(state => ({
@@ -489,11 +493,17 @@ export const useFournisseursStore = create<FournisseursStore>((set, get) => ({
         p_business_id: businessId,
         p_supplier_id: supplierId,
       });
-      if (error) return false;
+      if (error) {
+        const message = translateError(error, 'Impossible de modifier le fournisseur');
+        set({ error: message });
+        return false;
+      }
       await Promise.all([get().fetchCommandes(businessId), get().fetchFournisseurs(businessId)]);
       void useProductStore.getState().fetchProducts(businessId, userId);
       return true;
-    } catch {
+    } catch (err) {
+      const message = isNetworkError(err) ? 'Vérifiez votre connexion' : translateError(err, 'Impossible de modifier le fournisseur');
+      set({ error: message });
       return false;
     }
   },

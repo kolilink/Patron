@@ -66,7 +66,7 @@ type FilterType = 'tous' | 'doivent' | 'actifs';
 const FILTERS: { key: FilterType; label: string }[] = [
   { key: 'tous', label: 'Tous' },
   { key: 'doivent', label: 'En dette' },
-  { key: 'actifs', label: 'Actifs' },
+  { key: 'actifs', label: 'Récents' },
 ];
 
 function avatarColor(name: string): string {
@@ -216,7 +216,7 @@ export default function ClientsScreen() {
       {/* Leads with the total — this is the number she opens the screen to
           see. Own banner, not a small nav-bar subtitle, so it reads as the
           screen's actual headline. */}
-      {allClients.length > 0 && (
+      {allClients.length > 0 && !(totalOwedAmount === 0 && filter === 'doivent') && (
         <View style={styles.totalBanner}>
           {totalOwedAmount > 0 ? (
             <>
@@ -225,9 +225,6 @@ export default function ClientsScreen() {
                   (how overdue), not for the existence of a debt itself. */}
               <Text style={{ color: palette.textPrimary, fontFamily: fontFamily.bold, fontSize: 20, lineHeight: 25 }}>
                 On vous doit {fmt(totalOwedAmount, currency)} au total
-              </Text>
-              <Text variant="caption" color="secondary">
-                {totalOwedClients} client{totalOwedClients > 1 ? 's' : ''} en dette
               </Text>
             </>
           ) : (
@@ -304,6 +301,9 @@ export default function ClientsScreen() {
             icon="checkmark-circle-outline"
             title="Aucune dette"
             subtitle="Aucun client ne vous doit."
+            actionLabel="Effacer"
+            actionVariant="outline"
+            onAction={() => setFilter('tous')}
           />
         ) : (
           <EmptyState

@@ -33,7 +33,9 @@ export interface ProductStats {
   revenue: number;
   capital: number;
   linkedExpenses: number;
-  profit: number;
+  // null when any sold line in the period has an unknown purchase cost
+  // (v222) — the client renders "—" rather than a fictitious margin.
+  profit: number | null;
 }
 
 export interface CreateProductData {
@@ -97,7 +99,7 @@ interface ProductStore {
     qty: number,
     type: 'entree' | 'perte',
     note?: string,
-  ) => Promise<void>;
+  ) => Promise<boolean>;
   fetchProductStats: (productId: string, businessId: string, since?: string) => Promise<ProductStats | null>;
   clearError: () => void;
   reset: () => void;
@@ -470,6 +472,7 @@ export const useProductStore = create<ProductStore>((set, get) => ({
       }));
       const updated = get().products;
       void saveProductCache(businessId, updated);
+      return true;
     } catch (err) {
       if (isNetworkError(err)) {
         await enqueue('adjust_stock', {
@@ -485,9 +488,10 @@ export const useProductStore = create<ProductStore>((set, get) => ({
         );
         set({ products: optimisticProducts, saving: false });
         void saveProductCache(businessId, optimisticProducts);
-        return;
+        return true;
       }
       set({ error: translateError(err, "Erreur d'ajustement"), saving: false });
+      return false;
     }
   },
 
@@ -588,7 +592,9 @@ export const useProductStore = create<ProductStore>((set, get) => ({
       revenue: d.revenue / 100,
       capital: d.capital / 100,
       linkedExpenses: d.linked_expenses / 100,
-      profit: d.profit / 100,
+      // v222 returns NULL when profit is untrustworthy — keep it null so the
+      // catalogue sheet renders "—" instead of a fabricated margin.
+      profit: d.profit == null ? null : d.profit / 100,
     };
   },
 

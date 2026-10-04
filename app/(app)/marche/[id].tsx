@@ -15,6 +15,7 @@ import { router, useLocalSearchParams, useFocusEffect } from 'expo-router';
 import { Ionicons } from '@expo/vector-icons';
 import { Text } from '@/src/components/ui/Text';
 import { haptics } from '@/lib/haptics';
+import { toast } from '@/stores/toast';
 import { useTheme, radius, spacing, AVATAR_PALETTE } from '@/src/theme';
 import type { Palette } from '@/src/theme';
 import { useAuthStore } from '@/stores/auth';
@@ -209,7 +210,7 @@ function CommentItem({
         <Pressable onPress={handleBubbleTap} style={[styles.commentBubble, isHighlighted && styles.commentBubbleHighlighted]}>
           {isReplyToYou && (
             <View style={styles.replyToYouBadge}>
-              <Text style={styles.replyToYouBadgeText}>↩ pour vous</Text>
+              <Text style={styles.replyToYouBadgeText}>Réponse pour vous</Text>
             </View>
           )}
           {parentComment && (
@@ -276,7 +277,7 @@ export default function PostDetailScreen() {
   const userId = session?.user.id ?? '';
 
   const {
-    activePost, comments, loadingDetail,
+    activePost, comments, loadingDetail, detailError,
     fetchPostDetail, addComment, appendComment, toggleLike, editPost,
     likedPostIds, likedCommentIds, toggleCommentLike,
   } = useMarketStore();
@@ -364,6 +365,7 @@ export default function PostDetailScreen() {
       haptics.success();
     } catch {
       haptics.error();
+      toast.warning('Impossible de publier le commentaire');
     }
   };
 
@@ -405,6 +407,23 @@ export default function PostDetailScreen() {
         {loadingDetail ? (
           <View style={styles.centered}>
             <Text variant="body" color="secondary">Chargement…</Text>
+          </View>
+        ) : detailError ? (
+          <View style={styles.centered}>
+            <Text variant="body" color="secondary" style={{ textAlign: 'center' }}>
+              {detailError === 'not_found'
+                ? "Ce post n'existe plus."
+                : 'Impossible de charger ce post.'}
+            </Text>
+            {detailError !== 'not_found' && id ? (
+              <Pressable
+                onPress={() => fetchPostDetail(id, userId)}
+                hitSlop={8}
+                style={{ marginTop: spacing[3] }}
+              >
+                <Text variant="body" style={{ color: palette.primary, fontWeight: '600' }}>Réessayer</Text>
+              </Pressable>
+            ) : null}
           </View>
         ) : !activePost ? null : (
           <FlatList
@@ -459,39 +478,42 @@ export default function PostDetailScreen() {
           />
         )}
 
-        {/* Input bar — open to all authenticated members */}
-        <View style={styles.inputWrap}>
-          {replyingTo && (
-            <View style={styles.replyPill}>
-              <Text variant="caption" style={styles.replyPillText}>
-                Réponse à {replyingTo.author_name || generateFallbackName(replyingTo.author_id)}
-              </Text>
-              <Pressable onPress={() => setReplyingTo(null)} hitSlop={8}>
-                <Text variant="caption" style={styles.replyClose}>×</Text>
-              </Pressable>
-            </View>
-          )}
-          <View style={styles.inputRow}>
-            <TextInput
-              ref={inputRef}
-              style={styles.input}
-              value={text}
-              onChangeText={setText}
-              placeholder={replyingTo ? 'Votre réponse' : 'Votre commentaire'}
-              placeholderTextColor={palette.textSecondary}
-              multiline
-              maxLength={500}
-            />
-            {!!text.trim() && (
-              <Pressable
-                onPress={handleSend}
-                style={({ pressed }) => [styles.sendBtn, pressed && { opacity: 0.75 }]}
-              >
-                <Ionicons name="arrow-forward" size={20} color={palette.textInverse} />
-              </Pressable>
+        {/* Input bar — open to all authenticated members. Hidden when the post
+            no longer exists (or failed to load) so no one types into the void. */}
+        {activePost && !detailError ? (
+          <View style={styles.inputWrap}>
+            {replyingTo && (
+              <View style={styles.replyPill}>
+                <Text variant="caption" style={styles.replyPillText}>
+                  Réponse à {replyingTo.author_name || generateFallbackName(replyingTo.author_id)}
+                </Text>
+                <Pressable onPress={() => setReplyingTo(null)} hitSlop={8}>
+                  <Text variant="caption" style={styles.replyClose}>×</Text>
+                </Pressable>
+              </View>
             )}
+            <View style={styles.inputRow}>
+              <TextInput
+                ref={inputRef}
+                style={styles.input}
+                value={text}
+                onChangeText={setText}
+                placeholder={replyingTo ? 'Votre réponse' : 'Votre commentaire'}
+                placeholderTextColor={palette.textSecondary}
+                multiline
+                maxLength={500}
+              />
+              {!!text.trim() && (
+                <Pressable
+                  onPress={handleSend}
+                  style={({ pressed }) => [styles.sendBtn, pressed && { opacity: 0.75 }]}
+                >
+                  <Ionicons name="arrow-forward" size={20} color={palette.textInverse} />
+                </Pressable>
+              )}
+            </View>
           </View>
-        </View>
+        ) : null}
       </KeyboardAvoidingView>
 
       {/* ── Edit post modal ── */}
@@ -656,7 +678,7 @@ function makeStyles(p: Palette) {
       borderColor: p.primary,
     },
 
-    // "↩ pour vous" badge on replies directed at the current user
+    // "Réponse pour vous" badge on replies directed at the current user
     replyToYouBadge: {
       alignSelf: 'flex-start' as const,
       backgroundColor: `${p.primary}18`,

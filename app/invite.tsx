@@ -8,6 +8,7 @@ import { useTheme, spacing } from '@/src/theme';
 import type { Palette } from '@/src/theme';
 import { useAuthStore } from '@/stores/auth';
 import { useInviterStore } from '@/stores/inviter';
+import { toast } from '@/stores/toast';
 import { setPendingInviteToken, clearPendingInviteToken } from '@/lib/inviteLink';
 
 // ─── /invite deep-link entry (Phase 2 + Phase 5) ────────────────────────────
@@ -47,7 +48,12 @@ export default function InviteRoute() {
                     router.replace('/(app)/discussions?tab=amis');
                     return;
                 }
-                // Invalid/expired/revoked → fall through to Home (never a dead end).
+                // Invalid/expired/revoked → name the failure instead of landing
+                // silently on Home. A network failure (timeout) is told apart so
+                // we never mislabel a blip as a bad link.
+                const err = useInviterStore.getState().error;
+                const networkErr = err === 'Erreur de réseau. Vérifiez votre connexion.';
+                toast.warning(networkErr ? 'Problème de connexion, réessayez.' : "Lien d'invitation invalide ou expiré.");
                 await clearPendingInviteToken();
                 router.replace('/(app)/(tabs)/');
                 return;

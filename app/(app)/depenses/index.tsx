@@ -256,7 +256,12 @@ function ExpenseCard({ expense, currency, isManager, canEdit, businessId, userId
           ) : null}
         </View>
         <View style={{ alignItems: 'flex-end', alignSelf: 'stretch' }}>
-          <Text variant="label" style={{ color: palette.warning }}>{fmt(expense.amount, currency)}</Text>
+          <Text variant="label" style={{ color: expense.status === 'rejete' ? palette.textSecondary : palette.warning }}>{fmt(expense.amount, currency)}</Text>
+          {expense.status === 'rejete' ? (
+            <View style={[styles.statusPill, { marginTop: 4, backgroundColor: palette.danger + '20', borderWidth: 1, borderColor: palette.danger + '60' }]}>
+              <Text variant="caption" style={{ color: palette.danger, fontWeight: '600' }}>Refusée</Text>
+            </View>
+          ) : null}
           {canEdit ? (
             <Pressable onPress={onEdit} style={[styles.editBtn, { marginTop: 4 }]}>
               <Text variant="caption" style={{ color: palette.primary }}>Modifier</Text>
@@ -544,7 +549,7 @@ export default function DepensesScreen() {
             </View>
           )}
 
-          {groupedNonPending.map(group => (
+          {groupedNonPending.map((group, groupIdx) => (
             <MonthGroup
               key={group.key}
               label={group.label}
@@ -559,7 +564,7 @@ export default function DepensesScreen() {
               onReject={handleReject}
               onEdit={handleEdit}
               onProofAttached={() => fetchExpenses(businessId)}
-              defaultOpen={false}
+              defaultOpen={groupIdx === 0}
             />
           ))}
         </ScrollView>

@@ -1,5 +1,5 @@
 import { useCallback, useEffect, useMemo, useState } from 'react';
-import { FlatList, Pressable, ScrollView, StyleSheet, View } from 'react-native';
+import { Alert, FlatList, Pressable, ScrollView, StyleSheet, View } from 'react-native';
 import { Ionicons } from '@expo/vector-icons';
 import { Screen } from '@/src/components/ui/Screen';
 import { FormSheet } from '@/src/components/ui/FormSheet';
@@ -12,6 +12,7 @@ import { useTheme, spacing, radius } from '@/src/theme';
 import type { Palette } from '@/src/theme';
 import { useAuthStore } from '@/stores/auth';
 import { useModerationStore } from '@/stores/moderation';
+import { toast } from '@/stores/toast';
 import { isFounderPhone } from '@/src/utils/founder';
 import { REPORT_MOTIFS } from '@/src/constants/conduct';
 import type { Report, ReportMotif } from '@/src/types';
@@ -66,16 +67,50 @@ export default function ModerationScreen() {
 
     if (!isFounder) return null;
 
-    const handleDelete = async () => {
+    const handleDelete = () => {
         if (!active?.post_id) return;
-        const ok = await deletePost(active.post_id);
-        if (ok) setActive(null);
+        Alert.alert(
+            'Supprimer ce post ?',
+            'Cette action est définitive et ne peut pas être annulée.',
+            [
+                { text: 'Annuler', style: 'cancel' },
+                {
+                    text: 'Supprimer', style: 'destructive',
+                    onPress: async () => {
+                        const ok = await deletePost(active.post_id);
+                        if (ok) {
+                            toast.success('Post supprimé.');
+                            setActive(null);
+                        }
+                    },
+                },
+            ],
+        );
     };
 
-    const handleBlock = async () => {
+    const handleBlock = () => {
         if (!active?.post_author_id) return;
-        await blockUser(active.post_author_id);
-        setActive(null);
+        const authorId = active.post_author_id;
+        const authorName = active.post_author_name || 'cet auteur';
+        Alert.alert(
+            `Bloquer ${authorName} ?`,
+            'Ses publications seront masquées et il ne pourra plus interagir.',
+            [
+                { text: 'Annuler', style: 'cancel' },
+                {
+                    text: 'Bloquer', style: 'destructive',
+                    onPress: async () => {
+                        try {
+                            await blockUser(authorId);
+                            toast.success('Auteur bloqué.');
+                            setActive(null);
+                        } catch {
+                            // The store already surfaced a toast with the translated error.
+                        }
+                    },
+                },
+            ],
+        );
     };
 
     const renderReport = ({ item }: { item: Report }) => (

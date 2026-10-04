@@ -39,6 +39,7 @@ import { useSaveConfirmationStore } from '@/stores/saveConfirmation';
 import { productConfirmation } from '@/src/utils/saveConfirmationCopy';
 import { useFournisseursStore, type Fournisseur } from '@/stores/fournisseurs';
 import { haptics } from '@/lib/haptics';
+import { toast } from '@/stores/toast';
 import { formatAmount, formatAmountInput, parseAmountInput } from '@/src/utils/format';
 import { OfflineNotice } from '@/src/components/ui/OfflineNotice';
 import { SkeletonList } from '@/src/components/ui/SkeletonPlaceholder';
@@ -110,7 +111,7 @@ function totalCost(f: FormState, currency: string): number {
 }
 
 function validateForm(f: FormState, currency: string): string | null {
-  if (!f.name.trim()) return 'Indiquez le nom :)';
+  if (!f.name.trim()) return 'Indiquez le nom';
   const sp = parseAmountInput(f.sale_price, currency);
   if (isNaN(sp) || sp <= 0) return 'Le prix de vente doit être supérieur à 0';
   return null;
@@ -149,7 +150,7 @@ function SupplierPicker({ fournisseurs, selectedId, onSelect, businessId, userId
   const [newPhone, setNewPhone] = useState('');
 
   const handleCreate = async () => {
-    if (!newName.trim()) { Alert.alert('Ajoutez un nom :)'); return; }
+    if (!newName.trim()) { Alert.alert('Ajoutez un nom'); return; }
     const ok = await createFournisseur(businessId, userId, { name: newName, phone: newPhone });
     if (ok) {
       haptics.success();
@@ -195,7 +196,7 @@ function SupplierPicker({ fournisseurs, selectedId, onSelect, businessId, userId
             </Pressable>
           ))}
           <Pressable onPress={() => { setOpen(false); setShowNewForm(true); }} style={styles.supplierRow}>
-            <Text variant="label" style={{ color: palette.primary }}>+ Créer un nouveau fournisseur</Text>
+            <Text variant="label" style={{ color: palette.primary }}>+ Ajouter un fournisseur</Text>
           </Pressable>
         </View>
       )}
@@ -448,7 +449,7 @@ function ProductFormModal({ visible, editing, onClose, onSave, saving, currency,
         : v,
     );
     if (hasVariants && resolvedVariants.some(v => v.sale_price <= 0)) {
-      setFormError('Entrer tous les prix de vente');
+      setFormError('Entrez tous les prix de vente');
       return;
     }
     setFormError(null);
@@ -642,7 +643,7 @@ function ProductFormModal({ visible, editing, onClose, onSave, saving, currency,
               onFocus={() => setFocusedPriceField('quantity')}
               inputAccessoryViewID={Platform.OS === 'ios' ? PRICE_ACCESSORY_ID : undefined}
             />
-            <Text style={styles.unitTag}>pcs</Text>
+            <Text style={styles.unitTag}>pièces</Text>
           </View>
         </View>
       )}
@@ -685,7 +686,7 @@ function ProductFormModal({ visible, editing, onClose, onSave, saving, currency,
           {totalVariantStock > 0 && (
             <View style={[styles.liveCalcBlock, { borderTopWidth: 0 }]}>
               <Text style={styles.liveCalcText}>
-                Stock total : {totalVariantStock} pcs sur {variantDraft.length} variante{variantDraft.length !== 1 ? 's' : ''}
+                Stock total : {totalVariantStock} pièces sur {variantDraft.length} variante{variantDraft.length !== 1 ? 's' : ''}
               </Text>
             </View>
           )}
@@ -736,7 +737,7 @@ function ProductFormModal({ visible, editing, onClose, onSave, saving, currency,
                 placeholderTextColor={palette.textDisabled}
                 inputAccessoryViewID={Platform.OS === 'ios' ? SILENT_ACCESSORY_ID : undefined}
               />
-              <Text variant="caption" color="secondary">Utilisée pour répartir les frais par unité</Text>
+              <Text variant="caption" color="secondary">Pour répartir les frais sur chaque pièce.</Text>
             </View>
           )}
 
@@ -755,7 +756,7 @@ function ProductFormModal({ visible, editing, onClose, onSave, saving, currency,
 
           {!hasVariants && (
             <View style={styles.fieldBlock}>
-              <Text style={styles.fieldLabel}>Seuil d'alerte stock</Text>
+              <Text style={styles.fieldLabel}>Stock minimum</Text>
               <TextInput
                 style={styles.fieldInput}
                 value={form.reorder_level}
@@ -764,7 +765,7 @@ function ProductFormModal({ visible, editing, onClose, onSave, saving, currency,
                 placeholderTextColor={palette.textDisabled}
                 inputAccessoryViewID={Platform.OS === 'ios' ? SILENT_ACCESSORY_ID : undefined}
               />
-              <Text variant="caption" color="secondary">Vous serez alerté à ce niveau de stock</Text>
+              <Text variant="caption" color="secondary">Me prévenir quand le stock est bas</Text>
             </View>
           )}
         </>
@@ -810,7 +811,7 @@ function StockAdjustModal({ visible, product, onClose, onConfirm, saving, curren
             label={saving ? 'Enregistrement…' : 'Confirmer'}
             onPress={async () => {
               const n = parseInt(qty);
-              if (isNaN(n) || n <= 0) { Alert.alert('Entrez une quantité :)'); return; }
+              if (isNaN(n) || n <= 0) { Alert.alert('Entrez une quantité'); return; }
               await onConfirm(n, type, note);
             }}
             loading={saving} fullWidth size="lg"
@@ -898,13 +899,13 @@ function ProductStatsModal({ visible, product, onClose, businessId, currency, fe
 
   if (!product) return null;
 
-  const profitColor = stats && stats.profit >= 0 ? palette.success : palette.warning;
+  const profitColor = stats && stats.profit != null && stats.profit >= 0 ? palette.success : palette.warning;
 
   return (
     <FormSheet
       visible={visible}
       onClose={onClose}
-      title="Rentabilité"
+      title="Bénéfices"
       cancelLabel="Fermer"
       presentationStyle="formSheet"
       contentContainerStyle={styles.modalContent}
@@ -956,7 +957,7 @@ function ProductStatsModal({ visible, product, onClose, businessId, currency, fe
           <View style={[styles.statsRow, styles.statsRowBorder]}>
             <Text variant="body">Bénéfice</Text>
             <Text variant="body" style={{ fontFamily: 'System', fontWeight: '700', color: profitColor }}>
-              {stats.profit >= 0 ? '+' : ''}{formatAmount(stats.profit, currency)}
+              {stats.profit == null ? '—' : `${stats.profit >= 0 ? '+' : ''}${formatAmount(stats.profit, currency)}`}
             </Text>
           </View>
         </Card>
@@ -1218,7 +1219,7 @@ function ProductActionSheet({
   if (!product) return null;
 
   const stockLabel = product.has_variants
-    ? 'Produit avec variantes'
+    ? 'Plusieurs tailles / couleurs'
     : `${product.stock_qty} ${product.unit} · ${formatPrice(product.sale_price, currency)}`;
 
   return (
@@ -1582,6 +1583,9 @@ export default function CatalogueScreen() {
         // First value moment (or a later one, capped at twice) — only for a
         // genuinely new product, not an edit.
         if (wasNewProduct) activationPriming.maybeTrigger();
+      } else {
+        haptics.error();
+        toast.warning(useProductStore.getState().error ?? 'Impossible d\'enregistrer le produit');
       }
     },
     [editingProduct, businessId, userId, createProduct, updateProduct, upsertVariants, showSuccess, archiveProduct],
@@ -1590,10 +1594,15 @@ export default function CatalogueScreen() {
   const handleAdjust = useCallback(
     async (qty: number, type: 'entree' | 'perte', note: string) => {
       if (!adjustTarget) return;
-      await adjustStock(adjustTarget.id, businessId, userId, qty, type, note);
-      setShowAdjust(false);
-      setAdjustTarget(null);
-      showSuccess('Stock ajusté ✓');
+      const ok = await adjustStock(adjustTarget.id, businessId, userId, qty, type, note);
+      if (ok) {
+        setShowAdjust(false);
+        setAdjustTarget(null);
+        showSuccess('Stock ajusté ✓');
+      } else {
+        haptics.error();
+        toast.warning(useProductStore.getState().error ?? 'Erreur d\'ajustement');
+      }
     },
     [adjustTarget, businessId, userId, adjustStock, showSuccess],
   );
@@ -1719,7 +1728,7 @@ export default function CatalogueScreen() {
         ) : (
           <EmptyState
             icon="cube-outline"
-            title="Aucun produit archivé."
+            title="Aucun produit archivé pour le moment."
             subtitle="Les produits que vous archivez apparaîtront ici."
           />
         )
@@ -1789,9 +1798,9 @@ export default function CatalogueScreen() {
           <View style={styles.sheetHandle} />
           <View style={[styles.header, { paddingTop: spacing[2] }]}>
             <View>
-              <Text variant="h4">Produits épuisés</Text>
+              <Text variant="h4">Produits finis</Text>
               <Text variant="caption" color="secondary">
-                {outOfStockActive.length} produit{outOfStockActive.length !== 1 ? 's' : ''} à réapprovisionner
+                {outOfStockActive.length} produit{outOfStockActive.length !== 1 ? 's' : ''} à racheter
               </Text>
             </View>
             <Pressable onPress={() => setShowOutOfStockModal(false)} style={{ padding: spacing[2] }} accessibilityLabel="Fermer" accessibilityRole="button">

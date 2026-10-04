@@ -131,7 +131,7 @@ export default function PlusScreen() {
           <View style={styles.bizRow}>
             <View style={[styles.badge, { backgroundColor: roleColor + '20' }]}>
               <Text variant="labelSmall" style={{ color: roleColor }}>
-                {`Vous êtes ${role === 'administrateur' ? 'Gérant' : role === 'investisseur' ? 'Observateur' : role.charAt(0).toUpperCase() + role.slice(1)}`}
+                {`Vous êtes ${role === 'administrateur' ? 'Gérant' : role === 'investisseur' ? 'Investisseur' : role === 'manager' ? 'Gérant adjoint' : role.charAt(0).toUpperCase() + role.slice(1)}`}
               </Text>
             </View>
           </View>
@@ -142,7 +142,7 @@ export default function PlusScreen() {
           <MenuGroup>
             <MenuRow iconName="receipt-outline" label="Mes ventes" onPress={() => router.push('/ventes')} />
             <MenuRow iconName="people-outline" label="Mes clients" onPress={() => router.push('/clients')} />
-            <MenuRow iconName="cash-outline" label="Dépenses" onPress={() => router.push('/depenses')} />
+            <MenuRow iconName="cash-outline" label="Mes dépenses" onPress={() => router.push('/depenses')} />
             <MenuRow iconName="arrow-down-circle-outline" label="Mes apports" onPress={() => router.push('/apports')} />
           </MenuGroup>
         )}
@@ -203,7 +203,7 @@ export default function PlusScreen() {
                       "Vous n'êtes plus membre de ce commerce.\n\nSi vous pensez que c'est une erreur, contactez le gérant.",
                       [
                         {
-                          text: 'Fermer',
+                          text: 'Compris',
                           onPress: async () => {
                             await dismissRemovedBusiness(session!.user.id, b.id);
                             setRemovedBusinesses(prev => prev.filter(x => x.id !== b.id));

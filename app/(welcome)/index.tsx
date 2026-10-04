@@ -39,7 +39,7 @@ export default function WelcomeScreen() {
         </View>
 
         {error && (
-          <Text variant="bodySmall" color="secondary" style={styles.errorText}>{error}</Text>
+          <Text variant="bodySmall" color="danger" style={styles.errorText}>{error}</Text>
         )}
 
         <View style={styles.actions}>
@@ -99,7 +99,7 @@ function makeStyles(p: Palette) {
     },
     logo: { letterSpacing: -1 },
     tagline: { textAlign: 'center', lineHeight: 30, color: p.textSecondary },
-    errorText: { textAlign: 'center', color: p.textSecondary },
+    errorText: { textAlign: 'center' },
     actions: { gap: spacing[3] },
     whatsappCorner: {
       position: 'absolute',
