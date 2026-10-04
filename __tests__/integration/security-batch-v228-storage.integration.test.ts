@@ -11,14 +11,22 @@ import { createHash } from 'crypto';
 import { createTestUser, createTestBusiness, anonClient, adminClient } from './helpers';
 import { assertLocalDb, q, becomeFounder, resignFounder } from './pg';
 
-beforeAll(() => assertLocalDb());
+// One two-business world for the whole file (the tests use unique object paths
+// and only assert denials / own-object operations, so they don't interfere) —
+// creating fresh users per test multiplied GoTrue load ~12x for no benefit.
+let shared: Awaited<ReturnType<typeof makeWorld>>;
+const world = async () => shared;
+beforeAll(async () => {
+  assertLocalDb();
+  shared = await makeWorld();
+});
 
 const RLS = /row-level security|Unauthorized/i;
 
 const bytes = (tag: string) => Buffer.from(`${tag}-${randomUUID()}`);
 const md5 = (b: Buffer | Uint8Array) => createHash('md5').update(b).digest('hex');
 
-async function world() {
+async function makeWorld() {
   const { client: a, userId: aId } = await createTestUser('ownerA');
   const bizA = await createTestBusiness(a, 'Commerce A');
   const { client: b, userId: bId } = await createTestUser('ownerB');

@@ -134,7 +134,7 @@ describe('D2 — chat_messages: a sender edits content only', () => {
 });
 
 describe('D3 — so_lines mirrors sale_orders visibility (vendeur isolation)', () => {
-  async function world() {
+  async function makeWorld() {
     const admin = await createTestUser('admin');
     const biz = await createTestBusiness(admin.client, 'Commerce');
     const v1 = await createTestUser('vendeur1');
@@ -153,6 +153,11 @@ describe('D3 — so_lines mirrors sale_orders visibility (vendeur isolation)', (
     const lines = async (orderId: string) => (await q(`SELECT id, unit_price, qty FROM so_lines WHERE order_id = $1 ORDER BY id`, [orderId]));
     return { admin, biz, v1, v2, mgr, o1, o2, lines };
   }
+  // Built once: every D3 test only reads, or attempts writes that must be refused
+  // (and then asserts the rows are unchanged), so they can share the fixture.
+  let shared: Awaited<ReturnType<typeof makeWorld>>;
+  const world = async () => shared;
+  beforeAll(async () => { shared = await makeWorld(); });
 
   it('a vendeur sees ONLY the lines of their own sales', async () => {
     const w = await world();
