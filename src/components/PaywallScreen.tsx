@@ -221,7 +221,7 @@ export function PaywallScreen({ business, onDismiss, inline = false, onPurchased
 
         <Animated.View style={{ width: '100%', transform: [{ scale: breathScale }] }}>
           <Button
-            label={purchasing ? 'Un instant…' : ''}
+            label="" loadingLabel="Un instant" loading={purchasing}
             icon={!purchasing ? payButtonContent : undefined}
             onPress={purchase}
             disabled={purchasing}
@@ -296,7 +296,7 @@ export function PaywallScreen({ business, onDismiss, inline = false, onPurchased
 
         <Animated.View style={{ width: '100%', transform: [{ scale: breathScale }] }}>
           <Button
-            label={purchasing ? 'Un instant…' : ''}
+            label="" loadingLabel="Un instant" loading={purchasing}
             icon={!purchasing ? payButtonContent : undefined}
             onPress={purchase}
             disabled={purchasing}

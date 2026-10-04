@@ -18,7 +18,6 @@ import { useInviterStore } from '@/stores/inviter';
 import { getPendingInviteToken, clearPendingInviteToken } from '@/lib/inviteLink';
 import { trackEvent, classifyAuthError } from '@/lib/analytics';
 import { useCountdown } from '@/src/hooks/useCountdown';
-import { formatCountdown } from '@/src/utils/format';
 import { getKV, setKV } from '@/lib/db';
 import { openWhatsApp } from '@/src/utils/whatsapp';
 
@@ -229,15 +228,15 @@ export default function ConnexionScreen() {
               <OtpInput key={otpKey} onComplete={handleOtpComplete} disabled={loading} autoFocus whatsappAutofill />
               <Button label="Ouvrir WhatsApp" variant="ghost" onPress={openWhatsApp} />
               <Button
-                label={resendCooldown.isDone ? 'Renvoyer le code' : `Renvoyer le code (${formatCountdown(resendCooldown.secondsLeft)})`}
+                label={resendCooldown.isDone ? 'Renvoyer le code' : `Renvoyer le code dans ${resendCooldown.secondsLeft} s`}
                 variant="ghost"
-                loading={loading}
-                disabled={!resendCooldown.isDone}
+                disabled={!resendCooldown.isDone || loading}
                 onPress={handleResend}
               />
               <Button
                 label="Changer de numéro"
                 variant="ghost"
+                disabled={loading}
                 onPress={handleRetour}
               />
             </View>

@@ -12,7 +12,6 @@ import type { Palette } from '@/src/theme';
 import { useAuthStore } from '@/stores/auth';
 import { toast } from '@/stores/toast';
 import { useCountdown } from '@/src/hooks/useCountdown';
-import { formatCountdown } from '@/src/utils/format';
 import { getKV, setKV } from '@/lib/db';
 
 const LAST_EMAIL_KEY = 'last_login_email';
@@ -256,10 +255,10 @@ export default function RecuperationScreen() {
               <OtpInput key={otpKey} onComplete={handleOtpComplete} disabled={loading} autoFocus />
               {renderMailShortcut()}
               <Button
-                label={resendCooldown.isDone ? 'Renvoyer le code' : `Renvoyer le code (${formatCountdown(resendCooldown.secondsLeft)})`}
+                label={resendCooldown.isDone ? 'Renvoyer le code' : `Renvoyer le code dans ${resendCooldown.secondsLeft} s`}
                 variant="ghost"
                 loading={emailOtpLoading}
-                disabled={!resendCooldown.isDone}
+                disabled={!resendCooldown.isDone || loading}
                 onPress={handleResend}
               />
               <Button

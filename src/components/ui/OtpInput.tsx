@@ -5,10 +5,12 @@ import { useTheme } from '@/src/theme';
 import type { Palette } from '@/src/theme';
 import { addSmsReceivedListener, startSmsRetriever, stopSmsRetriever } from '@/modules/sms-retriever';
 import { haptics } from '@/lib/haptics';
+import { LoadingStatus } from './LoadingStatus';
 
 interface Props {
   length?: number;
-  onComplete: (code: string) => void;
+  /** If this returns a promise, the input is in its "Vérification" state until it settles. */
+  onComplete: (code: string) => void | Promise<unknown>;
   disabled?: boolean;
   autoFocus?: boolean;
   // Android only — starts the SMS Retriever broadcast listener that WhatsApp's one-tap/zero-tap
@@ -22,16 +24,30 @@ export function OtpInput({ length = 6, onComplete, disabled = false, autoFocus =
   const styles = useMemo(() => makeStyles(palette), [palette]);
   const [value, setValue] = useState('');
   const inputRef = useRef<TextInput>(null);
+  // Verification in flight: the six boxes take one steady active border (state,
+  // not animated) and the only motion is the caption beneath ("Vérification" +
+  // bouncing dots). The input ignores further typing/paste until it settles.
+  const [verifying, setVerifying] = useState(false);
+  const mounted = useRef(true);
+  useEffect(() => () => { mounted.current = false; }, []);
 
   const digits = value.split('').concat(Array(length).fill('')).slice(0, length);
 
   function handleChange(text: string) {
+    if (verifying) return;
     // Strip non-digits and cap at length — handles both typing and full-string paste
     const cleaned = text.replace(/\D/g, '').slice(0, length);
     if (cleaned.length === length) {
       // Completion is the single meaningful outcome — one success, no per-digit tick on the last box.
       haptics.success();
-      onComplete(cleaned);
+      const pending = onComplete(cleaned);
+      if (pending && typeof (pending as Promise<unknown>).then === 'function') {
+        setVerifying(true);
+        (pending as Promise<unknown>).then(
+          () => { if (mounted.current) setVerifying(false); },
+          () => { if (mounted.current) setVerifying(false); },
+        );
+      }
     } else if (cleaned.length > value.length) {
       haptics.select();
     }
@@ -56,7 +72,7 @@ export function OtpInput({ length = 6, onComplete, disabled = false, autoFocus =
   // On some Android OEM keyboards (OPPO, Xiaomi) calling focus() on an already-focused
   // input doesn't re-show the keyboard. Blur first then re-focus reliably re-opens it.
   function handlePress() {
-    if (disabled) return;
+    if (disabled || verifying) return;
     if (Platform.OS === 'android') {
       inputRef.current?.blur();
       setTimeout(() => inputRef.current?.focus(), 50);
@@ -69,16 +85,20 @@ export function OtpInput({ length = 6, onComplete, disabled = false, autoFocus =
     <Pressable onPress={handlePress} style={styles.container}>
       <View style={styles.boxes}>
         {digits.map((digit, i) => {
-          const isFocused = !disabled && i === value.length && value.length < length;
+          const isFocused = !disabled && !verifying && i === value.length && value.length < length;
           const isFilled = i < value.length;
           return (
-            <View key={i} style={[styles.box, isFilled && styles.boxFilled, isFocused && styles.boxFocused]}>
+            <View key={i} style={[styles.box, isFilled && styles.boxFilled, isFocused && styles.boxFocused, verifying && styles.boxVerifying]}>
               {/* Single glyph in a fixed 48×56 box, no room to grow — pinned regardless of OS text-size setting. */}
               <Text variant="h2" allowFontScaling={false} style={[styles.digit, !isFilled && styles.digitEmpty]}>{digit}</Text>
               {isFocused && <View style={styles.cursor} />}
             </View>
           );
         })}
+      </View>
+      {/* Fixed-height caption slot so the screen never jumps when it appears. */}
+      <View style={styles.caption}>
+        {verifying && <LoadingStatus word="Vérification" color={palette.textSecondary} variant="caption" />}
       </View>
       {/* Rendered last so it's front-most in z-order — needed for long-press "Paste" to reach the
           native field instead of being intercepted by the boxes above it. */}
@@ -90,7 +110,7 @@ export function OtpInput({ length = 6, onComplete, disabled = false, autoFocus =
         textContentType="oneTimeCode"
         autoComplete="one-time-code"
         maxLength={length}
-        editable={!disabled}
+        editable={!disabled && !verifying}
         caretHidden
         autoFocus={autoFocus}
         style={styles.hiddenInput}
@@ -115,6 +135,8 @@ function makeStyles(p: Palette) {
     },
     boxFilled: { borderColor: p.primary, backgroundColor: p.primaryLight },
     boxFocused: { borderColor: p.primary, borderWidth: 2 },
+    boxVerifying: { borderColor: p.primary, borderWidth: 2, backgroundColor: p.primaryLight },
+    caption: { height: 22, marginTop: 10, alignItems: 'center', justifyContent: 'center' },
     digit: { textAlign: 'center', letterSpacing: 0 },
     digitEmpty: { opacity: 0 },
     cursor: {

@@ -109,7 +109,7 @@ function ExpenseFormModal({ visible, editing, onClose, onSave, saving, currency,
       footer={
         <View style={styles.modalFooter}>
           <Button
-            label={saving ? 'Enregistrement…' : (isEdit ? 'Enregistrer les modifications' : 'Enregistrer')}
+            label={(isEdit ? 'Enregistrer les modifications' : 'Enregistrer')} loadingLabel="Enregistrement"
             onPress={handleSave}
             loading={saving}
             fullWidth

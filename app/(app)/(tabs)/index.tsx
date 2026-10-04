@@ -1050,7 +1050,7 @@ export default function AccueilScreen() {
               </View>
 
               <Button
-                label={investorSaving ? 'Envoi…' : 'Envoyer la demande'}
+                label="Envoyer la demande" loadingLabel="Envoi"
                 fullWidth
                 size="lg"
                 loading={investorSaving}

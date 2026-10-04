@@ -1,5 +1,5 @@
 import { create } from 'zustand';
-import { enqueue, getQueueCount, saveProductCache, getProductCache, getKV, setKV } from '@/lib/db';
+import { enqueue, getQueueCount, saveProductCache, getProductCache, getKV, setKV, saveVariantsCache, getVariantsCache } from '@/lib/db';
 import { generateId } from '@/lib/id';
 import { useSyncStore } from '@/stores/sync';
 import { useVentesStore } from '@/stores/ventes';
@@ -91,6 +91,31 @@ async function maybeTrackFirstValue(businessId: string, userId: string, kind: 's
   }
 }
 
+// An offline variant sale must leave the remaining variant stock reduced, or
+// the next offline sale could sell the same units again: apply the sold
+// quantities to the in-memory variants and the persisted variant cache (the
+// cache is the only source when the app was cold-started offline).
+export async function decrementVariantStock(
+  businessId: string,
+  cart: { product: { id: string }; qty: number; variant_id?: string }[],
+): Promise<void> {
+  const byProduct = new Map<string, Map<string, number>>();
+  for (const l of cart) {
+    if (!l.variant_id) continue;
+    const m = byProduct.get(l.product.id) ?? new Map<string, number>();
+    m.set(l.variant_id, (m.get(l.variant_id) ?? 0) + l.qty);
+    byProduct.set(l.product.id, m);
+  }
+  for (const [productId, sold] of byProduct) {
+    const inMemory = useProductStore.getState().variantsByProduct[productId];
+    const base = inMemory ?? (await getVariantsCache(businessId, productId) as ProductVariant[] | null);
+    if (!base || !base.length) continue;
+    const next = base.map(v => (sold.has(v.id) ? { ...v, stock_qty: Math.max(0, v.stock_qty - (sold.get(v.id) ?? 0)) } : v));
+    useProductStore.setState(state => ({ variantsByProduct: { ...state.variantsByProduct, [productId]: next } }));
+    await saveVariantsCache(businessId, productId, next);
+  }
+}
+
 export const useSalesStore = create<SalesStore>((set, get) => ({
   cart: [],
   submitting: false,
@@ -124,6 +149,8 @@ export const useSalesStore = create<SalesStore>((set, get) => ({
   },
 
   addToCartVariant: (product, variant, qty = 1) => {
+    // An exhausted variant cannot enter the cart (a 0-quantity line is not a state).
+    if (variant.stock_qty <= 0 || qty <= 0) return;
     const { cart } = get();
     const existing = cart.find(l => l.variant_id === variant.id);
     if (existing) {
@@ -423,13 +450,15 @@ export const useSalesStore = create<SalesStore>((set, get) => ({
         const base = cached ?? useProductStore.getState().products;
         if (!base.length) return;
         const updated = base.map(p => {
-          // Only decrement plain-product lines (variant stock isn't cached locally)
+          // Plain-product lines only here; variant lines are decremented
+          // against the variant stock cache just below.
           const line = cartSnapshot.find(l => l.product.id === p.id && !l.variant_id);
           if (!line) return p;
           return { ...p, stock_qty: Math.max(0, p.stock_qty - line.qty) };
         });
         useProductStore.setState({ products: updated });
         await saveProductCache(businessId, updated);
+        await decrementVariantStock(businessId, cartSnapshot);
       } catch (err) {
         // Best-effort, session-only estimate (see the comment above) — a
         // failure here must never become an unhandled rejection out of

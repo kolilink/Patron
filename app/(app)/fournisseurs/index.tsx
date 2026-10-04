@@ -139,7 +139,7 @@ function FournisseurForm({ visible, editing, products, onClose, onSave, saving }
       footer={
         <View style={styles.mfooter}>
           <Button
-            label={saving ? '…' : 'Enregistrer'}
+            label="Enregistrer" loadingLabel="Enregistrement"
             loading={saving} fullWidth size="lg"
             onPress={() => {
               if (!name.trim()) { Alert.alert('Ajoutez un nom :)'); return; }
@@ -317,7 +317,7 @@ function DebtModal({ visible, fournisseur, currency, saving, onClose, onSave }: 
       footer={
         <View style={styles.mfooter}>
           <Button
-            label={saving ? '…' : 'Enregistrer la dette'}
+            label="Enregistrer la dette" loadingLabel="Enregistrement"
             loading={saving} fullWidth size="lg"
             onPress={() => {
               const amt = parseAmountInput(amount, currency);

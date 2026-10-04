@@ -199,7 +199,7 @@ function ApportFormModal({ visible, mode, editing, businessId, currency, saving,
         footer={!isViewMode ? (
           <View style={styles.modalFooter}>
             <Button
-              label={saving ? 'Enregistrement…' : FORM_SAVE_LABELS[mode]}
+              label={FORM_SAVE_LABELS[mode]} loadingLabel="Enregistrement"
               onPress={handleSave}
               loading={saving}
               fullWidth

@@ -881,6 +881,20 @@ export async function getBestSellersCache(businessId: string): Promise<unknown |
   return getDashboardKpiCache('bestsellers:' + businessId);
 }
 
+// Variant stock, per product, so an offline variant sale is gated by the last
+// known stock exactly like a plain product (capped quantities, disabled when
+// exhausted). Same table/encryption/logout wipe as the other dashboard-side
+// caches, under a prefixed key — no new migration.
+export async function saveVariantsCache(businessId: string, productId: string, variants: unknown): Promise<void> {
+  try {
+    await writeCache({ table: 'dashboard_kpi_cache', keyCol: 'business_id', keyValue: `variants:${businessId}:${productId}`, json: JSON.stringify(variants), hashKey: `variants:${businessId}:${productId}` });
+  } catch { }
+}
+
+export async function getVariantsCache(businessId: string, productId: string): Promise<unknown | null> {
+  return getDashboardKpiCache(`variants:${businessId}:${productId}`);
+}
+
 // ─── Rapports snapshot cache ────────────────────────────────────────────────────
 
 export async function saveRapportsCache(businessId: string, snapshot: unknown): Promise<void> {

@@ -133,7 +133,7 @@ function EditModal({
       contentContainerStyle={styles.pad}
       footer={
         <View style={styles.footer}>
-          <Button label={saving ? 'Enregistrement…' : 'Enregistrer'}
+          <Button label="Enregistrer" loadingLabel="Enregistrement"
             onPress={handleSave} loading={saving} fullWidth size="lg" />
         </View>
       }
@@ -198,7 +198,7 @@ function PayModal({
       footer={
         <View style={styles.footer}>
           <Button
-            label={saving ? 'Enregistrement…' : amount > 0 ? `Enregistrer : ${displayName} a payé ${fmt(amount, currency)}` : 'Confirmer le paiement'}
+            label={amount > 0 ? `Enregistrer : ${displayName} a payé ${fmt(amount, currency)}` : 'Confirmer le paiement'} loadingLabel="Enregistrement"
             onPress={handleRecord} loading={saving} fullWidth size="lg" disabled={amount <= 0}
           />
         </View>

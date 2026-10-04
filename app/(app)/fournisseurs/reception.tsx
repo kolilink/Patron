@@ -1,4 +1,6 @@
 import { useEffect, useMemo, useRef, useState } from 'react';
+import { useInFlight } from '@/src/hooks/useInFlight';
+import { QuantityStepper } from '@/src/components/ui/QuantityStepper';
 import { Modal, Platform, Pressable, ScrollView, StyleSheet, TextInput, View } from 'react-native';
 import { SafeAreaView } from 'react-native-safe-area-context';
 import { router, useLocalSearchParams } from 'expo-router';
@@ -338,7 +340,10 @@ export default function ReceptionScreen() {
 
   const [showPerLine, setShowPerLine] = useState(false);
 
-  const handleConfirm = async () => {
+  // Confirming books a money record (stock, cost, transport): a second tap while
+  // the first is in flight is swallowed, and the control shows it is working.
+  const [confirming, runConfirm] = useInFlight();
+  const handleConfirm = () => runConfirm(async () => {
     if (!draft) return;
     const rpcLines: ReceptionLine[] = [];
     for (const l of draft.lines) {
@@ -392,7 +397,7 @@ export default function ReceptionScreen() {
     setConfirmedPoId(poId);
     setConfirmedSupplierName(draft.supplierName || OTHER_SUPPLIER_NAME);
     setStep('confirme');
-  };
+  });
 
   if (!ready || !draft) {
     return <Screen><View style={styles.center}><Text variant="body" color="secondary">…</Text></View></Screen>;
@@ -447,7 +452,7 @@ export default function ReceptionScreen() {
           onUpdateLine={updateLine}
           onBack={() => setStep('quoi')}
           onConfirm={handleConfirm}
-          saving={saving}
+          saving={saving || confirming}
           styles={styles}
           palette={palette}
         />
@@ -611,18 +616,17 @@ function QuoiStep({
                 <VariantSplitRow line={line} onUpdateLine={onUpdateLine} styles={styles} palette={palette} />
               ) : (
                 <View style={styles.lineFieldsRow}>
-                  <View style={{ flex: 1 }}>
+                  <View style={{ flex: 1.6 }}>
                     <Text variant="caption" color="secondary">Quantité</Text>
-                    <TextInput
+                    <QuantityStepper
+                      compact
                       value={line.qty}
-                      onChangeText={v => onUpdateLine(line.localId, { qty: v.replace(/[^0-9]/g, '') })}
-                      keyboardType="number-pad"
-                      placeholderTextColor={palette.textDisabled}
-                      style={[styles.fieldInput, !parseQty(line.qty) && styles.fieldInputWarn, { color: palette.textPrimary }]}
-                      inputAccessoryViewID={Platform.OS === 'ios' ? ACCESSORY_ID : undefined}
+                      onChange={v => onUpdateLine(line.localId, { qty: v })}
+                      inputStyle={[styles.fieldInput, !parseQty(line.qty) && styles.fieldInputWarn, { color: palette.textPrimary, minHeight: 0 }]}
+                      inputAccessoryViewID={ACCESSORY_ID}
                     />
                   </View>
-                  <View style={{ flex: 1.4 }}>
+                  <View style={{ flex: 1 }}>
                     <Text variant="caption" color="secondary">Prix d'achat ({currency})</Text>
                     <TextInput
                       value={line.unitCost}
@@ -690,12 +694,10 @@ function VariantSplitRow({ line, onUpdateLine, styles, palette }: {
   return (
     <View style={{ gap: spacing[2] }}>
       <Text variant="caption" color="secondary">Quantité totale reçue</Text>
-      <TextInput
+      <QuantityStepper
         value={line.qty}
-        onChangeText={v => onUpdateLine(line.localId, { qty: v.replace(/[^0-9]/g, '') })}
-        keyboardType="number-pad"
-        placeholderTextColor={palette.textDisabled}
-        style={[styles.fieldInput, { color: palette.textPrimary }]}
+        onChange={v => onUpdateLine(line.localId, { qty: v })}
+        inputStyle={[styles.fieldInput, { color: palette.textPrimary, minHeight: 0 }]}
       />
       <Text variant="caption" color="secondary">Répartition par variante</Text>
       <View style={styles.variantGrid}>
@@ -827,7 +829,7 @@ function MargeStep({
       </ScrollView>
 
       <View style={styles.footer}>
-        <Button label={saving ? 'Enregistrement…' : 'Confirmer la livraison'} onPress={onConfirm} loading={saving} fullWidth size="lg" />
+        <Button label="Confirmer la livraison" loadingLabel="Enregistrement" onPress={onConfirm} loading={saving} fullWidth size="lg" />
       </View>
     </>
   );

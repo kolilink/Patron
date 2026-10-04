@@ -123,6 +123,7 @@ export default function MilestonePhoneScreen() {
               <Button
                 label="Changer de numéro"
                 variant="ghost"
+                disabled={loading}
                 onPress={() => {
                   clearError();
                   setStep('phone');
