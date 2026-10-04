@@ -92,14 +92,14 @@ function MailAppButton({
 }
 
 const styles_mailButton = StyleSheet.create({
-  wrap:   { alignItems: 'center', gap: 6 },
+  wrap: { alignItems: 'center', gap: 6 },
   circle: { width: 48, height: 48, borderRadius: 24, borderWidth: 1, alignItems: 'center', justifyContent: 'center' },
 });
 
 export default function RecuperationScreen() {
   const { palette } = useTheme();
   const styles = useMemo(() => makeStyles(palette), [palette]);
-  const { sendEmailOtp, recoverByEmail, session, loading, error, clearError } = useAuthStore();
+  const { sendEmailOtp, recoverByEmail, session, loading, emailOtpLoading, error, clearError } = useAuthStore();
 
   const [step, setStep] = useState<'email' | 'otp'>('email');
   const [email, setEmail] = useState('');
@@ -244,7 +244,7 @@ export default function RecuperationScreen() {
               />
               <Button
                 label="Envoyer le code"
-                loading={loading}
+                loading={emailOtpLoading}
                 onPress={handleSendCode}
                 fullWidth
                 size="lg"
@@ -258,7 +258,7 @@ export default function RecuperationScreen() {
               <Button
                 label={resendCooldown.isDone ? 'Renvoyer le code' : `Renvoyer le code (${formatCountdown(resendCooldown.secondsLeft)})`}
                 variant="ghost"
-                loading={loading}
+                loading={emailOtpLoading}
                 disabled={!resendCooldown.isDone}
                 onPress={handleResend}
               />
@@ -287,10 +287,10 @@ function makeStyles(p: Palette) {
     formCentered: { alignItems: 'center' },
     mailRow: { flexDirection: 'row', gap: spacing[8] },
     errorBox: {
-      backgroundColor: p.warningLight,
+      backgroundColor: p.dangerLight,
       borderRadius: radius.md,
       padding: spacing[3],
     },
-    errorText: { color: p.warning },
+    errorText: { color: p.danger },
   });
 }

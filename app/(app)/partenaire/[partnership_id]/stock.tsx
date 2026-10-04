@@ -1,4 +1,4 @@
-import { useEffect, useState } from 'react';
+import { useCallback, useEffect, useState } from 'react';
 import {
   Pressable,
   SectionList,
@@ -51,7 +51,7 @@ export default function PartnerStockScreen() {
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState('');
 
-  useEffect(() => {
+  const load = useCallback(() => {
     if (!partnership_id || !businessId) return;
     setLoading(true);
     setError('');
@@ -62,13 +62,17 @@ export default function PartnerStockScreen() {
       })
       .then(({ data, error: rpcErr }) => {
         if (rpcErr) {
-          setError(rpcErr.message ?? 'Erreur de chargement');
+          setError('Impossible de charger le stock pour le moment. Réessayez.');
         } else {
           setResult(data as PartnerStockResult);
         }
         setLoading(false);
       });
   }, [partnership_id, businessId]);
+
+  useEffect(() => {
+    load();
+  }, [load]);
 
   const sections = result?.products ? buildSections(result.products) : [];
   const inStockCount = result?.products?.filter(p => p.in_stock).length ?? 0;
@@ -98,8 +102,11 @@ export default function PartnerStockScreen() {
         </View>
       ) : error ? (
         <View style={styles.center}>
-          <Ionicons name="lock-closed-outline" size={48} color={palette.textSecondary} style={{ marginBottom: 16 }} />
+          <Ionicons name="cloud-offline-outline" size={48} color={palette.textSecondary} style={{ marginBottom: 16 }} />
           <Text variant="body" color="secondary" style={{ textAlign: 'center', lineHeight: 22 }}>{error}</Text>
+          <Pressable onPress={load} style={styles.retryButton} hitSlop={8}>
+            <Text variant="label" style={{ color: palette.primary }}>Réessayer</Text>
+          </Pressable>
         </View>
       ) : sections.length === 0 ? (
         <View style={styles.center}>
@@ -163,6 +170,15 @@ function makeStyles(p: Palette) {
       alignItems: 'center',
       justifyContent: 'center',
       padding: spacing[6],
+    },
+    retryButton: {
+      marginTop: spacing[4],
+      paddingHorizontal: spacing[4],
+      paddingVertical: spacing[2],
+      borderRadius: radius.sm,
+      backgroundColor: p.background,
+      borderWidth: 1,
+      borderColor: p.primary,
     },
     listContent: { paddingBottom: 32 },
     sectionHeader: {

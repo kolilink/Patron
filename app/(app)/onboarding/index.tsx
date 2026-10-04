@@ -1,6 +1,7 @@
 import { useEffect } from 'react';
 import { router } from 'expo-router';
 import { useAuthStore } from '@/stores/auth';
+import { Screen } from '@/src/components/ui/Screen';
 
 export default function OnboardingIndex() {
   const session = useAuthStore(s => s.session);
@@ -18,5 +19,6 @@ export default function OnboardingIndex() {
     }
   }, []);
 
-  return null;
+  // Themed blank (not null) so there is no white flash while redirecting.
+  return <Screen>{null}</Screen>;
 }

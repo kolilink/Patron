@@ -572,8 +572,7 @@ export default function AccueilScreen() {
   const delta = (kpis?.revenue_today ?? 0) - (kpis?.revenue_yesterday ?? 0);
 
   const dayPart = getDayPart();
-  const dayGreeting = dayPart === 'morning' ? 'Bonne journée'
-    : dayPart === 'evening' ? 'Voici votre journée'
+  const dayGreeting = dayPart === 'evening' ? 'Voici votre journée'
       : null;
   // Never prints "0 ventes" — a zero-sales day drops the count entirely
   // rather than stating it, same reasoning as the debt card's zero-state
@@ -612,7 +611,7 @@ export default function AccueilScreen() {
   const comparisonText = !hasEverSold
     ? 'Bienvenue'
     : isFirstSaleToday
-      ? 'Première vente notée ✓'
+      ? 'Première vente enregistrée ✓'
       : isEvening
         ? (hasMonthRevenue ? `Ce mois : ${amtOrMask(monthRevenue)}` : '')
         : "Même niveau qu'hier";
@@ -654,7 +653,7 @@ export default function AccueilScreen() {
             <Pressable style={StyleSheet.absoluteFill} onPress={() => setShowCarnetSheet(false)} />
             <View style={[styles.sheetPanel, { backgroundColor: palette.surface }]}>
               <View style={[styles.sheetHandle, { backgroundColor: palette.border }]} />
-              <Text variant="h3" style={styles.sheetTitle}>Votre commerce est créé !</Text>
+              <Text variant="h3" style={styles.sheetTitle}>Votre commerce est prêt !</Text>
               <Text variant="body" color="secondary" style={styles.sheetBody}>
                 Des gens vous doivent de l'argent ?
               </Text>
@@ -739,7 +738,7 @@ export default function AccueilScreen() {
             <Card style={styles.welcome}>
               <Text variant="h4" style={{ textAlign: 'center' }}>Aucun produit</Text>
               <Text variant="body" color="secondary" style={{ textAlign: 'center' }}>
-                Votre commerce n'a pas encore de produits configurés.{'\n'}
+                Votre commerce n'a pas encore de produits.{'\n'}
                 Contactez votre gérant pour commencer à vendre.
               </Text>
             </Card>
@@ -754,9 +753,6 @@ export default function AccueilScreen() {
                   <Text variant="caption" style={{ color: palette.warning }}>Demande en cours</Text>
                   <Text variant="amountLarge" style={{ color: palette.warning, fontSize: 44, lineHeight: 56 }}>
                     {formatAmount(pendingPayout.requested_amount, currency)}
-                  </Text>
-                  <Text variant="caption" color="secondary" style={{ marginTop: spacing[1] }}>
-                    en cours de traitement
                   </Text>
                 </Card>
               ) : (
@@ -959,7 +955,7 @@ export default function AccueilScreen() {
                   <KpiCard
                     label="À racheter"
                     value={String(lowStock)}
-                    sub={`produit${lowStock > 1 ? 's' : ''} à racheter`}
+                    sub="Stock bas"
                     onPress={isVendeur ? undefined : () => router.push('/(app)/(tabs)/catalogue')}
                     tone="warning"
                     icon="leaf-outline"
@@ -999,7 +995,7 @@ export default function AccueilScreen() {
               {/* ── Zone 3: Month context — hidden in evening/night (already in comparison) ── */}
               {dayPart !== 'evening' && dayPart !== 'night' && hasMonthRevenue ? (
                 <Text variant="caption" color="secondary" style={styles.monthLine}>
-                  Ce mois: {amtOrMask(monthRevenue)}
+                  Ce mois : {amtOrMask(monthRevenue)}
                 </Text>
               ) : null}
             </>

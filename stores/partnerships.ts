@@ -4,6 +4,7 @@ import { translateError } from '@/lib/errors';
 import { getKV, setKV, savePartnershipsCache, getPartnershipsCache, getCacheTimestamp } from '@/lib/db';
 import { isNetworkError, withNetworkRetry, reportOfflineFallback } from '@/lib/sync';
 import { notifyEvent } from '@/src/utils/notifications';
+import { toast } from '@/stores/toast';
 import type { PartnerData, PendingRequest, PartnerInviteCode } from '@/src/types';
 
 function dmReadKey(roomId: string) { return `dm_last_read_${roomId}`; }
@@ -196,8 +197,8 @@ export const usePartnershipsStore = create<PartnershipsStore>((set, get) => ({
       // For display purposes this is accurate enough.
       const expires_at = new Date(Date.now() + 24 * 60 * 60 * 1000).toISOString();
       set({ inviteCode: { code: data as string, expires_at }, inviteCodeLoading: false });
-    } catch {
-      set({ inviteCodeLoading: false });
+    } catch (err) {
+      set({ inviteCodeLoading: false, error: translateError(err, 'Impossible de charger le code d\'invitation') });
     }
   },
 
@@ -210,8 +211,9 @@ export const usePartnershipsStore = create<PartnershipsStore>((set, get) => ({
       if (error) throw error;
       const expires_at = new Date(Date.now() + 24 * 60 * 60 * 1000).toISOString();
       set({ inviteCode: { code: data as string, expires_at }, inviteCodeLoading: false });
-    } catch {
+    } catch (err) {
       set({ inviteCodeLoading: false });
+      toast.warning(translateError(err, 'Impossible de régénérer le code d\'invitation'));
     }
   },
 

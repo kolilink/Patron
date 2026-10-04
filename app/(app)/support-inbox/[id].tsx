@@ -120,7 +120,7 @@ export default function SupportInboxDetailScreen() {
   };
 
   const handleClose = () => {
-    Alert.alert('Marquer comme résolu ?', '', [
+    Alert.alert('Marquer comme résolu ?', undefined, [
       { text: 'Annuler', style: 'cancel' },
       { text: 'Marquer résolu', onPress: async () => { await closeConversation(id); router.back(); } },
     ]);

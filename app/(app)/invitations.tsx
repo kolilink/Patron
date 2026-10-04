@@ -143,7 +143,7 @@ export default function InvitationsScreen() {
                 <View style={[styles.notice, { backgroundColor: palette.warningLight, borderColor: palette.warning }]}>
                     <Ionicons name="information-circle-outline" size={18} color={palette.warning} style={{ marginTop: 2 }} />
                     <Text variant="body" color="secondary" style={{ flex: 1 }}>
-                        Ce lien ne marche qu'une fois, pendant 24 h. Envoie-le en privé, pas dans un groupe.
+                        Ce lien ne marche qu'une fois, pendant 24 h. Envoyez-le en privé, pas dans un groupe.
                     </Text>
                 </View>
 

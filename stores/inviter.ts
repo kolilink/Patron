@@ -216,8 +216,11 @@ export const useInviterStore = create<InviterStore>((set, get) => ({
             // actually rate-limited — a raise inside resolve_consumer_invite
             // rolls back the whole call including any INSERT it made itself
             // (see db/migration_v124.sql for the original bug this mirrors).
-            await supabase.rpc('record_invite_attempt');
-            const { data, error } = await supabase.rpc('resolve_consumer_invite', { p_token: token, p_code: code });
+            // withTimeout so a hung network can never strand the deep-link
+            // route on "Chargement…" — it resolves null and the caller lands
+            // on a usable screen.
+            await withTimeout(supabase.rpc('record_invite_attempt'));
+            const { data, error } = await withTimeout(supabase.rpc('resolve_consumer_invite', { p_token: token, p_code: code }));
             if (error) {
                 set({ error: translateError(error, 'Invitation invalide') });
                 return null;

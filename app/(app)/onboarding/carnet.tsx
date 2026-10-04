@@ -117,10 +117,12 @@ export default function CarnetScreen() {
       >
         {/* Header */}
         <View style={styles.header}>
-          <Text variant="h3">Mes dettes en cours</Text>
-          <Pressable onPress={() => router.replace('/(app)/(tabs)/')} hitSlop={12}>
-            <Text variant="body" color="secondary">Passer</Text>
-          </Pressable>
+          <Text variant="h3">L'argent qu'on me doit</Text>
+          {entries.length > 0 && (
+            <Pressable onPress={() => router.replace('/(app)/(tabs)/')} hitSlop={12}>
+              <Text variant="body" color="secondary">Passer</Text>
+            </Pressable>
+          )}
         </View>
 
         {/* Entry inputs */}
@@ -170,7 +172,7 @@ export default function CarnetScreen() {
           renderItem={({ item }) => (
             <View style={styles.entryRow}>
               <Text variant="label" style={{ flex: 1 }} numberOfLines={1}>{item.name}</Text>
-              <Text variant="label" style={{ color: palette.warning }}>
+              <Text variant="label">
                 {formatAmount(item.amountCents / 100, currency)}
               </Text>
               <Pressable onPress={() => handleRemove(item.id)} hitSlop={10}>

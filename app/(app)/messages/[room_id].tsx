@@ -116,13 +116,14 @@ export default function DmChatScreen() {
   const businessId = session?.activeBusiness?.id ?? '';
   const businessName = session?.activeBusiness?.name ?? '';
 
-  const { partners, markDmRead, updatePartnerSettings, removePartner } = usePartnershipsStore();
+  const { partners, markDmRead, updatePartnerSettings, removePartner, offline: partnersOffline } = usePartnershipsStore();
   const partner = partners.find(p => p.partnership_id === partnership_id);
   const partnerName = partner?.display_name ?? 'Partenaire';
   const partnerBizId = partner?.partner_business_id ?? '';
 
   const [messages, setMessages] = useState<ChatMessage[]>([]);
   const [loading, setLoading] = useState(true);
+  const [loadError, setLoadError] = useState(false);
   const [text, setText] = useState('');
   const [sending, setSending] = useState(false);
   const [sendError, setSendError] = useState('');
@@ -140,28 +141,40 @@ export default function DmChatScreen() {
   const [isRecording, setIsRecording] = useState(false);
   const [recDuration, setRecDuration] = useState(0);
   const [recAmplitudes, setRecAmplitudes] = useState<number[]>([]);
-  const recordingRef   = useRef<Audio.Recording | null>(null);
-  const recTimerRef    = useRef<ReturnType<typeof setInterval> | null>(null);
-  const pulseAnim      = useRef(new RNAnimated.Value(1)).current;
+  const recordingRef = useRef<Audio.Recording | null>(null);
+  const recTimerRef = useRef<ReturnType<typeof setInterval> | null>(null);
+  const pulseAnim = useRef(new RNAnimated.Value(1)).current;
 
   const flatListRef = useRef<FlatList<GroupedMessage>>(null);
   const channelRef = useRef<ReturnType<typeof supabase.channel> | null>(null);
 
   // ─── Load messages ─────────────────────────────────────────────────────────
-  useEffect(() => {
+  // A failed load must NOT masquerade as an empty conversation ("Écrivez votre
+  // premier message…"). We keep a distinct loadError flag and a retry that
+  // re-runs the same query, so a network blip is visible and recoverable.
+  const loadMessages = useCallback(async () => {
     if (!room_id) return;
     setLoading(true);
-    supabase
-      .from('chat_messages')
-      .select('*')
-      .eq('room_id', room_id)
-      .order('created_at', { ascending: true })
-      .limit(200)
-      .then(({ data }) => {
-        setMessages((data ?? []) as ChatMessage[]);
-        setLoading(false);
-      });
+    setLoadError(false);
+    try {
+      const { data, error } = await supabase
+        .from('chat_messages')
+        .select('*')
+        .eq('room_id', room_id)
+        .order('created_at', { ascending: true })
+        .limit(200);
+      if (error) throw error;
+      setMessages((data ?? []) as ChatMessage[]);
+      setLoading(false);
+    } catch {
+      setLoading(false);
+      setLoadError(true);
+    }
   }, [room_id]);
+
+  useEffect(() => {
+    loadMessages();
+  }, [loadMessages]);
 
   // ─── Real-time subscription ────────────────────────────────────────────────
   useEffect(() => {
@@ -202,7 +215,7 @@ export default function DmChatScreen() {
     if (!isRecording) { pulseAnim.setValue(1); return; }
     const loop = RNAnimated.loop(RNAnimated.sequence([
       RNAnimated.timing(pulseAnim, { toValue: 0.3, duration: 600, useNativeDriver: true }),
-      RNAnimated.timing(pulseAnim, { toValue: 1,   duration: 600, useNativeDriver: true }),
+      RNAnimated.timing(pulseAnim, { toValue: 1, duration: 600, useNativeDriver: true }),
     ]));
     loop.start();
     return () => loop.stop();
@@ -290,8 +303,8 @@ export default function DmChatScreen() {
       await rec.prepareToRecordAsync({
         isMeteringEnabled: true,
         android: { extension: '.m4a', outputFormat: A.AndroidOutputFormat.MPEG_4, audioEncoder: A.AndroidAudioEncoder.AAC, sampleRate: 16000, numberOfChannels: 1, bitRate: 32000 },
-        ios:     { extension: '.m4a', outputFormat: A.IOSOutputFormat.MPEG4AAC, audioQuality: A.IOSAudioQuality.MEDIUM, sampleRate: 16000, numberOfChannels: 1, bitRate: 32000, linearPCMBitDepth: 16, linearPCMIsBigEndian: false, linearPCMIsFloat: false },
-        web:     {},
+        ios: { extension: '.m4a', outputFormat: A.IOSOutputFormat.MPEG4AAC, audioQuality: A.IOSAudioQuality.MEDIUM, sampleRate: 16000, numberOfChannels: 1, bitRate: 32000, linearPCMBitDepth: 16, linearPCMIsBigEndian: false, linearPCMIsFloat: false },
+        web: {},
       });
       rec.setOnRecordingStatusUpdate(s => {
         if (s.metering != null) setRecAmplitudes(prev => [...prev.slice(-39), Math.max(0, (s.metering! + 60) / 60)]);
@@ -436,10 +449,34 @@ export default function DmChatScreen() {
           </Pressable>
         </View>
 
+        {partnersOffline && (
+          <View style={{ paddingHorizontal: spacing[4], paddingTop: spacing[1] }}>
+            <Text variant="caption" color="secondary">Hors ligne — dernières données connues</Text>
+          </View>
+        )}
+
         {/* Message list */}
         {loading ? (
           <View style={styles.empty}>
             <Text variant="body" color="secondary">Chargement…</Text>
+          </View>
+        ) : loadError ? (
+          <View style={styles.empty}>
+            <Text variant="h4" style={{ textAlign: 'center', marginBottom: 8 }}>Impossible de charger la conversation.</Text>
+            <Text variant="body" color="secondary" style={{ textAlign: 'center', lineHeight: 22, marginBottom: 16 }}>
+              Vérifiez votre connexion puis réessayez.
+            </Text>
+            <Pressable
+              onPress={loadMessages}
+              hitSlop={8}
+              style={({ pressed }) => [
+                { paddingHorizontal: spacing[5], paddingVertical: spacing[2], borderRadius: radius.md, backgroundColor: palette.primary, opacity: pressed ? 0.8 : 1 },
+              ]}
+              accessibilityLabel="Réessayer"
+              accessibilityRole="button"
+            >
+              <Text variant="body" style={{ color: palette.textInverse, fontWeight: '600' }}>Réessayer</Text>
+            </Pressable>
           </View>
         ) : grouped.length === 0 ? (
           <View style={styles.empty}>
@@ -541,55 +578,55 @@ export default function DmChatScreen() {
         }
         contentContainerStyle={[styles.settingsContent, { paddingBottom: insets.bottom + spacing[6] }]}
       >
-            {/* Nickname */}
-            <Text variant="caption" color="secondary" style={styles.settingsLabel}>NOM AFFICHÉ</Text>
-            <View style={styles.settingsField}>
-              <TextInput
-                style={styles.settingsInput}
-                value={nicknameInput}
-                onChangeText={setNicknameInput}
-                placeholder={partner?.partner_business_name ?? 'Nom personnalisé'}
-                placeholderTextColor={palette.textSecondary}
-                maxLength={40}
-              />
-            </View>
+        {/* Nickname */}
+        <Text variant="caption" color="secondary" style={styles.settingsLabel}>NOM AFFICHÉ</Text>
+        <View style={styles.settingsField}>
+          <TextInput
+            style={styles.settingsInput}
+            value={nicknameInput}
+            onChangeText={setNicknameInput}
+            placeholder={partner?.partner_business_name ?? 'Nom personnalisé'}
+            placeholderTextColor={palette.textSecondary}
+            maxLength={40}
+          />
+        </View>
 
-            {/* Stock share toggle */}
-            <Text variant="caption" color="secondary" style={[styles.settingsLabel, { marginTop: 32 }]}>PARTAGE DE STOCK</Text>
-            <View style={styles.settingsRow}>
-              <View style={{ flex: 1 }}>
-                <Text variant="body">Partager mon stock</Text>
-                <Text variant="caption" color="secondary">
-                  {shareStockToggle
-                    ? `${partner?.partner_business_name ?? 'Votre ami'} peut voir votre catalogue`
-                    : 'Stock masqué pour cet ami'}
-                </Text>
-              </View>
-              <Switch
-                value={shareStockToggle}
-                onValueChange={setShareStockToggle}
-                trackColor={{ true: palette.primary }}
-              />
-            </View>
+        {/* Stock share toggle */}
+        <Text variant="caption" color="secondary" style={[styles.settingsLabel, { marginTop: 32 }]}>PARTAGE DE STOCK</Text>
+        <View style={styles.settingsRow}>
+          <View style={{ flex: 1 }}>
+            <Text variant="body">Partager mon stock</Text>
+            <Text variant="caption" color="secondary">
+              {shareStockToggle
+                ? `${partner?.partner_business_name ?? 'Votre ami'} peut voir votre catalogue`
+                : 'Stock masqué pour cet ami'}
+            </Text>
+          </View>
+          <Switch
+            value={shareStockToggle}
+            onValueChange={setShareStockToggle}
+            trackColor={{ true: palette.primary }}
+          />
+        </View>
 
-            {/* View partner stock */}
-            {partner?.they_share_stock && (
-              <Pressable
-                style={({ pressed }) => [styles.settingsRow, pressed && { opacity: 0.7 }]}
-                onPress={() => { setShowSettings(false); router.push(`/(app)/partenaire/${partnership_id}/stock`); }}
-              >
-                <Text variant="body" style={{ color: palette.primary }}>Voir le stock de {partnerName}</Text>
-                <Ionicons name="chevron-forward" size={18} color={palette.primary} />
-              </Pressable>
-            )}
+        {/* View partner stock */}
+        {partner?.they_share_stock && (
+          <Pressable
+            style={({ pressed }) => [styles.settingsRow, pressed && { opacity: 0.7 }]}
+            onPress={() => { setShowSettings(false); router.push(`/(app)/partenaire/${partnership_id}/stock`); }}
+          >
+            <Text variant="body" style={{ color: palette.primary }}>Voir le stock de {partnerName}</Text>
+            <Ionicons name="chevron-forward" size={18} color={palette.primary} />
+          </Pressable>
+        )}
 
-            {/* Remove partner — always reachable at the bottom */}
-            <Pressable
-              style={({ pressed }) => [styles.settingsRemoveRow, pressed && { opacity: 0.7 }]}
-              onPress={confirmRemovePartner}
-            >
-              <Text variant="body" style={{ color: palette.warning }}>Retirer cet ami</Text>
-            </Pressable>
+        {/* Remove partner — always reachable at the bottom */}
+        <Pressable
+          style={({ pressed }) => [styles.settingsRemoveRow, pressed && { opacity: 0.7 }]}
+          onPress={confirmRemovePartner}
+        >
+          <Text variant="body" style={{ color: palette.warning }}>Retirer cet ami</Text>
+        </Pressable>
       </FormSheet>
     </KeyboardAvoidingView>
   );

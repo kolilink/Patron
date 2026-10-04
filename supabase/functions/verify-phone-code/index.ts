@@ -66,7 +66,16 @@ serve(async (req) => {
       .maybeSingle();
 
     if (!verif) {
-      return err('Code expiré. Demandez un nouveau code.');
+      // Distinguish a code that was already consumed from one that truly
+      // expired, so a re-submitted valid code doesn't read as "expired".
+      const { data: used } = await serviceClient
+        .from('phone_verifications')
+        .select('id')
+        .eq('id', verificationId)
+        .eq('phone', phone.trim())
+        .eq('status', 'verifie')
+        .maybeSingle();
+      return err(used ? 'Code déjà utilisé.' : 'Code expiré. Demandez un nouveau code.');
     }
 
     if (verif.failed_attempts >= MAX_FAILED_ATTEMPTS) {

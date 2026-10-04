@@ -92,7 +92,7 @@ export default function VerrouilleScreen() {
           {businessName ? <Text style={styles.businessName}>{businessName}</Text> : null}
           <Text variant="h1" style={styles.centerText}>Bon retour</Text>
           <Text variant="body" color="secondary" style={styles.centerText}>
-            Regardez votre téléphone pour continuer.
+            Déverrouillez Patron pour continuer.
           </Text>
         </Pressable>
       </Animated.View>

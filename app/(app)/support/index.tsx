@@ -6,6 +6,7 @@ import { Screen } from '@/src/components/ui/Screen';
 import { router, useFocusEffect } from 'expo-router';
 import { Ionicons } from '@expo/vector-icons';
 import { Text } from '@/src/components/ui/Text';
+import { EmptyState } from '@/src/components/ui/EmptyState';
 import { SupportMessageBubble } from '@/src/components/ui/SupportMessageBubble';
 import { useTheme, spacing, radius } from '@/src/theme';
 import type { Palette } from '@/src/theme';
@@ -155,11 +156,11 @@ export default function SupportScreen() {
             </Text>
           </View>
         ) : messages.length === 0 ? (
-          <View style={styles.empty}>
-            <Text variant="body" color="secondary" style={{ textAlign: 'center', lineHeight: 22 }}>
-              Décrivez votre inquiétude et un membre de l'équipe vous assistera
-            </Text>
-          </View>
+          <EmptyState
+            icon="chatbubbles-outline"
+            title="Écrivez-nous"
+            subtitle="Un membre de l'équipe vous répond."
+          />
         ) : (
           <FlatList
             ref={listRef}
@@ -211,6 +212,7 @@ export default function SupportScreen() {
             style={styles.input}
             value={text}
             onChangeText={setText}
+            placeholder="Décrivez votre problème…"
             placeholderTextColor={palette.textSecondary}
             multiline
             maxLength={1000}

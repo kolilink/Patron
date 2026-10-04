@@ -20,6 +20,7 @@ import { useAuthStore } from '@/stores/auth';
 import { useProductStore } from '@/stores/products';
 import { useFournisseursStore, type CommandeAchat, type Fournisseur } from '@/stores/fournisseurs';
 import { haptics } from '@/lib/haptics';
+import { toast } from '@/stores/toast';
 import { translateError } from '@/lib/errors';
 import { generateId } from '@/lib/id';
 import { supabase } from '@/lib/supabase';
@@ -40,18 +41,14 @@ function todayISO() {
 
 const AVATAR_PALETTE = SUPPLIER_AVATAR_PALETTE;
 
-// Debt age since it was recorded (there's no due_date on supplier_debts to
-// count down to, unlike client credit) — 14 days is a deliberately simple,
-// disclosed threshold for "this has been sitting a while," not a real term.
-const DEBT_AGE_WARNING_DAYS = 14;
+// Debt recorded-date caption (there's no due_date on supplier_debts to
+// count down to, unlike client credit) — neutral, never an alarm color.
 function debtAgeDays(iso: string): number {
   return Math.max(0, Math.round((Date.now() - new Date(iso + 'T00:00:00').getTime()) / 86400000));
 }
 function fmtDebtAge(iso: string): string {
-  const days = debtAgeDays(iso);
-  if (days === 0) return "Depuis aujourd'hui";
-  if (days === 1) return 'Depuis 1 jour';
-  return `Depuis ${days} jours`;
+  if (debtAgeDays(iso) === 0) return "Aujourd'hui";
+  return `Enregistrée le ${new Date(iso + 'T00:00:00').toLocaleDateString('fr-FR', { day: 'numeric', month: 'short' })}`;
 }
 
 function fmtDraftDate(createdAt: number): string {
@@ -620,7 +617,7 @@ export default function FournisseursScreen() {
             const lastLivraison = lastLivraisonMap[item.id];
             return (
               <Pressable
-                onLongPress={() => Alert.alert(item.name, '', [
+                onLongPress={() => Alert.alert(item.name, undefined, [
                   { text: 'Modifier', onPress: () => { setEditF(item); setShowForm(true); } },
                   { text: 'Enregistrer une dette', onPress: () => openDebt(item) },
                   {
@@ -667,7 +664,7 @@ export default function FournisseursScreen() {
                   {owedAmount > 0 && oldestDebtDateMap[item.id] ? (
                     <Text
                       variant="caption"
-                      style={{ color: debtAgeDays(oldestDebtDateMap[item.id]) >= DEBT_AGE_WARNING_DAYS ? palette.warning : palette.textSecondary }}
+                      color="secondary"
                     >
                       {fmtDebtAge(oldestDebtDateMap[item.id])}
                     </Text>
@@ -711,11 +708,18 @@ export default function FournisseursScreen() {
         onSave={async (amount, description, date) => {
           if (!debtTarget) return;
           const ok = await createDebt(businessId, userId, { supplierId: debtTarget.id, amount, description, date });
-          if (ok) { haptics.success(); setShowDebtModal(false); setDebtTarget(null); }
+          if (ok) {
+            haptics.success();
+            setShowDebtModal(false);
+            setDebtTarget(null);
+          } else {
+            haptics.error();
+            toast.warning(useFournisseursStore.getState().error ?? 'Impossible d\'enregistrer la dette');
+          }
         }}
       />
 
-      {fournisseurs.length > 0 && (
+      {(
         <Animated.View style={[styles.fabContainer, { opacity: fabOpacity, transform: [{ scale: fabScale }] }]}>
           <Pressable
             onPress={() => router.push('/(app)/fournisseurs/reception')}
