@@ -19,6 +19,13 @@ export function adminClient(): SupabaseClient {
   });
 }
 
+/** Unauthenticated client (anon key only, no session) — auth.uid() is NULL for its calls. */
+export function anonClient(): SupabaseClient {
+  return createClient(LOCAL_URL, LOCAL_ANON_KEY, {
+    auth: { autoRefreshToken: false, persistSession: false },
+  });
+}
+
 /** Creates a real (test) auth user + signs in, mirroring how the app itself authenticates. */
 export async function createTestUser(prefix: string): Promise<{ client: SupabaseClient; userId: string }> {
   const email = `${prefix}-${randomUUID()}@test.local`;
