@@ -120,7 +120,13 @@ export function reportOfflineFallback(context: string, err: unknown): void {
 export function withTimeout<T>(promise: PromiseLike<T>, ms = 12000): Promise<T> {
   let timer: ReturnType<typeof setTimeout>;
   const timeout = new Promise<never>((_, reject) => {
-    timer = setTimeout(() => reject(new Error(`Network timeout after ${ms}ms`)), ms);
+    timer = setTimeout(() => {
+      const err = new Error(`Network timeout after ${ms}ms`) as Error & { stalled?: boolean };
+      // Marks OUR timer firing (a request that neither succeeded nor failed),
+      // as distinct from a fast rejection — withNetworkRetry must not retry a stall.
+      err.stalled = true;
+      reject(err);
+    }, ms);
   });
   // Without this, every call leaves its setTimeout running for the full
   // `ms` even after the real promise already settled — harmless in the app
@@ -163,11 +169,18 @@ export function withTimeout<T>(promise: PromiseLike<T>, ms = 12000): Promise<T> 
 // market.ts's fetchPosts passes its own `isFailure` to check the specific
 // element that call site actually throws on.
 const RETRY_CONFIRM_DELAY_MS = 500;
-const RETRY_CONFIRM_TIMEOUT_MS = 5000;
+const RETRY_CONFIRM_TIMEOUT_MS = 3000;
+// A first load that neither succeeds nor fails within this window is a
+// half-open connection (Wi-Fi up, packets going nowhere), not a slow one:
+// treat it as the honest offline state so the cache-fallback path runs and
+// the screen stops showing a skeleton. This was 12s + 0.5s + 5s = 17.5s.
+// Worst case now: STALL_TIMEOUT_MS (stall, no retry), or a fast failure
+// followed by one confirm retry capped at RETRY_CONFIRM_TIMEOUT_MS.
+const STALL_TIMEOUT_MS = 5000;
 
 export async function withNetworkRetry<T>(
   fn: () => PromiseLike<T>,
-  ms = 12000,
+  ms = STALL_TIMEOUT_MS,
   isFailure: (result: T) => boolean = (result) => isNetworkError((result as { error?: unknown } | null)?.error),
 ): Promise<T> {
   let first: T;
@@ -175,6 +188,8 @@ export async function withNetworkRetry<T>(
     first = await withTimeout(fn(), ms);
   } catch (err) {
     if (!isNetworkError(err)) throw err;
+    // A stall is not a blip: retrying a half-open connection only doubles the wait.
+    if ((err as { stalled?: boolean }).stalled) throw err;
     await new Promise(resolve => setTimeout(resolve, RETRY_CONFIRM_DELAY_MS));
     return await withTimeout(fn(), RETRY_CONFIRM_TIMEOUT_MS);
   }

@@ -87,6 +87,17 @@ describe('withNetworkRetry — confirms a failure before trusting it', () => {
     expect(fn).toHaveBeenCalledTimes(2);
   });
 
+  it('a stalled first attempt (our own timer firing) is NOT retried — becomes offline fast', async () => {
+    jest.useFakeTimers();
+    const fn = jest.fn(() => new Promise<never>(() => { /* never settles */ }));
+    const p = withNetworkRetry(fn);
+    const assertion = expect(p).rejects.toThrow('Network timeout after 5000ms');
+    await jest.advanceTimersByTimeAsync(5000);
+    await assertion;
+    expect(fn).toHaveBeenCalledTimes(1);
+    jest.useRealTimers();
+  });
+
   it('a rejected non-network error is never retried and propagates immediately', async () => {
     const fn = jest.fn().mockRejectedValue(new Error('boom — some unrelated bug'));
 
