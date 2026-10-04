@@ -28,7 +28,7 @@ import { useRapportsStore } from '@/stores/rapports';
 import { useEquipeStore } from '@/stores/equipe';
 import { useInvestorStore } from '@/stores/investor';
 import type { MemberProductStake } from '@/src/types';
-import { formatAmount, formatAmountInput, parseAmountInput } from '@/src/utils/format';
+import { formatAmount, formatAmountInput, parseAmountInput, formatAmountValue } from '@/src/utils/format';
 import { debtAgeTier } from '@/src/utils/clientReminder';
 import { supabase } from '@/lib/supabase';
 import { isNetworkError, withTimeout } from '@/lib/sync';
@@ -64,7 +64,7 @@ interface BestSeller {
 }
 
 function fmt(n: number, cur: string) {
-  return `${Math.round(n).toLocaleString('fr-FR')} ${cur}`;
+  return formatAmount(n, cur);
 }
 
 // Same clamped-to-zero "days ago" logic as clients/index.tsx's getDaysAgo —
@@ -251,7 +251,7 @@ export default function AccueilScreen() {
 
   // Helpers: when privacy mode is on, replace money amounts with bullets
   const amtOrMask = (n: number) => isPrivate ? `••••• ${currency}` : fmt(n, currency);
-  const rawOrMask = (n: number) => isPrivate ? '•••••' : n.toLocaleString('fr-FR');
+  const rawOrMask = (n: number) => isPrivate ? '•••••' : formatAmountValue(n, currency);
 
   useEffect(() => {
     if (!userId || !businessId || !isOwner) { setOnboardingDismissed(true); return; }

@@ -14,13 +14,10 @@ import type { Palette } from '@/src/theme';
 import { useAuthStore } from '@/stores/auth';
 import { useRapportsStore, type PeriodReport } from '@/stores/rapports';
 import { useExpensesStore } from '@/stores/expenses';
+import { formatAmount, formatCount } from '@/src/utils/format';
 
 function fmt(n: number, cur: string) {
-  // `|| 0` normalizes a rounded negative zero (e.g. Math.round(-0.4) === -0)
-  // back to plain 0 — otherwise a value that nets out to just-below-zero
-  // could display as "-0 GNF", which reads as a real (wrong) negative amount.
-  const rounded = Math.round(n) || 0;
-  return `${rounded.toLocaleString('fr-FR')} ${cur}`;
+  return formatAmount(n, cur);
 }
 
 // ── Calendar helpers ─────────────────────────────────────────────────────────
@@ -454,7 +451,7 @@ export default function RapportsScreen() {
         />
         <StatCard
           label="Produits vendus" loading={loading}
-          value={`${Math.round(unitsSold).toLocaleString('fr-FR')}`}
+          value={formatCount(unitsSold)}
           accent={palette.primary} bg={palette.primaryLight}
         />
       </View>

@@ -15,7 +15,7 @@ import { OfflineNotice } from '@/src/components/ui/OfflineNotice';
 import { useTheme, spacing, radius } from '@/src/theme';
 import type { Palette } from '@/src/theme';
 import { activeSalesTotals } from '@/src/utils/salesTotals';
-import { formatAmount, formatAmountInput, parseAmountInput } from '@/src/utils/format';
+import { formatAmount, formatAmountInput, parseAmountInput, formatSignedAmount, formatMargin } from '@/src/utils/format';
 import { useAuthStore } from '@/stores/auth';
 import { useVentesStore, type Vente, type EditSaleParams, type SaleEdit } from '@/stores/ventes';
 import { SaleReceiptView, type ReceiptData, type ReceiptItem } from '@/src/components/ui/SaleReceiptView';
@@ -481,7 +481,6 @@ function DetailModal({ sale, currency, businessName, singleVendor, role, onClose
     ? sale.amount_paid
     : sale.total_amount - discount;
   const totalProfit = effectiveRevenue - totalCost;
-  const margin = effectiveRevenue > 0 ? (totalProfit / effectiveRevenue) * 100 : 0;
 
   const showToast = (msg: string) => {
     setToast(msg);
@@ -836,7 +835,7 @@ function DetailModal({ sale, currency, businessName, singleVendor, role, onClose
                       <View style={[styles.row, { paddingTop: spacing[1], borderTopWidth: 1, borderTopColor: palette.border }]}>
                         <Text variant="label">Bénéfice net</Text>
                         <Text variant="label" style={{ color: totalProfit >= 0 ? palette.success : palette.warning }}>
-                          {totalProfit >= 0 ? '+' : ''}{fmt(totalProfit, currency)} ({margin.toFixed(0)}%)
+                          {formatSignedAmount(totalProfit, currency)} ({formatMargin(totalProfit, effectiveRevenue)})
                         </Text>
                       </View>
                     </>

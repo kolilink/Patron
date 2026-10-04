@@ -16,8 +16,9 @@ import { supabase } from '@/lib/supabase';
 import { OfflineNotice } from '@/src/components/ui/OfflineNotice';
 import { SkeletonList } from '@/src/components/ui/SkeletonPlaceholder';
 import { buildDebtReminderMessage, formatDebtAge, debtAgeTier } from '@/src/utils/clientReminder';
+import { formatAmount } from '@/src/utils/format';
 
-function fmt(n: number, cur: string) { return `${Math.round(n).toLocaleString('fr-FR')} ${cur}`; }
+function fmt(n: number, cur: string) { return formatAmount(n, cur); }
 
 // Maps the shared age tier to this screen's actual palette tokens — kept
 // here rather than in clientReminder.ts since that file has no theme context.

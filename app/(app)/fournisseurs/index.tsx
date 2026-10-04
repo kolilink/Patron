@@ -24,7 +24,7 @@ import { toast } from '@/stores/toast';
 import { translateError } from '@/lib/errors';
 import { generateId } from '@/lib/id';
 import { supabase } from '@/lib/supabase';
-import { formatAmountInput, parseAmountInput } from '@/src/utils/format';
+import { formatAmountInput, parseAmountInput, formatAmount } from '@/src/utils/format';
 
 // iOS-only: number-pad/decimal-pad keyboards have no built-in return key, so
 // the OS auto-injects its own floating "Done" pill above the keyboard when
@@ -33,7 +33,7 @@ import { formatAmountInput, parseAmountInput } from '@/src/utils/format';
 // pill without repeating it.
 const DEBT_MODAL_SILENT_ACCESSORY_ID = 'fournisseurs-debt-modal-silent-accessory';
 
-function fmt(n: number, cur: string) { return `${Math.round(n).toLocaleString('fr-FR')} ${cur}`; }
+function fmt(n: number, cur: string) { return formatAmount(n, cur); }
 function todayISO() {
   const d = new Date();
   return `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, '0')}-${String(d.getDate()).padStart(2, '0')}`;

@@ -23,9 +23,9 @@ import { ProofControl } from '@/src/components/ui/ProofControl';
 import { ProofPhotoField, type PickedImage } from '@/src/components/ui/ProofPhotoField';
 import { EmptyState } from '@/src/components/ui/EmptyState';
 import { attachTransactionProof } from '@/lib/proofs';
-import { formatAmountInput, parseAmountInput } from '@/src/utils/format';
+import { formatAmountInput, parseAmountInput, formatAmount } from '@/src/utils/format';
 
-function fmt(n: number, cur: string) { return `${n.toLocaleString('fr-FR')} ${cur}`; }
+function fmt(n: number, cur: string) { return formatAmount(n, cur); }
 function todayIso() {
   const d = new Date();
   return `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, '0')}-${String(d.getDate()).padStart(2, '0')}`;

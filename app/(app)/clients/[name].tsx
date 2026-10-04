@@ -15,7 +15,7 @@ import { useAuthStore } from '@/stores/auth';
 import { useVentesStore } from '@/stores/ventes';
 import { CreditRapideCapture } from '@/src/components/CreditRapideCapture';
 import { supabase } from '@/lib/supabase';
-import { formatAmountInput, parseAmountInput } from '@/src/utils/format';
+import { formatAmountInput, parseAmountInput, formatAmount } from '@/src/utils/format';
 import { useSaveConfirmationStore } from '@/stores/saveConfirmation';
 import { repaymentConfirmation } from '@/src/utils/saveConfirmationCopy';
 import { paymentOverlayCopy } from '@/src/utils/paymentOverlayCopy';
@@ -30,7 +30,7 @@ import { buildDebtReminderMessage, formatDebtAge, debtAgeTier } from '@/src/util
 // always-visible "Confirmer le paiement" footer button.
 const PAYMENT_SHEET_SILENT_ACCESSORY_ID = 'client-ledger-payment-sheet-silent-accessory';
 
-function fmt(n: number, cur: string) { return `${Math.round(n).toLocaleString('fr-FR')} ${cur}`; }
+function fmt(n: number, cur: string) { return formatAmount(n, cur); }
 
 // Maps the shared age tier to this screen's actual palette tokens — kept
 // here rather than in clientReminder.ts since that file has no theme context.
