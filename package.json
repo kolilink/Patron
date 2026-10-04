@@ -18,7 +18,9 @@
     "test:integration": "jest --config jest.integration.config.js",
     "build:android": "node -e \"const fs=require('fs'),f='app.json',j=JSON.parse(fs.readFileSync(f,'utf8')),v=j.expo.version.split('.').map(Number);v[2]++;j.expo.version=v.join('.');fs.writeFileSync(f,JSON.stringify(j,null,2)+'\\n');console.log('Version bumped to '+j.expo.version)\" && eas build --platform android --profile preview",
     "fingerprint:ios": "expo-updates fingerprint:generate --platform ios",
-    "fingerprint:android": "expo-updates fingerprint:generate --platform android"
+    "fingerprint:android": "expo-updates fingerprint:generate --platform android",
+    "test:functions:serve": "supabase functions serve --env-file scripts/test-functions.env",
+    "test:integration:e2e": "E2E_FUNCTIONS=1 jest --config jest.integration.config.js --runInBand --testPathPattern auth-chain"
   },
   "dependencies": {
     "@expo-google-fonts/dm-sans": "^0.4.2",

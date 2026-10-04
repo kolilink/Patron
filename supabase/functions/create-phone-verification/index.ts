@@ -82,6 +82,17 @@ serve(async (req) => {
     );
 
     // ── Demo / App Store review bypass ───────────────────────────────────────
+    // ACCEPTED RISK (documented, not an oversight): Apple/Google reviewers have no
+    // WhatsApp access, so ONE reserved phone number (the DEMO_PHONE /
+    // DEMO_PHONES Supabase secrets — never committed to this repo) skips the
+    // WhatsApp send and rate limits and gets a fixed code. Anyone who learns
+    // that number AND the fixed code can log in as that reviewer account.
+    // Mitigations: the number is unpublished and lives only in Supabase
+    // secrets + App Store Connect review notes; the account is a throwaway
+    // review business with no real data; ROTATE both whenever review ends or
+    // the number may have leaked (update the secret, the demo profile's phone,
+    // and the review notes together). Do NOT write the number or the code in
+    // docs, comments or tests.
     const DEMO_PHONE = Deno.env.get('DEMO_PHONE') ?? '';
     const DEMO_PHONES = (Deno.env.get('DEMO_PHONES') ?? '').split(',').map(p => p.trim()).filter(Boolean);
     const isDemo = (DEMO_PHONE !== '' && phone.trim() === DEMO_PHONE) || DEMO_PHONES.includes(phone.trim());

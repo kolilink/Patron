@@ -9,6 +9,7 @@ const {
   findScreenViolations,
   findUnprotectedFetchViolations,
   findRawModalWithTextInputViolations,
+  findFunctionExposureViolations,
 } = require('../scripts/lib/consistency-checks');
 
 describe('consistency checks', () => {
@@ -44,5 +45,11 @@ describe('consistency checks', () => {
   // raw <Modal> for a form the way "Nouveau produit" originally did.
   it('every <Modal> containing a <TextInput> uses <FormSheet> instead of a raw Modal', () => {
     expect(findRawModalWithTextInputViolations()).toEqual([]);
+  });
+
+  // The batch-v228 bug class: a public function with no auth check and no
+  // REVOKE ... FROM anon is callable by anyone with the public anon key.
+  it('no db/ function is anon-callable without an auth check or a REVOKE FROM anon', () => {
+    expect(findFunctionExposureViolations()).toEqual([]);
   });
 });

@@ -13,6 +13,10 @@ const LOCAL_ANON_KEY = process.env.TEST_SUPABASE_ANON_KEY
 const LOCAL_SERVICE_KEY = process.env.TEST_SUPABASE_SERVICE_KEY
   || 'sb_secret_N7UND0UgjKTVK-Uodkm0Hg_xSvEMPvz';
 
+/** Local stack URL / anon key, for tests that talk to the REST/functions endpoints directly. */
+export const localSupabaseUrl = (): string => LOCAL_URL;
+export const localAnonKey = (): string => LOCAL_ANON_KEY;
+
 export function adminClient(): SupabaseClient {
   return createClient(LOCAL_URL, LOCAL_SERVICE_KEY, {
     auth: { autoRefreshToken: false, persistSession: false },

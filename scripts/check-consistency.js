@@ -12,12 +12,14 @@ const {
   findScreenViolations,
   findUnprotectedFetchViolations,
   findRawModalWithTextInputViolations,
+  findFunctionExposureViolations,
 } = require('./lib/consistency-checks');
 
 const hexViolations = findHexViolations();
 const screenViolations = findScreenViolations();
 const unprotectedFetchViolations = findUnprotectedFetchViolations();
 const rawModalWithTextInputViolations = findRawModalWithTextInputViolations();
+const functionExposureViolations = findFunctionExposureViolations();
 
 let failed = false;
 
@@ -45,9 +47,15 @@ if (rawModalWithTextInputViolations.length) {
   rawModalWithTextInputViolations.forEach(l => console.error(`  ${l}`));
 }
 
+if (functionExposureViolations.length) {
+  failed = true;
+  console.error(`\n✗ Database functions callable by anon with no auth check (${functionExposureViolations.length}) — every function under db/ must REVOKE EXECUTE from anon (naming anon explicitly: REVOKE ... FROM PUBLIC alone does not remove anon's direct grant) or contain an auth check (auth.uid / is_member / get_role / is_founder). See scripts/lib/function-exposure.js:\n`);
+  functionExposureViolations.forEach(l => console.error(`  ${l}`));
+}
+
 if (failed) {
   console.error('');
   process.exit(1);
 }
 
-console.log('✓ Consistency check passed (no hardcoded hex, all screens use <Screen>, all cache-backed store fetches use withTimeout, all form modals use <FormSheet>).');
+console.log('✓ Consistency check passed (no hardcoded hex, all screens use <Screen>, all cache-backed store fetches use withTimeout, all form modals use <FormSheet>, no db/ function is anon-callable without an auth check).');
