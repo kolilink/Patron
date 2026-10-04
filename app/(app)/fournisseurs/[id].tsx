@@ -24,7 +24,7 @@ import {
   type SupplierPayment,
 } from '@/stores/fournisseurs';
 import { supabase } from '@/lib/supabase';
-import { formatAmountInput, parseAmountInput } from '@/src/utils/format';
+import { formatAmountInput, parseAmountInput, formatAmount } from '@/src/utils/format';
 
 // iOS-only: suppresses the OS's auto-injected floating "Done" pill above
 // number-pad/decimal-pad keyboards — the pay form below already has a
@@ -32,7 +32,7 @@ import { formatAmountInput, parseAmountInput } from '@/src/utils/format';
 const PAY_FORM_SILENT_ACCESSORY_ID = 'fournisseurs-id-pay-form-silent-accessory';
 
 function fmt(n: number, cur: string) {
-  return `${Math.round(n).toLocaleString('fr-FR')} ${cur}`;
+  return formatAmount(n, cur);
 }
 
 function digitsOnly(phone: string): string {

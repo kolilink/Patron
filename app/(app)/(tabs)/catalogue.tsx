@@ -40,7 +40,8 @@ import { productConfirmation } from '@/src/utils/saveConfirmationCopy';
 import { useFournisseursStore, type Fournisseur } from '@/stores/fournisseurs';
 import { haptics } from '@/lib/haptics';
 import { toast } from '@/stores/toast';
-import { formatAmount, formatAmountInput, parseAmountInput } from '@/src/utils/format';
+import { perUnitCost, totalInvested, unitProfit } from '@/src/utils/productPricing';
+import { formatAmount, formatAmountInput, parseAmountInput, formatAmountValue, formatSignedAmount } from '@/src/utils/format';
 import { OfflineNotice } from '@/src/components/ui/OfflineNotice';
 import { SkeletonList } from '@/src/components/ui/SkeletonPlaceholder';
 import { activationPriming } from '@/stores/activationPriming';
@@ -48,13 +49,13 @@ import { activationPriming } from '@/stores/activationPriming';
 // ─── Helpers ─────────────────────────────────────────────────────────────────
 
 function formatPrice(amount: number, currency: string) {
-  return `${amount.toLocaleString('fr-FR')} ${currency}`;
+  return formatAmount(amount, currency);
 }
 
 // List rows show the bare number — the currency is declared once above the
 // list instead of repeated on every row (see the "Prix (devise)" header).
-function formatPriceValue(amount: number) {
-  return amount.toLocaleString('fr-FR');
+function formatPriceValue(amount: number, currency: string) {
+  return formatAmountValue(amount, currency);
 }
 
 
@@ -107,7 +108,7 @@ function productToForm(p: Product, currency: string): FormState {
 function totalCost(f: FormState, currency: string): number {
   const qty = Math.max(parseFloat(f.initial_stock) || parseFloat(f.purchase_qty) || 1, 1);
   const fees = parseAmountInput(f.extra_fees, currency);
-  return parseAmountInput(f.purchase_price, currency) + fees / qty;
+  return perUnitCost(parseAmountInput(f.purchase_price, currency), fees, qty);
 }
 
 function validateForm(f: FormState, currency: string): string | null {
@@ -473,7 +474,7 @@ function ProductFormModal({ visible, editing, onClose, onSave, saving, currency,
   const sp = parseAmountInput(form.sale_price, currency);
   const computedCost = totalCost(form, currency);
   const fees = parseAmountInput(form.extra_fees, currency);
-  const liveInvested = qty * pp + fees;
+  const liveInvested = totalInvested(qty, pp, fees);
   const totalVariantStock = variantDraft.reduce((s, v) => s + (v.stock_qty || 0), 0);
   const showLiveCalc = !editing && !hasVariants && liveInvested > 0;
   const showProfitHint = (pp > 0 || computedCost > 0) && sp > 0;
@@ -697,14 +698,14 @@ function ProductFormModal({ visible, editing, onClose, onSave, saving, currency,
       {showLiveCalc && (
         <View style={styles.liveCalcBlock}>
           <Text style={styles.liveCalcText}>
-            Total investi : {liveInvested.toLocaleString('fr-FR')} {currency}
+            Total investi : {formatAmount(liveInvested, currency)}
           </Text>
         </View>
       )}
       {showProfitHint && (
         <View style={styles.liveCalcBlock}>
           <Text style={[styles.liveCalcText, { color: sp > computedCost ? palette.success : palette.warning }]}>
-            Bénéfice : {(sp - computedCost).toLocaleString('fr-FR')} {currency} par pièce
+            Bénéfice : {formatAmount(unitProfit(sp, computedCost), currency)} par pièce
           </Text>
         </View>
       )}
@@ -957,7 +958,7 @@ function ProductStatsModal({ visible, product, onClose, businessId, currency, fe
           <View style={[styles.statsRow, styles.statsRowBorder]}>
             <Text variant="body">Bénéfice</Text>
             <Text variant="body" style={{ fontFamily: 'System', fontWeight: '700', color: profitColor }}>
-              {stats.profit == null ? '—' : `${stats.profit >= 0 ? '+' : ''}${formatAmount(stats.profit, currency)}`}
+              {stats.profit == null ? '—' : formatSignedAmount(stats.profit, currency)}
             </Text>
           </View>
         </Card>
@@ -1076,7 +1077,7 @@ function ArchiveSwitch({ value, onChange }: { value: 'actifs' | 'archives'; onCh
   );
 }
 
-function ProductRow({ product, onPress, onLongPress, archived, variants }: ProductRowProps) {
+function ProductRow({ product, currency, onPress, onLongPress, archived, variants }: ProductRowProps) {
   const { palette } = useTheme();
   const styles = useMemo(() => makeStyles(palette), [palette]);
   const initial = product.name.charAt(0).toUpperCase();
@@ -1138,7 +1139,7 @@ function ProductRow({ product, onPress, onLongPress, archived, variants }: Produ
             style={[styles.priceText, isOutOfStock && { color: palette.textDisabled }]}
             numberOfLines={1}
           >
-            {formatPriceValue(product.sale_price)}
+            {formatPriceValue(product.sale_price, currency)}
           </Text>
           {product.has_variants && (
             <Ionicons name="chevron-forward" size={14} color={palette.textDisabled} />

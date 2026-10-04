@@ -17,7 +17,7 @@ import { getKV, setKV } from '@/lib/db';
 import { haptics } from '@/lib/haptics';
 import { toast } from '@/stores/toast';
 import { trackEvent } from '@/lib/analytics';
-import { formatAmountInput, parseAmountInput } from '@/src/utils/format';
+import { formatAmountInput, parseAmountInput, formatAmount } from '@/src/utils/format';
 import { DatePickerField } from '@/src/components/ui/DatePickerField';
 
 // ── "Nouvelle livraison" — replaces the old "commande" 2-phase flow. ────────
@@ -639,7 +639,7 @@ function QuoiStep({
 
               {parseQty(line.qty) && parseAmountInput(line.unitCost, currency) > 0 && !line.hasVariants && (
                 <Text variant="caption" color="secondary">
-                  Total : {Math.round(parseQty(line.qty)! * parseAmountInput(line.unitCost, currency)).toLocaleString('fr-FR')} {currency}
+                  Total : {formatAmount(parseQty(line.qty)! * parseAmountInput(line.unitCost, currency), currency)}
                 </Text>
               )}
 
@@ -660,7 +660,7 @@ function QuoiStep({
         <View style={styles.checkCard}>
           <View style={styles.checkRow}>
             <Text variant="label">Total</Text>
-            <Text variant="label">{Math.round(linesTotal).toLocaleString('fr-FR')} {currency}</Text>
+            <Text variant="label">{formatAmount(linesTotal, currency)}</Text>
           </View>
         </View>
       </ScrollView>
@@ -737,7 +737,7 @@ function MargeStep({
   const exampleLine = draft.lines.find(l => parseAmountInput(l.unitCost, currency) > 0);
   const exampleCost = exampleLine ? parseAmountInput(exampleLine.unitCost, currency) : 0;
   const exampleSale = exampleCost > 0 ? computedSalePrice(exampleCost) / 100 : 0;
-  const exampleGain = exampleCost > 0 ? Math.round(exampleSale - exampleCost) : 0;
+  const exampleGain = exampleCost > 0 ? exampleSale - exampleCost : 0;
 
   return (
     <>
@@ -762,13 +762,13 @@ function MargeStep({
         {exampleCost > 0 ? (
           <>
             <Text variant="body" color="secondary">
-              Prix d'achat {Math.round(exampleCost).toLocaleString('fr-FR')} → vous vendez à{' '}
+              Prix d'achat {formatAmount(exampleCost, currency)} → vous vendez à{' '}
               <Text variant="body" style={{ color: palette.textPrimary, fontFamily: fontFamily.semibold }}>
-                {Math.round(exampleSale).toLocaleString('fr-FR')} {currency}
+                {formatAmount(exampleSale, currency)}
               </Text>
             </Text>
             <Text variant="body" style={{ color: palette.success, fontFamily: fontFamily.semibold }}>
-              Vous gagnez {exampleGain.toLocaleString('fr-FR')} {currency} par produit.
+              Vous gagnez {formatAmount(exampleGain, currency)} par produit.
             </Text>
           </>
         ) : (
@@ -853,7 +853,7 @@ function ConfirmeStep({ draft, currency, linesTotal, supplierName, onChangeSuppl
       <Text variant="h2" style={{ textAlign: 'center' }}>{itemCount} produit{itemCount > 1 ? 's' : ''} enregistré{itemCount > 1 ? 's' : ''}</Text>
       <Text variant="body" color="secondary" style={{ textAlign: 'center' }}>
         {newProductCount > 0 ? `+${newProductCount} produit${newProductCount > 1 ? 's' : ''} · ` : ''}
-        stock mis à jour · Total {Math.round(linesTotal).toLocaleString('fr-FR')} {currency}
+        stock mis à jour · Total {formatAmount(linesTotal, currency)}
       </Text>
 
       <Pressable onPress={onChangeSupplier} style={[styles.supplierChip, { marginTop: spacing[6] }]}>
