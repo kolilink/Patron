@@ -45,6 +45,8 @@ import { useChatStore } from '@/stores/chat';
 import { useMarketStore } from '@/stores/market';
 import { usePartnershipsStore } from '@/stores/partnerships';
 import { useEquipeStore } from '@/stores/equipe';
+import { useTeamsEnabled } from '@/src/hooks/useTeamsEnabled';
+import { resolveDiscussionsTab } from '@/src/utils/teamsFlag';
 import { useInviterStore } from '@/stores/inviter';
 import { SkeletonList } from '@/src/components/ui/SkeletonPlaceholder';
 import { supabase } from '@/lib/supabase';
@@ -451,6 +453,10 @@ export default function DiscussionsScreen() {
   const businessName = session?.activeBusiness?.name ?? '';
   const role = session?.activeMembership?.role;
   const isAdminOrManager = role === 'administrateur' || role === 'manager';
+  // Team flag (v227): Ma Boutique is the team chat — hidden while false and
+  // the default tab becomes Amis (or Le Marché where Amis isn't offered).
+  // Fail-open: undefined flag → shown. Chat data is never touched.
+  const teamsEnabled = useTeamsEnabled();
   const membres = useEquipeStore(s => s.membres);
 
   // ─── Chat store (Ma Boutique — untouched) ─────────────────────────────────
@@ -489,7 +495,11 @@ export default function DiscussionsScreen() {
 
   // ─── Shared state ─────────────────────────────────────────────────────────
   const { tab: deepLinkTab } = useLocalSearchParams<{ tab?: string }>();
-  const [activeTab, setActiveTab] = useState<Tab>('boutique');
+  const [tabState, setActiveTab] = useState<Tab>('boutique');
+  // Derived, not synced via an effect: while teams are off, 'boutique' can
+  // never be the visible tab (no one-render flash, and a business switch that
+  // flips the flag moves the user off a now-hidden tab automatically).
+  const activeTab: Tab = resolveDiscussionsTab(tabState, teamsEnabled, isAdminOrManager);
 
   // Phase 5 — post-OTP arrival: creer.tsx routes to
   // /discussions?tab=amis after redeeming the invite, so the new user lands
@@ -1052,17 +1062,19 @@ export default function DiscussionsScreen() {
 
         <View style={styles.tabRow}>
           <View style={styles.tabTrack}>
-            <Pressable
-              onPress={() => handleTabChange('boutique')}
-              style={[styles.tabSeg, activeTab === 'boutique' && styles.tabSegActive]}
-            >
-              <View style={styles.tabLabelRow}>
-                <Text style={[styles.tabSegText, activeTab === 'boutique' && styles.tabSegTextActive]}>
-                  Ma Boutique
-                </Text>
-                {boutiqueUnread > 0 && <View style={styles.unreadDot} />}
-              </View>
-            </Pressable>
+            {teamsEnabled && (
+              <Pressable
+                onPress={() => handleTabChange('boutique')}
+                style={[styles.tabSeg, activeTab === 'boutique' && styles.tabSegActive]}
+              >
+                <View style={styles.tabLabelRow}>
+                  <Text style={[styles.tabSegText, activeTab === 'boutique' && styles.tabSegTextActive]}>
+                    Ma Boutique
+                  </Text>
+                  {boutiqueUnread > 0 && <View style={styles.unreadDot} />}
+                </View>
+              </Pressable>
+            )}
             {isAdminOrManager && (
               <Pressable
                 onPress={() => handleTabChange('amis')}

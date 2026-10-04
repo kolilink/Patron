@@ -29,6 +29,7 @@ import { useAuthStore } from '@/stores/auth';
 import { useSupportChatStore } from '@/stores/supportChat';
 import { isFounderPhone } from '@/src/utils/founder';
 import type { Role } from '@/src/types';
+import { isTeamsEnabled } from '@/src/utils/teamsFlag';
 
 const DRAWER_WIDTH = Dimensions.get('window').width * 0.78;
 
@@ -274,7 +275,7 @@ export function BusinessDrawer() {
                   </View>
                   <View style={{ flex: 1 }}>
                     <Text style={styles.bizName} numberOfLines={1}>{name}</Text>
-                    <Text style={styles.roleLabel}>{ROLE_LABEL[m.role]}</Text>
+                    {isTeamsEnabled(m.business) && <Text style={styles.roleLabel}>{ROLE_LABEL[m.role]}</Text>}
                   </View>
                   {isActive && (
                     <Ionicons name="checkmark" size={18} color={palette.primary} />

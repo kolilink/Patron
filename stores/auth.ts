@@ -201,6 +201,8 @@ interface AuthStore {
   logout: () => Promise<void>;
   revokeOtherSessions: () => Promise<boolean>;
   selectBusiness: (businessId: string) => void;
+  /** Best-effort refresh of the active business's teams_enabled flag (v227). Fail-open: never throws, never clears an existing value on error. */
+  refreshTeamsFlag: () => Promise<void>;
   createBusiness: (data: { name: string; type?: string; currency: string; referralCode?: string }) => Promise<void>;
   markFirstRunHeroCompleted: (businessId: string) => Promise<void>;
   joinBusiness: (code: string) => Promise<void>;
@@ -747,6 +749,10 @@ export const useAuthStore = create<AuthStore>((set, get) => ({
     // the OLD business instead of the one just selected.
     void persistSessionCache(nextSession);
     set({ session: nextSession });
+    // The flag rides along with the business record already loaded in
+    // memberships, but that copy can be stale — refresh it for the business
+    // just switched to (best-effort, fail-open).
+    void get().refreshTeamsFlag();
   },
 
   createBusiness: async ({ name, type, currency, referralCode }) => {
@@ -1378,6 +1384,41 @@ export const useAuthStore = create<AuthStore>((set, get) => ({
         ),
       },
     });
+    // Separate, best-effort query (see refreshTeamsFlag) so a server without
+    // the v227 column can never break the subscription refresh above.
+    await get().refreshTeamsFlag();
+  },
+
+  refreshTeamsFlag: async () => {
+    const business = get().session?.activeBusiness;
+    if (!business) return;
+    const businessId = business.id;
+    try {
+      const { data, error } = await withTimeout(
+        supabase.from('businesses').select('teams_enabled').eq('id', businessId).single(),
+      );
+      // Unknown (error, old server without the column, missing row) → leave
+      // whatever we already have. Fail-open: never hide UI on an unknown flag.
+      if (error || !data || typeof data.teams_enabled !== 'boolean') return;
+      const flag: boolean = data.teams_enabled;
+      const cur = get().session;
+      // The user may have switched business while this was in flight.
+      if (!cur?.activeBusiness || cur.activeBusiness.id !== businessId) return;
+      if (cur.activeBusiness.teams_enabled === flag) return;
+      const nextSession: AppSession = {
+        ...cur,
+        activeBusiness: { ...cur.activeBusiness, teams_enabled: flag },
+        memberships: cur.memberships.map(m =>
+          m.business_id === businessId
+            ? { ...m, business: { ...(m.business as Business), teams_enabled: flag } }
+            : m,
+        ),
+      };
+      void persistSessionCache(nextSession);
+      set({ session: nextSession });
+    } catch {
+      // Network failure / timeout — keep the cached value (fail-open).
+    }
   },
 
   clearTrialWelcome: () => set({ showTrialWelcome: false }),
