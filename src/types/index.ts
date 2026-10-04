@@ -79,6 +79,9 @@ export interface Business {
   first_run_hero_completed_at: string | null;
   // Team/test business — excluded from every founder KPI (migration_v209).
   is_test?: boolean;
+  // Team feature flag (migration_v227). Optional on purpose: undefined (old
+  // server / stale cache) must read as "show everything" — see teamsFlag.ts.
+  teams_enabled?: boolean;
   created_at: string;
   updated_at: string;
   created_by: string;

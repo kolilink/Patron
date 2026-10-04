@@ -10,6 +10,7 @@ import { Text } from '@/src/components/ui/Text';
 import { useTheme, spacing, ROLE_COLORS as ROLE_COLORS_LIGHT, ROLE_COLORS_DARK } from '@/src/theme';
 import type { Palette } from '@/src/theme';
 import { useAuthStore } from '@/stores/auth';
+import { useTeamsEnabled } from '@/src/hooks/useTeamsEnabled';
 import { generateFallbackName } from '@/lib/id';
 import { type KnownBusiness, getKnownBusinesses, dismissRemovedBusiness } from '@/lib/knownBusinesses';
 
@@ -73,6 +74,9 @@ export default function PlusScreen() {
   const styles = useMemo(() => makeStyles(palette), [palette]);
   const session = useAuthStore(s => s.session);
   const logout = useAuthStore(s => s.logout);
+  // Team flag (v227): Équipe, Apports and the role badge are team concepts,
+  // hidden while false. Fail-open — see src/utils/teamsFlag.ts.
+  const teamsEnabled = useTeamsEnabled();
   const [removedBusinesses, setRemovedBusinesses] = useState<KnownBusiness[]>([]);
 
   useEffect(() => {
@@ -128,6 +132,7 @@ export default function PlusScreen() {
               {business?.name}
             </Text>
           </View>
+          {teamsEnabled && (
           <View style={styles.bizRow}>
             <View style={[styles.badge, { backgroundColor: roleColor + '20' }]}>
               <Text variant="labelSmall" style={{ color: roleColor }}>
@@ -135,6 +140,7 @@ export default function PlusScreen() {
               </Text>
             </View>
           </View>
+          )}
         </Card>
 
         {/* Vendeur section */}
@@ -143,7 +149,7 @@ export default function PlusScreen() {
             <MenuRow iconName="receipt-outline" label="Mes ventes" onPress={() => router.push('/ventes')} />
             <MenuRow iconName="people-outline" label="Mes clients" onPress={() => router.push('/clients')} />
             <MenuRow iconName="cash-outline" label="Mes dépenses" onPress={() => router.push('/depenses')} />
-            <MenuRow iconName="arrow-down-circle-outline" label="Mes apports" onPress={() => router.push('/apports')} />
+            {teamsEnabled && <MenuRow iconName="arrow-down-circle-outline" label="Mes apports" onPress={() => router.push('/apports')} />}
           </MenuGroup>
         )}
 
@@ -151,7 +157,7 @@ export default function PlusScreen() {
         {isInvestisseur && (
           <MenuGroup>
             <MenuRow iconName="bar-chart-outline" label="Bilan" onPress={() => router.push('/rapports')} />
-            <MenuRow iconName="arrow-down-circle-outline" label="Apports" onPress={() => router.push('/apports')} />
+            {teamsEnabled && <MenuRow iconName="arrow-down-circle-outline" label="Apports" onPress={() => router.push('/apports')} />}
           </MenuGroup>
         )}
 
@@ -166,7 +172,7 @@ export default function PlusScreen() {
             <MenuGroup>
               <MenuRow iconName="bar-chart-outline" label="Bilan" onPress={() => router.push('/rapports')} />
               <MenuRow iconName="cash-outline" label="Dépenses" onPress={() => router.push('/depenses')} />
-              <MenuRow iconName="arrow-down-circle-outline" label="Apports" onPress={() => router.push('/apports')} />
+              {teamsEnabled && <MenuRow iconName="arrow-down-circle-outline" label="Apports" onPress={() => router.push('/apports')} />}
             </MenuGroup>
 
             <MenuGroup>
@@ -178,7 +184,7 @@ export default function PlusScreen() {
         {/* Team + settings — admin only */}
         {isAdmin && (
           <MenuGroup>
-            <MenuRow iconName="people-outline" label="Équipe" onPress={() => router.push('/equipe')} />
+            {teamsEnabled && <MenuRow iconName="people-outline" label="Équipe" onPress={() => router.push('/equipe')} />}
             <MenuRow iconName="settings-outline" label="Paramètres" onPress={() => router.push('/parametres')} />
           </MenuGroup>
         )}
