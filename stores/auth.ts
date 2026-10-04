@@ -1177,13 +1177,19 @@ export const useAuthStore = create<AuthStore>((set, get) => ({
       const { data: { user } } = await supabase.auth.getUser();
       if (!user) throw new Error('Session introuvable');
 
+      // The client NEVER writes profiles.phone (migration_v228 pins it in RLS):
+      // upgrade_anonymous_user() takes the phone from this user's completed
+      // verification server-side and sets it itself. Only non-sensitive
+      // defaults are upserted here.
       await supabase.from('profiles').upsert(
-        { id: user.id, name: '', email: '', phone: phone.trim(), language: 'fr' },
+        { id: user.id, name: '', email: '', language: 'fr' },
         { onConflict: 'id', ignoreDuplicates: false },
       );
 
-      // Lift anonymous flag so RLS policies that block anonymous users allow this user through.
-      await supabase.rpc('upgrade_anonymous_user');
+      // Lift anonymous flag (and set the verified phone) — refused server-side
+      // unless this user has a completed phone verification.
+      const { error: upgradeErr } = await supabase.rpc('upgrade_anonymous_user');
+      if (upgradeErr) throw upgradeErr;
       // Refresh the JWT so the new is_anonymous=false claim takes effect immediately.
       const { data: refreshData } = await supabase.auth.refreshSession();
       if (refreshData.session) void saveBioRefreshToken(refreshData.session.refresh_token);

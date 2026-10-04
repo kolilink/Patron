@@ -49,3 +49,6 @@ yarn-error.*
 
 # supabase CLI generated temp files (tracked by mistake earlier — ignore, don't delete)
 supabase/.temp/
+
+# Production dumps taken before deploys (contain real data) — never commit
+backups/

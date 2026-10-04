@@ -246,7 +246,10 @@ function findRawModalWithTextInputViolations() {
   return violations;
 }
 
+const { findFunctionExposureViolations } = require('./function-exposure');
+
 module.exports = {
+  findFunctionExposureViolations,
   findHexViolations,
   findScreenViolations,
   findUnprotectedFetchViolations,
