@@ -32,7 +32,9 @@ import { formatAmount, formatAmountInput, parseAmountInput } from '@/src/utils/f
 import { debtAgeTier } from '@/src/utils/clientReminder';
 import { supabase } from '@/lib/supabase';
 import { isNetworkError, withTimeout } from '@/lib/sync';
-import { saveDashboardKpiCache, getDashboardKpiCache, getKV, setKV } from '@/lib/db';
+import { saveDashboardKpiCache, getDashboardKpiCache, saveBestSellersCache, getBestSellersCache, getKV, setKV } from '@/lib/db';
+import { computeLocalKpis as kpisFromLocalState } from '@/src/utils/salesTotals';
+import { computeBestSellersDelta, mergeBestSellers, type OverlaySale } from '@/lib/pendingOverlay';
 import { SkeletonKpiGrid } from '@/src/components/ui/SkeletonPlaceholder';
 import { haptics } from '@/lib/haptics';
 import { toast } from '@/stores/toast';
@@ -206,7 +208,9 @@ export default function AccueilScreen() {
   const { fetchMemberScope } = useEquipeStore();
   const { balance, payouts, saving: investorSaving, fetchBalance, fetchPayouts, requestPayout } = useInvestorStore();
   const [kpis, setKpis] = useState<KPIs | null>(null);
-  const [bestSellers, setBestSellers] = useState<BestSeller[]>([]);
+  // Raw server (or cached) month ranking, before pending-sale deltas and the
+  // >= 2 filter — `bestSellers` below is derived from this + the overlay.
+  const [bestSellersBase, setBestSellersBase] = useState<BestSeller[]>([]);
   const [loading, setLoading] = useState(true);
   const [isOffline, setIsOffline] = useState(false);
   const [investorScope, setInvestorScope] = useState<MemberProductStake[]>([]);
@@ -337,7 +341,7 @@ export default function AccueilScreen() {
       // Show skeleton immediately when switching businesses so stale data
       // from the previous business never shows alongside new-business content.
       setLoading(true);
-      setBestSellers([]);
+      setBestSellersBase([]);
       setKpis(null);
       const cachedKpis = await getDashboardKpiCache(businessId) as KPIs | null;
       if (cachedKpis) {
@@ -420,24 +424,13 @@ export default function AccueilScreen() {
   // attempted — the network is strictly a background refresh from here on.
   const computeLocalKpis = async (): Promise<KPIs> => {
     const cached = await getDashboardKpiCache(businessId) as KPIs | null;
-    const now = new Date();
-    const today = `${now.getFullYear()}-${String(now.getMonth() + 1).padStart(2, '0')}-${String(now.getDate()).padStart(2, '0')}`;
-    const sales = useVentesStore.getState().sales;
-    const todaySales = sales.filter(s => (s.sale_date ?? s.created_at.split('T')[0]) === today && s.status !== 'annule');
-    const creditSales = sales.filter(s => s.status === 'credit');
     const { products: pOffline, variantsByProduct: vOffline } = useProductStore.getState();
-    return {
-      revenue_today: todaySales.filter(s => !s.is_credit).reduce((sum, s) => sum + s.total_amount - (s.discount_amount ?? 0), 0),
-      revenue_yesterday: cached?.revenue_yesterday ?? 0,
-      revenue_month: cached?.revenue_month ?? 0,
-      sales_today: todaySales.length,
-      credit_total: creditSales.reduce((sum, s) => sum + (s.total_amount - (s.discount_amount ?? 0) - (s.amount_paid ?? 0)), 0),
-      credit_count: new Set(creditSales.map(s => s.customer_name).filter(Boolean)).size + creditSales.filter(s => !s.customer_name).length,
-      low_stock: pOffline.filter(p => !p.has_variants && p.reorder_level > 0 && p.stock_qty <= p.reorder_level).length
-        + Object.values(vOffline).flat().filter(v => v.reorder_level > 0 && v.stock_qty <= v.reorder_level).length,
-      expenses_month: cached?.expenses_month ?? 0,
-      first_sale_at: cached?.first_sale_at ?? null,
-    };
+    return kpisFromLocalState({
+      cached,
+      sales: useVentesStore.getState().sales,
+      products: pOffline,
+      variantsByProduct: vOffline,
+    });
   };
 
   const loadKpis = async () => {
@@ -485,26 +478,46 @@ export default function AccueilScreen() {
     const now = new Date();
     const monthStart = `${now.getFullYear()}-${String(now.getMonth() + 1).padStart(2, '0')}-01`;
 
-    const { data, error: bsErr } = await withTimeout(
-      supabase.rpc('get_best_sellers', {
-        p_business_id: businessId,
-        p_month_start: monthStart,
-        p_limit: 5,
-      }),
-    );
-    if (bsErr) throw bsErr;
+    // Local-first, same as loadKpis: show the last cached base immediately.
+    // A failed/offline refresh below must leave it on screen — it used to
+    // simply throw, and the section vanished whenever the network did.
+    const cachedBase = await getBestSellersCache(businessId) as BestSeller[] | null;
+    if (cachedBase) setBestSellersBase(cachedBase);
 
-    setBestSellers(
-      (data ?? [])
-        .map((r: BestSeller) => ({
-          product_id: r.product_id,
-          product_name: r.product_name,
-          total_qty: Number(r.total_qty),
-          total_revenue: Number(r.total_revenue) / 100,
-        }))
-        .filter((bs: BestSeller) => bs.total_qty >= 2),
-    );
+    try {
+      const { data, error: bsErr } = await withTimeout(
+        supabase.rpc('get_best_sellers', {
+          p_business_id: businessId,
+          p_month_start: monthStart,
+          p_limit: 5,
+        }),
+      );
+      if (bsErr) {
+        if (isNetworkError(bsErr)) return;
+        throw bsErr;
+      }
+      const base: BestSeller[] = (data ?? []).map((r: BestSeller) => ({
+        product_id: r.product_id,
+        product_name: r.product_name,
+        total_qty: Number(r.total_qty),
+        total_revenue: Number(r.total_revenue) / 100,
+      }));
+      setBestSellersBase(base);
+      void saveBestSellersCache(businessId, base);
+    } catch (err) {
+      if (!isNetworkError(err)) throw err;
+    }
   };
+
+  // displayed = base + delta from still-pending sales (useVentesStore.sales
+  // already carries the outbox overlay), so an offline sale shows up too.
+  const bestSellers = useMemo<BestSeller[]>(() => {
+    const now = new Date();
+    const monthStart = `${now.getFullYear()}-${String(now.getMonth() + 1).padStart(2, '0')}-01`;
+    const known = new Set(products.map(p => p.id));
+    const deltas = computeBestSellersDelta(ventesSales as unknown as OverlaySale[], monthStart, known);
+    return mergeBestSellers(bestSellersBase, deltas);
+  }, [bestSellersBase, ventesSales, products]);
 
   const lowStock = kpis?.low_stock ?? 0;
 

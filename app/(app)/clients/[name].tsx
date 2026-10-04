@@ -22,6 +22,7 @@ import { paymentOverlayCopy } from '@/src/utils/paymentOverlayCopy';
 import { saveClientLedgerCache, getClientLedgerCache } from '@/lib/db';
 import { isNetworkError, withTimeout } from '@/lib/sync';
 import { OfflineNotice } from '@/src/components/ui/OfflineNotice';
+import { selectClientSales, clientBalance } from '@/src/utils/salesTotals';
 import { buildDebtReminderMessage, formatDebtAge, debtAgeTier } from '@/src/utils/clientReminder';
 
 // iOS-only: suppresses the OS's auto-injected floating "Done" pill above
@@ -475,13 +476,7 @@ export default function ClientLedgerScreen() {
   };
 
   const clientSales = useMemo(() => {
-    const name = isClientId ? displayName : routeParam;
-    return sales.filter(s =>
-      s.status !== 'annule' &&
-      (isClientId
-        ? s.client_id === routeParam || (s.client_id == null && name && s.customer_name === name)
-        : s.customer_name === routeParam)
-    );
+    return selectClientSales(sales, routeParam, isClientId, displayName);
   }, [sales, routeParam, isClientId, displayName]);
 
   const creditSales = useMemo(
@@ -505,7 +500,6 @@ export default function ClientLedgerScreen() {
     return Math.max(0, Math.floor((Date.now() - new Date(oldest + 'T00:00:00').getTime()) / 86400000));
   }, [creditSales]);
 
-  const totalSold = clientSales.reduce((s, v) => s + v.total_amount - (v.discount_amount ?? 0), 0);
   // Known, disclosed Phase-1 limitation (offline-first rewrite, §6): unlike
   // totalSold (derived from `sales`, which stores/ventes.ts's
   // refreshPendingOverlay keeps correct for a still-pending credit debt),
@@ -519,8 +513,7 @@ export default function ClientLedgerScreen() {
   // display lag is real, separate scope, not attempted here — deliberately
   // not risked as a quick patch to this money-display calculation without
   // the ability to verify it on a real device in this environment.
-  const totalPaid = ledgerPayments.reduce((s, p) => s + p.amount, 0);
-  const totalOwed = Math.max(0, totalSold - totalPaid);
+  const { totalSold, totalPaid, totalOwed } = clientBalance(clientSales, ledgerPayments);
 
   // The carnet page — one row per real entry, newest first. Cash ('paye')
   // sales are deliberately excluded entirely, not just hidden: a cash sale

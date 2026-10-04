@@ -869,6 +869,18 @@ export async function getDashboardKpiCache(businessId: string): Promise<unknown 
   }
 }
 
+// Best-sellers base snapshot (Accueil). Stored in dashboard_kpi_cache under a
+// prefixed key — same table, encryption and logout wipe, no new migration.
+export async function saveBestSellersCache(businessId: string, rows: unknown): Promise<void> {
+  try {
+    await writeCache({ table: 'dashboard_kpi_cache', keyCol: 'business_id', keyValue: 'bestsellers:' + businessId, json: JSON.stringify(rows), hashKey: 'bestsellers:' + businessId });
+  } catch { }
+}
+
+export async function getBestSellersCache(businessId: string): Promise<unknown | null> {
+  return getDashboardKpiCache('bestsellers:' + businessId);
+}
+
 // ─── Rapports snapshot cache ────────────────────────────────────────────────────
 
 export async function saveRapportsCache(businessId: string, snapshot: unknown): Promise<void> {

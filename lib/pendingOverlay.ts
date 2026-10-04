@@ -383,3 +383,69 @@ export async function rebuildPendingOverlay(baseline: OverlaySale[], ctx: Overla
 
   return { sales, corrupt };
 }
+
+export interface BestSellerDelta {
+  product_id: string;
+  product_name: string;
+  qty: number;
+  revenue: number;
+}
+
+// What still-unsynced NEW sales add to the month's best-sellers ranking.
+// Pure: takes the already-overlaid sales list (rows flagged `_pending`),
+// never reads the queue itself. Only sales dated on/after `monthStart`
+// (YYYY-MM-DD) and not cancelled count, matching get_best_sellers' window.
+// Revenue is qty * unit_price in display units (same basis as the RPC's
+// total_revenue / 100). Lines for products not in `knownProductIds` (the
+// is_system placeholders: "Solde reporté", "Vente rapide") are skipped,
+// as the RPC excludes them.
+//
+// TODO(Phase 1 — unify, do not duplicate): this is a stopgap. The main
+// Phase 1 work adds a `topSellers` map to the SHARED report-delta builder;
+// when that lands, Accueil must consume that builder's topSellers instead of
+// this function (and mergeBestSellers below). Two implementations of the
+// same "what do pending sales add to the ranking" logic WILL drift. Delete
+// this pair then; do not extend it.
+export function computeBestSellersDelta(
+  sales: OverlaySale[],
+  monthStart: string,
+  knownProductIds: Set<string>,
+): BestSellerDelta[] {
+  const byProduct = new Map<string, BestSellerDelta>();
+  for (const sale of sales) {
+    if (!sale._pending || sale.status === 'annule') continue;
+    if ((sale.sale_date ?? sale.created_at.split('T')[0]) < monthStart) continue;
+    for (const line of sale.lines ?? []) {
+      if (!knownProductIds.has(line.product_id)) continue;
+      const cur = byProduct.get(line.product_id)
+        ?? { product_id: line.product_id, product_name: line.product_name, qty: 0, revenue: 0 };
+      cur.qty += line.qty;
+      cur.revenue += line.qty * line.unit_price;
+      byProduct.set(line.product_id, cur);
+    }
+  }
+  return [...byProduct.values()];
+}
+
+export interface BestSellerRow {
+  product_id: string;
+  product_name: string;
+  total_qty: number;
+  total_revenue: number;
+}
+
+// base (server/cached month ranking) + pending deltas -> what Accueil shows:
+// qty >= 2 only, revenue-descending, top 5. See the TODO on
+// computeBestSellersDelta — same stopgap, same removal.
+export function mergeBestSellers(base: BestSellerRow[], deltas: BestSellerDelta[]): BestSellerRow[] {
+  const merged = new Map<string, BestSellerRow>(base.map(b => [b.product_id, { ...b }]));
+  for (const d of deltas) {
+    const cur = merged.get(d.product_id);
+    if (cur) { cur.total_qty += d.qty; cur.total_revenue += d.revenue; }
+    else merged.set(d.product_id, { product_id: d.product_id, product_name: d.product_name, total_qty: d.qty, total_revenue: d.revenue });
+  }
+  return [...merged.values()]
+    .filter(b => b.total_qty >= 2)
+    .sort((a, b) => b.total_revenue - a.total_revenue)
+    .slice(0, 5);
+}

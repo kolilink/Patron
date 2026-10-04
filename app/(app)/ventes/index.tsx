@@ -14,6 +14,7 @@ import { DatePickerField } from '@/src/components/ui/DatePickerField';
 import { OfflineNotice } from '@/src/components/ui/OfflineNotice';
 import { useTheme, spacing, radius } from '@/src/theme';
 import type { Palette } from '@/src/theme';
+import { activeSalesTotals } from '@/src/utils/salesTotals';
 import { formatAmount, formatAmountInput, parseAmountInput } from '@/src/utils/format';
 import { useAuthStore } from '@/stores/auth';
 import { useVentesStore, type Vente, type EditSaleParams, type SaleEdit } from '@/stores/ventes';
@@ -130,8 +131,7 @@ function buildSummaryLine(all: Vente[], filtered: Vente[], filter: string, curre
 
   switch (filter) {
     case 'all': {
-      const total = active.reduce((s, v) => s + v.total_amount - (v.discount_amount ?? 0), 0);
-      const n = active.length;
+      const { count: n, total } = activeSalesTotals(all);
       const c = creditSales.length;
       return `${n} vente${n !== 1 ? 's' : ''} · ${fmt(total, currency)} · ${c} en dette`;
     }
