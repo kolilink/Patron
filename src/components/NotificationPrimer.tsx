@@ -10,7 +10,7 @@ function primerShownKey(userId: string): string {
 interface Props {
   userId: string;
   // Parent only sets this true once there's real context to prime with
-  // (activeBusiness exists, not demo mode) — mirrors why the raw OS dialog
+  // (activeBusiness exists) — mirrors why the raw OS dialog
   // used to fire wrong: asking before the user has seen any value at all.
   active: boolean;
   // True from the moment this component might still show itself through to

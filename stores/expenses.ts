@@ -149,7 +149,7 @@ export const useExpensesStore = create<ExpensesStore>((set, get) => ({
       // Notify admins/managers when a vendeur submits an expense pending approval
       if (!isManager) {
         const _session = useAuthStore.getState().session;
-        if (_session && !_session.isDemoMode) {
+        if (_session) {
           const currency = _session.activeBusiness?.currency ?? 'GNF';
           notifyEvent({
             businessId,

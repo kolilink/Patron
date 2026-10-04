@@ -282,7 +282,6 @@ export default function AccueilScreen() {
   // empty, this requires it not to be.
   useEffect(() => {
     if (!userId || !businessId || !isOwner) return;
-    if (session?.isDemoMode) return;
     if (onboardingDismissed !== true) return; // wait until fully dismissed
     const ageMs = business?.created_at ? Date.now() - new Date(business.created_at).getTime() : Infinity;
     if (ageMs > 7 * 24 * 60 * 60 * 1000) return;
@@ -1117,7 +1116,7 @@ export default function AccueilScreen() {
           <PaymentReminderAsker
             businessId={businessId}
             userId={userId}
-            active={isOwner && !session?.isDemoMode}
+            active={isOwner}
             blocked={showQuickCapture || showDebtCapture}
             onDenied={() => setDebtDeniedRefresh(n => n + 1)}
           />

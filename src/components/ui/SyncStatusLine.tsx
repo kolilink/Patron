@@ -3,7 +3,6 @@ import { Animated, StyleSheet, View } from 'react-native';
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
 import { Text } from '@/src/components/ui/Text';
 import { useTheme, spacing } from '@/src/theme';
-import { useAuthStore } from '@/stores/auth';
 import { useSyncStore } from '@/stores/sync';
 import { getQueueSnapshot } from '@/lib/db';
 import { computeSyncStatusLabel } from '@/src/components/ui/syncStatusLabel';
@@ -40,7 +39,6 @@ export function SyncStatusLine() {
   const pendingCount = useSyncStore(s => s.pendingCount);
   const syncing = useSyncStore(s => s.syncing);
   const lastSyncedAt = useSyncStore(s => s.lastSyncedAt);
-  const isDemoMode = useAuthStore(s => s.session?.isDemoMode ?? false);
 
   // Oldest pending item's queued_at — the only way to know whether the
   // 7-day escalation copy applies. Re-checked whenever pendingCount
@@ -95,7 +93,7 @@ export function SyncStatusLine() {
         onLayout={e => setBarHeight(e.nativeEvent.layout.height)}
         style={[
           styles.bar,
-          { paddingTop: (isDemoMode ? 0 : insets.top) + spacing[1] },
+          { paddingTop: insets.top + spacing[1] },
         ]}
       >
         <Text variant="caption" style={{ color: palette.textSecondary }}>{committedLabel ?? ''}</Text>

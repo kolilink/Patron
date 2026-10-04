@@ -13,7 +13,6 @@ import { ActivationForkOverlay } from '@/src/components/ActivationForkOverlay';
 import { NotificationPrimer } from '@/src/components/NotificationPrimer';
 import { AppToastContainer } from '@/src/components/ui/AppToast';
 import { SaveConfirmation } from '@/src/components/ui/SaveConfirmation';
-import { DemoBanner } from '@/src/components/ui/DemoBanner';
 import { NotificationSetup } from '@/src/components/NotificationSetup';
 import { ActivationPrimingSheet } from '@/src/components/ActivationPrimingSheet';
 import { Text } from '@/src/components/ui/Text';
@@ -131,7 +130,6 @@ export default function AppLayout() {
   if (activeBusinessId !== heroCheckedBusinessId) {
     setHeroCheckedBusinessId(activeBusinessId);
     const eligible = !!activeBusinessId && !!activeBusinessForHero
-      && !(session?.isDemoMode ?? false)
       && !activeBusinessForHero.first_run_hero_completed_at
       && session?.activeMembership?.role === 'administrateur';
     setHeroBusinessId(eligible ? activeBusinessId : null);
@@ -507,10 +505,9 @@ export default function AppLayout() {
   if (!session) return <Redirect href="/(welcome)/" />;
 
   const activeBusiness = session.activeBusiness;
-  const isDemoMode = session.isDemoMode ?? false;
   // First-run hero action ("Qui vous doit de l'argent ?") — the very first
   // thing a brand-new business should see, ahead of even NotificationPrimer.
-  // Eligibility (business flag unset, administrateur, not demo mode) was
+  // Eligibility (business flag unset, administrateur) was
   // already decided once, above, into heroBusinessId the moment this
   // business became active — this line only checks whether THIS render's
   // active business is the one currently latched open, never re-derives
@@ -524,7 +521,6 @@ export default function AppLayout() {
   return (
     <>
       <NotificationSetup />
-      <DemoBanner />
       <SyncStatusLine />
       <Stack screenOptions={{ headerShown: false, animation: 'slide_from_right' }} />
 
@@ -547,7 +543,7 @@ export default function AppLayout() {
         <>
           <NotificationPrimer
             userId={session.user.id}
-            active={!!activeBusiness && !isDemoMode}
+            active={!!activeBusiness}
             onBlockingChange={setNotifPrimerBlocking}
           />
           {PAYWALL_ENABLED && showTrialWelcome && activeBusiness && (

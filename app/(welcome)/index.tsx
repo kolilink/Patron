@@ -14,10 +14,7 @@ export default function WelcomeScreen() {
   const { palette } = useTheme();
   const styles = useMemo(() => makeStyles(palette), [palette]);
   const session = useAuthStore(s => s.session);
-  const loading = useAuthStore(s => s.loading);
-  const startDemoMode = useAuthStore(s => s.startDemoMode);
   const error = useAuthStore(s => s.error);
-  const clearError = useAuthStore(s => s.clearError);
 
   useEffect(() => {
     if (!session) return;
@@ -61,15 +58,6 @@ export default function WelcomeScreen() {
               label="Se connecter"
               variant="ghost"
               onPress={() => router.push('/(welcome)/connexion')}
-              fullWidth
-            />
-          )}
-          {!session && (
-            <Button
-              label="Essayer Patron"
-              variant="ghost"
-              onPress={() => { clearError(); startDemoMode(); }}
-              loading={loading}
               fullWidth
             />
           )}

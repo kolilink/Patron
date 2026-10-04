@@ -36,7 +36,7 @@ interface Props {
 // on an empty dashboard right after "Ouvrir mon commerce". Soft gate, per
 // business: see markFirstRunHeroCompleted (stores/auth.ts) for how it's
 // persisted and CLAUDE.md for the full policy (backfill, invite-join
-// carve-out, demo-mode exclusion). Deliberately its own minimal flow, not a
+// carve-out). Deliberately its own minimal flow, not a
 // reuse of CreditRapideCapture — no client picker (nobody exists yet on a
 // brand-new business), no Vente/Crédit toggle, no phone field. Reuses only
 // the underlying save (submitCarnetDebt) and the same "upsert a client by

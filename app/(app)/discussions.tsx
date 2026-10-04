@@ -1033,27 +1033,6 @@ export default function DiscussionsScreen() {
   const isAdmin = role === 'administrateur';
   const canPost = isAdmin || userLevel >= 2;
 
-  if (session?.isDemoMode) {
-    return (
-      <Screen style={{ justifyContent: 'center', alignItems: 'center', gap: spacing[4], paddingHorizontal: spacing[8] }}>
-        <Text style={{ fontSize: 36 }}>💬</Text>
-        <Text variant="h3" style={{ textAlign: 'center' }}>Les discussions sont réservées aux vrais commerces</Text>
-        <Text variant="body" color="secondary" style={{ textAlign: 'center', lineHeight: 22 }}>
-          Créez votre commerce gratuitement pour discuter avec votre équipe et rejoindre la communauté Patron.
-        </Text>
-        <Pressable
-          onPress={() => router.push('/(welcome)/creer')}
-          style={{ backgroundColor: palette.primary, borderRadius: 14, paddingVertical: spacing[4], paddingHorizontal: spacing[8], marginTop: spacing[2] }}
-        >
-          <Text style={{ color: palette.textInverse, fontWeight: '700', fontSize: 16 }}>Sauvegarder ma boutique →</Text>
-        </Pressable>
-        <Pressable onPress={() => router.back()}>
-          <Text variant="bodySmall" color="secondary">Retour</Text>
-        </Pressable>
-      </Screen>
-    );
-  }
-
   return (
     <KeyboardAvoidingView
       style={{ flex: 1, backgroundColor: palette.background }}
