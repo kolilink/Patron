@@ -9,11 +9,10 @@
 import { randomUUID } from 'crypto';
 import { createHash } from 'crypto';
 import { createTestUser, createTestBusiness, anonClient, adminClient } from './helpers';
-import { assertLocalDb, q } from './pg';
+import { assertLocalDb, q, becomeFounder, resignFounder } from './pg';
 
 beforeAll(() => assertLocalDb());
 
-const FOUNDER_PHONE = '+12672421843'; // src/utils/founder.ts (is_founder() matches on these digits)
 const RLS = /row-level security|Unauthorized/i;
 
 const bytes = (tag: string) => Buffer.from(`${tag}-${randomUUID()}`);
@@ -136,13 +135,13 @@ describe('message-images — support/{conversation_id | business_id}/…', () =>
   it('the founder (profile phone) can read and upload support images across businesses', async () => {
     const w = await world();
     const { client: founder, userId: fId } = await createTestUser('founder');
-    await adminClient().from('profiles').update({ phone: FOUNDER_PHONE }).eq('id', fId);
+    await becomeFounder(fId);
     const original = bytes('support');
     const p = `support/${w.convA}/${randomUUID()}.jpg`;
     expect((await put(w.a, 'message-images', p, original)).error).toBeNull();
     expect(md5((await fetchBytes(founder, 'message-images', p))!)).toBe(md5(original));
     expect((await put(founder, 'message-images', `support/${w.convA}/${randomUUID()}.jpg`, bytes('reply'))).error).toBeNull();
-    await adminClient().from('profiles').update({ phone: null }).eq('id', fId); // leave no founder behind
+    await resignFounder(fId); // leave no founder behind
   });
 });
 

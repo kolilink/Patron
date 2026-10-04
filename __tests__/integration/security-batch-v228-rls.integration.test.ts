@@ -2,12 +2,11 @@
 // Every rejection asserts the exact RLS error AND that the row is unchanged.
 import { randomUUID } from 'crypto';
 import { createTestUser, createTestBusiness, addMember, adminClient } from './helpers';
-import { assertLocalDb, q } from './pg';
+import { assertLocalDb, q, becomeFounder, resignFounder } from './pg';
 
 beforeAll(() => assertLocalDb());
 
 const RLS = expect.objectContaining({ code: '42501', message: expect.stringContaining('row-level security') });
-const FOUNDER_PHONE = '+12672421843';
 
 describe('D1 — market_posts: an author edits title/content only', () => {
   async function post() {
@@ -62,7 +61,7 @@ describe('D1 — market_posts: an author edits title/content only', () => {
   it('moderation / counters are untouched: the founder pin RPC and the like RPC still work', async () => {
     const { id } = await post();
     const founder = await createTestUser('founder');
-    await adminClient().from('profiles').update({ phone: FOUNDER_PHONE }).eq('id', founder.userId);
+    await becomeFounder(founder.userId);
     const pin = await founder.client.rpc('pin_market_post', { p_post_id: id, p_pinned: true });
     expect([pin.error, pin.data]).toEqual([null, true]);
     expect((await row(id)).is_pinned).toBe(true);
@@ -73,7 +72,7 @@ describe('D1 — market_posts: an author edits title/content only', () => {
     const like = await liker.client.rpc('toggle_post_like', { p_post_id: id });
     expect(like.error).toBeNull();
     expect((await row(id)).likes_count).toBe(1);
-    await adminClient().from('profiles').update({ phone: null }).eq('id', founder.userId);
+    await resignFounder(founder.userId);
   });
 });
 
