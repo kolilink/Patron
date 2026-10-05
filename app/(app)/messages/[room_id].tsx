@@ -33,6 +33,8 @@ import { notifyEvent } from '@/src/utils/notifications';
 import { translateError } from '@/lib/errors';
 import { generateId } from '@/lib/id';
 import type { ChatMessage } from '@/src/types';
+import { FAILURE_COPY } from '@/src/utils/failureCopy';
+import { failAlert } from '@/src/components/ui/FailureView';
 
 // expo-av's native module only exists once the app has been rebuilt with this
 // dependency linked in — requiring it eagerly would crash older binaries that
@@ -41,6 +43,7 @@ function getAudio(): typeof Audio | null {
   try {
     return require('expo-av').Audio;
   } catch {
+    // failure: silent — stored JSON unreadable: treated as empty
     return null;
   }
 }
@@ -167,6 +170,7 @@ export default function DmChatScreen() {
       setMessages((data ?? []) as ChatMessage[]);
       setLoading(false);
     } catch {
+      // failure: speaks — load failed: loadError state renders the failure view
       setLoading(false);
       setLoadError(true);
     }
@@ -264,9 +268,10 @@ export default function DmChatScreen() {
         });
       }
     } catch (err) {
+      // failure: speaks — send failed: message restored in the box + inline error
       setMessages(prev => prev.filter(m => m.id !== optimisticId));
       setText(content);
-      setSendError(translateError(err, 'Message non envoyé'));
+      setSendError(translateError(err, FAILURE_COPY.messageNotSent.what));
     } finally {
       setSending(false);
     }
@@ -284,8 +289,10 @@ export default function DmChatScreen() {
         shareStockToggle,
       );
       setShowSettings(false);
-    } catch {
-      // silent
+    } catch (err) {
+      // failure: speaks — partner settings: failAlert
+      // The sheet stays open with her entries; one action re-fires the save.
+      failAlert('partnerSettingsNotSaved', { err });
     } finally {
       setSettingsSaving(false);
     }
@@ -315,7 +322,9 @@ export default function DmChatScreen() {
       setRecDuration(0);
       setRecAmplitudes([]);
       recTimerRef.current = setInterval(() => setRecDuration(d => d + 1), 1000);
-    } catch { /* permission denied or hardware error */ }
+    } catch {
+      // failure: silent — mic permission / hardware error: the OS owns the permission prompt
+    }
   };
 
   const stopRecording = async (send: boolean) => {
@@ -356,7 +365,8 @@ export default function DmChatScreen() {
         notifyEvent({ businessId: partnerBizId, eventType: 'chat_message', payload: { sender: businessName, preview: `Message vocal · ${mins}:${secs}`, route: `/(app)/messages/${room_id}?partnership_id=${partnership_id}` }, targetRoles: ['administrateur', 'manager'], excludeUserId: userId });
       }
     } catch (err) {
-      setSendError(translateError(err, 'Impossible d\'envoyer le message vocal'));
+      // failure: speaks — voice message: inline error
+      setSendError(translateError(err, FAILURE_COPY.voiceMessageNotSent.what));
     } finally {
       setSending(false);
     }
@@ -390,7 +400,8 @@ export default function DmChatScreen() {
         notifyEvent({ businessId: partnerBizId, eventType: 'chat_message', payload: { sender: businessName, preview: 'Photo', route: `/(app)/messages/${room_id}?partnership_id=${partnership_id}` }, targetRoles: ['administrateur', 'manager'], excludeUserId: userId });
       }
     } catch (err) {
-      setSendError(translateError(err, 'Impossible d\'envoyer l\'image'));
+      // failure: speaks — image message: inline error
+      setSendError(translateError(err, FAILURE_COPY.imageMessageNotSent.what));
     } finally {
       setSending(false);
     }
@@ -401,8 +412,9 @@ export default function DmChatScreen() {
     try {
       await removePartner(partnership_id, businessId);
       router.back();
-    } catch {
-      // silent
+    } catch (err) {
+      // failure: speaks — remove partner: failAlert + Réessayer
+      failAlert('partnerNotRemoved', { err, label: 'Réessayer', onPress: () => { void handleRemovePartner(); } });
     }
   }, [partnership_id, businessId, removePartner]);
 

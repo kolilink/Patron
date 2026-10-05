@@ -14,6 +14,7 @@ import type { ConsumerInvite } from '@/stores/inviter';
 import { trackEvent } from '@/lib/analytics';
 import { haptics } from '@/lib/haptics';
 import { toast } from '@/stores/toast';
+import { FAILURE_COPY } from '@/src/utils/failureCopy';
 
 // ─── Invitations — Phase 6 code-hygiene surface ────────────────────────────
 //
@@ -99,7 +100,8 @@ export default function InvitationsScreen() {
             trackEvent('invite_sent', businessId, userId, { source: 'invitations_screen' });
             await Share.share({ message });
         } catch {
-            toast.warning("Impossible d'ouvrir le partage");
+          // failure: speaks — share sheet failed to open: shareNotOpened toast
+            toast.warning(FAILURE_COPY.shareNotOpened.what);
         } finally {
             setSharing(false);
         }

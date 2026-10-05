@@ -23,6 +23,7 @@ import { isSep, buildGroupedItems } from '@/src/lib/chatGrouping';
 import { haptics } from '@/lib/haptics';
 import type { GroupedItem } from '@/src/lib/chatGrouping';
 import type { AlphaMessage } from '@/src/types';
+import { FAILURE_COPY } from '@/src/utils/failureCopy';
 
 // buildGroupedItems clusters by `sender_id` — Alpha only has two "senders"
 // (the user and the assistant), so `role` doubles as the grouping key.
@@ -241,8 +242,9 @@ export default function AlphaScreen() {
       setText(t => (t.trim() ? `${t.trim()} ${data.text}` : data.text));
       inputRef.current?.focus();
     } catch {
+      // failure: speaks — voice transcription failed: inline voiceNotTranscribed
       haptics.warning();
-      setVoiceError('Transcription impossible — réessayez.');
+      setVoiceError(FAILURE_COPY.voiceNotTranscribed.what);
     } finally {
       setIsTranscribing(false);
     }

@@ -13,6 +13,7 @@ import { useAuthStore } from '@/stores/auth';
 import { toast } from '@/stores/toast';
 import { useCountdown } from '@/src/hooks/useCountdown';
 import { getKV, setKV } from '@/lib/db';
+import { FAILURE_COPY } from '@/src/utils/failureCopy';
 
 const LAST_EMAIL_KEY = 'last_login_email';
 const RESEND_COOLDOWN_SECONDS = 60;
@@ -21,7 +22,8 @@ async function openScheme(url: string) {
   try {
     await Linking.openURL(url);
   } catch {
-    toast.warning("Impossible d'ouvrir l'application mail");
+    // failure: speaks — mail app did not open: mailNotOpened toast
+    toast.warning(FAILURE_COPY.mailNotOpened.what);
   }
 }
 
@@ -37,6 +39,7 @@ async function openMailAppFallback() {
       await Linking.openURL(url);
       return;
     } catch {
+      // failure: control-flow — tries the next candidate mail scheme
       // try the next candidate
     }
   }

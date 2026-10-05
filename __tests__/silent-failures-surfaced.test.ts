@@ -47,7 +47,8 @@ describe('Phase 3 — silent failures surfaced on mutating actions', () => {
         expect(src).toMatch(/const ok = await removeMembre\(membre\.id\);[\s\S]*?toast\.warning\(useEquipeStore\.getState\(\)\.error/);
         expect(src).toMatch(/revokeCode\(item\.id\)\.then\(ok\s*=>\s*\{[\s\S]*?toast\.warning\(useEquipeStore\.getState\(\)\.error/);
         expect(src).toMatch(/const ok = await updateScopeAll\(membre\.id,\s*val\);/);
-        expect(src).toMatch(/toast\.warning\(useEquipeStore\.getState\(\)\.error \?\? 'Impossible de modifier l\\'accès'\)/);
+        // Phase 4: failures speak in the one vocabulary (what + one action), not a bare toast.
+        expect(src).toMatch(/showFailureAlert\(buildFailure\(\{\s*what: FAILURE_COPY\.memberStakesNotSaved\.what/);
     });
 
     it('catalogue.tsx adjustStock returns boolean and shows success only on ok', () => {
@@ -62,15 +63,15 @@ describe('Phase 3 — silent failures surfaced on mutating actions', () => {
 
     it('catalogue.tsx handleSave surfaces failure toast', () => {
         const src = readSource('app/(app)/(tabs)/catalogue.tsx');
-        expect(src).toMatch(/toast\.warning\(useProductStore\.getState\(\)\.error \?\? 'Impossible d\\'enregistrer le produit'\)/);
+        expect(src).toMatch(/showFailureAlert\(buildFailure\(\{[\s\S]*?FAILURE_COPY\.productNotSaved\.what/);
     });
 
     it('marche/[id].tsx and discussions.tsx surface addComment/editMessage failures', () => {
         const marche = readSource('app/(app)/marche/[id].tsx');
-        expect(marche).toMatch(/catch\s*\{\s*\n\s*haptics\.error\(\);\s*\n\s*toast\.warning\('Impossible de publier le commentaire'\);/);
+        expect(marche).toMatch(/haptics\.error\(\);\s*setText\(trimmed\);\s*failAlert\('commentNotPublished'\);/);
 
         const disc = readSource('app/(app)/discussions.tsx');
-        expect(disc).toMatch(/catch\s*\{\s*\n\s*haptics\.error\(\);\s*\n\s*toast\.warning\('Impossible de modifier le message\. Réessayez\.'\);/);
+        expect(disc).toMatch(/haptics\.error\(\);[\s\S]*?failAlert\('messageNotEdited'\);/);
     });
 
     it('fournisseurs/index.tsx surfaces createDebt failure', () => {

@@ -23,6 +23,11 @@ import { toast } from '@/stores/toast';
 import { checkNotificationPermission, requestNotificationPermission } from '@/src/components/NotificationSetup';
 import { toUnicodeBold } from '@/src/utils/format';
 import type { Business } from '@/src/types';
+import { showFailureAlert } from '@/src/components/ui/FailureView';
+import { buildFailure } from '@/src/utils/failure';
+import { FAILURE_COPY, NO_CONNECTION_MESSAGE } from '@/src/utils/failureCopy';
+import { NO_CONNECTION_WHY, serverSentence } from '@/src/utils/failure';
+import { failAlert } from '@/src/components/ui/FailureView';
 
 // Must match the list in creer.tsx — all currencies we support
 const CURRENCIES = ['GNF', 'XOF', 'XAF', 'NGN', 'GHS', 'MAD', 'DZD', 'TND', 'EGP', 'KES', 'ZAR', 'ETB', 'AED', 'SAR', 'USD', 'EUR', 'GBP', 'CNY', 'CAD', 'CHF', 'INR'];
@@ -54,8 +59,10 @@ async function extractFnError(fnErr: unknown): Promise<string | null> {
   try {
     const body = await (fnErr as { context?: { json?: () => Promise<{ error?: string }> } }).context?.json?.();
     if (body?.error) return body.error;
-  } catch { /* fall through to generic message below */ }
-  return 'Erreur de réseau. Vérifiez votre connexion.';
+  } catch {
+    // failure: control-flow — unreadable function body: falls through to the safe generic sentence
+  }
+  return NO_CONNECTION_MESSAGE;
 }
 
 // A Supabase/Postgres error is either one of our own deliberate RAISE
@@ -131,7 +138,7 @@ export default function ParametresScreen() {
     const { error } = await supabase.from('profiles').update({ notify_on_every_sale: value }).eq('id', userId);
     if (error) {
       setNotifyEverySale(!value);
-      toast.warning('Vérifiez votre connexion et réessayez.');
+      failAlert('settingNotChanged', { why: NO_CONNECTION_WHY, label: 'Réessayer', onPress: () => { void handleToggleNotifyEverySale(value); } });
       return;
     }
     useAuthStore.setState(state =>
@@ -339,10 +346,17 @@ export default function ParametresScreen() {
             try {
               ({ error } = await supabase.rpc('leave_or_delete_business', { p_business_id: business.id }));
             } catch (err) {
+              // failure: control-flow — normalises a thrown error into the same shape as a returned one; shown via failAlert, P0001 only
               error = err instanceof Error ? { message: err.message } : { message: String(err) };
             }
             if (error) {
-              Alert.alert('Erreur', rpcErrorMessage(error, "Ça n'a pas fonctionné. Écrivez-nous si ça continue :)"));
+              // Server-authored French sentences (e.g. "remove the other members first") reach her verbatim as the reason.
+              const reason = serverSentence(error);
+              showFailureAlert(buildFailure({
+                what: FAILURE_COPY.leaveNotDone.what,
+                why: reason,
+                action: { label: reason ? 'Retour' : 'Réessayer', onPress: reason ? () => {} : () => handleQuitterPress() },
+              }));
               return;
             }
 
@@ -396,7 +410,7 @@ export default function ParametresScreen() {
               haptics.success();
               toast.success('Les autres appareils ont été déconnectés');
             } else {
-              toast.warning('Vérifiez votre connexion et réessayez.');
+              failAlert('otherDevicesNotSignedOut', { why: NO_CONNECTION_WHY });
             }
           },
         },
@@ -413,7 +427,7 @@ export default function ParametresScreen() {
       .eq('business_id', business.id).neq('user_id', userId);
 
     if (error) {
-      toast.warning('Vérifiez votre connexion et réessayez.');
+      failAlert('leaveNotDone', { why: NO_CONNECTION_WHY });
       return;
     }
 
@@ -477,7 +491,7 @@ export default function ParametresScreen() {
       const sendErr = await extractFnError(fnErr) ?? data?.error;
       if (sendErr || !data?.verificationId) {
         setDeleting(false);
-        toast.warning("Impossible d'envoyer le code. Réessayez.");
+        failAlert('codeNotSent', { label: 'Réessayer', onPress: () => handleDeleteAccount() });
         return;
       }
 
@@ -485,11 +499,12 @@ export default function ParametresScreen() {
       setDeleting(false);
       setDeleteAccountStep('otp');
     } catch {
+      // failure: speaks — delete account: failAlert, no connection
       // A thrown exception (e.g. a network timeout) here must never leave
       // `deleting` stuck true with no feedback — same posture as every other
       // bare-await-in-an-action-flow fix (see CLAUDE.md's withTimeout() sweep).
       setDeleting(false);
-      toast.warning('Vérifiez votre connexion et réessayez.');
+      failAlert('deleteAccountNotDone', { why: NO_CONNECTION_WHY });
     }
   };
 
@@ -523,7 +538,7 @@ export default function ParametresScreen() {
         // on the common path, not a race where membership changed in between.
         // Anything else (a raw infrastructure error) is translated, never shown raw.
         resetDeleteFlow();
-        Alert.alert('Suppression impossible', rpcErrorMessage(error, "Ça n'a pas fonctionné. Écrivez-nous si ça continue :)"));
+        failAlert('deleteAccountNotDone', { why: serverSentence(error) });
         return;
       }
 
@@ -533,11 +548,12 @@ export default function ParametresScreen() {
         [{ text: 'OK', onPress: async () => { await useAuthStore.getState().logout(); } }],
       );
     } catch {
+      // failure: speaks — delete account OTP step: inline
       // A thrown exception (e.g. a network timeout, whether during the OTP
       // check or the delete RPC itself) must never leave `deleting` stuck
       // true nor the OTP screen silent with no feedback.
       setDeleting(false);
-      setDeleteOtpError('Vérifiez votre connexion et réessayez.');
+      setDeleteOtpError(`${FAILURE_COPY.deleteAccountNotDone.what} ${NO_CONNECTION_WHY}`);
       setDeleteOtpKey(k => k + 1);
     }
   };
@@ -558,6 +574,7 @@ export default function ParametresScreen() {
     try {
       ({ error } = await supabase.rpc('leave_or_delete_business', { p_business_id: business.id }));
     } catch (err) {
+      // failure: control-flow — normalises a thrown error into the returned-error shape, shown via failAlert
       // A thrown exception (e.g. a network timeout) must be treated the
       // same as a returned {error} — otherwise `deleting` is left stuck
       // true forever with no message shown, on a genuinely destructive flow.

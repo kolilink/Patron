@@ -419,6 +419,7 @@ export default function AppLayout() {
         // failed_permanent/failed_corrupt items is §9's job (the staleness
         // proxy + a Paramètres line), not a merchant-facing alert.
       } catch (err) {
+        // failure: silent — background sync tick: the sync status line and Hors ligne header speak; console.warn only
         console.warn('[sync] trySync error:', err);
       }
     };

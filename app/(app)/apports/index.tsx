@@ -22,6 +22,7 @@ import { useEquipeStore, type Membre } from '@/stores/equipe';
 import { useAportsStore, type Apport } from '@/stores/apports';
 import { haptics } from '@/lib/haptics';
 import { toast } from '@/stores/toast';
+import { FAILURE_COPY } from '@/src/utils/failureCopy';
 
 // iOS-only: suppresses the OS's auto-injected floating "Done" pill above
 // the numeric keyboard — this form already has a persistent, always-
@@ -491,7 +492,8 @@ export default function AportsScreen() {
         });
         await fetchApports(businessId);
       } catch {
-        toast.warning('Enregistré, mais l\'image n\'a pas pu être jointe');
+        // failure: speaks — record saved, photo not attached: proofNotAttached toast
+        toast.warning(`${FAILURE_COPY.proofNotAttached.what} ${FAILURE_COPY.proofNotAttached.why}`);
       }
     }
 

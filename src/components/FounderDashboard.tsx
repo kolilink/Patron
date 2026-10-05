@@ -23,6 +23,9 @@ import {
   type FounderKpis,
   type HealthStatus,
 } from '@/src/utils/founderKpis';
+import { showFailureAlert } from '@/src/components/ui/FailureView';
+import { buildFailure, failureReason } from '@/src/utils/failure';
+import { FAILURE_COPY } from '@/src/utils/failureCopy';
 
 // Founder-only measurement screen — the 7 blocks of the measurement spec
 // (docs/measurement.md): North Star, funnel, activation + TTFV, retention,
@@ -83,7 +86,7 @@ export function FounderDashboard() {
           text: 'Marquer test',
           onPress: async () => {
             const { error: e } = await supabase.rpc('set_business_is_test', { p_business_id: row.business_id, p_is_test: true });
-            if (e) Alert.alert('Erreur', translateError(e, 'Impossible de modifier'));
+            if (e) showFailureAlert(buildFailure({ what: FAILURE_COPY.testFlagNotChanged.what, why: failureReason(e), action: { label: 'Retour', onPress: () => {} } }));
             else reload();
           },
         },

@@ -2,6 +2,7 @@ import { create } from 'zustand';
 import { trackEvent } from '@/lib/analytics';
 import { supabase } from '@/lib/supabase';
 import { translateError } from '@/lib/errors';
+import { NO_CONNECTION_MESSAGE } from '@/src/utils/failureCopy';
 import { isNetworkError, withTimeout } from '@/lib/sync';
 import { notifyEvent } from '@/src/utils/notifications';
 import { useAuthStore } from '@/stores/auth';
@@ -66,6 +67,8 @@ interface InviterStore {
     friends: ConsumerFriend[];
     loading: boolean;
     error: string | null;
+    /** Machine-readable failure kind — callers branch on THIS, never on the human copy in `error`. */
+    errorCode: 'network' | 'invalid' | null;
 
     createInvite: () => Promise<{ id: string; token: string; code: string; expires_at: string } | null>;
     fetchMyInvites: () => Promise<void>;
@@ -82,6 +85,7 @@ export const useInviterStore = create<InviterStore>((set, get) => ({
     friends: [],
     loading: false,
     error: null,
+    errorCode: null,
 
     createInvite: async () => {
         set({ loading: true, error: null });
@@ -111,7 +115,7 @@ export const useInviterStore = create<InviterStore>((set, get) => ({
             }));
             return invite;
         } catch (err) {
-            const msg = isNetworkError(err) ? 'Erreur de réseau. Vérifiez votre connexion.' : "Impossible de créer l'invitation";
+            const msg = isNetworkError(err) ? NO_CONNECTION_MESSAGE : "Impossible de créer l'invitation";
             set({ loading: false, error: msg });
             return null;
         }
@@ -154,7 +158,7 @@ export const useInviterStore = create<InviterStore>((set, get) => ({
                     .filter(i => i.status !== 'revoked'),
             });
         } catch (err) {
-            set({ loading: false, error: isNetworkError(err) ? 'Erreur de réseau. Vérifiez votre connexion.' : 'Impossible de charger vos invitations' });
+            set({ loading: false, error: isNetworkError(err) ? NO_CONNECTION_MESSAGE : 'Impossible de charger vos invitations' });
         }
     },
 
@@ -181,7 +185,7 @@ export const useInviterStore = create<InviterStore>((set, get) => ({
                 })),
             });
         } catch (err) {
-            set({ error: isNetworkError(err) ? 'Erreur de réseau. Vérifiez votre connexion.' : 'Impossible de charger vos amis' });
+            set({ error: isNetworkError(err) ? NO_CONNECTION_MESSAGE : 'Impossible de charger vos amis' });
         }
     },
 
@@ -204,13 +208,13 @@ export const useInviterStore = create<InviterStore>((set, get) => ({
             }
             return revoked;
         } catch (err) {
-            set({ error: isNetworkError(err) ? 'Erreur de réseau. Vérifiez votre connexion.' : "Impossible de révoquer l'invitation" });
+            set({ error: isNetworkError(err) ? NO_CONNECTION_MESSAGE : "Impossible de révoquer l'invitation" });
             return false;
         }
     },
 
     resolveInvite: async (token, code) => {
-        set({ error: null });
+        set({ error: null, errorCode: null });
         try {
             // Attempt logging is its own top-level RPC so a failed guess is
             // actually rate-limited — a raise inside resolve_consumer_invite
@@ -222,7 +226,7 @@ export const useInviterStore = create<InviterStore>((set, get) => ({
             await withTimeout(supabase.rpc('record_invite_attempt'));
             const { data, error } = await withTimeout(supabase.rpc('resolve_consumer_invite', { p_token: token, p_code: code }));
             if (error) {
-                set({ error: translateError(error, 'Invitation invalide') });
+                set({ error: translateError(error, 'Invitation invalide'), errorCode: isNetworkError(error) ? 'network' : 'invalid' });
                 return null;
             }
             const result = data as { inviter_id: string; inviter_name: string; newly_used?: boolean };
@@ -247,7 +251,7 @@ export const useInviterStore = create<InviterStore>((set, get) => ({
             }
             return result;
         } catch (err) {
-            set({ error: isNetworkError(err) ? 'Erreur de réseau. Vérifiez votre connexion.' : 'Invitation invalide' });
+            set({ error: isNetworkError(err) ? NO_CONNECTION_MESSAGE : 'Invitation invalide', errorCode: isNetworkError(err) ? 'network' : 'invalid' });
             return null;
         }
     },

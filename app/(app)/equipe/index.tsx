@@ -28,6 +28,9 @@ import { haptics } from '@/lib/haptics';
 import { formatAmount, formatAmountInput, parseAmountInput } from '@/src/utils/format';
 import { toast } from '@/stores/toast';
 import type { Role, MemberProductStake, Product } from '@/src/types';
+import { showFailureAlert } from '@/src/components/ui/FailureView';
+import { buildFailure, failureReason } from '@/src/utils/failure';
+import { FAILURE_COPY } from '@/src/utils/failureCopy';
 
 // iOS-only: suppresses the OS's auto-injected floating "Done" pill above
 // the numeric keyboard — the payout sheet's "Confirmer le paiement" button
@@ -268,7 +271,11 @@ function MemberDetailSheet({
       haptics.success();
     } else {
       haptics.error();
-      toast.warning(useEquipeStore.getState().error ?? 'Impossible de modifier l\'accès');
+      showFailureAlert(buildFailure({
+        what: FAILURE_COPY.memberStakesNotSaved.what,
+        why: failureReason(useEquipeStore.getState().error),
+        action: { label: 'Réessayer', onPress: () => { void handleToggleScopeAll(val); } },
+      }));
     }
   };
 
@@ -289,7 +296,11 @@ function MemberDetailSheet({
       setDraftStakes(draft);
     } else {
       haptics.error();
-      toast.warning(useEquipeStore.getState().error ?? 'Erreur de mise à jour');
+      showFailureAlert(buildFailure({
+        what: FAILURE_COPY.memberStakesNotSaved.what,
+        why: failureReason(useEquipeStore.getState().error),
+        action: { label: 'Réessayer', onPress: () => { void handleSaveScope(ids); } },
+      }));
     }
   };
 
@@ -304,7 +315,11 @@ function MemberDetailSheet({
       haptics.success();
     } else {
       haptics.error();
-      toast.warning(useEquipeStore.getState().error ?? 'Erreur de mise à jour');
+      showFailureAlert(buildFailure({
+        what: FAILURE_COPY.memberStakesNotSaved.what,
+        why: failureReason(useEquipeStore.getState().error),
+        action: { label: 'Réessayer', onPress: () => { void handleSaveStakeEdits(); } },
+      }));
     }
   };
 
@@ -322,7 +337,11 @@ function MemberDetailSheet({
             setScope(rows);
           } else {
             haptics.error();
-            toast.warning(useEquipeStore.getState().error ?? 'Erreur de suppression');
+            showFailureAlert(buildFailure({
+              what: FAILURE_COPY.memberStakeNotRemoved.what,
+              why: failureReason(useEquipeStore.getState().error),
+              action: { label: 'Réessayer', onPress: () => { void removeScopeProduct(membre.id, productId).then(async ok2 => { if (ok2) setScope(await fetchMemberScope(membre.id)); }); } },
+            }));
           }
         },
       },

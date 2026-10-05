@@ -2,6 +2,7 @@ import { useEffect, useMemo, useRef, useState } from 'react';
 import { Alert, FlatList, KeyboardAvoidingView, Platform, Pressable, StyleSheet, TextInput, View } from 'react-native';
 import * as ImagePicker from 'expo-image-picker';
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
+import { failAlert } from '@/src/components/ui/FailureView';
 import { Screen } from '@/src/components/ui/Screen';
 import { router, useLocalSearchParams } from 'expo-router';
 import { Ionicons } from '@expo/vector-icons';
@@ -77,7 +78,9 @@ export default function SupportInboxDetailScreen() {
     try {
       await sendFounderReply({ conversationId: id, content: founderDraft.draft_content, usedAiDraft: true });
     } catch {
+      // failure: speaks — founder reply: failAlert + Réessayer
       haptics.error();
+      failAlert('founderReplyNotSent', { label: 'Réessayer', onPress: () => { void handleSendAsIs(); } });
     } finally {
       sendingRef.current = false;
       setSending(false);
@@ -94,7 +97,9 @@ export default function SupportInboxDetailScreen() {
       setText('');
       setUsedDraft(false);
     } catch {
+      // failure: speaks — founder reply: failAlert + Réessayer
       haptics.error();
+      failAlert('founderReplyNotSent', { label: 'Réessayer', onPress: () => { void handleSend(); } });
     } finally {
       sendingRef.current = false;
       setSending(false);
@@ -115,7 +120,9 @@ export default function SupportInboxDetailScreen() {
         sourceHeight: asset.height,
       });
     } catch {
+      // failure: speaks — founder image: failAlert
       haptics.error();
+      failAlert('imageMessageNotSent');
     }
   };
 

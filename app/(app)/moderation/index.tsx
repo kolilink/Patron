@@ -105,6 +105,7 @@ export default function ModerationScreen() {
                             toast.success('Auteur bloqué.');
                             setActive(null);
                         } catch {
+                          // failure: speaks — the store already surfaced the translated failure toast
                             // The store already surfaced a toast with the translated error.
                         }
                     },

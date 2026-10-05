@@ -109,6 +109,7 @@ async function loadDraft(businessId: string): Promise<Draft | null> {
     if (Date.now() - d.createdAt > DRAFT_MAX_AGE_MS) { await setKV(draftKey(businessId), ''); return null; }
     return d;
   } catch {
+    // failure: silent — draft JSON unreadable: no draft
     return null;
   }
 }

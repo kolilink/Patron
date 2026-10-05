@@ -2,6 +2,7 @@ import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { FlatList, InteractionManager, KeyboardAvoidingView, Platform, Pressable, StyleSheet, TextInput, View } from 'react-native';
 import * as ImagePicker from 'expo-image-picker';
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
+import { failAlert } from '@/src/components/ui/FailureView';
 import { Screen } from '@/src/components/ui/Screen';
 import { router, useFocusEffect } from 'expo-router';
 import { Ionicons } from '@expo/vector-icons';
@@ -33,7 +34,9 @@ function RatingPrompt({ conversationId }: { conversationId: string }) {
       haptics.success();
       setSubmitted(true);
     } catch {
+      // failure: speaks — rating: failAlert + Réessayer
       haptics.error();
+      failAlert('ratingNotSent', { label: 'Réessayer', onPress: () => { void handleRate(rating); } });
     } finally {
       setSubmitting(null);
     }

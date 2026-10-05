@@ -25,6 +25,8 @@ import { generateFallbackName } from '@/lib/id';
 import { PostActionsMenu } from '@/src/components/ui/PostActionsMenu';
 import { PseudoSheet } from '@/src/components/ui/PseudoSheet';
 import type { MarketComment, MarketPost } from '@/src/types';
+import { FAILURE_COPY } from '@/src/utils/failureCopy';
+import { failAlert } from '@/src/components/ui/FailureView';
 
 const LOCALE = Intl.DateTimeFormat().resolvedOptions().locale;
 
@@ -343,8 +345,9 @@ export default function PostDetailScreen() {
       haptics.success();
       setShowEdit(false);
     } catch {
+      // failure: speaks — post edit: inline postNotEdited
       haptics.error();
-      setEditError('Impossible de modifier le post');
+      setEditError(FAILURE_COPY.postNotEdited.what);
     } finally {
       setEditSaving(false);
     }
@@ -364,8 +367,10 @@ export default function PostDetailScreen() {
       await addComment(id, parentId, trimmed);
       haptics.success();
     } catch {
+      // failure: speaks — comment: text restored + failAlert
       haptics.error();
-      toast.warning('Impossible de publier le commentaire');
+      setText(trimmed);
+      failAlert('commentNotPublished');
     }
   };
 

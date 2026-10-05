@@ -56,6 +56,8 @@ import { PostActionsMenu } from '@/src/components/ui/PostActionsMenu';
 import { ConductBanner, ComposerReminder } from '@/src/components/ui/ConductBanner';
 import { PseudoSheet } from '@/src/components/ui/PseudoSheet';
 import type { ChatMessage, MarketPost, MarketCategory } from '@/src/types';
+import { FAILURE_COPY } from '@/src/utils/failureCopy';
+import { failAlert } from '@/src/components/ui/FailureView';
 
 // expo-av's native module only exists once the app has been rebuilt with this
 // dependency linked in — requiring it eagerly would crash older binaries that
@@ -64,6 +66,7 @@ function getAudio(): typeof Audio | null {
   try {
     return require('expo-av').Audio;
   } catch {
+    // failure: silent — stored JSON unreadable: treated as empty
     return null;
   }
 }
@@ -813,8 +816,8 @@ export default function DiscussionsScreen() {
       setAddPartnerSuccess(`Demande envoyée à ${partnerName} !`);
       setPartnerCodeInput('');
     } catch (err: unknown) {
-      const msg = err instanceof Error ? err.message : 'Erreur lors de l\'envoi';
-      setAddPartnerError(msg);
+      // failure: speaks — partner request not sent: inline error
+      setAddPartnerError(friendlyMessage(err, FAILURE_COPY.partnerRequestNotSent.what));
     } finally {
       setAddPartnerLoading(false);
     }
@@ -824,8 +827,9 @@ export default function DiscussionsScreen() {
     try {
       await acceptRequest(partnershipId, businessId, businessName, requesterBusinessId);
       await loadPartnerships(businessId, userId);
-    } catch {
-      // silent — user can retry
+    } catch (err) {
+      // failure: speaks — accept request: failAlert + Réessayer
+      failAlert('requestNotAccepted', { err, label: 'Réessayer', onPress: () => { void handleAcceptRequest(partnershipId, requesterBusinessId, requesterName); } });
     }
   }, [businessId, businessName, userId, acceptRequest, loadPartnerships]);
 
@@ -835,8 +839,9 @@ export default function DiscussionsScreen() {
       // now notifies the requester (partnership_declined) and, via
       // migration_v216, the requester may re-request after the 7-day cooldown.
       await declineRequest(partnershipId, businessId, businessName, requesterBusinessId);
-    } catch {
-      // silent
+    } catch (err) {
+      // failure: speaks — decline request: failAlert + Réessayer
+      failAlert('requestNotDeclined', { err, label: 'Réessayer', onPress: () => { void handleDeclineRequest(partnershipId, requesterBusinessId); } });
     }
   }, [businessId, businessName, declineRequest]);
 
@@ -851,7 +856,7 @@ export default function DiscussionsScreen() {
     try {
       const result = await redeemCode(redeemCodeInput);
       if (!result) {
-        setRedeemCodeError('Ce code ne fonctionne pas. Vérifie et réessaie.');
+        setRedeemCodeError(FAILURE_COPY.codeNotWorking.what);
         return;
       }
       // Success: the joiner now sees the inviter. Refetch the friend list so
@@ -860,7 +865,8 @@ export default function DiscussionsScreen() {
       setRedeemCodeInput('');
       setShowRedeemCode(false);
     } catch {
-      setRedeemCodeError('Ce code ne fonctionne pas. Vérifie et réessaie.');
+      // failure: speaks — invite code redemption: inline codeNotWorking
+      setRedeemCodeError(FAILURE_COPY.codeNotWorking.what);
     } finally {
       setRedeemCodeLoading(false);
     }
@@ -923,6 +929,7 @@ export default function DiscussionsScreen() {
       recTimerRef.current = setInterval(() => setRecDuration(d => d + 1), 1000);
       haptics.tap();
     } catch {
+      // failure: silent — mic permission / device error: the OS owns the permission prompt
       // Permission denied or device error — silent
     }
   };
@@ -936,7 +943,9 @@ export default function DiscussionsScreen() {
 
     try {
       await rec.stopAndUnloadAsync();
-    } catch { /* already stopped */ }
+    } catch {
+      // failure: silent — recorder already stopped: nothing to report
+    }
 
     await getAudio()?.setAudioModeAsync({ allowsRecordingIOS: false, playsInSilentModeIOS: true });
 
@@ -976,8 +985,12 @@ export default function DiscussionsScreen() {
         await editMessage(msg.id, trimmed);
         haptics.success();
       } catch {
+        // failure: speaks — message edit: edit restored in the box + failAlert
         haptics.error();
-        toast.warning('Impossible de modifier le message. Réessayez.');
+        // Her edit is put back in the box so nothing has to be retyped.
+        setText(trimmed);
+        setEditingMsg(msg);
+        failAlert('messageNotEdited');
       }
       return;
     }
@@ -1032,11 +1045,12 @@ export default function DiscussionsScreen() {
       haptics.success();
       closeNewPost();
     } catch (err) {
+      // failure: speaks — publish: inline friendlyMessage
       haptics.error();
       // Phase 3 — the server's non-punitive rate-limit sentence
       // ("Doucement — vous pourrez republier dans X minutes.") and the
       // Phase 5 identity gate are shown verbatim, never rephrased.
-      setPostError(friendlyMessage(err, 'Impossible de publier. Réessayez.'));
+      setPostError(friendlyMessage(err, FAILURE_COPY.postNotPublished.what));
     }
   };
 
@@ -1452,7 +1466,9 @@ export default function DiscussionsScreen() {
                               const { getOrCreateDmRoom } = usePartnershipsStore.getState();
                               const roomId = await getOrCreateDmRoom(p.partnership_id, businessId);
                               router.push(`/(app)/messages/${roomId}?partnership_id=${p.partnership_id}`);
-                            } catch { /* silent */ }
+                            } catch (err) {
+                              // failure: speaks — open DM room: failAlert
+                              failAlert('conversationNotOpened', { err }); }
                           }}
                         >
                           <View style={[styles.amisAvatar, { backgroundColor: `${palette.primary}22` }]}>
