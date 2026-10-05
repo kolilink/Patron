@@ -1,5 +1,6 @@
 import { serve } from 'https://deno.land/std@0.177.0/http/server.ts';
 import { createClient } from 'https://esm.sh/@supabase/supabase-js@2';
+import { bearerMatches } from '../_shared/webhook-auth.ts';
 
 // RevenueCat webhooks authenticate via a static Authorization header
 // (configured in the RevenueCat dashboard's webhook settings), not a
@@ -44,7 +45,9 @@ serve(async (req) => {
   }
 
   const auth = req.headers.get('Authorization');
-  if (!webhookAuthHeader || auth !== `Bearer ${webhookAuthHeader}`) {
+  // Constant-time compare (a plain !== leaks, via response time, how many leading
+  // characters of a guessed secret were right). Fails closed if the secret is unset.
+  if (!bearerMatches(auth, webhookAuthHeader)) {
     return new Response('Unauthorized', { status: 401 });
   }
 

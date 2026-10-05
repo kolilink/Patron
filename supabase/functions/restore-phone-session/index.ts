@@ -1,6 +1,7 @@
 import { serve } from 'https://deno.land/std@0.177.0/http/server.ts';
 import { createClient } from 'https://esm.sh/@supabase/supabase-js@2';
 import { safeErrorResponse } from '../_shared/errors.ts';
+import { isDemoPhone, pickRestoreProfileId } from '../_shared/phone.ts';
 
 const corsHeaders = {
   'Access-Control-Allow-Origin': '*',
@@ -56,28 +57,36 @@ serve(async (req) => {
       }
     }
 
-    // Look up by phone first (normal returning-user login).
-    // Fallback to verif.user_id — handles demo account and fresh installs where
-    // no profile has this phone yet (the anon user initiated the verification).
+    // Look up by phone first (normal returning-user login). The fallback to the
+    // verifying anonymous session's own profile exists for the reviewer demo
+    // account only (it has no phone on file) — see pickRestoreProfileId.
     const { data: profileByPhone } = await serviceClient
       .from('profiles')
       .select('id')
       .eq('phone', phone.trim())
       .maybeSingle();
 
-    let profileId: string | null = profileByPhone?.id ?? null;
-
-    if (!profileId && verif.user_id) {
+    let profileByVerifUser: string | null = null;
+    if (!profileByPhone && verif.user_id) {
       const { data: profileByUser } = await serviceClient
         .from('profiles')
         .select('id')
         .eq('id', verif.user_id)
         .maybeSingle();
-      profileId = profileByUser?.id ?? null;
+      profileByVerifUser = profileByUser?.id ?? null;
     }
 
+    const profileId = pickRestoreProfileId({
+      profileByPhone: profileByPhone?.id ?? null,
+      profileByVerifUser,
+      isDemo: isDemoPhone(phone, Deno.env.get('DEMO_PHONE') ?? '', Deno.env.get('DEMO_PHONES') ?? ''),
+    });
+
     if (!profileId) {
-      return new Response(JSON.stringify({ error: 'Aucun compte trouvé pour ce numéro' }), {
+      // The caller has just proven they hold this number, so telling them it has
+      // no account is not an enumeration oracle. The app maps this code to its
+      // "Aucun compte associé à ce numéro → Créer un compte" prompt.
+      return new Response(JSON.stringify({ error: 'PHONE_NOT_FOUND' }), {
         status: 404, headers: { ...corsHeaders, 'Content-Type': 'application/json' },
       });
     }
