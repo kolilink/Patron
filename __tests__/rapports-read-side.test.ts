@@ -58,6 +58,16 @@ const quickItem = (n: number, status = 'pending', cents = 450000, last_error: st
   payload: JSON.stringify({ p_business_id: 'biz-1', p_seller_id: 'u1', p_unit_price: cents, p_qty: 1, p_label: null, p_idempotency_key: `key-${n}` }),
 });
 
+
+const otherSellerQuick = (n: number, cents = 900000) => ({
+  ...quickItem(n),
+  payload: JSON.stringify({ p_business_id: 'biz-1', p_seller_id: 'u2', p_unit_price: cents, p_qty: 3, p_label: null, p_idempotency_key: `key-${n}` }),
+});
+const otherSellerDebt = (n: number, cents = 700000) => ({
+  ...quickItem(n), operation: 'submit_carnet_debt', entity_type: 'dette',
+  payload: JSON.stringify({ p_business_id: 'biz-1', p_seller_id: 'u2', p_customer_name: 'Client Moussa', p_amount: cents, p_client_id: null, p_idempotency_key: `key-${n}` }),
+});
+
 const periodRaw = (over: Record<string, unknown> = {}) => ({
   role: 'administrateur', period_start: `${YEAR}-01-01`, period_end: TODAY, cash_on_hand: 0, net_profit: 700000, sales_count: 3,
   units_sold: 5, sales_without_cost: 0, credit_outstanding: 0, credit_count: 0, daily: [], my_sales_count: 0, my_units_sold: 0,
@@ -220,6 +230,49 @@ describe('role scoping', () => {
     expect(S().yearReport!.my_sales_count).toBe(3);
     expect(S().yearReport!.sales_count).toBe(0);
     expect(S().yearReport!.cash_on_hand).toBe(0);
+  });
+
+  it("another seller's queued sales are invisible to a vendeur end to end (store → apply → displayed my_*)", async () => {
+    mockRole = 'vendeur';
+    const vendeurPeriod = { role: 'vendeur', my_sales_count: 2, my_units_sold: 4, my_credit_pending: 1000000, my_credit_count: 1, my_daily: [{ date: TODAY, amount: 300000, sales_count: 1, units_sold: 2 }] };
+    const vendeurSnap = { role: 'vendeur', my_revenue: 250000, my_sales_count: 2, my_credit_pending: 1000000, my_credit_count: 1, my_activity: [{ date: TODAY, amount: 250000 }] };
+    rpcImpl = async (fn) => ({ data: fn === 'get_period_report' ? periodRaw(vendeurPeriod) : snapRaw(vendeurSnap), error: null });
+
+    // Baseline: nothing queued → the server values, exactly.
+    await fetchYear(); await fetchSnap();
+    const baseYear = JSON.parse(JSON.stringify(S().yearReport));
+    const baseSnap = JSON.parse(JSON.stringify(S().snapshot));
+    expect(baseYear.my_sales_count).toBe(2);
+
+    // Only ANOTHER seller's items are queued (a paid sale of 3 units + a credit debt).
+    mockItems = [otherSellerQuick(10), otherSellerDebt(11)];
+    await fetchYear(); await fetchSnap();
+    const y = S().yearReport!; const sn = S().snapshot!;
+    // period report my_*
+    expect(y.my_sales_count).toBe(baseYear.my_sales_count);   // my_salesCount
+    expect(y.my_units_sold).toBe(baseYear.my_units_sold);     // my_unitsSold
+    expect(y.my_credit_pending).toBe(baseYear.my_credit_pending); // my_creditDelta
+    expect(y.my_daily).toEqual(baseYear.my_daily);            // my_daily
+    // snapshot my_*
+    expect(sn.my_revenue).toBe(baseSnap.my_revenue);          // my_revenue
+    expect(sn.my_sales_count).toBe(baseSnap.my_sales_count);
+    expect(sn.my_credit_pending).toBe(baseSnap.my_credit_pending);
+    expect(sn.my_credit_count).toBe(baseSnap.my_credit_count);
+    expect(sn.my_activity).toEqual(baseSnap.my_activity);
+    // ...and nothing business-wide leaks into her view either
+    expect(y.sales_count).toBe(baseYear.sales_count);
+    expect(y.cash_on_hand).toBe(baseYear.cash_on_hand);
+    expect(sn.revenue).toBe(baseSnap.revenue);
+    expect(sn.cash_on_hand).toBe(baseSnap.cash_on_hand);
+
+    // Control: her OWN queued sale does move my_* — the filter isn't just zeroing everything.
+    mockItems = [otherSellerQuick(10), otherSellerDebt(11), quickItem(12)];
+    await S().refreshOverlay();
+    expect(S().yearReport!.my_sales_count).toBe(baseYear.my_sales_count + 1);
+    expect(S().yearReport!.my_units_sold).toBe(baseYear.my_units_sold + 1);
+    expect(S().yearReport!.my_daily.find(d => d.date === TODAY)!.amount).toBe(3000 + 4500);
+    expect(S().snapshot!.my_revenue).toBe(2500 + 4500);
+    expect(S().snapshot!.my_credit_pending).toBe(baseSnap.my_credit_pending); // her sale was paid, no credit added
   });
   it("a vendeur's offline cache slot is isolated from an admin's (role + user are in the key)", async () => {
     rpcImpl = async () => ({ data: periodRaw(), error: null });
