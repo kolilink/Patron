@@ -31,4 +31,14 @@ describe('Accueil scope — sales + debts only', () => {
   it('best sellers are only fetched for an investisseur (their own stake figures)', () => {
     expect(src).toMatch(/isInvestisseur \? loadBestSellers\(\) : Promise\.resolve\(\)/);
   });
+
+  it('shows base + outbox, never a bare server read, and refreshes when a sync pass completes', () => {
+    expect(src).toMatch(/applyKpiOverlay/);
+    expect(src).toMatch(/fetchPaired/);
+    expect(src).toMatch(/readOverlayPair/);
+    expect(src).not.toMatch(/setKpis\(freshKpis\)/);             // the server number is never shown as-is
+    expect(src).toMatch(/useSyncStore\(s => s\.lastResult\)/);    // sync completion re-reads the base, no remount
+    expect(src).toMatch(/\[ventesSales, kpisBase, syncing\]/);      // local writes re-derive it live
+    expect(src).toMatch(/saveDashboardKpiCache\(businessId, freshKpis\)/); // cache keeps server truth only
+  });
 });

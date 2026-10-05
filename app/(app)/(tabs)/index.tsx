@@ -25,7 +25,8 @@ import { useVentesStore } from '@/stores/ventes';
 import { useChatStore } from '@/stores/chat';
 import { useSupportChatStore } from '@/stores/supportChat';
 import { isFounderPhone } from '@/src/utils/founder';
-import { useRapportsStore } from '@/stores/rapports';
+import { useRapportsStore, fetchPaired } from '@/stores/rapports';
+import { useSyncStore } from '@/stores/sync';
 import { useEquipeStore } from '@/stores/equipe';
 import { useInvestorStore } from '@/stores/investor';
 import type { MemberProductStake } from '@/src/types';
@@ -34,7 +35,7 @@ import { debtAgeTier } from '@/src/utils/clientReminder';
 import { supabase } from '@/lib/supabase';
 import { isNetworkError, withTimeout } from '@/lib/sync';
 import { saveDashboardKpiCache, getDashboardKpiCache, saveBestSellersCache, getBestSellersCache, getKV, setKV } from '@/lib/db';
-import { computeLocalKpis as kpisFromLocalState } from '@/src/utils/salesTotals';
+import { computeLocalKpis as kpisFromLocalState, applyKpiOverlay } from '@/src/utils/salesTotals';
 import { buildReportDelta, applyTopSellers, type OverlaySale } from '@/lib/pendingOverlay';
 import { SkeletonKpiGrid } from '@/src/components/ui/SkeletonPlaceholder';
 import { haptics } from '@/lib/haptics';
@@ -211,6 +212,11 @@ export default function AccueilScreen() {
   const { snapshot: rapportsSnapshot, fetchReportsSnapshot } = useRapportsStore();
   const { fetchMemberScope } = useEquipeStore();
   const { balance, payouts, saving: investorSaving, fetchBalance, fetchPayouts, requestPayout } = useInvestorStore();
+  // `kpisBase` = the last server read (or its cache), never touched by the
+  // outbox; `kpis` = what is shown = base + what the outbox still holds. See
+  // src/utils/salesTotals.ts (applyKpiOverlay) for why the two never diverge
+  // from the lists.
+  const [kpisBase, setKpisBase] = useState<KPIs | null>(null);
   const [kpis, setKpis] = useState<KPIs | null>(null);
   // Raw server (or cached) month ranking, before pending-sale deltas and the
   // >= 2 filter — `bestSellers` below is derived from this + the overlay.
@@ -347,9 +353,11 @@ export default function AccueilScreen() {
       setLoading(true);
       setBestSellersBase([]);
       setKpis(null);
+      setKpisBase(null);
       const cachedKpis = await getDashboardKpiCache(businessId) as KPIs | null;
       if (cachedKpis) {
-        setKpis(cachedKpis);
+        setKpisBase(cachedKpis);
+        setKpis(await withOutbox(cachedKpis));
         setLoading(false);
       }
     }
@@ -386,6 +394,29 @@ export default function AccueilScreen() {
       loadedForRef.current = businessId;
     }
   }, [businessId, userId, isInvestisseur, isVendeur, membershipId, role]);
+
+  // Any change to the sales the lists read (a local write, a refetch) re-derives
+  // the dashboard from the same server base — no remount, no refocus. Held while
+  // a drain is running: ops leave the outbox before the next server read lands,
+  // and recomputing in that gap would drop them from the total.
+  const syncing = useSyncStore(s => s.syncing);
+  useEffect(() => {
+    if (!kpisBase || syncing) return;
+    let alive = true;
+    void withOutbox(kpisBase).then(k => { if (alive) setKpis(k); }).catch(() => { /* keep what is shown */ });
+    return () => { alive = false; };
+  }, [ventesSales, kpisBase, syncing]);
+
+  // A sync pass that sent something: re-read the server base now, so the numbers
+  // settle on the server's truth without waiting for a refocus.
+  const syncedCount = useSyncStore(s => s.lastResult?.synced ?? 0);
+  const lastResult = useSyncStore(s => s.lastResult);
+  const seenResult = useRef<unknown>(useSyncStore.getState().lastResult);
+  useEffect(() => {
+    if (!lastResult || seenResult.current === lastResult) return;
+    seenResult.current = lastResult;
+    if (syncedCount > 0) loadAll();
+  }, [lastResult, syncedCount, loadAll]);
 
   // Reload every time this tab gains focus (catches sales made in caisse)
   useFocusEffect(
@@ -440,22 +471,40 @@ export default function AccueilScreen() {
     });
   };
 
-  const loadKpis = async () => {
-    // Local-first: render immediately from cache + the current sales
-    // overlay, before ever touching the network. Hydration order per the
-    // approved plan: cache -> overlay -> render -> background refresh.
-    setKpis(await computeLocalKpis());
+  // Server base + whatever the outbox still holds (never a server number shown
+  // as current while ops are pending).
+  const withOutbox = async (base: KPIs): Promise<KPIs> => {
+    const { baseline, overlay } = await useVentesStore.getState().readOverlayPair();
+    return applyKpiOverlay(base, overlay, baseline);
+  };
 
-    // Background refresh — only ever upgrades what's already showing; a
-    // network failure here is a no-op, not a fallback trigger (the local
-    // estimate is already on screen).
+  const loadKpis = async () => {
+    // Local-first: render immediately from the last server base + the outbox,
+    // before touching the network. With no base at all (first ever open,
+    // nothing cached) the list-derived estimate stands in.
+    const cachedBase = await getDashboardKpiCache(businessId) as KPIs | null;
+    if (cachedBase) {
+      setKpisBase(cachedBase);
+      setKpis(await withOutbox(cachedBase));
+    } else {
+      setKpis(await computeLocalKpis());
+    }
+
+    // Background refresh. The read is paired with the outbox (fetchPaired:
+    // waits out a running drain and retries when the queue moved during the
+    // call), so the base never already contains an op the overlay will add
+    // again. A network failure is a no-op — what is on screen is already
+    // base + outbox.
     try {
       const localDate = todayIso(); // YYYY-MM-DD device local date
-      const { data, error } = await withTimeout(
-        supabase.rpc('get_dashboard_kpis', {
-          p_business_id: businessId,
-          p_today: localDate,
-        }),
+      const { result: { data, error } } = await fetchPaired(
+        () => withTimeout(
+          supabase.rpc('get_dashboard_kpis', {
+            p_business_id: businessId,
+            p_today: localDate,
+          }),
+        ),
+        r => !!r.error,
       );
       if (error) {
         if (isNetworkError(error)) return;
@@ -472,12 +521,12 @@ export default function AccueilScreen() {
         low_stock: Number(d.low_stock),
         first_sale_at: (d.first_sale_at as string | null) ?? null,
       };
-      setKpis(freshKpis);
-      void saveDashboardKpiCache(businessId, freshKpis);
+      setKpisBase(freshKpis);
+      void saveDashboardKpiCache(businessId, freshKpis);   // server truth only — never the overlaid figures
+      setKpis(await withOutbox(freshKpis));
     } catch (err) {
-      // failure: control-flow — network error: the local estimate already on screen stays; anything else rethrows
+      // failure: control-flow — network error: base + outbox already on screen; anything else rethrows
       if (!isNetworkError(err)) throw err;
-      // network error — the local estimate set above is already on screen
     }
   };
 
