@@ -25,6 +25,7 @@ import { EmptyState } from '@/src/components/ui/EmptyState';
 import { attachTransactionProof } from '@/lib/proofs';
 import { formatAmountInput, parseAmountInput, formatAmount } from '@/src/utils/format';
 import { FAILURE_COPY } from '@/src/utils/failureCopy';
+import { formatDate } from '@/src/utils/dates';
 
 function fmt(n: number, cur: string) { return formatAmount(n, cur); }
 function todayIso() {
@@ -269,7 +270,7 @@ function ExpenseCard({ expense, currency, isManager, canEdit, businessId, userId
             </Pressable>
           ) : null}
           <Text variant="caption" color="secondary" style={{ marginTop: 'auto' }}>
-            {new Date(expense.date + 'T00:00:00').toLocaleDateString('fr-FR', { day: 'numeric', month: 'short', year: 'numeric' })}
+            {formatDate(expense.date, 'short')}
           </Text>
         </View>
       </View>
@@ -431,7 +432,7 @@ export default function DepensesScreen() {
     for (const e of nonPending) {
       const d = new Date(e.date + 'T00:00:00');
       const key = `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, '0')}`;
-      const label = d.toLocaleDateString('fr-FR', { month: 'long', year: 'numeric' });
+      const label = formatDate(d, 'monthYear');
       const group = map.get(key) ?? { label, total: 0, items: [] };
       if (e.status === 'approuve') group.total += e.amount;
       group.items.push(e);

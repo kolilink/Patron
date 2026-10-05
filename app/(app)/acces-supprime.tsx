@@ -64,7 +64,7 @@ export default function AccesSupprime() {
 
         <View style={styles.actions}>
           <Button
-            label="Créer mon commerce"
+            label="Ajouter mon commerce"
             fullWidth
             size="lg"
             onPress={handleCreate}

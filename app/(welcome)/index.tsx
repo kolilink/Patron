@@ -41,7 +41,7 @@ export default function WelcomeScreen() {
 
         <View style={styles.actions}>
           <Button
-            label="Créer mon commerce"
+            label="Ouvrir mon commerce"
             onPress={() => router.push('/(welcome)/creer')}
             fullWidth
             size="lg"

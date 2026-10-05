@@ -31,6 +31,7 @@ import { formatAmountInput, parseAmountInput, formatAmount } from '@/src/utils/f
 import { failAlert } from '@/src/components/ui/FailureView';
 import { supplierDeletedConfirmation } from '@/src/utils/saveConfirmationCopy';
 import { toast } from '@/stores/toast';
+import { formatDate } from '@/src/utils/dates';
 
 // iOS-only: suppresses the OS's auto-injected floating "Done" pill above
 // number-pad/decimal-pad keyboards — the pay form below already has a
@@ -61,7 +62,7 @@ function LivraisonDetail({ livraison, fournisseurName, currency, businessId, can
 }) {
   const { palette } = useTheme();
   const styles = useMemo(() => makeStyles(palette), [palette]);
-  const dateLabel = new Date(livraison.ordered_at).toLocaleDateString('fr-FR', { day: 'numeric', month: 'short' });
+  const dateLabel = formatDate(livraison.ordered_at, 'dayMonth');
   return (
     <Modal visible animationType="slide" presentationStyle="formSheet" onRequestClose={onClose} statusBarTranslucent navigationBarTranslucent backdropColor={palette.background}>
       <SafeAreaView style={styles.modalSafe} edges={Platform.OS === 'android' ? ['top', 'bottom'] : ['bottom']}>
@@ -422,7 +423,7 @@ export default function FournisseurProfile() {
                 <View key={p.id} style={styles.orderRow}>
                   <View style={{ flex: 1 }}>
                     <Text variant="body">
-                      {new Date(p.paid_at).toLocaleDateString('fr-FR', { day: 'numeric', month: 'long', year: 'numeric' })}
+                      {formatDate(p.paid_at, 'long')}
                     </Text>
                     {p.note ? <Text variant="caption" color="secondary">{p.note}</Text> : null}
                   </View>
@@ -443,7 +444,7 @@ export default function FournisseurProfile() {
               style={({ pressed }) => [styles.orderRow, pressed && { opacity: 0.6 }]}>
               <View style={{ flex: 1 }}>
                 <Text variant="body">
-                  {new Date(livraison.ordered_at).toLocaleDateString('fr-FR', { day: 'numeric', month: 'long', year: 'numeric' })}
+                  {formatDate(livraison.ordered_at, 'long')}
                 </Text>
                 <Text variant="caption" color="secondary">{fmt(livraison.total_cost, currency)}</Text>
               </View>

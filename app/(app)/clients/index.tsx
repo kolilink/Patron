@@ -309,8 +309,10 @@ export default function ClientsScreen() {
         ) : (
           <EmptyState
             icon="people-outline"
-            title={isVendeur ? 'Vos clients arrivent' : 'Personne encore'}
+            title="Aucun client pour le moment."
             subtitle={isVendeur ? 'Faites votre première vente.' : 'Chaque vente crée un client.'}
+            actionLabel={isInvestisseur ? undefined : '+ Ajouter un client'}
+            onAction={isInvestisseur ? undefined : () => router.push({ pathname: '/(app)/(tabs)/vendre', params: { mode: 'credit' } })}
           />
         )
       ) : (

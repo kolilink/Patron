@@ -21,7 +21,7 @@ interface BusinessDetailsStepProps {
   // Required, not defaulted — the two call sites are different moments
   // ("Ouvrir mon commerce" for a fresh signup vs. "Créer le commerce" for an
   // already-verified user adding another) and a shared fallback previously
-  // let one of them go stale (still "Créer mon commerce") without anyone
+  // let one of them go stale (once a stale "Créer mon commerce") without anyone
   // noticing, since there was nothing forcing a deliberate choice.
   submitLabel: string;
   autoFocusName?: boolean;

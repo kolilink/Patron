@@ -34,6 +34,7 @@ import { buildFailure, failureReason } from '@/src/utils/failure';
 import { FAILURE_COPY } from '@/src/utils/failureCopy';
 import { memberRemovedConfirmation, inviteCodeRevokedConfirmation, stakeRemovedConfirmation, partnerRemovedConfirmation, supplierDeletedConfirmation, saleCancelledConfirmation } from '@/src/utils/saveConfirmationCopy';
 import { failAlert } from '@/src/components/ui/FailureView';
+import { formatDate } from '@/src/utils/dates';
 
 // iOS-only: suppresses the OS's auto-injected floating "Done" pill above
 // the numeric keyboard — the payout sheet's "Confirmer le paiement" button
@@ -548,7 +549,7 @@ function MemberDetailSheet({
                 <View style={{ flex: 1 }}>
                   <Text variant="body">{formatAmount(p.paid_amount ?? p.requested_amount, currency)}</Text>
                   <Text variant="caption" color="secondary">
-                    {new Date(p.paid_at ?? p.requested_at).toLocaleDateString('fr-FR', { day: 'numeric', month: 'short', year: 'numeric' })}
+                    {formatDate(p.paid_at ?? p.requested_at, 'short')}
                   </Text>
                 </View>
               </View>
@@ -1139,7 +1140,7 @@ export default function EquipeScreen() {
           search.trim() ? (
             <View style={styles.empty}>
               <Ionicons name="search-outline" size={40} color={palette.textDisabled} />
-              <Text variant="body" color="secondary" style={{ marginTop: spacing[3] }}>Aucun résultat pour "{search}"</Text>
+              <Text variant="body" color="secondary" style={{ marginTop: spacing[3] }}>Aucun résultat pour « {search} »</Text>
             </View>
           ) : (
             <View style={styles.empty}>
@@ -1229,7 +1230,7 @@ export default function EquipeScreen() {
                     </View>
                     <Text variant="caption" color="secondary">
                       {c.redeemed_by_name ? `Utilisé par ${c.redeemed_by_name}` : 'Utilisé'}
-                      {c.redeemed_at ? ` · ${new Date(c.redeemed_at).toLocaleDateString('fr-FR')}` : ''}
+                      {c.redeemed_at ? ` · ${formatDate(c.redeemed_at, 'numeric')}` : ''}
                     </Text>
                   </Card>
                 ))}
@@ -1269,7 +1270,7 @@ export default function EquipeScreen() {
                     onPress={() => {
                       const businessName = session?.activeBusiness?.name ?? 'Un commerce';
                       Share.share({
-                        message: `${businessName} vous invite à rejoindre son équipe sur Patron.\n\nVotre code d'accès : ${item.code}\n\nCe code est valable jusqu'au ${item.expires_at ? new Date(item.expires_at).toLocaleDateString('fr-FR') : '—'}.`,
+                        message: `${businessName} vous invite à rejoindre son équipe sur Patron.\n\nVotre code d'accès : ${item.code}\n\nCe code est valable jusqu'au ${item.expires_at ? formatDate(item.expires_at, 'numeric') : '—'}.`,
                       });
                     }}
                     style={styles.shareRow}

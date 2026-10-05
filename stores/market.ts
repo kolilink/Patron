@@ -1,4 +1,5 @@
 import { create } from 'zustand';
+import { failureLine } from '@/src/utils/failure';
 import { trackEvent } from '@/lib/analytics';
 import { supabase } from '@/lib/supabase';
 import { translateError } from '@/lib/errors';
@@ -341,7 +342,7 @@ export const useMarketStore = create<MarketStore>((set, get) => ({
       set({ sendingComment: false });
     } catch (err) {
       set({ sendingComment: false });
-      toast.warning(translateError(err, 'Impossible de publier le commentaire'));
+      toast.warning(failureLine('commentNotPublished', err));
       throw err;
     }
   },
@@ -387,7 +388,7 @@ export const useMarketStore = create<MarketStore>((set, get) => ({
       if (msg.includes('quotidienne')) {
         toast.warning('Limite atteinte — vous avez déjà beaucoup aimé ce contributeur aujourd\'hui.');
       } else if (!msg.includes('Auto-upvotes')) {
-        toast.warning('Impossible d\'enregistrer le like. Réessayez.');
+        toast.warning(failureLine('likeNotSaved'));
       }
     }
   },
@@ -430,7 +431,7 @@ export const useMarketStore = create<MarketStore>((set, get) => ({
       // used to leave the tap feeling broken with no explanation.
       const msg = err instanceof Error ? err.message : '';
       if (!msg.includes('Auto-upvotes')) {
-        toast.warning('Impossible d\'enregistrer le like. Réessayez.');
+        toast.warning(failureLine('likeNotSaved'));
       }
     }
   },

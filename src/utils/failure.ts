@@ -14,6 +14,7 @@
 
 import { extractRawMessage, friendlyMessage } from '@/lib/errors';
 import { isNetworkError } from '@/lib/networkError';
+import { FAILURE_COPY, type FailureKey } from './failureCopy';
 
 export interface FailureAction {
   label: string;
@@ -70,6 +71,13 @@ export function failureReason(input: unknown): string | undefined {
   // are not acceptable here.
   if (!friendly || /\berreur\b/i.test(friendly)) return undefined;
   return friendly;
+}
+
+/** One line for a toast: the registered sentence, plus the reason when there is one. */
+export function failureLine(key: FailureKey, err?: unknown): string {
+  const copy = FAILURE_COPY[key] as { what: string; why?: string };
+  const why = (err !== undefined ? failureReason(err) : undefined) ?? copy.why;
+  return why ? `${copy.what} ${why}` : copy.what;
 }
 
 export function buildFailure(opts: {

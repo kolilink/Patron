@@ -6,6 +6,7 @@ import { spacing, radius, shadow } from '@/src/theme';
 import type { Palette } from '@/src/theme';
 import { Text } from './Text';
 import type { DailyPoint } from '@/stores/rapports';
+import { formatDate } from '@/src/utils/dates';
 
 // Same grid logic as the GitHub/Skool-style contribution graph — Monday-first
 // rows (row 0 = Mon … row 6 = Sun, labeled at rows 0/2/4/6 exactly like the
@@ -53,9 +54,7 @@ function isoOf(d: Date): string {
 
 function fmtCellDate(iso: string): string {
   const [y, m, d] = iso.split('-').map(Number);
-  return new Date(y, m - 1, d).toLocaleDateString('fr-FR', {
-    weekday: 'long', day: 'numeric', month: 'long', year: 'numeric',
-  });
+  return formatDate(new Date(y, m - 1, d), 'weekdayLongYear');
 }
 
 export function YearHeatmap({ year, data, highlightRange, defaultMonth }: YearHeatmapProps) {

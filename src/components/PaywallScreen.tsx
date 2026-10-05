@@ -1,4 +1,5 @@
 import React, { useEffect, useMemo, useRef, useState } from 'react';
+import { failureLine } from '@/src/utils/failure';
 import { Animated, Easing, Linking, Platform, StyleSheet, Pressable, View } from 'react-native';
 import { SafeAreaView } from 'react-native-safe-area-context';
 import { Ionicons } from '@expo/vector-icons';
@@ -145,7 +146,7 @@ export function PaywallScreen({ business, onDismiss, inline = false, onPurchased
 
   const restore = async () => {
     if (!isPurchasesConfigured()) {
-      toast.warning('Restauration indisponible pour le moment.');
+      toast.warning(failureLine('purchasesNotRestored'));
       return;
     }
     setRestoring(true);
@@ -155,7 +156,7 @@ export function PaywallScreen({ business, onDismiss, inline = false, onPurchased
       toast.success('Achats restaurés.');
       onPurchased?.();
     } catch {
-      toast.warning('Aucun achat trouvé à restaurer sur ce compte.');
+      toast.warning(failureLine('purchasesNotRestored'));
     } finally {
       setRestoring(false);
     }
@@ -168,7 +169,7 @@ export function PaywallScreen({ business, onDismiss, inline = false, onPurchased
       if (__DEV__) {
         toast.warning('Abonnement pas encore configuré (RevenueCat) — voir CLAUDE.md.');
       } else {
-        toast.warning('Abonnement indisponible pour le moment. Réessayez plus tard.');
+        toast.warning(failureLine('purchaseNotDone'));
       }
       return;
     }
@@ -191,7 +192,7 @@ export function PaywallScreen({ business, onDismiss, inline = false, onPurchased
     } catch (err) {
       const cancelled = (err as { userCancelled?: boolean })?.userCancelled;
       if (!cancelled) {
-        toast.warning('Achat impossible pour le moment. Réessayez.');
+        toast.warning(failureLine('purchaseNotDone'));
       }
       setPurchasing(false);
     }

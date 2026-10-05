@@ -19,6 +19,7 @@ import { useAuthStore } from '@/stores/auth';
 import { useRapportsStore, type PeriodReport } from '@/stores/rapports';
 import { useExpensesStore } from '@/stores/expenses';
 import { formatAmount, formatCount } from '@/src/utils/format';
+import { formatDate } from '@/src/utils/dates';
 
 function fmt(n: number, cur: string) {
   return formatAmount(n, cur);
@@ -45,7 +46,7 @@ function dayFromIso(iso: string): Date {
 // screen showing which year is being browsed, so repeating "2026" on
 // every sub-label read as redundant noise rather than useful context.
 function fmtDateFr(iso: string): string {
-  return dayFromIso(iso).toLocaleDateString('fr-FR', { day: 'numeric', month: 'short' });
+  return formatDate(dayFromIso(iso), 'dayMonth');
 }
 
 function weekRange(anchor: Date): { start: string; end: string } {
@@ -62,7 +63,7 @@ function monthRange(anchor: Date): { start: string; end: string } {
 }
 
 function fmtMonthFr(iso: string): string {
-  const label = dayFromIso(iso).toLocaleDateString('fr-FR', { month: 'long' });
+  const label = formatDate(dayFromIso(iso), 'month');
   return label.charAt(0).toUpperCase() + label.slice(1);
 }
 

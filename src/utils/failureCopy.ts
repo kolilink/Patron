@@ -56,6 +56,18 @@ export const FAILURE_COPY = {
   otherDevicesNotSignedOut: { what: "Les autres appareils n'ont pas été déconnectés." },
   codeNotSent: { what: "Le code n'a pas été envoyé." },
   codeNotWorking: { what: 'Ce code ne fonctionne pas.' },
+  // Community & subscription toasts (same sentence shape as everything above)
+  likeNotSaved: { what: "Le like n'a pas été enregistré." },
+  inviteCodeNotRenewed: { what: "Le code n'a pas été renouvelé." },
+  postStateNotChanged: { what: "Le post n'a pas été mis à jour." },
+  postNotDeleted: { what: "Le post n'a pas été supprimé." },
+  authorNotBlocked: { what: "L'auteur n'a pas été bloqué." },
+  authorNotUnblocked: { what: "L'auteur n'a pas été débloqué." },
+  postNotReported: { what: "Le post n'a pas été signalé." },
+  imageNotRemoved: { what: "L'image n'a pas été supprimée." },
+  imageNotAdded: { what: "L'image n'a pas été ajoutée." },
+  purchaseNotDone: { what: "L'achat n'a pas été fait." },
+  purchasesNotRestored: { what: "Les achats n'ont pas été restaurés." },
   // Photos attached after a save
   proofNotAttached: { what: "L'image n'a pas été jointe.", why: 'Le reste est enregistré.' },
   // Invites: a deliberately named reason so the caller can react

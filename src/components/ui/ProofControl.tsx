@@ -1,4 +1,5 @@
 import { useState } from 'react';
+import { failureLine } from '@/src/utils/failure';
 import { ActivityIndicator, Alert, Modal, Platform, Pressable, StyleSheet, View } from 'react-native';
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
 import { Image } from 'expo-image';
@@ -8,7 +9,6 @@ import { Text } from '@/src/components/ui/Text';
 import { useTheme, spacing, radius, colors } from '@/src/theme';
 import type { Palette } from '@/src/theme';
 import { attachTransactionProof, deleteTransactionProof, type ProofKind } from '@/lib/proofs';
-import { translateError } from '@/lib/errors';
 import { toast } from '@/stores/toast';
 import { haptics } from '@/lib/haptics';
 import { useAuthStore } from '@/stores/auth';
@@ -85,7 +85,7 @@ export function ProofControl({
                 setViewerOpen(false);
                 onDeleted?.();
               } catch (err) {
-                toast.warning(translateError(err, 'Impossible de supprimer l\'image'));
+                toast.warning(failureLine('imageNotRemoved', err));
               } finally {
                 setDeleting(false);
               }
@@ -119,7 +119,7 @@ export function ProofControl({
       toast.success('Image ajoutée');
       onAttached?.(proof);
     } catch (err) {
-      toast.warning(translateError(err, 'Impossible d\'ajouter l\'image'));
+      toast.warning(failureLine('imageNotAdded', err));
     } finally {
       setUploading(false);
     }
