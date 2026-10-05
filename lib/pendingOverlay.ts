@@ -82,6 +82,10 @@ export interface OverlaySale {
   // stores/ventes.ts's refreshPendingOverlay, which strips it back out
   // before every rebuild so a previous overlay is never folded twice).
   _pending?: true;
+  // The queue item behind this row was refused by the server (failed_permanent).
+  // The ventes list keeps showing it (deliberate — nothing she recorded vanishes),
+  // but money reports MUST NOT count it: a refused sale is not revenue.
+  _failedPermanent?: true;
 }
 
 export interface OverlayContext {
@@ -282,28 +286,49 @@ export function applyPatchOp(
 // stores/ventes.ts's recordClientPayment. Pure: takes and returns a plain
 // array, no store/network access, so it's usable identically from the live
 // action (§5) and this offline rebuild.
-export function allocateClientPayment(
+export interface PaymentAllocation { saleId: string; amount: number }
+
+// The FIFO split itself (oldest credit sale first), separated from applying it
+// so the carnet can show a pending payment as the same per-sale rows the
+// server will create.
+export function computeAllocations(
   sales: OverlaySale[],
   businessId: string,
   customerName: string,
   amount: number,
-): OverlaySale[] {
+): PaymentAllocation[] {
   const creditSales = sales
     .filter(s => s.customer_name === customerName && s.business_id === businessId && s.status === 'credit')
     .sort((a, b) => new Date(a.created_at).getTime() - new Date(b.created_at).getTime());
 
   let toAllocate = amount;
-  const updates = new Map<string, { newAmountPaid: number; fullyPaid: boolean }>();
-  const now = new Date().toISOString();
+  const out: PaymentAllocation[] = [];
   for (const sale of creditSales) {
     if (toAllocate <= 0.005) break;
     const owed = sale.total_amount - (sale.discount_amount ?? 0);
     const remaining = owed - (sale.amount_paid ?? 0);
     if (remaining <= 0.005) continue;
     const allocated = Math.min(toAllocate, remaining);
-    const newAmountPaid = (sale.amount_paid ?? 0) + allocated;
-    updates.set(sale.id, { newAmountPaid, fullyPaid: newAmountPaid >= owed - 0.01 });
+    out.push({ saleId: sale.id, amount: allocated });
     toAllocate -= allocated;
+  }
+  return out;
+}
+
+export function allocateClientPayment(
+  sales: OverlaySale[],
+  businessId: string,
+  customerName: string,
+  amount: number,
+): OverlaySale[] {
+  const updates = new Map<string, { newAmountPaid: number; fullyPaid: boolean }>();
+  const now = new Date().toISOString();
+  const byId = new Map(sales.map(s => [s.id, s]));
+  for (const { saleId, amount: allocated } of computeAllocations(sales, businessId, customerName, amount)) {
+    const sale = byId.get(saleId)!;
+    const owed = sale.total_amount - (sale.discount_amount ?? 0);
+    const newAmountPaid = (sale.amount_paid ?? 0) + allocated;
+    updates.set(saleId, { newAmountPaid, fullyPaid: newAmountPaid >= owed - 0.01 });
   }
 
   return sales.map(s => {
@@ -324,9 +349,30 @@ export interface CorruptStub {
   queuedAt: string | null;
 }
 
+// A payment op still in the outbox, as its own event (a payment patches an
+// existing sale's amount_paid, which loses the payment itself — reports and the
+// carnet ledger need the individual amount). id = the op's idempotency key.
+export interface PendingPaymentEvent {
+  id: string;
+  operation: 'record_client_payment' | 'record_payment';
+  amount: number;            // display units, face value
+  queuedAt: string;
+  businessId: string;
+  customerName: string | null;
+  saleId: string | null;
+  method: string;
+  date: string;              // YYYY-MM-DD she chose (p_date), else the day it was queued
+  // Per-sale split against the working set at the moment this op folded in
+  // (meaningful when the baseline passed to rebuildPendingOverlay is the synced
+  // cache; with a [] baseline only pending credit sales can appear here).
+  allocations: PaymentAllocation[];
+  failedPermanent: boolean;
+}
+
 export interface OverlayResult {
   sales: OverlaySale[];
   corrupt: CorruptStub[];
+  payments: PendingPaymentEvent[];
 }
 
 // The one entry point everything else (stores/ventes.ts §6, the future
@@ -350,6 +396,7 @@ export async function rebuildPendingOverlay(baseline: OverlaySale[], ctx: Overla
   const corrupt: CorruptStub[] = decryptCorrupt.map(c => ({ id: c.id, entityType: c.entity_type, queuedAt: c.queued_at }));
 
   let sales = baseline;
+  const payments: PendingPaymentEvent[] = [];
   for (const item of ok) {
     let payload: Record<string, unknown>;
     try {
@@ -372,59 +419,209 @@ export async function rebuildPendingOverlay(baseline: OverlaySale[], ctx: Overla
     if (NEW_SALE_OPS.has(item.operation)) {
       const key = item.idempotency_key ?? `${item.operation}:${item.id}`;
       const projected = projectNewSale(item.operation, payload, item.queued_at, ctx, key);
-      if (projected) sales = [projected, ...sales];
+      if (projected) {
+        if (item.status === 'failed_permanent') projected._failedPermanent = true;
+        sales = [projected, ...sales];
+      }
     } else if (PATCH_OPS.has(item.operation)) {
+      let allocations: PaymentAllocation[] = [];
+      if (item.operation === 'record_client_payment') {
+        allocations = computeAllocations(sales, String(payload.p_business_id ?? ''), String(payload.p_customer_name ?? ''), Number(payload.p_amount ?? 0) / 100);
+      } else if (item.operation === 'record_payment') {
+        const target = sales.find(x => x.id === String(payload.p_sale_id ?? ''));
+        if (target) allocations = [{ saleId: target.id, amount: Number(payload.p_amount ?? 0) / 100 }];
+      }
       sales = applyPatchOp(sales, item.operation, payload, item.queued_at, ctx);
+      if (item.operation === 'record_client_payment' || item.operation === 'record_payment') {
+        const queuedAt = item.queued_at ?? new Date().toISOString();
+        payments.push({
+          id: item.idempotency_key ?? (payload.p_idempotency_key != null ? String(payload.p_idempotency_key) : `${item.operation}:${item.id}`),
+          operation: item.operation,
+          amount: Number(payload.p_amount ?? 0) / 100,
+          queuedAt,
+          method: payload.p_method != null ? String(payload.p_method) : 'especes',
+          date: payload.p_date != null ? String(payload.p_date).slice(0, 10) : queuedAt.slice(0, 10),
+          allocations,
+          businessId: opBusinessId ?? '',
+          customerName: payload.p_customer_name != null ? String(payload.p_customer_name) : null,
+          saleId: payload.p_sale_id != null ? String(payload.p_sale_id) : null,
+          failedPermanent: item.status === 'failed_permanent',
+        });
+      }
     }
     // Any other queued operation (create_expense, adjust_stock, ...) has no
     // effect on the sales overlay — intentionally a no-op here, not an
     // error; this module only concerns itself with what Phase 1 covers.
   }
 
-  return { sales, corrupt };
+  return { sales, corrupt, payments };
 }
 
-export interface BestSellerDelta {
-  product_id: string;
-  product_name: string;
-  qty: number;
-  revenue: number;
-}
-
-// What still-unsynced NEW sales add to the month's best-sellers ranking.
-// Pure: takes the already-overlaid sales list (rows flagged `_pending`),
-// never reads the queue itself. Only sales dated on/after `monthStart`
-// (YYYY-MM-DD) and not cancelled count, matching get_best_sellers' window.
-// Revenue is qty * unit_price in display units (same basis as the RPC's
-// total_revenue / 100). Lines for products not in `knownProductIds` (the
-// is_system placeholders: "Solde reporté", "Vente rapide") are skipped,
-// as the RPC excludes them.
+// ─────────────────────────────────────────────────────────────────────────────
+// Report delta — what still-unsynced writes add to a server-computed report.
 //
-// TODO(Phase 1 — unify, do not duplicate): this is a stopgap. The main
-// Phase 1 work adds a `topSellers` map to the SHARED report-delta builder;
-// when that lands, Accueil must consume that builder's topSellers instead of
-// this function (and mergeBestSellers below). Two implementations of the
-// same "what do pending sales add to the ranking" logic WILL drift. Delete
-// this pair then; do not extend it.
-export function computeBestSellersDelta(
-  sales: OverlaySale[],
-  monthStart: string,
-  knownProductIds: Set<string>,
-): BestSellerDelta[] {
-  const byProduct = new Map<string, BestSellerDelta>();
-  for (const sale of sales) {
-    if (!sale._pending || sale.status === 'annule') continue;
-    if ((sale.sale_date ?? sale.created_at.split('T')[0]) < monthStart) continue;
+// Read side of offline: a report screen shows `base + delta`, where `base` is
+// the last server (or cached) report and `delta` is built here from the
+// outbox. Pure: takes the output of rebuildPendingOverlay([], ctx) (so only
+// NEW sales and payment events — a baseline of [] means nothing synced is in
+// the working set) and a period; never reads the queue itself. Mirrors the
+// RPC buckets in db/migration_v162.sql (+ v220's cost rule):
+//   revenue    = Σ(total − discount) over paye/credit sales dated in period
+//   salesCount = number of those sales        unitsSold = Σ line qty
+//   daily      = per sale_date {amount, salesCount, unitsSold}
+//   topSellers = per real catalog product {qty, revenue} (is_system
+//                placeholders excluded, as get_best_sellers does)
+//   creditDelta = pending credit balances (owed − upfront payment), minus every
+//                pending payment at FACE VALUE; callers clamp the displayed
+//                outstanding at ≥ 0
+//   cashDelta   = upfront payments on pending sales + pending payment events
+// Profit contribution is ALWAYS 0: a pending row's cost is unknown (the RPC
+// looks it up server-side at sync). pendingWithoutCost counts the pending
+// sales in period so the screen shows its "sans prix d'achat" caveat
+// instead of an invented margin.
+//
+// Excluded on purpose: status === 'annule' (a pending cancel of a pending sale)
+// and _failedPermanent rows/events (a refused sale is not revenue — the ventes
+// list still shows it, see lib/db.ts getAllQueueItemsForOverlay).
+//
+// OUT OF SCOPE (no overlay, the number simply stays at the server value until
+// sync): operating_expenses, stock_losses, stock_value, apports/capital — their
+// writes aren't in the Phase-1 outbox set. A queued cancellation aimed at an
+// ALREADY-SYNCED sale does not subtract that sale's revenue (the sale isn't in
+// the working set); a payment aimed at one still moves cash/credit.
+//
+// MULTI-DEVICE BOUNDARY: this phone's outbox is the only thing it can know. A
+// second phone's unsynced sales are unknowable here; they appear after that
+// phone syncs and this one next refreshes.
+// ─────────────────────────────────────────────────────────────────────────────
+
+export interface DailyDelta { amount: number; salesCount: number; unitsSold: number }
+export interface TopSellerDelta { product_id: string; product_name: string; qty: number; revenue: number }
+export interface StaffSellerDelta { name: string; revenue: number; count: number }
+
+export interface MyReportDelta {
+  revenue: number;
+  salesCount: number;
+  unitsSold: number;
+  creditDelta: number;
+  creditCountDelta: number;
+  daily: Map<string, DailyDelta>;
+  activity: Map<string, number>;
+}
+
+export interface ReportDelta {
+  revenue: number;
+  salesCount: number;
+  unitsSold: number;
+  creditDelta: number;
+  creditCountDelta: number;
+  cashDelta: number;
+  pendingWithoutCost: number;
+  daily: Map<string, DailyDelta>;
+  topSellers: Map<string, TopSellerDelta>;
+  staffSellers: Map<string, StaffSellerDelta>;
+  /** Vendeur view: only rows with seller_id === currentUserId. */
+  my: MyReportDelta;
+}
+
+export interface ReportDeltaOptions {
+  /** Inclusive YYYY-MM-DD bounds of the report period. */
+  start: string;
+  end: string;
+  currentUserId: string | null;
+  /** If given, topSellers only includes these product ids (the real catalog). */
+  knownProductIds?: Set<string>;
+}
+
+const emptyMy = (): MyReportDelta => ({
+  revenue: 0, salesCount: 0, unitsSold: 0, creditDelta: 0, creditCountDelta: 0, daily: new Map(), activity: new Map(),
+});
+
+export function emptyReportDelta(): ReportDelta {
+  return {
+    revenue: 0, salesCount: 0, unitsSold: 0, creditDelta: 0, creditCountDelta: 0, cashDelta: 0,
+    pendingWithoutCost: 0, daily: new Map(), topSellers: new Map(), staffSellers: new Map(), my: emptyMy(),
+  };
+}
+
+const saleDay = (s: OverlaySale) => s.sale_date ?? s.created_at.split('T')[0];
+
+function addDaily(map: Map<string, DailyDelta>, day: string, amount: number, units: number) {
+  const cur = map.get(day) ?? { amount: 0, salesCount: 0, unitsSold: 0 };
+  cur.amount += amount; cur.salesCount += 1; cur.unitsSold += units;
+  map.set(day, cur);
+}
+
+export function buildReportDelta(
+  overlay: { sales: OverlaySale[]; payments?: PendingPaymentEvent[] },
+  opts: ReportDeltaOptions,
+): ReportDelta {
+  const d = emptyReportDelta();
+  for (const sale of overlay.sales) {
+    if (!sale._pending || sale._failedPermanent) continue;
+    if (sale.status !== 'paye' && sale.status !== 'credit') continue; // annule etc.
+    const day = saleDay(sale);
+    const inPeriod = day >= opts.start && day <= opts.end;
+    const net = sale.total_amount - (sale.discount_amount ?? 0);
+    const units = (sale.lines ?? []).reduce((sum, l) => sum + l.qty, 0);
+    const mine = opts.currentUserId != null && sale.seller_id === opts.currentUserId;
+
+    // Credit / cash are live all-time balances in the RPC (not period-bound).
+    // status may have flipped credit → paye through a pending payment patch, so
+    // test the creation-time intent (is_credit is never flipped), and take only
+    // the UPFRONT payments recorded on the row (patches don't add entries — the
+    // payment events below carry those, at face value).
+    const upfront = (sale.payments ?? []).reduce((sum, p) => sum + p.amount, 0);
+    d.cashDelta += upfront;
+    if (sale.is_credit) {
+      const balance = Math.max(0, net - upfront);
+      d.creditDelta += balance;
+      if (balance > 0.005) d.creditCountDelta += 1;
+      if (mine) {
+        d.my.creditDelta += balance;
+        if (balance > 0.005) d.my.creditCountDelta += 1;
+      }
+    }
+
+    if (!inPeriod) continue;
+    d.revenue += net;
+    d.salesCount += 1;
+    d.unitsSold += units;
+    d.pendingWithoutCost += 1; // cost is unknown for every pending sale (v220 rule)
+    addDaily(d.daily, day, net, units);
+
+    const staff = d.staffSellers.get(sale.seller_name) ?? { name: sale.seller_name, revenue: 0, count: 0 };
+    staff.revenue += net; staff.count += 1;
+    d.staffSellers.set(sale.seller_name, staff);
+
     for (const line of sale.lines ?? []) {
-      if (!knownProductIds.has(line.product_id)) continue;
-      const cur = byProduct.get(line.product_id)
+      if (!line.product_id) continue;
+      if (opts.knownProductIds && !opts.knownProductIds.has(line.product_id)) continue;
+      const cur = d.topSellers.get(line.product_id)
         ?? { product_id: line.product_id, product_name: line.product_name, qty: 0, revenue: 0 };
       cur.qty += line.qty;
       cur.revenue += line.qty * line.unit_price;
-      byProduct.set(line.product_id, cur);
+      d.topSellers.set(line.product_id, cur);
+    }
+
+    if (mine) {
+      d.my.revenue += net;
+      d.my.salesCount += 1;
+      d.my.unitsSold += units;
+      addDaily(d.my.daily, day, net, units);
+      d.my.activity.set(day, (d.my.activity.get(day) ?? 0) + net);
     }
   }
-  return [...byProduct.values()];
+
+  for (const p of overlay.payments ?? []) {
+    if (p.failedPermanent) continue;
+    d.cashDelta += p.amount;
+    d.creditDelta -= p.amount; // face value, never allocated: the clamp happens where it is displayed
+    // Vendeur: a payment's target sale/seller isn't in the payload, so it is
+    // NOT subtracted from my_* credit (it may belong to someone else) — my
+    // outstanding can overstate until sync, never understate.
+  }
+  return d;
 }
 
 export interface BestSellerRow {
@@ -434,18 +631,86 @@ export interface BestSellerRow {
   total_revenue: number;
 }
 
-// base (server/cached month ranking) + pending deltas -> what Accueil shows:
-// qty >= 2 only, revenue-descending, top 5. See the TODO on
-// computeBestSellersDelta — same stopgap, same removal.
-export function mergeBestSellers(base: BestSellerRow[], deltas: BestSellerDelta[]): BestSellerRow[] {
+/** Home best-sellers: base month ranking + the builder's topSellers → qty ≥ 2, revenue-desc, top 5. */
+export function applyTopSellers(base: BestSellerRow[], topSellers: Map<string, TopSellerDelta>): BestSellerRow[] {
   const merged = new Map<string, BestSellerRow>(base.map(b => [b.product_id, { ...b }]));
-  for (const d of deltas) {
-    const cur = merged.get(d.product_id);
-    if (cur) { cur.total_qty += d.qty; cur.total_revenue += d.revenue; }
-    else merged.set(d.product_id, { product_id: d.product_id, product_name: d.product_name, total_qty: d.qty, total_revenue: d.revenue });
+  for (const t of topSellers.values()) {
+    const cur = merged.get(t.product_id);
+    if (cur) { cur.total_qty += t.qty; cur.total_revenue += t.revenue; }
+    else merged.set(t.product_id, { product_id: t.product_id, product_name: t.product_name, total_qty: t.qty, total_revenue: t.revenue });
   }
   return [...merged.values()]
     .filter(b => b.total_qty >= 2)
     .sort((a, b) => b.total_revenue - a.total_revenue)
     .slice(0, 5);
+}
+
+// ─────────────────────────────────────────────────────────────────────────────
+// Refused operations (failed_permanent) — surfaced as a notice, never counted.
+// ─────────────────────────────────────────────────────────────────────────────
+
+export interface RefusedOp {
+  id: number;
+  operation: string;
+  label: string;        // what she recorded, in her words
+  reason: string;       // the server's own (French) refusal message
+  queuedAt: string;
+  payload: string;      // kept so Réessayer can re-enqueue it unchanged
+  idempotencyKey: string | null;
+}
+
+const OP_LABELS: Record<string, string> = {
+  submit_sale: 'Vente', submit_quick_sale: 'Vente', submit_carnet_debt: 'Crédit',
+  record_client_payment: 'Paiement', record_payment: 'Paiement', cancel_sale: 'Annulation',
+};
+
+export async function loadRefusedOps(currentBusinessId: string | null): Promise<RefusedOp[]> {
+  const { ok } = await getAllQueueItemsForOverlay();
+  const out: RefusedOp[] = [];
+  for (const item of ok) {
+    if (item.status !== 'failed_permanent') continue;
+    try {
+      const payload = JSON.parse(item.payload) as Record<string, unknown>;
+      const biz = payload.p_business_id != null ? String(payload.p_business_id) : null;
+      if (currentBusinessId && biz && biz !== currentBusinessId) continue;
+    } catch { continue; }
+    out.push({
+      id: item.id, operation: item.operation, label: OP_LABELS[item.operation] ?? 'Opération',
+      reason: item.last_error ?? 'Refusée par le serveur', queuedAt: item.queued_at ?? '',
+      payload: item.payload, idempotencyKey: item.idempotency_key ?? null,
+    });
+  }
+  return out;
+}
+
+// ─────────────────────────────────────────────────────────────────────────────
+// Carnet: pending payments as ledger rows.
+// ─────────────────────────────────────────────────────────────────────────────
+
+export interface PendingLedgerPayment {
+  id: string;            // the op's idempotency key (one row per sale a split lands on: key, key#2, …)
+  order_id: string;
+  method: string;
+  amount: number;
+  date: string;
+  created_at: string;    // queued_at
+  _pending: true;
+}
+
+/** The ledger rows a client's still-queued payments will become, from rebuildPendingOverlay(cacheBaseline, ctx).payments. */
+export function pendingLedgerPayments(payments: PendingPaymentEvent[], clientSaleIds: Set<string>): PendingLedgerPayment[] {
+  const rows: PendingLedgerPayment[] = [];
+  for (const p of payments) {
+    if (p.failedPermanent) continue; // refused: not a payment she received
+    let n = 0;
+    for (const a of p.allocations) {
+      if (!clientSaleIds.has(a.saleId)) continue;
+      n += 1;
+      rows.push({
+        id: n === 1 ? p.id : `${p.id}#${n}`,
+        order_id: a.saleId, method: p.method, amount: a.amount, date: p.date, created_at: p.queuedAt, _pending: true,
+      });
+    }
+  }
+  return rows;
 }

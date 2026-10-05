@@ -12,6 +12,7 @@ import { Text } from '@/src/components/ui/Text';
 import { Button } from '@/src/components/ui/Button';
 import { DatePickerField } from '@/src/components/ui/DatePickerField';
 import { OfflineNotice } from '@/src/components/ui/OfflineNotice';
+import { RefusedOpsNotice } from '@/src/components/RefusedOpsNotice';
 import { useTheme, spacing, radius } from '@/src/theme';
 import type { Palette } from '@/src/theme';
 import { activeSalesTotals } from '@/src/utils/salesTotals';
@@ -1392,6 +1393,8 @@ export default function VentesScreen() {
           </Pressable>
         ))}
       </View>
+
+      <RefusedOpsNotice />
 
       {offline && (
         <OfflineNotice

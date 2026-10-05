@@ -34,7 +34,7 @@ import { supabase } from '@/lib/supabase';
 import { isNetworkError, withTimeout } from '@/lib/sync';
 import { saveDashboardKpiCache, getDashboardKpiCache, saveBestSellersCache, getBestSellersCache, getKV, setKV } from '@/lib/db';
 import { computeLocalKpis as kpisFromLocalState } from '@/src/utils/salesTotals';
-import { computeBestSellersDelta, mergeBestSellers, type OverlaySale } from '@/lib/pendingOverlay';
+import { buildReportDelta, applyTopSellers, type OverlaySale } from '@/lib/pendingOverlay';
 import { SkeletonKpiGrid } from '@/src/components/ui/SkeletonPlaceholder';
 import { haptics } from '@/lib/haptics';
 import { toast } from '@/stores/toast';
@@ -514,9 +514,14 @@ export default function AccueilScreen() {
   const bestSellers = useMemo<BestSeller[]>(() => {
     const now = new Date();
     const monthStart = `${now.getFullYear()}-${String(now.getMonth() + 1).padStart(2, '0')}-01`;
-    const known = new Set(products.map(p => p.id));
-    const deltas = computeBestSellersDelta(ventesSales as unknown as OverlaySale[], monthStart, known);
-    return mergeBestSellers(bestSellersBase, deltas);
+    const today = `${now.getFullYear()}-${String(now.getMonth() + 1).padStart(2, '0')}-${String(now.getDate()).padStart(2, '0')}`;
+    // The shared report-delta builder (lib/pendingOverlay.ts) — the same one
+    // Rapports uses — so the two screens cannot drift on what a pending sale adds.
+    const { topSellers } = buildReportDelta(
+      { sales: ventesSales as unknown as OverlaySale[] },
+      { start: monthStart, end: today, currentUserId: null, knownProductIds: new Set(products.map(p => p.id)) },
+    );
+    return applyTopSellers(bestSellersBase, topSellers);
   }, [bestSellersBase, ventesSales, products]);
 
   const lowStock = kpis?.low_stock ?? 0;

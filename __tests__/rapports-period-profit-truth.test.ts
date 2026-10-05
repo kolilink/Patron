@@ -27,6 +27,11 @@ jest.mock('@/lib/supabase', () => ({
     supabase: { rpc },
 }));
 
+// The store pairs every report with the outbox; these suites don't exercise that
+// (see rapports-read-side.test.ts), so keep the heavy store graph out.
+jest.mock('@/stores/ventes', () => ({ useVentesStore: { getState: () => ({ sales: [] }), subscribe: () => () => {} } }));
+jest.mock('@/stores/sync', () => ({ useSyncStore: { getState: () => ({ syncing: false }), subscribe: () => () => {} } }));
+
 let mockSession: unknown = null;
 jest.mock('@/stores/auth', () => ({
     useAuthStore: { getState: () => ({ session: mockSession }) },

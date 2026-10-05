@@ -19,7 +19,8 @@ import { formatAmountInput, parseAmountInput, formatAmount } from '@/src/utils/f
 import { useSaveConfirmationStore } from '@/stores/saveConfirmation';
 import { repaymentConfirmation } from '@/src/utils/saveConfirmationCopy';
 import { paymentOverlayCopy } from '@/src/utils/paymentOverlayCopy';
-import { saveClientLedgerCache, getClientLedgerCache } from '@/lib/db';
+import { saveClientLedgerCache, getClientLedgerCache, getVentesCache } from '@/lib/db';
+import { rebuildPendingOverlay, pendingLedgerPayments, type OverlaySale, type PendingLedgerPayment } from '@/lib/pendingOverlay';
 import { isNetworkError, withTimeout } from '@/lib/sync';
 import { OfflineNotice } from '@/src/components/ui/OfflineNotice';
 import { selectClientSales, clientBalance } from '@/src/utils/salesTotals';
@@ -61,7 +62,7 @@ const PAY_METHODS = [
 ];
 
 interface ClientRecord { id: string; name: string; phone: string | null; notes: string | null; }
-interface LedgerPayment { id: string; order_id: string; method: string; amount: number; date: string; created_at: string; }
+interface LedgerPayment { id: string; order_id: string; method: string; amount: number; date: string; created_at: string; _pending?: true }
 
 // One line on the carnet page — a credit given ("Donné") or a payment
 // received ("Reçu"). Built fresh from clientSales + ledgerPayments below,
@@ -289,6 +290,8 @@ export default function ClientLedgerScreen() {
   // displayName is resolved after clientRecord loads when routing by UUID
   const [displayName, setDisplayName] = useState(isClientId ? '' : routeParam);
   const [ledgerPayments, setLedgerPayments] = useState<LedgerPayment[]>([]);
+  // Payments still in the outbox, projected as the same per-sale rows the server will create.
+  const [pendingLedger, setPendingLedger] = useState<PendingLedgerPayment[]>([]);
   // order_id -> real product label ('Riz, sac de 5kg'), or '' for a bare
   // carnet debt (all lines are the "Solde reporté" placeholder). Absent key
   // = not loaded yet, which the carnet renders identically to bare (no
@@ -362,7 +365,39 @@ export default function ClientLedgerScreen() {
     }
   };
 
+  // Pending payments → ledger rows (id = idempotency key). Allocation runs against
+  // the SYNCED cache baseline (never the overlay-patched store sales, which would
+  // apply each payment twice).
+  const readPendingLedger = async (): Promise<PendingLedgerPayment[]> => {
+    try {
+      const session = useAuthStore.getState().session;
+      const isVend = session?.activeMembership?.role === 'vendeur';
+      const baseline = ((await getVentesCache(`${businessId}:${isVend ? session?.user.id : 'all'}`)) ?? []) as unknown as OverlaySale[];
+      const { payments } = await rebuildPendingOverlay(baseline, {
+        currentUserId: session?.user.id ?? null,
+        currentUserName: session?.user.name ?? '',
+        currentBusinessId: businessId,
+      });
+      const ids = new Set(selectClientSales(useVentesStore.getState().sales, routeParam, isClientId, displayName).map(x => x.id));
+      return pendingLedgerPayments(payments, ids);
+    } catch {
+      return [];
+    }
+  };
+
+  // Pairing with the server read: pending rows are read before AND after it, and
+  // only rows present at both ends are kept. A payment that drained during the
+  // fetch is dropped here (the server value is trusted) so it can never be
+  // counted twice; the post-sync refetch repairs the rare transient gap.
   const loadLedgerPayments = async () => {
+    const before = await readPendingLedger();
+    await loadLedgerPaymentsServer();
+    const after = await readPendingLedger();
+    const stillThere = new Set(after.map(r => r.id));
+    setPendingLedger(before.filter(r => stillThere.has(r.id)));
+  };
+
+  const loadLedgerPaymentsServer = async () => {
     const name = isClientId ? displayName : routeParam;
     const clientSales = isClientId
       ? sales.filter(s => s.client_id === routeParam || (s.client_id == null && s.customer_name === name))
@@ -500,20 +535,13 @@ export default function ClientLedgerScreen() {
     return Math.max(0, Math.floor((Date.now() - new Date(oldest + 'T00:00:00').getTime()) / 86400000));
   }, [creditSales]);
 
-  // Known, disclosed Phase-1 limitation (offline-first rewrite, §6): unlike
-  // totalSold (derived from `sales`, which stores/ventes.ts's
-  // refreshPendingOverlay keeps correct for a still-pending credit debt),
-  // ledgerPayments is a separate read from the `payments` table with no
-  // equivalent pending-overlay mechanism yet — a payment recorded while
-  // offline does not reduce this total until it actually syncs. The error
-  // direction is the safe one (this screen temporarily OVERSTATES what's
-  // owed, never understates it — no risk of a merchant under-collecting),
-  // and it self-corrects automatically the moment the queued payment
-  // drains. Building a payments-specific pending overlay to close this
-  // display lag is real, separate scope, not attempted here — deliberately
-  // not risked as a quick patch to this money-display calculation without
-  // the ability to verify it on a real device in this environment.
-  const { totalSold, totalPaid, totalOwed } = clientBalance(clientSales, ledgerPayments);
+  // (Historical note: a payment recorded offline used to leave this total
+  // overstated until it synced. pendingLedger below closes that — queued payments
+  // are projected into ledger rows via lib/pendingOverlay.ts.)
+  // ONE combined ledger (server rows + still-queued payments) feeds the banner total AND
+  // the rows below, so they cannot contradict each other.
+  const allPayments = useMemo<LedgerPayment[]>(() => [...ledgerPayments, ...pendingLedger], [ledgerPayments, pendingLedger]);
+  const { totalSold, totalPaid, totalOwed } = clientBalance(clientSales, allPayments);
 
   // The carnet page — one row per real entry, newest first. Cash ('paye')
   // sales are deliberately excluded entirely, not just hidden: a cash sale
@@ -545,7 +573,7 @@ export default function ClientLedgerScreen() {
         sourceId: s.id,
       });
     }
-    for (const p of ledgerPayments) {
+    for (const p of allPayments) {
       if (!creditSaleIds.has(p.order_id)) continue; // a cash sale's own self-payment, not a carnet event
       raw.push({
         key: `p-${p.id}`,
@@ -575,7 +603,7 @@ export default function ClientLedgerScreen() {
     });
 
     return withBalance.reverse(); // newest first — see the ORDER NOTE in the spec this implements
-  }, [clientSales, ledgerPayments, ledgerLines]);
+  }, [clientSales, allPayments, ledgerLines]);
 
   // "Aujourd'hui" / "Hier" / "27 sept." — day-level only, never a timestamp.
   // Deliberately shorter than the old day-group header's own date format
