@@ -172,7 +172,7 @@ export const useMarketStore = create<MarketStore>((set, get) => ({
         set({ loading: false, error: null, offline: true, offlineSince: null }); // show empty state, not an error
         return;
       }
-      set({ loading: false, error: translateError(err, 'Erreur de chargement') });
+      set({ loading: false, error: translateError(err, "Le chargement n'a pas abouti.") });
     }
   },
 
@@ -208,7 +208,7 @@ export const useMarketStore = create<MarketStore>((set, get) => ({
       }
       set({ creating: false });
     } catch (err) {
-      set({ creating: false, error: translateError(err, 'Erreur de création') });
+      set({ creating: false, error: translateError(err, "La création n'a pas abouti.") });
       throw err;
     }
   },

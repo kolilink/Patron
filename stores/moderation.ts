@@ -50,7 +50,7 @@ export const useModerationStore = create<ModerationStore>((set, get) => ({
                 set({ loading: false, error: 'Hors ligne — impossible de charger la file.' });
                 return;
             }
-            set({ loading: false, error: translateError(err, 'Erreur de chargement') });
+            set({ loading: false, error: translateError(err, "Le chargement n'a pas abouti.") });
         }
     },
 

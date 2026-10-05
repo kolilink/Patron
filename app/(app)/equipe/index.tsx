@@ -1144,7 +1144,7 @@ export default function EquipeScreen() {
             </View>
           ) : (
             <View style={styles.empty}>
-              <Text variant="body" color="secondary">Vous êtes seul pour l'instant</Text>
+              <Text variant="body" color="secondary">Aucun membre pour l'instant</Text>
               <Text variant="caption" color="secondary" style={{ textAlign: 'center', marginTop: spacing[1] }}>
                 Invitez un vendeur ou un gérant pour partager le travail
               </Text>
