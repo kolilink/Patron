@@ -1,17 +1,12 @@
 import { serve } from 'https://deno.land/std@0.177.0/http/server.ts';
 import { createClient } from 'https://esm.sh/@supabase/supabase-js@2';
-import { SafeError, safeErrorResponse } from '../_shared/errors.ts';
+import { SafeError } from '../_shared/errors.ts';
+import { handleCreatePhoneVerification, CreatePhoneVerificationDeps } from './handler.ts';
 
-const corsHeaders = {
-  'Access-Control-Allow-Origin': '*',
-  'Access-Control-Allow-Headers': 'authorization, x-client-info, apikey, content-type',
-};
-
-// Client IP as seen by the edge (Supabase forwards this header).
-function getClientIp(req: Request): string {
-  const fwd = req.headers.get('x-forwarded-for');
-  return fwd ? fwd.split(',')[0].trim() : 'unknown';
-}
+// All decision logic (rate limits, demo bypass, response shape) lives in
+// handler.ts so it is unit-tested; this file only wires the real services.
+// Phase 9 / Finding 1: the response never depends on whether the number is
+// already registered — see handler.ts.
 
 // Cryptographically-secure uniform 6-digit code (100000–999999).
 // Rejection sampling drops the top of the u32 range so `% 900000` carries no
@@ -39,170 +34,89 @@ async function hashToken(token: string): Promise<string> {
   return Array.from(new Uint8Array(digest)).map((b) => b.toString(16).padStart(2, '0')).join('');
 }
 
-serve(async (req) => {
-  if (req.method === 'OPTIONS') {
-    return new Response('ok', { headers: corsHeaders });
-  }
+serve((req) => {
+  const serviceClient = createClient(
+    Deno.env.get('SUPABASE_URL')!,
+    Deno.env.get('SUPABASE_SERVICE_ROLE_KEY')!,
+  );
 
-  try {
-    const { phone, login = false } = await req.json() as { phone: string; login?: boolean };
-    if (!phone) {
-      return new Response(JSON.stringify({ error: 'Numéro requis' }), {
-        status: 400,
-        headers: { ...corsHeaders, 'Content-Type': 'application/json' },
-      });
-    }
-
-    // Identify caller from their Supabase JWT
-    const authHeader = req.headers.get('Authorization');
-    if (!authHeader) {
-      return new Response(JSON.stringify({ error: 'Non authentifié' }), {
-        status: 401,
-        headers: { ...corsHeaders, 'Content-Type': 'application/json' },
-      });
-    }
-
-    const userClient = createClient(
-      Deno.env.get('SUPABASE_URL')!,
-      Deno.env.get('SUPABASE_ANON_KEY')!,
-      { global: { headers: { Authorization: authHeader } } },
-    );
-
-    const { data: { user }, error: userErr } = await userClient.auth.getUser();
-    if (userErr || !user) {
-      return new Response(JSON.stringify({ error: 'Utilisateur introuvable' }), {
-        status: 401,
-        headers: { ...corsHeaders, 'Content-Type': 'application/json' },
-      });
-    }
-
-    const serviceClient = createClient(
-      Deno.env.get('SUPABASE_URL')!,
-      Deno.env.get('SUPABASE_SERVICE_ROLE_KEY')!,
-    );
-
-    // ── Demo / App Store review bypass ───────────────────────────────────────
-    // ACCEPTED RISK (documented, not an oversight): Apple/Google reviewers have no
-    // WhatsApp access, so ONE reserved phone number (the DEMO_PHONE /
-    // DEMO_PHONES Supabase secrets — never committed to this repo) skips the
-    // WhatsApp send and rate limits and gets a fixed code. Anyone who learns
-    // that number AND the fixed code can log in as that reviewer account.
-    // Mitigations: the number is unpublished and lives only in Supabase
-    // secrets + App Store Connect review notes; the account is a throwaway
-    // review business with no real data; ROTATE both whenever review ends or
-    // the number may have leaked (update the secret, the demo profile's phone,
-    // and the review notes together). Do NOT write the number or the code in
-    // docs, comments or tests.
-    const DEMO_PHONE = Deno.env.get('DEMO_PHONE') ?? '';
-    const DEMO_PHONES = (Deno.env.get('DEMO_PHONES') ?? '').split(',').map(p => p.trim()).filter(Boolean);
-    const isDemo = (DEMO_PHONE !== '' && phone.trim() === DEMO_PHONE) || DEMO_PHONES.includes(phone.trim());
-
-    // ── Rate limiting (skip for demo) ─────────────────────────────────────────
-    if (!isDemo) {
+  // ── Demo / App Store review bypass (decided in handler.ts) ────────────────
+  // ACCEPTED RISK (documented, not an oversight): Apple/Google reviewers have no
+  // WhatsApp access, so ONE reserved phone number (the DEMO_PHONE /
+  // DEMO_PHONES Supabase secrets — never committed to this repo) skips the
+  // WhatsApp send and rate limits and gets a fixed code. Anyone who learns
+  // that number AND the fixed code can log in as that reviewer account.
+  // Mitigations: the number is unpublished and lives only in Supabase
+  // secrets + App Store Connect review notes; the account is a throwaway
+  // review business with no real data; ROTATE both whenever review ends or
+  // the number may have leaked (update the secret, the demo profile's phone,
+  // and the review notes together). Do NOT write the number or the code in
+  // docs, comments or tests.
+  const deps: CreatePhoneVerificationDeps = {
+    getUser: async (authHeader) => {
+      const userClient = createClient(
+        Deno.env.get('SUPABASE_URL')!,
+        Deno.env.get('SUPABASE_ANON_KEY')!,
+        { global: { headers: { Authorization: authHeader } } },
+      );
+      const { data: { user }, error } = await userClient.auth.getUser();
+      return error || !user ? null : { id: user.id };
+    },
+    countPhoneAttempts: async (phone, sinceIso) => {
       const { count } = await serviceClient
         .from('phone_verification_attempts')
         .select('*', { count: 'exact', head: true })
-        .eq('phone', phone.trim())
-        .gt('attempted_at', new Date(Date.now() - 10 * 60 * 1000).toISOString());
-
-      if ((count ?? 0) >= 5) {
-        return new Response(
-          JSON.stringify({ error: 'Trop de tentatives. Réessayez dans 10 minutes.' }),
-          { status: 429, headers: { ...corsHeaders, 'Content-Type': 'application/json' } },
-        );
-      }
-
-      // Secondary limit scoped per IP — the per-phone limit above doesn't stop
-      // an attacker rotating through many phone numbers to run up WhatsApp/Twilio costs.
-      const clientIp = getClientIp(req);
-      const { count: ipCount } = await serviceClient
+        .eq('phone', phone)
+        .gt('attempted_at', sinceIso);
+      return count ?? 0;
+    },
+    // Secondary limit scoped per IP — the per-phone limit doesn't stop an
+    // attacker rotating through many phone numbers to run up WhatsApp/Twilio costs.
+    countIpAttempts: async (ip, sinceIso) => {
+      const { count } = await serviceClient
         .from('ip_verification_attempts')
         .select('*', { count: 'exact', head: true })
-        .eq('ip', clientIp)
+        .eq('ip', ip)
         .eq('endpoint', 'phone')
-        .gt('attempted_at', new Date(Date.now() - 60 * 60 * 1000).toISOString());
-
-      if ((ipCount ?? 0) >= 20) {
-        return new Response(
-          JSON.stringify({ error: 'Trop de tentatives. Réessayez plus tard.' }),
-          { status: 429, headers: { ...corsHeaders, 'Content-Type': 'application/json' } },
-        );
-      }
-
-      await serviceClient.from('phone_verification_attempts').insert({ phone: phone.trim() });
-      await serviceClient.from('ip_verification_attempts').insert({ ip: clientIp, endpoint: 'phone' });
-
-      await serviceClient
-        .from('phone_verification_attempts')
-        .delete()
-        .lt('attempted_at', new Date(Date.now() - 60 * 60 * 1000).toISOString());
-
-      await serviceClient
-        .from('ip_verification_attempts')
-        .delete()
-        .lt('attempted_at', new Date(Date.now() - 60 * 60 * 1000).toISOString());
-    }
-
-    // ── Phone existence check (skip for demo) ─────────────────────────────────
-    if (!isDemo) {
-      const { data: existing } = await serviceClient
-        .from('profiles')
+        .gt('attempted_at', sinceIso);
+      return count ?? 0;
+    },
+    recordAttempts: async (phone, ip) => {
+      await serviceClient.from('phone_verification_attempts').insert({ phone });
+      await serviceClient.from('ip_verification_attempts').insert({ ip, endpoint: 'phone' });
+    },
+    purgeAttemptsBefore: async (iso) => {
+      await serviceClient.from('phone_verification_attempts').delete().lt('attempted_at', iso);
+      await serviceClient.from('ip_verification_attempts').delete().lt('attempted_at', iso);
+    },
+    // WhatsApp (Meta Cloud API), falling back to Twilio Verify.
+    sendOtp: async (phone, code) => {
+      const sentViaWhatsapp = await sendWhatsappOtp(phone, code);
+      if (!sentViaWhatsapp) await sendViaTwilioVerify(phone, code);
+    },
+    // token column holds the SHA-256 hex digest of the real code, never the
+    // code itself — verify-phone-code hashes the caller's guess the same way
+    // and compares digests. The plaintext only ever leaves this function via
+    // WhatsApp/Twilio to the user's own phone, never stored.
+    insertVerification: async ({ userId, phone, tokenHash, expiresAtIso }) => {
+      const { data, error } = await serviceClient
+        .from('phone_verifications')
+        .insert({ user_id: userId, phone, token: tokenHash, status: 'en_attente', expires_at: expiresAtIso })
         .select('id')
-        .eq('phone', phone.trim())
-        .maybeSingle();
-
-      if (!login && existing) {
-        return new Response(JSON.stringify({ error: 'PHONE_EXISTS' }), {
-          headers: { ...corsHeaders, 'Content-Type': 'application/json' },
-        });
-      }
-
-      if (login && !existing) {
-        return new Response(JSON.stringify({ error: 'PHONE_NOT_FOUND' }), {
-          headers: { ...corsHeaders, 'Content-Type': 'application/json' },
-        });
-      }
-    }
-
-    // ── Generate 6-digit code ─────────────────────────────────────────────────
+        .single();
+      if (error) throw error;
+      return data.id as string;
+    },
     // CSPRNG, not Math.random() — Deno exposes crypto.getRandomValues (the
     // Hermes limitation that forces Math.random() for client-side invite codes
     // does not apply server-side). Rejection-sampled to avoid modulo bias.
-    const token = isDemo ? '000000' : generateOtpCode();
-
-    // ── Send via WhatsApp (Meta Cloud API), fall back to Twilio Verify (skip for demo) ──
-    if (!isDemo) {
-      const sentViaWhatsapp = await sendWhatsappOtp(phone.trim(), token);
-      if (!sentViaWhatsapp) {
-        await sendViaTwilioVerify(phone.trim(), token);
-      }
-    }
-
-    // ── Insert verification row ───────────────────────────────────────────────
-    // token column holds the SHA-256 hex digest of the real code, never the
-    // code itself — verify-phone-code hashes the caller's guess the same way
-    // and compares digests. The plaintext `token` only ever leaves this
-    // function via WhatsApp/Twilio to the user's own phone, never stored.
-    const { data, error: insertErr } = await serviceClient
-      .from('phone_verifications')
-      .insert({
-        user_id:    user.id,
-        phone:      phone.trim(),
-        token:      await hashToken(token),
-        status:     'en_attente',
-        expires_at: new Date(Date.now() + 10 * 60 * 1000).toISOString(),
-      })
-      .select('id')
-      .single();
-
-    if (insertErr) throw insertErr;
-
-    return new Response(JSON.stringify({ verificationId: data.id }), {
-      headers: { ...corsHeaders, 'Content-Type': 'application/json' },
-    });
-  } catch (err) {
-    return safeErrorResponse(err, corsHeaders, 'create-phone-verification');
-  }
+    generateCode: generateOtpCode,
+    hashToken,
+    now: () => Date.now(),
+    demoPhone: Deno.env.get('DEMO_PHONE') ?? '',
+    demoPhones: Deno.env.get('DEMO_PHONES') ?? '',
+  };
+  return handleCreatePhoneVerification(req, deps);
 });
 
 // ── WhatsApp via Meta Cloud API (free for authentication templates) ─────────
