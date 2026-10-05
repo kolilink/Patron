@@ -1,384 +1,31 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
-import { Alert, Animated, Easing, InputAccessoryView, Platform, Pressable, ScrollView, StyleSheet, View } from 'react-native';
+import { Animated, Easing, Pressable, ScrollView, StyleSheet, View } from 'react-native';
 import { Ionicons } from '@expo/vector-icons';
 import { Screen } from '@/src/components/ui/Screen';
-import { FormSheet } from '@/src/components/ui/FormSheet';
 import { router } from 'expo-router';
-import { Button } from '@/src/components/ui/Button';
-import { Card } from '@/src/components/ui/Card';
-import { Input } from '@/src/components/ui/Input';
 import { Text } from '@/src/components/ui/Text';
-import { DatePickerField } from '@/src/components/ui/DatePickerField';
 import { OfflineNotice } from '@/src/components/ui/OfflineNotice';
-import { useTheme, spacing, radius, INFO_TAG } from '@/src/theme';
+import { SkeletonList } from '@/src/components/ui/SkeletonPlaceholder';
+import { EmptyState } from '@/src/components/ui/EmptyState';
+import { ExpenseRow } from '@/src/components/expenses/ExpenseRow';
+import { ExpenseSheet, type SheetMode } from '@/src/components/expenses/ExpenseSheet';
+import { CountUpAmount } from '@/src/components/expenses/CountUpAmount';
+import { UndoBar, type UndoBarState } from '@/src/components/expenses/UndoBar';
+import { ReceiptPhotoChip } from '@/src/components/expenses/ReceiptPhotoChip';
+import { useTheme, spacing, radius } from '@/src/theme';
 import type { Palette } from '@/src/theme';
 import { useAuthStore } from '@/stores/auth';
 import { useExpensesStore, type CreateExpenseData } from '@/stores/expenses';
-import { useProductStore } from '@/stores/products';
+import { useSyncStore } from '@/stores/sync';
 import type { Expense } from '@/src/types';
 import { haptics } from '@/lib/haptics';
-import { toast } from '@/stores/toast';
-import { SkeletonList } from '@/src/components/ui/SkeletonPlaceholder';
-import { ProofControl } from '@/src/components/ui/ProofControl';
-import { ProofPhotoField, type PickedImage } from '@/src/components/ui/ProofPhotoField';
-import { EmptyState } from '@/src/components/ui/EmptyState';
-import { attachTransactionProof } from '@/lib/proofs';
-import { formatAmountInput, parseAmountInput, formatAmount } from '@/src/utils/format';
-import { FAILURE_COPY } from '@/src/utils/failureCopy';
-import { formatDate } from '@/src/utils/dates';
-
-function fmt(n: number, cur: string) { return formatAmount(n, cur); }
-function todayIso() {
-  const d = new Date();
-  return `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, '0')}-${String(d.getDate()).padStart(2, '0')}`;
-}
-function yesterdayIso() {
-  const d = new Date();
-  d.setDate(d.getDate() - 1);
-  return `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, '0')}-${String(d.getDate()).padStart(2, '0')}`;
-}
-
-// iOS-only: suppresses the OS's auto-injected floating "Done" pill above
-// the numeric keyboard — this form already has a persistent, always-
-// visible footer button.
-const EXPENSE_FORM_SILENT_ACCESSORY_ID = 'depenses-form-silent-accessory';
-
-// ─── Expense Form ─────────────────────────────────────────────────────────────
-
-interface ExpenseFormProps {
-  visible: boolean;
-  editing: Expense | null;
-  onClose: () => void;
-  onSave: (data: CreateExpenseData, photo: PickedImage | null) => Promise<void>;
-  saving: boolean;
-  currency: string;
-  businessId: string;
-  userId: string;
-  offline: boolean;
-}
-
-function ExpenseFormModal({ visible, editing, onClose, onSave, saving, currency, businessId, userId, offline }: ExpenseFormProps) {
-  const { palette } = useTheme();
-  const styles = useMemo(() => makeStyles(palette), [palette]);
-  const [amount, setAmount] = useState('');
-  const [description, setDescription] = useState('');
-  const [date, setDate] = useState(todayIso());
-  const [dateMode, setDateMode] = useState<'hier' | 'aujourdhui' | 'autre'>('aujourdhui');
-  const [selectedProductId, setSelectedProductId] = useState<string | null>(null);
-  const [photo, setPhoto] = useState<PickedImage | null>(null);
-
-  const { products, fetchProducts } = useProductStore();
-  const activeProducts = useMemo(
-    () => products.filter(p => !p.archived),
-    [products],
-  );
-
-  useEffect(() => {
-    if (visible && products.length === 0 && businessId) {
-      void fetchProducts(businessId, userId);
-    }
-  }, [visible, businessId]);
-
-  useEffect(() => {
-    if (visible) {
-      setAmount(editing ? formatAmountInput(String(Math.round(editing.amount)), currency) : '');
-      setDescription(editing?.description ?? '');
-      setSelectedProductId(editing?.product_id ?? null);
-      setPhoto(null);
-      const today = todayIso();
-      const yesterday = yesterdayIso();
-      const d = editing?.date ?? today;
-      setDate(d);
-      setDateMode(d === today ? 'aujourdhui' : d === yesterday ? 'hier' : 'autre');
-    }
-  }, [visible, editing]);
-
-  const handleSave = async () => {
-    const amt = parseAmountInput(amount, currency);
-    if (!description.trim()) { Alert.alert('Écrivez un petit mot :)'); return; }
-    if (!amt || amt <= 0) { Alert.alert('Vérifiez le montant :)'); return; }
-    await onSave({ amount: amt, description, category: null, date, due_date: null, note: null, product_id: selectedProductId }, photo);
-  };
-
-  const isEdit = !!editing;
-
-  return (
-    <FormSheet
-      visible={visible}
-      onClose={onClose}
-      title={isEdit ? 'Modifier la dépense' : 'Nouvelle dépense'}
-      contentContainerStyle={styles.modalContent}
-      footer={
-        <View style={styles.modalFooter}>
-          <Button
-            label={(isEdit ? 'Enregistrer les modifications' : 'Enregistrer')} loadingLabel="Enregistrement"
-            onPress={handleSave}
-            loading={saving}
-            fullWidth
-            size="lg"
-          />
-        </View>
-      }
-      accessory={
-        Platform.OS === 'ios' ? (
-          <InputAccessoryView nativeID={EXPENSE_FORM_SILENT_ACCESSORY_ID}>
-            <View style={{ height: 0 }} />
-          </InputAccessoryView>
-        ) : undefined
-      }
-    >
-      <Input
-        label={`Montant (${currency})`}
-        value={amount}
-        onChangeText={v => setAmount(formatAmountInput(v, currency))}
-        keyboardType="decimal-pad"
-        inputAccessoryViewID={Platform.OS === 'ios' ? EXPENSE_FORM_SILENT_ACCESSORY_ID : undefined}
-      />
-
-      <Input
-        label="Description"
-        value={description}
-        onChangeText={setDescription}
-        placeholder="Carburant, loyer, salaire du gardien"
-      />
-
-      {activeProducts.length > 0 && (
-        <View style={{ gap: spacing[2] }}>
-          <Text variant="label">Produit concerné <Text variant="caption" color="secondary">(optionnel)</Text></Text>
-          <ScrollView horizontal showsHorizontalScrollIndicator={false} style={{ flexGrow: 0 }}>
-            {activeProducts.map(p => {
-              const active = selectedProductId === p.id;
-              return (
-                <Pressable
-                  key={p.id}
-                  onPress={() => setSelectedProductId(active ? null : p.id)}
-                  style={[styles.productChip, active && styles.productChipActive]}
-                >
-                  <Text
-                    variant="caption"
-                    numberOfLines={1}
-                    style={{ color: active ? palette.textInverse : palette.textPrimary }}
-                  >
-                    {p.name}
-                  </Text>
-                </Pressable>
-              );
-            })}
-          </ScrollView>
-        </View>
-      )}
-
-      <View style={{ gap: spacing[2] }}>
-        <Text variant="label">Date de la dépense</Text>
-        <View style={styles.datePills}>
-          {(['hier', 'aujourdhui', 'autre'] as const).map(mode => (
-            <Pressable
-              key={mode}
-              onPress={() => {
-                setDateMode(mode);
-                if (mode === 'hier') setDate(yesterdayIso());
-                else if (mode === 'aujourdhui') setDate(todayIso());
-              }}
-              style={[styles.datePill, dateMode === mode && styles.datePillActive]}
-            >
-              <Text variant="label" style={{ color: dateMode === mode ? palette.textInverse : palette.textSecondary }}>
-                {mode === 'hier' ? 'Hier' : mode === 'aujourdhui' ? "Aujourd'hui" : 'Autre date'}
-              </Text>
-            </Pressable>
-          ))}
-        </View>
-        {dateMode === 'autre' && (
-          <DatePickerField value={date} onChange={setDate} maxToday />
-        )}
-      </View>
-
-      {/* Image well — attach a receipt while recording the expense */}
-      <ProofPhotoField
-        existingUrl={editing?.proof_image_url}
-        existingWidth={editing?.proof_image_width}
-        existingHeight={editing?.proof_image_height}
-        value={photo}
-        onChange={setPhoto}
-        disabled={offline}
-      />
-    </FormSheet>
-  );
-}
-
-// ─── Single expense card ───────────────────────────────────────────────────────
-
-interface ExpenseCardProps {
-  expense: Expense;
-  currency: string;
-  isManager: boolean;
-  canEdit: boolean;
-  businessId: string;
-  userId: string;
-  offline: boolean;
-  onApprove: () => void;
-  onReject: () => void;
-  onEdit: () => void;
-  onProofAttached: () => void;
-}
-
-function ExpenseCard({ expense, currency, isManager, canEdit, businessId, userId, offline, onApprove, onReject, onEdit, onProofAttached }: ExpenseCardProps) {
-  const { palette } = useTheme();
-  const styles = useMemo(() => makeStyles(palette), [palette]);
-  const isPending = expense.status === 'en_attente';
-  const [confirmAction, setConfirmAction] = useState<'approve' | 'reject' | null>(null);
-  // Matches attach_transaction_proof's gate: admin/manager anytime, or the
-  // creator while the expense is still pending (the vendeur with the receipt).
-  const canAttachProof = isManager || (expense.created_by === userId && expense.status === 'en_attente');
-
-  const handleConfirm = () => {
-    if (confirmAction === 'approve') onApprove();
-    else if (confirmAction === 'reject') onReject();
-    setConfirmAction(null);
-  };
-
-  return (
-    <Card style={[styles.expRow, isPending && styles.expRowPending]}>
-      <View style={styles.expTop}>
-        <View style={{ flex: 1 }}>
-          <Text variant="label" numberOfLines={1}>{expense.description}</Text>
-          {expense.category === 'transport_achat' ? (
-            <View style={[styles.productTag, { backgroundColor: INFO_TAG.bg, flexDirection: 'row', alignItems: 'center', gap: 4 }]}>
-              <Ionicons name="cube-outline" size={11} color={INFO_TAG.text} />
-              <Text variant="caption" style={{ color: INFO_TAG.text }}>
-                {expense.product_name ? `Transport · ${expense.product_name}` : 'Transport'}
-              </Text>
-            </View>
-          ) : expense.product_name ? (
-            <View style={styles.productTag}>
-              <Text variant="caption" style={{ color: palette.primary }}>{expense.product_name}</Text>
-            </View>
-          ) : null}
-          {expense.note ? (
-            <Text variant="caption" color="secondary" numberOfLines={2}>{expense.note}</Text>
-          ) : null}
-        </View>
-        <View style={{ alignItems: 'flex-end', alignSelf: 'stretch' }}>
-          <Text variant="label" style={{ color: expense.status === 'rejete' ? palette.textSecondary : palette.warning }}>{fmt(expense.amount, currency)}</Text>
-          {expense.status === 'rejete' ? (
-            <View style={[styles.statusPill, { marginTop: 4, backgroundColor: palette.danger + '20', borderWidth: 1, borderColor: palette.danger + '60' }]}>
-              <Text variant="caption" style={{ color: palette.danger, fontWeight: '600' }}>Refusée</Text>
-            </View>
-          ) : null}
-          {canEdit ? (
-            <Pressable onPress={onEdit} style={[styles.editBtn, { marginTop: 4 }]}>
-              <Text variant="caption" style={{ color: palette.primary }}>Modifier</Text>
-            </Pressable>
-          ) : null}
-          <Text variant="caption" color="secondary" style={{ marginTop: 'auto' }}>
-            {formatDate(expense.date, 'short')}
-          </Text>
-        </View>
-      </View>
-
-      {isManager && isPending && (
-        confirmAction ? (
-          <View style={styles.actionRow}>
-            <Pressable
-              onPress={handleConfirm}
-              style={[styles.confirmBtn, { backgroundColor: confirmAction === 'approve' ? palette.success : palette.warning }]}
-            >
-              <Text variant="label" style={{ color: palette.textInverse }}>
-                {confirmAction === 'approve' ? '✓ Confirmer' : '✕ Confirmer le refus'}
-              </Text>
-            </Pressable>
-            <Pressable onPress={() => setConfirmAction(null)} style={styles.cancelBtn}>
-              <Text variant="label" color="secondary">Annuler</Text>
-            </Pressable>
-          </View>
-        ) : (
-          <View style={styles.actionRow}>
-            <Button label="Accepter" size="sm" onPress={() => { haptics.tap(); setConfirmAction('approve'); }} style={{ flex: 1 }} />
-            <Button label="Refuser" size="sm" variant="outline" onPress={() => { haptics.tap(); setConfirmAction('reject'); }} style={{ flex: 1 }} />
-          </View>
-        )
-      )}
-
-      <ProofControl
-        variant="row"
-        kind="expense"
-        id={expense.id}
-        businessId={businessId}
-        imageUrl={expense.proof_image_url}
-        imageWidth={expense.proof_image_width}
-        imageHeight={expense.proof_image_height}
-        attachedBy={expense.proof_attached_by}
-        attachedAt={expense.proof_attached_at}
-        canAttach={canAttachProof}
-        offline={offline}
-        onAttached={onProofAttached}
-        onDeleted={onProofAttached}
-      />
-    </Card>
-  );
-}
-
-// ─── Month accordion ───────────────────────────────────────────────────────────
-
-interface MonthGroupProps {
-  label: string;
-  total: number;
-  items: Expense[];
-  currency: string;
-  isManager: boolean;
-  userId: string;
-  businessId: string;
-  offline: boolean;
-  onApprove: (id: string) => void;
-  onReject: (id: string) => void;
-  onEdit: (e: Expense) => void;
-  onProofAttached: () => void;
-  defaultOpen: boolean;
-}
-
-function MonthGroup({ label, total, items, currency, isManager, userId, businessId, offline, onApprove, onReject, onEdit, onProofAttached, defaultOpen }: MonthGroupProps) {
-  const { palette } = useTheme();
-  const styles = useMemo(() => makeStyles(palette), [palette]);
-  const [open, setOpen] = useState(defaultOpen);
-
-  useEffect(() => {
-    if (defaultOpen) setOpen(true);
-  }, [defaultOpen, items.length]);
-
-  return (
-    <View style={styles.monthBlock}>
-      <Pressable onPress={() => { haptics.toggle(!open); setOpen(o => !o); }} style={styles.monthHeader}>
-        <Text variant="label" style={styles.monthLabel}>{label}</Text>
-        <View style={{ flexDirection: 'row', alignItems: 'center', gap: spacing[2] }}>
-          <Text variant="label" style={{ color: palette.warning }}>{fmt(total, currency)}</Text>
-          <Text variant="caption" color="secondary">{open ? '▲' : '▼'}</Text>
-        </View>
-      </Pressable>
-
-      {open && (
-        <View style={styles.monthItems}>
-          {items.map(e => (
-            <ExpenseCard
-              key={e.id}
-              expense={e}
-              currency={currency}
-              isManager={isManager}
-              canEdit={e.status === 'en_attente' && e.created_by === userId}
-              businessId={businessId}
-              userId={userId}
-              offline={offline}
-              onApprove={() => onApprove(e.id)}
-              onReject={() => onReject(e.id)}
-              onEdit={() => onEdit(e)}
-              onProofAttached={onProofAttached}
-            />
-          ))}
-        </View>
-      )}
-    </View>
-  );
-}
+import { formatAmount } from '@/src/utils/format';
+import { groupByMonthAndDay } from '@/src/utils/expenseUtils';
+import { expenseSubtitle } from '@/src/components/expenses/ExpenseRow';
 
 // ─── Main Screen ──────────────────────────────────────────────────────────────
+
+type Sheet = { mode: SheetMode; id: string | null } | null;
 
 export default function DepensesScreen() {
   const { palette } = useTheme();
@@ -390,11 +37,20 @@ export default function DepensesScreen() {
   const role = session?.activeMembership?.role;
   const isManager = role === 'administrateur' || role === 'manager';
 
-  const { expenses, loading, saving, error, offline, offlineSince, fetchExpenses, createExpense, updateExpense, approveExpense, rejectExpense } =
-    useExpensesStore();
+  const {
+    expenses, loading, saving, error, offline, offlineSince,
+    fetchExpenses, createExpense, updateExpense, deleteExpense, restoreExpense, approveExpense, rejectExpense,
+  } = useExpensesStore();
+  const lastSyncedAt = useSyncStore(s => s.lastSyncedAt);
 
-  const [showForm, setShowForm] = useState(false);
-  const [editingExpense, setEditingExpense] = useState<Expense | null>(null);
+  const [sheet, setSheet] = useState<Sheet>(null);
+  const [undoBar, setUndoBar] = useState<UndoBarState | null>(null);
+  const [photoChip, setPhotoChip] = useState<string | null>(null);
+  const [newId, setNewId] = useState<string | null>(null);
+  const [openMonths, setOpenMonths] = useState<Record<string, boolean>>({});
+  const barSeq = useRef(0);
+  // After the undo window closes on a fresh create, offer the receipt photo.
+  const pendingPhotoFor = useRef<{ barId: number; expenseId: string } | null>(null);
 
   const fabScale = useRef(new Animated.Value(1)).current;
   const fabOpacity = useRef(new Animated.Value(1)).current;
@@ -421,82 +77,106 @@ export default function DepensesScreen() {
     if (businessId) fetchExpenses(businessId);
   }, [businessId]);
 
-  const pendingExpenses = useMemo(
-    () => expenses.filter(e => e.status === 'en_attente'),
+  // Once the outbox has drained, show what the server now holds.
+  useEffect(() => {
+    if (businessId && lastSyncedAt) void fetchExpenses(businessId);
+  }, [lastSyncedAt]);
+
+  const canModify = useCallback(
+    (e: Expense) => isManager || (e.created_by === userId && e.status === 'en_attente'),
+    [isManager, userId],
+  );
+
+  const pendingExpenses = useMemo(() => expenses.filter(e => e.status === 'en_attente'), [expenses]);
+  // Month header + total, then day groups. Every total is a live sum over the
+  // rows below it — nothing stored, so it can never disagree with the list.
+  const months = useMemo(
+    () => groupByMonthAndDay(expenses.filter(e => e.status !== 'en_attente')),
     [expenses],
   );
 
-  const groupedNonPending = useMemo(() => {
-    const nonPending = expenses.filter(e => e.status !== 'en_attente');
-    const map = new Map<string, { label: string; total: number; items: Expense[] }>();
-    for (const e of nonPending) {
-      const d = new Date(e.date + 'T00:00:00');
-      const key = `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, '0')}`;
-      const label = formatDate(d, 'monthYear');
-      const group = map.get(key) ?? { label, total: 0, items: [] };
-      if (e.status === 'approuve') group.total += e.amount;
-      group.items.push(e);
-      map.set(key, group);
-    }
-    return Array.from(map.entries())
-      .sort((a, b) => b[0].localeCompare(a[0]))
-      .map(([key, g]) => ({ key, ...g }));
-  }, [expenses]);
+  const showBar = useCallback((message: string, onUndo: () => void | Promise<void>, photoFor?: string) => {
+    const id = ++barSeq.current;
+    pendingPhotoFor.current = photoFor ? { barId: id, expenseId: photoFor } : null;
+    setUndoBar({ id, text: message, onUndo });
+  }, []);
 
-  const handleSave = useCallback(async (data: CreateExpenseData, photo: PickedImage | null) => {
-    let expenseId: string | null;
-    if (editingExpense) {
-      const ok = await updateExpense(editingExpense.id, businessId, data);
-      expenseId = ok ? editingExpense.id : null;
-    } else {
-      expenseId = await createExpense(businessId, userId, data, isManager);
+  const onBarExpire = useCallback((id: number) => {
+    setUndoBar(cur => (cur && cur.id === id ? null : cur));
+    const p = pendingPhotoFor.current;
+    if (p && p.barId === id) {
+      pendingPhotoFor.current = null;
+      setPhotoChip(p.expenseId);
     }
-    if (!expenseId) {
-      Alert.alert('La dépense n\'est pas passée :)');
-      return;
-    }
+  }, []);
 
-    // Attach a picked image to the just-saved expense (best-effort; needs a
-    // live connection, so an offline-created expense gets its image later from
-    // the card). Skip if the expense already has one — it's immutable.
-    if (photo && !editingExpense?.proof_image_url) {
-      try {
-        await attachTransactionProof({
-          kind: 'expense', id: expenseId, businessId,
-          fileUri: photo.uri, sourceWidth: photo.width, sourceHeight: photo.height,
-        });
-        await fetchExpenses(businessId);
-      } catch {
-        // failure: speaks — expense saved, photo not attached: proofNotAttached toast
-        toast.info(`${FAILURE_COPY.proofNotAttached.what} ${FAILURE_COPY.proofNotAttached.why}`);
+  const barLabel = (e: Expense | null, data: CreateExpenseData) => {
+    const detail = e ? expenseSubtitle(e) : (data.note ?? '');
+    return `Dépense ${formatAmount(data.amount, currency)}${detail ? ` · ${detail}` : ''}`;
+  };
+
+  const handleSave = useCallback(async (data: CreateExpenseData, editingId: string | null): Promise<boolean> => {
+    if (editingId) {
+      const prev = expenses.find(e => e.id === editingId);
+      const ok = await updateExpense(editingId, businessId, data);
+      if (!ok) return false;
+      if (prev) {
+        const prior: CreateExpenseData = {
+          amount: prev.amount, description: prev.description, category: prev.category, date: prev.date,
+          due_date: prev.due_date, note: prev.note, product_id: prev.product_id ?? null,
+        };
+        showBar('Dépense modifiée', async () => { await updateExpense(editingId, businessId, prior); });
       }
+      return true;
     }
+    const id = await createExpense(businessId, userId, data, isManager);
+    if (!id) return false;
+    setNewId(id);
+    // Same code path as a delete: Annuler soft-deletes the row just created.
+    const productLine = useExpensesStore.getState().expenses.find(e => e.id === id);
+    showBar(barLabel(productLine ?? null, data), async () => {
+      pendingPhotoFor.current = null;
+      await deleteExpense(id, businessId);
+    }, id);
+    return true;
+  }, [expenses, businessId, userId, isManager, createExpense, updateExpense, deleteExpense, showBar]);
 
-    setShowForm(false);
-    setEditingExpense(null);
-    if (editingExpense) {
-      toast.success('Dépense mise à jour');
-    } else if (!isManager) {
-      toast.info('Dépense enregistrée — en attente du gérant');
-    } else {
-      haptics.success();
-    }
-  }, [editingExpense, businessId, userId, isManager, updateExpense, createExpense, fetchExpenses]);
+  const handleDelete = useCallback(async (e: Expense) => {
+    setSheet(null);
+    const ok = await deleteExpense(e.id, businessId);
+    if (!ok) { haptics.error(); return; }
+    haptics.tap();
+    if (photoChip === e.id) setPhotoChip(null);
+    showBar('Dépense supprimée', async () => { await restoreExpense(e.id, businessId); });
+  }, [businessId, deleteExpense, restoreExpense, showBar, photoChip]);
 
-  const handleEdit = (expense: Expense) => { setEditingExpense(expense); setShowForm(true); };
-  const handleAdd = () => { setEditingExpense(null); setShowForm(true); };
-
-  const handleApprove = useCallback(async (id: string) => {
-    const ok = await approveExpense(id, userId);
+  const handleApprove = useCallback(async (e: Expense) => {
+    setSheet(null);
+    const ok = await approveExpense(e.id, userId);
     if (ok) haptics.success(); else haptics.error();
   }, [approveExpense, userId]);
 
-  const handleReject = useCallback(async (id: string) => {
-    const ok = await rejectExpense(id, userId);
-    if (ok) haptics.error();
+  const handleReject = useCallback(async (e: Expense) => {
+    setSheet(null);
+    await rejectExpense(e.id, userId);
   }, [rejectExpense, userId]);
 
+  const handleAdd = () => setSheet({ mode: 'add', id: null });
+  const sheetExpense = sheet?.id ? expenses.find(e => e.id === sheet.id) ?? null : null;
+
   const isEmpty = expenses.length === 0;
+
+  const renderRow = (e: Expense) => (
+    <ExpenseRow
+      key={e.id}
+      expense={e}
+      currency={currency}
+      canModify={canModify(e)}
+      isNew={e.id === newId}
+      onPress={() => setSheet({ mode: 'detail', id: e.id })}
+      onDelete={() => handleDelete(e)}
+    />
+  );
 
   return (
     <Screen>
@@ -519,9 +199,9 @@ export default function DepensesScreen() {
       ) : isEmpty ? (
         <EmptyState
           icon="wallet-outline"
-          title="Aucune dépense pour le moment."
-          subtitle="Notez l'argent qui sort de votre commerce."
-          actionLabel="+ Ajouter une dépense"
+          title="Aucune dépense pour le moment"
+          subtitle="Vos dépenses apparaîtront ici, jour par jour."
+          actionLabel="+ Dépense"
           onAction={handleAdd}
         />
       ) : (
@@ -533,56 +213,53 @@ export default function DepensesScreen() {
                   EN ATTENTE · {pendingExpenses.length}
                 </Text>
               </View>
-              {pendingExpenses.map(e => (
-                <ExpenseCard
-                  key={e.id}
-                  expense={e}
-                  currency={currency}
-                  isManager={isManager}
-                  canEdit={e.created_by === userId}
-                  businessId={businessId}
-                  userId={userId}
-                  offline={offline}
-                  onApprove={() => handleApprove(e.id)}
-                  onReject={() => handleReject(e.id)}
-                  onEdit={() => handleEdit(e)}
-                  onProofAttached={() => fetchExpenses(businessId)}
-                />
-              ))}
+              {pendingExpenses.map(renderRow)}
             </View>
           )}
 
-          {groupedNonPending.map((group, groupIdx) => (
-            <MonthGroup
-              key={group.key}
-              label={group.label}
-              total={group.total}
-              items={group.items}
-              currency={currency}
-              isManager={isManager}
-              userId={userId}
-              businessId={businessId}
-              offline={offline}
-              onApprove={handleApprove}
-              onReject={handleReject}
-              onEdit={handleEdit}
-              onProofAttached={() => fetchExpenses(businessId)}
-              defaultOpen={groupIdx === 0}
-            />
-          ))}
+          {months.map((m, idx) => {
+            const open = openMonths[m.key] ?? idx === 0;
+            return (
+              <View key={m.key} style={styles.monthBlock}>
+                <Pressable
+                  onPress={() => { haptics.toggle(!open); setOpenMonths(o => ({ ...o, [m.key]: !open })); }}
+                  style={styles.monthHeader}
+                >
+                  <Text variant="label" style={styles.monthLabel}>{m.label}</Text>
+                  <View style={{ flexDirection: 'row', alignItems: 'center', gap: spacing[2] }}>
+                    <CountUpAmount value={m.total} currency={currency} style={{ color: palette.textPrimary }} />
+                    <Text variant="caption" color="secondary">{open ? '▲' : '▼'}</Text>
+                  </View>
+                </Pressable>
+                {open && m.days.map(d => (
+                  <View key={d.key} style={styles.dayBlock}>
+                    <Text variant="caption" color="secondary" style={styles.dayLabel}>{d.label}</Text>
+                    {d.items.map(renderRow)}
+                  </View>
+                ))}
+              </View>
+            );
+          })}
         </ScrollView>
       )}
 
-      <ExpenseFormModal
-        visible={showForm}
-        editing={editingExpense}
-        onClose={() => { setShowForm(false); setEditingExpense(null); }}
-        onSave={handleSave}
-        saving={saving}
+      <ExpenseSheet
+        visible={!!sheet}
+        mode={sheet?.mode ?? 'add'}
+        expense={sheetExpense}
+        expenses={expenses}
         currency={currency}
         businessId={businessId}
         userId={userId}
-        offline={offline}
+        saving={saving}
+        canModify={sheetExpense ? canModify(sheetExpense) : false}
+        canReview={isManager}
+        onClose={() => setSheet(null)}
+        onSave={handleSave}
+        onEditRequest={() => sheetExpense && setSheet({ mode: 'edit', id: sheetExpense.id })}
+        onDelete={handleDelete}
+        onApprove={handleApprove}
+        onReject={handleReject}
       />
 
       {!isEmpty && (
@@ -598,6 +275,20 @@ export default function DepensesScreen() {
           </Pressable>
         </Animated.View>
       )}
+
+      {photoChip && !undoBar ? (
+        <View style={styles.chipWrap} pointerEvents="box-none">
+          <ReceiptPhotoChip
+            expenseId={photoChip}
+            businessId={businessId}
+            offline={offline}
+            onDone={() => { setPhotoChip(null); void fetchExpenses(businessId); }}
+            onDismiss={() => setPhotoChip(null)}
+          />
+        </View>
+      ) : null}
+
+      <UndoBar state={undoBar} onExpire={onBarExpire} />
     </Screen>
   );
 }
@@ -632,6 +323,10 @@ function makeStyles(p: Palette) {
     },
     monthLabel: { textTransform: 'capitalize' },
     monthItems: { gap: spacing[2], paddingTop: spacing[2] },
+
+    dayBlock: { gap: spacing[2], paddingTop: spacing[3] },
+    dayLabel: { paddingHorizontal: spacing[1] },
+    chipWrap: { position: 'absolute', left: 0, right: 0, bottom: spacing[6], alignItems: 'center' },
 
     // Expense card
     expRow: { gap: spacing[2] },

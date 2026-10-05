@@ -71,11 +71,11 @@ describe('Phase 5 — misleading screens & dead ends', () => {
         expect(src).not.toMatch(/Aucune vente enregistrée\./);
     });
 
-    it('5.6 depenses/index.tsx renders a "Refusée" tag via statusPill for rejected expenses', () => {
-        const src = readSource('app/(app)/depenses/index.tsx');
-        expect(src).toMatch(/expense\.status === 'rejete' \? palette\.textSecondary : palette\.warning/);
-        expect(src).toMatch(/styles\.statusPill, \{ marginTop: 4, backgroundColor: palette\.danger \+ '20', borderWidth: 1, borderColor: palette\.danger \+ '60' \}\]/);
+    it('5.6 a rejected expense still renders a "Refusée" tag (neutral, never red)', () => {
+        const src = readSource('src/components/expenses/ExpenseRow.tsx');
+        expect(src).toMatch(/rejected && \{ color: palette\.textSecondary \}/);
         expect(src).toMatch(/>Refusée<\/Text>/);
+        expect(src).not.toMatch(/palette\.danger/);
     });
 
     it('5.7 fournisseurs/[id].tsx tells the truth about delete blockers and cascade erasure', () => {

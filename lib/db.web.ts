@@ -3,6 +3,7 @@
 export async function openDb(): Promise<void> { }
 export async function enqueue(_op: string, _payload: object): Promise<void> { }
 export async function deleteQueueItem(_id: number): Promise<void> { }
+export async function cancelPendingQueueItems(_operations: string[], _key: string): Promise<number> { return 0; }
 export async function getQueueCount(): Promise<number> { return 0; }
 export async function getFailedQueueCount(): Promise<number> { return 0; }
 // Outbox rework additions (lib/db.ts).
