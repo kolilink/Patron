@@ -11,10 +11,9 @@
 // cache semantics — it survives a simulated restart because it lives outside
 // the stores). The physical-device airplane-mode test remains separate.
 //
-// KNOWN GAP (Phase 1): Rapports offline serves the last cached server
-// snapshot with NO pending-sale overlay, so it cannot match the other three
-// surfaces until the shared report-delta builder lands. Pinned below as
-// `it.failing` so it flips loudly when that is fixed.
+// Rapports (the 4th surface) is on the same base + overlay as the others: offline it
+// serves the cached server report plus what the outbox adds, so a sale recorded
+// offline shows the same total on all four.
 
 const mockQueue: any[] = [];
 let mockNextId = 1;
@@ -93,7 +92,7 @@ jest.mock('@/lib/supabase', () => ({
         return { data: id, error: null };
       }
       if (fn === 'get_reports_snapshot') {
-        return { data: { role: 'administrateur', period_days: 30, revenue: serverSnapshotRevenueCents }, error: null };
+        return { data: { role: 'administrateur', period_days: 30, period_start: '2026-09-04', revenue: serverSnapshotRevenueCents, period_order_count: serverTables.sale_orders.length }, error: null };
       }
       return { data: null, error: null };
     },
@@ -155,7 +154,10 @@ function totalsSeenByScreens() {
   const home = computeLocalKpis({ cached: null, sales, products: [], variantsByProduct: {} });
   const ventes = activeSalesTotals(sales);
   const carnet = clientBalance(selectClientSales(sales, 'Aissatou', false, ''), []);
+  const rap = useRapportsStore.getState().snapshot;
   return {
+    rapportsRevenue: rap?.revenue,
+    rapportsOrders: rap?.period_order_count,
     homeCreditTotal: home.credit_total,
     homeRevenueToday: home.revenue_today,
     homeSalesToday: home.sales_today,
@@ -199,6 +201,7 @@ describe('airplane mode: record a sale offline', () => {
       homeCreditTotal: DEBT, homeRevenueToday: QUICK, homeSalesToday: 2,
       ventesCount: 2, ventesTotal: DEBT + QUICK,
       carnetOwed: DEBT,
+      rapportsRevenue: DEBT + QUICK, rapportsOrders: 2,   // base 0 (cached) + overlay
     });
     expect(useVentesStore.getState().offline).toBe(true);
     expect(writeCalls()).toEqual([]);              // nothing reached the server
@@ -240,11 +243,8 @@ describe('airplane mode: record a sale offline', () => {
   });
 });
 
-describe('Rapports offline parity — KNOWN GAP (Phase 1 shared report-delta builder)', () => {
-  // Offline Rapports = last cached server snapshot with no pending overlay, so
-  // a sale recorded offline is absent from it. Flip to a normal `it` when the
-  // shared builder lands and Rapports consumes it.
-  it.failing('Rapports shows the same total as Home/Ventes/Carnet for a sale recorded offline', async () => {
+describe('Rapports offline parity (formerly the pinned known gap)', () => {
+  it('Rapports shows the same total as Home/Ventes/Carnet for a sale recorded offline', async () => {
     mockQueue.length = 0;
     serverTables.sale_orders.length = 0; serverTables.payments.length = 0; serverSnapshotRevenueCents = 0;
     simulateRestart();

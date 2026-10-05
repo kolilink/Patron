@@ -5,6 +5,8 @@ import { router, useFocusEffect } from 'expo-router';
 import { Card } from '@/src/components/ui/Card';
 import { SkeletonKpiGrid } from '@/src/components/ui/SkeletonPlaceholder';
 import { OfflineNotice } from '@/src/components/ui/OfflineNotice';
+import { Button } from '@/src/components/ui/Button';
+import { RefusedOpsNotice } from '@/src/components/RefusedOpsNotice';
 import { Text } from '@/src/components/ui/Text';
 import { Pill } from '@/src/components/ui/Pill';
 import { DatePickerField } from '@/src/components/ui/DatePickerField';
@@ -161,6 +163,7 @@ export default function RapportsScreen() {
     previousYearReport, previousYearReportLoading, fetchPreviousYearReport,
     filterReport, filterReportLoading,
     periodOffline, periodOfflineSince,
+    yearReportError, filterReportError,
     fetchYearReport, fetchFilterReport, clearFilterReport,
   } = useRapportsStore();
 
@@ -496,6 +499,47 @@ export default function RapportsScreen() {
     );
   }
 
+  // Unknown is never zero: a failed load with nothing cached gets an error view
+  // with Réessayer — the numbers below only ever render from a real report.
+  if (yearReportError && !yearReport) {
+    return (
+      <Screen>
+        <View style={styles.hdr}>
+          <Pressable onPress={() => router.back()}>
+            <Text variant="body" color="secondary">‹ Retour</Text>
+          </Pressable>
+          <Text variant="h4">{seesWholeBusiness ? 'Les chiffres' : 'Mes chiffres'}</Text>
+          <View style={{ width: 60 }} />
+        </View>
+        <View style={styles.content}>
+          <Text variant="body" color="secondary" style={{ textAlign: 'center', marginTop: spacing[8] }}>
+            {yearReportError}
+          </Text>
+          <View style={{ marginTop: spacing[5], alignItems: 'center' }}>
+            <Button label="Réessayer" variant="outline" onPress={() => { if (role) fetchYearReport(businessId, year, role, userId); }} />
+          </View>
+        </View>
+      </Screen>
+    );
+  }
+
+  // Nothing known yet (first render before the fetch starts, or a fetch in
+  // flight): skeleton, never a screen of zeros.
+  if (!yearReport) {
+    return (
+      <Screen>
+        <View style={styles.hdr}>
+          <Pressable onPress={() => router.back()}>
+            <Text variant="body" color="secondary">‹ Retour</Text>
+          </Pressable>
+          <Text variant="h4">{seesWholeBusiness ? 'Les chiffres' : 'Mes chiffres'}</Text>
+          <View style={{ width: 60 }} />
+        </View>
+        <SkeletonKpiGrid />
+      </Screen>
+    );
+  }
+
   return (
     <Screen>
       <View style={styles.hdr}>
@@ -505,6 +549,8 @@ export default function RapportsScreen() {
         <Text variant="h4">{seesWholeBusiness ? 'Les chiffres' : 'Mes chiffres'}</Text>
         <View style={{ width: 60 }} />
       </View>
+
+      <RefusedOpsNotice />
 
       {periodOffline && (
         <OfflineNotice
@@ -643,15 +689,24 @@ export default function RapportsScreen() {
           {filterRange && (
             <>
               <SectionSep label={periodLabel} />
+              {filterReportError && !filterReport && !filterReportLoading && (
+                <View style={{ alignItems: 'center', gap: spacing[3], paddingVertical: spacing[4] }}>
+                  <Text variant="body" color="secondary" style={{ textAlign: 'center' }}>{filterReportError}</Text>
+                  <Button
+                    label="Réessayer" variant="outline" size="sm"
+                    onPress={() => { if (role && filterRange) fetchFilterReport(businessId, filterRange.start, filterRange.end, role, userId); }}
+                  />
+                </View>
+              )}
               {!isVendeur && (
                 <StatCard
-                  label="Bénéfice de la période" loading={filterReportLoading}
+                  label="Bénéfice de la période" loading={filterReportLoading || !filterReport}
                   value={fmt(filterReport?.net_profit ?? 0, currency)}
                   accent={(filterReport?.net_profit ?? 0) >= 0 ? palette.success : palette.warning}
                   bg={(filterReport?.net_profit ?? 0) >= 0 ? palette.successLight : palette.warningLight}
                 />
               )}
-              {renderVolumeRow(filterReport, filterReportLoading)}
+              {renderVolumeRow(filterReport, filterReportLoading || !filterReport)}
             </>
           )}
         </View>
