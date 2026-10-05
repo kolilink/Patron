@@ -19,7 +19,6 @@ interface TotalsSale {
 export interface HomeKpisCache {
   revenue_yesterday?: number;
   revenue_month?: number;
-  expenses_month?: number;
   first_sale_at?: string | null;
 }
 
@@ -31,7 +30,6 @@ export interface HomeKpis {
   credit_total: number;
   credit_count: number;
   low_stock: number;
-  expenses_month: number;
   first_sale_at: string | null;
 }
 
@@ -40,7 +38,7 @@ interface StockRow { reorder_level: number; stock_qty: number; has_variants?: bo
 const net = (s: TotalsSale) => s.total_amount - (s.discount_amount ?? 0);
 
 // Accueil's local-first KPI estimate: last cached server KPIs for the fields
-// only the server can know (yesterday, month, expenses), live sales for the rest.
+// only the server can know (yesterday, month), live sales for the rest.
 export function computeLocalKpis(args: {
   cached: HomeKpisCache | null;
   sales: (TotalsSale & { customer_name?: string | null })[];
@@ -62,7 +60,6 @@ export function computeLocalKpis(args: {
     credit_count: new Set(creditSales.map(s => s.customer_name).filter(Boolean)).size + creditSales.filter(s => !s.customer_name).length,
     low_stock: products.filter(p => !p.has_variants && p.reorder_level > 0 && p.stock_qty <= p.reorder_level).length
       + Object.values(variantsByProduct).flat().filter(v => v.reorder_level > 0 && v.stock_qty <= v.reorder_level).length,
-    expenses_month: cached?.expenses_month ?? 0,
     first_sale_at: cached?.first_sale_at ?? null,
   };
 }

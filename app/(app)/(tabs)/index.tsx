@@ -52,7 +52,6 @@ interface KPIs {
   credit_total: number;
   credit_count: number;
   low_stock: number;
-  expenses_month: number;
   // Lifetime — the business's very first real (status='paye') sale ever,
   // null if none yet. Drives the one-time "Première vente notée ✓"
   // acknowledgment; never scoped to today/this month like the rest of KPIs.
@@ -370,7 +369,9 @@ export default function AccueilScreen() {
       await Promise.all([
         fetchProducts(businessId, userId, membershipId, role),
         ventesReady.then(() => loadKpis()),
-        loadBestSellers(),
+        // Best sellers no longer render on Accueil; only an investisseur's own
+        // stake figures ("Vos produits") still read them.
+        isInvestisseur ? loadBestSellers() : Promise.resolve(),
       ]);
       if (isInvestisseur && membershipId) {
         fetchMemberScope(membershipId).then(rows => setInvestorScope(rows)).catch(() => { });
@@ -469,7 +470,6 @@ export default function AccueilScreen() {
         credit_total: Number(d.credit_total) / 100,
         credit_count: Number(d.credit_count),
         low_stock: Number(d.low_stock),
-        expenses_month: Number(d.expenses_month) / 100,
         first_sale_at: (d.first_sale_at as string | null) ?? null,
       };
       setKpis(freshKpis);
@@ -562,15 +562,6 @@ export default function AccueilScreen() {
     return { agingCount, oldestDays };
   }, [ventesSales]);
 
-  const visibleBestSellers = useMemo(() => {
-    const archivedIds = new Set(products.filter(p => p.archived).map(p => p.id));
-    if (isInvestisseur && investorScope.length > 0) {
-      const scopeIds = new Set(investorScope.map(s => s.product_id));
-      return bestSellers.filter(bs => scopeIds.has(bs.product_id) && !archivedIds.has(bs.product_id));
-    }
-    return bestSellers.filter(bs => !archivedIds.has(bs.product_id));
-  }, [bestSellers, products, isInvestisseur, investorScope]);
-
   // Investor gain: sum profit_share% of each assigned product's gross margin this month.
   // Gross margin per product = revenue - (qty sold × cost_price). Expenses are business-level
   // overhead and are not deducted here since the stake is in individual product margins.
@@ -589,7 +580,6 @@ export default function AccueilScreen() {
 
   const pendingPayout = payouts.find(p => p.status === 'en_attente');
 
-  const monthNet = rapportsSnapshot?.net_profit ?? 0;
   const monthOrderCount = rapportsSnapshot?.period_order_count ?? 0;
 
   const salesCount = kpis?.sales_today ?? 0;
@@ -806,11 +796,9 @@ export default function AccueilScreen() {
                   </View>
                   <View style={[styles.heroComparison, { marginTop: spacing[3] }]}>
                     <Text variant="caption" color="secondary">
-                      {monthNet > 0
-                        ? `Ce mois, bénéfice de ${formatAmount(monthNet, currency)} · ${monthOrderCount} vente${monthOrderCount !== 1 ? 's' : ''}`
-                        : monthOrderCount > 0
-                          ? `Ce mois · ${monthOrderCount} vente${monthOrderCount !== 1 ? 's' : ''}`
-                          : 'Aucune vente ce mois'}
+                      {monthOrderCount > 0
+                        ? `Ce mois · ${monthOrderCount} vente${monthOrderCount !== 1 ? 's' : ''}`
+                        : 'Aucune vente ce mois'}
                     </Text>
                   </View>
                 </Card>
@@ -996,26 +984,6 @@ export default function AccueilScreen() {
                   onDone={() => { setShowDebtCapture(false); loadAll(); }}
                 />
               )}
-
-              {/* ── Best sellers ── */}
-              {visibleBestSellers.length > 0 && (
-                <View style={styles.section}>
-                  <Text variant="label" color="secondary" style={styles.sectionTitle}>
-                    Produits qui marchent
-                  </Text>
-                  {visibleBestSellers.map((bs, i) => (
-                    <View key={bs.product_id} style={styles.bsRow}>
-                      <Text variant="caption" style={{ width: 20, color: palette.textSecondary }}>#{i + 1}</Text>
-                      <Text variant="body" style={{ flex: 1 }} numberOfLines={1}>{bs.product_name}</Text>
-                      <View style={{ alignItems: 'flex-end' }}>
-                        <Text variant="label">{amtOrMask(bs.total_revenue)}</Text>
-                        <Text variant="caption" color="secondary">{bs.total_qty} unité{bs.total_qty > 1 ? 's' : ''}</Text>
-                      </View>
-                    </View>
-                  ))}
-                </View>
-              )}
-
 
               {/* ── Zone 3: Month context — hidden in evening/night (already in comparison) ── */}
               {dayPart !== 'evening' && dayPart !== 'night' && hasMonthRevenue ? (
