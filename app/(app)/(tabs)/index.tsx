@@ -1,4 +1,5 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
+import { useReduceMotion } from '@/src/hooks/useReduceMotion';
 import { InputAccessoryView, KeyboardAvoidingView, Modal, Platform, Pressable, ScrollView, Share, StyleSheet, TextInput, View } from 'react-native';
 import { Gesture, GestureDetector } from 'react-native-gesture-handler';
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
@@ -139,6 +140,7 @@ function KpiCard({ label, value, sub, onPress, tone, icon }: {
 }
 
 export default function AccueilScreen() {
+  const reduceMotion = useReduceMotion();
   const { palette } = useTheme();
   const insets = useSafeAreaInsets();
   const styles = useMemo(() => makeStyles(palette, insets.bottom), [palette, insets.bottom]);
@@ -666,7 +668,7 @@ export default function AccueilScreen() {
         <Modal
           visible={showCarnetSheet}
           transparent
-          animationType="slide"
+          animationType={reduceMotion ? 'none' : 'slide'}
           onRequestClose={() => setShowCarnetSheet(false)}
           statusBarTranslucent
           navigationBarTranslucent
@@ -1028,7 +1030,7 @@ export default function AccueilScreen() {
         <Modal
           visible={showWithdrawSheet}
           transparent
-          animationType="slide"
+          animationType={reduceMotion ? 'none' : 'slide'}
           onRequestClose={() => setShowWithdrawSheet(false)}
           statusBarTranslucent
           navigationBarTranslucent

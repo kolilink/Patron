@@ -1,4 +1,5 @@
 import { useCallback, useMemo, useState } from 'react';
+import { haptics } from '@/lib/haptics';
 import { Alert, Linking, Pressable, StyleSheet, View } from 'react-native';
 import { useFocusEffect } from 'expo-router';
 import { Text } from '@/src/components/ui/Text';
@@ -86,7 +87,7 @@ export function FounderDashboard() {
           text: 'Marquer test',
           onPress: async () => {
             const { error: e } = await supabase.rpc('set_business_is_test', { p_business_id: row.business_id, p_is_test: true });
-            if (e) showFailureAlert(buildFailure({ what: FAILURE_COPY.testFlagNotChanged.what, why: failureReason(e), action: { label: 'Retour', onPress: () => {} } }));
+            if (e) { haptics.error(); showFailureAlert(buildFailure({ what: FAILURE_COPY.testFlagNotChanged.what, why: failureReason(e), action: { label: 'Retour', onPress: () => {} } })); }
             else reload();
           },
         },

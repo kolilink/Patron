@@ -439,10 +439,12 @@ export default function DmChatScreen() {
     if (!partnership_id) return;
     try {
       await removePartner(partnership_id, businessId);
+      haptics.destructive();
       toast.success(partnerRemovedConfirmation(partner?.display_name ?? 'partenaire'));
       router.back();
     } catch (err) {
       // failure: speaks — remove partner: failAlert + Réessayer
+      haptics.error();
       failAlert('partnerNotRemoved', { err, label: 'Réessayer', onPress: () => { void handleRemovePartner(); } });
     }
   }, [partnership_id, businessId, removePartner]);
@@ -652,7 +654,7 @@ export default function DmChatScreen() {
           </View>
           <Switch
             value={shareStockToggle}
-            onValueChange={setShareStockToggle}
+            onValueChange={v => { haptics.toggle(v); setShareStockToggle(v); }}
             trackColor={{ true: palette.primary }}
           />
         </View>

@@ -1915,6 +1915,7 @@ export default function VendreScreen() {
       closeConfirmSheet();
     } catch (shareErr) {
       // failure: speaks — receipt share failed: receiptNotShared
+      haptics.error();
       failAlert('receiptNotShared');
     } finally {
       setSharingReceipt(false);

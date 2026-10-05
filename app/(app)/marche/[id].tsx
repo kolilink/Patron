@@ -74,8 +74,7 @@ function PostHeaderBlock({
     const now = Date.now();
     if (now - lastTapRef.current < 300) {
       lastTapRef.current = 0;
-      haptics.tap();
-      onLike();
+      onLike(); // haptic fires once, in the caller's like handler
     } else {
       lastTapRef.current = now;
     }
@@ -187,8 +186,7 @@ function CommentItem({
     const now = Date.now();
     if (now - lastTapRef.current < 300) {
       lastTapRef.current = 0;
-      haptics.tap();
-      onLikeComment();
+      onLikeComment(); // haptic fires once, in the caller's like handler
     } else {
       lastTapRef.current = now;
     }
