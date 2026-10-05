@@ -56,7 +56,7 @@ damage, and the pre-flight below tells you whether any damage exists.
 | supplier_debts | amount | `bigint` | cents | yes |
 | supplier_debts | amount_paid | `bigint` | cents | yes |
 | supplier_payments | amount_cents | `bigint` | cents | yes |
-| so_lines | unit_price_paid | **not created by any migration** | cents (v104 reads it) | yes, if present |
+| so_lines | unit_price_paid | **absent in production too** (pre-flight 2026-10-05) | cents (v104 reads it) | skipped when absent |
 
 Money is `bigint` cents everywhere except the pre-v24 display-unit tables (`po_lines.unit_cost`,
 `purchase_orders.total_cost`, `investors.*`, `membership_product_scope.profit_share`), which are
