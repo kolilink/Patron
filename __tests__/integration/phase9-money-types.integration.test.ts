@@ -26,27 +26,44 @@ async function colType(c: Client, table: string, col: string): Promise<string | 
   return data_type === 'numeric' && numeric_precision ? `numeric(${numeric_precision},${numeric_scale})` : data_type;
 }
 
-/** Runs `fn` in a rolled-back transaction on a superuser connection. */
+/**
+ * Runs `fn` in a rolled-back transaction on a superuser connection.
+ *
+ * LOCK DISCIPLINE (this suite shares one database with ~58 others running in
+ * parallel): ALTER TABLE takes ACCESS EXCLUSIVE. Inside the transaction we therefore
+ * only ever touch the table being altered (UPDATE/ALTER/read) — ALL seeding that
+ * needs other tables (sale_orders, products, purchase_orders, FK parents) is
+ * committed BEFORE the transaction begins. Seeding inside it held FK/row locks on
+ * those parents while waiting on so_lines, and deadlocked against the
+ * delete_business suite (CI run 37339229614: "deadlock detected").
+ */
 async function inTx<T>(fn: (c: Client) => Promise<T>): Promise<T> {
   return withPg(async (c) => {
     await c.query('BEGIN');
+    await c.query(`SET LOCAL lock_timeout = '30s'`);
     try { return await fn(c); } finally { await c.query('ROLLBACK'); }
   });
 }
 
-async function seedLine(c: Client, unitPrice: number | string): Promise<{ orderId: string }> {
+/** Committed (outside any DDL transaction) so_lines row with a harmless integer price; returns its order id. */
+async function seedLine(price = 100): Promise<string> {
   const owner = await seedUser('mt-owner');
   const biz = await seedBusiness(owner);
   const prod = await seedProduct(biz, owner);
   const orderId = randomUUID();
-  await c.query(
-    `INSERT INTO sale_orders (id, business_id, seller_id, created_by, status, total_amount, discount_amount, sale_date)
-     VALUES ($1,$2,$3,$3,'paye',0,0,CURRENT_DATE)`, [orderId, biz, owner]);
-  await c.query(
-    `INSERT INTO so_lines (order_id, product_id, qty, unit_price, cost_price_at_sale, product_name)
-     VALUES ($1,$2,1,$3,1,'x')`, [orderId, prod, unitPrice]);
-  return { orderId };
+  await withPg(async (c) => {
+    await c.query(
+      `INSERT INTO sale_orders (id, business_id, seller_id, created_by, status, total_amount, discount_amount, sale_date)
+       VALUES ($1,$2,$3,$3,'paye',0,0,CURRENT_DATE)`, [orderId, biz, owner]);
+    await c.query(
+      `INSERT INTO so_lines (order_id, product_id, qty, unit_price, cost_price_at_sale, product_name)
+       VALUES ($1,$2,1,$3,1,'x')`, [orderId, prod, price]);
+  });
+  return orderId;
 }
+
+const setUnitPrice = (c: Client, orderId: string, v: number | string) =>
+  c.query(`UPDATE so_lines SET unit_price = $2 WHERE order_id = $1`, [orderId, v]);
 
 describe('replayed schema: every money column is already exact (the migration is a no-op there)', () => {
   it('applying v231 to the clean chain changes nothing and does not raise', async () => {
@@ -61,11 +78,13 @@ describe('replayed schema: every money column is already exact (the migration is
 
 describe('production drift: so_lines.unit_price is real (float4)', () => {
   it('converts to bigint and preserves every stored value exactly (incl. > 2^24, where float4 spacing is 8-16)', async () => {
+    const ids = [await seedLine(), await seedLine()];
     await inTx(async (c) => {
       await c.query(`ALTER TABLE so_lines ALTER COLUMN unit_price TYPE real USING unit_price::real`);
       expect(await colType(c, 'so_lines', 'unit_price')).toBe('real');
       // 150000 and 150000000 (1.5M GNF in cents) are both exactly representable in float4.
-      const ids = [(await seedLine(c, 150000)).orderId, (await seedLine(c, 150000000)).orderId];
+      await setUnitPrice(c, ids[0], 150000);
+      await setUnitPrice(c, ids[1], 150000000);
       const stored = (await c.query(`SELECT unit_price::double precision AS v FROM so_lines WHERE order_id = ANY($1) ORDER BY unit_price`, [ids])).rows.map(r => r.v);
 
       await c.query(MIGRATION);
@@ -78,9 +97,10 @@ describe('production drift: so_lines.unit_price is real (float4)', () => {
   });
 
   it('REFUSES (no silent rounding) when a drifted cents column holds a fractional value', async () => {
+    const id = await seedLine();
     await inTx(async (c) => {
       await c.query(`ALTER TABLE so_lines ALTER COLUMN unit_price TYPE real USING unit_price::real`);
-      await seedLine(c, 1500.5); // not whole cents: looks like display units, scale unknown
+      await setUnitPrice(c, id, 1500.5); // not whole cents: looks like display units, scale unknown
       await expect(c.query(MIGRATION)).rejects.toThrow(/so_lines\.unit_price.*not whole cents/s);
     });
     // transaction rolled back: nothing changed outside it either
@@ -88,9 +108,9 @@ describe('production drift: so_lines.unit_price is real (float4)', () => {
   });
 
   it('also converts a production-only so_lines.unit_price_paid (referenced by v104 but never created by the chain)', async () => {
+    const orderId = await seedLine(100000);
     await inTx(async (c) => {
       await c.query(`ALTER TABLE so_lines ADD COLUMN unit_price_paid real`);
-      const { orderId } = await seedLine(c, 100000);
       await c.query(`UPDATE so_lines SET unit_price_paid = 120000 WHERE order_id = $1`, [orderId]);
       await c.query(MIGRATION);
       expect(await colType(c, 'so_lines', 'unit_price_paid')).toBe('bigint');
@@ -100,9 +120,9 @@ describe('production drift: so_lines.unit_price is real (float4)', () => {
   });
 
   it('leaves NULLs NULL', async () => {
+    const orderId = await seedLine(100000);
     await inTx(async (c) => {
       await c.query(`ALTER TABLE so_lines ADD COLUMN unit_price_paid double precision`);
-      const { orderId } = await seedLine(c, 100000);
       await c.query(MIGRATION);
       const r = await c.query(`SELECT unit_price_paid FROM so_lines WHERE order_id = $1`, [orderId]);
       expect(r.rows[0].unit_price_paid).toBeNull();
@@ -112,12 +132,16 @@ describe('production drift: so_lines.unit_price is real (float4)', () => {
 
 describe('display-unit numeric money (po_lines.unit_cost numeric(15,2))', () => {
   it('a drifted float column becomes numeric(15,2) using the exact decimal the app wrote (12.34, not 12.3400001525879)', async () => {
+    // committed seeding (outside the DDL transaction — see inTx)
+    const owner = await seedUser('pl-owner'); const biz = await seedBusiness(owner); const prod = await seedProduct(biz, owner);
+    const po = await withPg(async (c) => {
+      const sup = (await c.query(`INSERT INTO suppliers (business_id, name, created_by) VALUES ($1,'S',$2) RETURNING id`, [biz, owner])).rows[0].id;
+      const id = (await c.query(`INSERT INTO purchase_orders (business_id, supplier_id, total_cost, created_by) VALUES ($1,$2,0,$3) RETURNING id`, [biz, sup, owner])).rows[0].id;
+      await c.query(`INSERT INTO po_lines (po_id, product_id, qty_ordered, unit_cost) VALUES ($1,$2,1,12.34)`, [id, prod]);
+      return id as string;
+    });
     await inTx(async (c) => {
       await c.query(`ALTER TABLE po_lines ALTER COLUMN unit_cost TYPE real USING unit_cost::real`);
-      const owner = await seedUser('pl-owner'); const biz = await seedBusiness(owner); const prod = await seedProduct(biz, owner);
-      const sup = (await c.query(`INSERT INTO suppliers (business_id, name, created_by) VALUES ($1,'S',$2) RETURNING id`, [biz, owner])).rows[0].id;
-      const po = (await c.query(`INSERT INTO purchase_orders (business_id, supplier_id, total_cost, created_by) VALUES ($1,$2,0,$3) RETURNING id`, [biz, sup, owner])).rows[0].id;
-      await c.query(`INSERT INTO po_lines (po_id, product_id, qty_ordered, unit_cost) VALUES ($1,$2,1,12.34)`, [po, prod]);
       await c.query(MIGRATION);
       expect(await colType(c, 'po_lines', 'unit_cost')).toBe('numeric(15,2)');
       const r = await c.query(`SELECT unit_cost::text AS v FROM po_lines WHERE po_id = $1`, [po]);
