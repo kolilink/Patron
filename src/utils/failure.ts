@@ -13,7 +13,7 @@
 //  - Static text. No animation on an error.
 
 import { extractRawMessage, friendlyMessage } from '@/lib/errors';
-import { isNetworkError } from '@/lib/sync';
+import { isNetworkError } from '@/lib/networkError';
 
 export interface FailureAction {
   label: string;

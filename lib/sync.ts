@@ -34,37 +34,9 @@ export type SyncResult = {
 
 let _running = false;
 
-// Shared by isNetworkError() and reportOfflineFallback() — a raw Error
-// instance is the exception, not the rule, in this codebase: by default
-// (no .throwOnError()), a failed Supabase call resolves with a plain
-// PostgrestError-shaped OBJECT ({ message, code, details, hint }), not a
-// thrown Error. String(plainObject) is the literal text "[object Object]",
-// not its message — isNetworkError() has always special-cased this (see
-// __tests__/offline-resilience.test.ts's regression guard); this used to be
-// duplicated ad hoc rather than shared, and reportOfflineFallback() was
-// missing the object-shape branch entirely, so every Sentry event for the
-// (most common) plain-object case logged "[object Object]" instead of the
-// actual message — silently defeating its own purpose.
-function extractErrorMessage(err: unknown): string {
-  if (err instanceof Error) return err.message;
-  if (err && typeof err === 'object' && 'message' in err) return String((err as { message: unknown }).message);
-  return String(err);
-}
-
-export function isNetworkError(err: unknown): boolean {
-  if (err instanceof Error && err.name === 'AbortError') return true;
-  const msg = extractErrorMessage(err).toLowerCase();
-  return (
-    msg.includes('fetch') ||
-    msg.includes('network') ||
-    msg.includes('failed to connect') ||
-    msg.includes('econnrefused') ||
-    msg.includes('etimedout') ||
-    msg.includes('timeout') ||
-    msg.includes('offline') ||
-    msg.includes('load failed')
-  );
-}
+import { isNetworkError, extractErrorMessage } from '@/lib/networkError';
+// Re-exported: callers keep importing isNetworkError from here.
+export { isNetworkError };
 
 // A genuine business rejection is a RAISE EXCEPTION with ERRCODE P0001 — this
 // codebase's convention for French, user-facing rejections (see CLAUDE.md's
