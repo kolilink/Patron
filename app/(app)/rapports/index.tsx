@@ -1,4 +1,6 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
+import { useReduceMotion } from '@/src/hooks/useReduceMotion';
+import { configureLayoutNext } from '@/src/hooks/useAnimateLayoutChange';
 import { Animated, Easing, LayoutAnimation, Platform, Pressable, ScrollView, StyleSheet, UIManager, View } from 'react-native';
 import { Screen } from '@/src/components/ui/Screen';
 import { router, useFocusEffect } from 'expo-router';
@@ -90,15 +92,19 @@ const FILTER_CHIPS: { key: FilterType; label: string }[] = [
 
 function ValueSkeleton() {
   const { palette } = useTheme();
+  const reduceMotion = useReduceMotion();
   const pulse = useRef(new Animated.Value(0.3)).current;
   useEffect(() => {
-    Animated.loop(
+    if (reduceMotion) { pulse.setValue(0.5); return; }
+    const loop = Animated.loop(
       Animated.sequence([
         Animated.timing(pulse, { toValue: 0.7, duration: 900, useNativeDriver: true, easing: Easing.inOut(Easing.ease) }),
         Animated.timing(pulse, { toValue: 0.3, duration: 900, useNativeDriver: true, easing: Easing.inOut(Easing.ease) }),
       ])
-    ).start();
-  }, [pulse]);
+    );
+    loop.start();
+    return () => loop.stop();
+  }, [pulse, reduceMotion]);
   return (
     <View style={{ height: 22, width: 88, borderRadius: 6, overflow: 'hidden', marginVertical: 1 }}>
       <Animated.View style={{ flex: 1, backgroundColor: palette.successLight, opacity: pulse }} />
@@ -200,7 +206,7 @@ export default function RapportsScreen() {
     if (Platform.OS === 'android') UIManager.setLayoutAnimationEnabledExperimental?.(true);
   }, []);
   const animateFilterChange = () => {
-    LayoutAnimation.configureNext(
+    configureLayoutNext(
       LayoutAnimation.create(280, LayoutAnimation.Types.easeInEaseOut, LayoutAnimation.Properties.opacity),
     );
   };

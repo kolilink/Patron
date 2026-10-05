@@ -1,4 +1,7 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
+import { AnimatedRowCell, AnimatedRow } from '@/src/components/ui/AnimatedRow';
+import { useReduceMotion } from '@/src/hooks/useReduceMotion';
+import { configureLayoutNext } from '@/src/hooks/useAnimateLayoutChange';
 import { Alert, Animated, Easing, FlatList, InputAccessoryView, LayoutAnimation, Platform, Pressable, ScrollView, StyleSheet, TextInput, UIManager, View } from 'react-native';
 import { Ionicons } from '@expo/vector-icons';
 import { Screen } from '@/src/components/ui/Screen';
@@ -81,6 +84,7 @@ function FournisseurForm({ visible, editing, products, onClose, onSave, saving }
   const [showCreate, setShowCreate] = useState(false);
   const [newProductName, setNewProductName] = useState('');
   const [dropdownOpen, setDropdownOpen] = useState(false);
+  const reduceMotion = useReduceMotion();
   const pulseAnim = useRef(new Animated.Value(1)).current;
 
   useEffect(() => {
@@ -95,9 +99,9 @@ function FournisseurForm({ visible, editing, products, onClose, onSave, saving }
         Animated.timing(pulseAnim, { toValue: 1.0, duration: 300, easing: Easing.inOut(Easing.ease), useNativeDriver: true }),
       ])
     );
-    if (visible) { pulseAnim.setValue(1); loop.start(); }
+    if (visible && !reduceMotion) { pulseAnim.setValue(1); loop.start(); } else pulseAnim.setValue(1);
     return () => loop.stop();
-  }, [visible]);
+  }, [visible, reduceMotion]);
 
   useEffect(() => {
     if (visible) {
@@ -117,7 +121,7 @@ function FournisseurForm({ visible, editing, products, onClose, onSave, saving }
     setLinkedIds(prev => { const s = new Set(prev); s.has(id) ? s.delete(id) : s.add(id); return s; });
 
   const handleToggleCreate = () => {
-    LayoutAnimation.configureNext(LayoutAnimation.Presets.easeInEaseOut);
+    configureLayoutNext(LayoutAnimation.Presets.easeInEaseOut);
     if (showCreate) setNewProductName('');
     setShowCreate(prev => !prev);
   };
@@ -126,7 +130,7 @@ function FournisseurForm({ visible, editing, products, onClose, onSave, saving }
     const trimmed = newProductName.trim();
     if (!trimmed) return;
     const tempId = `temp_${Date.now()}`;
-    LayoutAnimation.configureNext(LayoutAnimation.Presets.easeInEaseOut);
+    configureLayoutNext(LayoutAnimation.Presets.easeInEaseOut);
     setLocalProducts(prev => [...prev, { id: tempId, name: trimmed }]);
     setLinkedIds(prev => new Set([...prev, tempId]));
     setNewProductName('');
@@ -185,7 +189,7 @@ function FournisseurForm({ visible, editing, products, onClose, onSave, saving }
           {/* Dropdown trigger — flex: 1 */}
           <Pressable
             onPress={() => {
-              LayoutAnimation.configureNext(LayoutAnimation.Presets.easeInEaseOut);
+              configureLayoutNext(LayoutAnimation.Presets.easeInEaseOut);
               if (showCreate) { setShowCreate(false); setNewProductName(''); }
               setDropdownOpen(prev => !prev);
             }}
@@ -203,7 +207,7 @@ function FournisseurForm({ visible, editing, products, onClose, onSave, saving }
           {/* Pulsing circular + badge — right side, never moves */}
           <Pressable
             onPress={() => {
-              LayoutAnimation.configureNext(LayoutAnimation.Presets.easeInEaseOut);
+              configureLayoutNext(LayoutAnimation.Presets.easeInEaseOut);
               if (dropdownOpen) setDropdownOpen(false);
               setShowCreate(prev => !prev);
               if (showCreate) setNewProductName('');
@@ -228,7 +232,7 @@ function FournisseurForm({ visible, editing, products, onClose, onSave, saving }
                   key={p.id}
                   onPress={() => {
                     toggleProduct(p.id);
-                    LayoutAnimation.configureNext(LayoutAnimation.Presets.easeInEaseOut);
+                    configureLayoutNext(LayoutAnimation.Presets.easeInEaseOut);
                     setDropdownOpen(false);
                   }}
                   style={styles.prodDropdownItem}>
@@ -504,6 +508,7 @@ export default function FournisseursScreen() {
           supplier_id: supplierId,
         });
         if (pErr) {
+          haptics.error();
           showFailureAlert(buildFailure({
             what: `Le produit « ${np.name} » n'a pas été enregistré.`,
             why: failureReason(pErr),
@@ -547,7 +552,9 @@ export default function FournisseursScreen() {
 
   const fabScale = useRef(new Animated.Value(1)).current;
   const fabOpacity = useRef(new Animated.Value(1)).current;
+  const fabReduceMotion = useReduceMotion();
   useEffect(() => {
+    if (fabReduceMotion) { fabScale.setValue(1); fabOpacity.setValue(1); return; }
     const easing = Easing.inOut(Easing.sin);
     const loop = Animated.loop(
       Animated.sequence([
@@ -563,7 +570,7 @@ export default function FournisseursScreen() {
     );
     loop.start();
     return () => loop.stop();
-  }, []);
+  }, [fabReduceMotion]);
 
   return (
     <Screen>
@@ -622,6 +629,7 @@ export default function FournisseursScreen() {
         <FlatList
           data={fournisseurs}
           keyExtractor={f => f.id}
+          CellRendererComponent={AnimatedRowCell}
           contentContainerStyle={styles.list}
           renderItem={({ item }) => {
             const ac = AVATAR_PALETTE[item.name.charCodeAt(0) % AVATAR_PALETTE.length];
@@ -640,8 +648,8 @@ export default function FournisseursScreen() {
                         { text: 'Annuler', style: 'cancel' },
                         {
                           text: 'Supprimer', style: 'destructive', onPress: async () => {
-                            haptics.destructive();
                             const { ok, message } = await deleteFournisseur(item.id, businessId);
+                            if (ok) haptics.destructive(); else haptics.error();
                             if (ok) toast.success(supplierDeletedConfirmation(item.name));
                             else failAlert('supplierNotDeleted', { why: message ?? undefined });
                           }

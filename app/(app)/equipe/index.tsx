@@ -1,4 +1,5 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
+import { AnimatedRowCell, AnimatedRow } from '@/src/components/ui/AnimatedRow';
 import { useInFlight } from '@/src/hooks/useInFlight';
 import { LoadingStatus } from '@/src/components/ui/LoadingStatus';
 import { Alert, Animated, Easing, FlatList, InputAccessoryView, Linking, Modal, Platform, Pressable, ScrollView, Share, StyleSheet, TextInput, View } from 'react-native';
@@ -332,9 +333,9 @@ function MemberDetailSheet({
         text: 'Retirer',
         style: 'destructive',
         onPress: async () => {
-          haptics.destructive();
           const ok = await removeScopeProduct(membre.id, productId);
           if (ok) {
+            haptics.destructive();
             toast.success(stakeRemovedConfirmation(productName, membre.display_name ?? membre.user_name ?? generateFallbackName(membre.user_id)));
             const rows = await fetchMemberScope(membre.id);
             setScope(rows);
@@ -379,10 +380,10 @@ function MemberDetailSheet({
         text: 'Retirer',
         style: 'destructive',
         onPress: () => {
-          haptics.destructive();
           void runRemove(async () => {
             const ok = await removeMembre(membre.id);
             if (ok) {
+              haptics.destructive();
               // A removed member can only come back through a new invitation, so there is no
               // Annuler — the message names exactly who was removed.
               toast.success(memberRemovedConfirmation(membre.user_name || generateFallbackName(membre.user_id)));
@@ -606,7 +607,7 @@ function MemberDetailSheet({
                 <Text variant="caption" color="secondary">Chargement…</Text>
               ) : (
                 scope.map(s => (
-                  <View key={s.product_id} style={[styles.scopeRow, isInvestisseur && { flexDirection: 'column', alignItems: 'stretch', gap: spacing[3] }]}>
+                  <AnimatedRow key={s.product_id} id={s.product_id} style={[styles.scopeRow, isInvestisseur && { flexDirection: 'column', alignItems: 'stretch', gap: spacing[3] }]}>
                     <View style={styles.scopeRowTop}>
                       <Text variant="body" style={{ flex: 1 }} numberOfLines={2}>{s.product_name}</Text>
                       <Pressable
@@ -632,7 +633,7 @@ function MemberDetailSheet({
                         />
                       </View>
                     )}
-                  </View>
+                  </AnimatedRow>
                 ))
               )
             )}
@@ -1170,8 +1171,8 @@ export default function EquipeScreen() {
                     {groupMembres.map((item, i) => {
                       const shownName = item.display_name ?? item.user_name;
                       return (
+                        <AnimatedRow key={item.id} id={item.id}>
                         <Pressable
-                          key={item.id}
                           onPress={() => setSelectedMembre(item)}
                           style={({ pressed }) => [
                             styles.memberRow,
@@ -1196,6 +1197,7 @@ export default function EquipeScreen() {
                           </View>
                           <Ionicons name="chevron-forward" size={16} color={palette.textDisabled} />
                         </Pressable>
+                        </AnimatedRow>
                       );
                     })}
                   </View>
@@ -1210,6 +1212,7 @@ export default function EquipeScreen() {
         <FlatList
           data={codes}
           keyExtractor={c => c.id}
+          CellRendererComponent={AnimatedRowCell}
           contentContainerStyle={styles.list}
           ListEmptyComponent={<EmptyState icon="key-outline" title="Aucun code actif." />}
           ListFooterComponent={
@@ -1257,7 +1260,7 @@ export default function EquipeScreen() {
                         : `Valide · Expire dans ${item.expires_at ? Math.max(1, Math.ceil((new Date(item.expires_at).getTime() - Date.now()) / 3600000)) : '—'} h`}
                     </Text>
                   </View>
-                  <Pressable onPress={() => Alert.alert('Révoquer ce code ?', undefined, [{ text: 'Non', style: 'cancel' }, { text: 'Oui, révoquer', style: 'destructive', onPress: () => { haptics.destructive(); revokeCode(item.id).then(ok => { if (ok) { toast.success(inviteCodeRevokedConfirmation()); } else { haptics.error(); failAlert('codeNotRevoked', { err: useEquipeStore.getState().error, label: 'Réessayer', onPress: () => { void revokeCode(item.id).then(ok2 => { if (ok2) toast.success(inviteCodeRevokedConfirmation()); }); } }); } }); } }])}>
+                  <Pressable onPress={() => Alert.alert('Révoquer ce code ?', undefined, [{ text: 'Non', style: 'cancel' }, { text: 'Oui, révoquer', style: 'destructive', onPress: () => { revokeCode(item.id).then(ok => { if (ok) { haptics.destructive(); toast.success(inviteCodeRevokedConfirmation()); } else { haptics.error(); failAlert('codeNotRevoked', { err: useEquipeStore.getState().error, label: 'Réessayer', onPress: () => { void revokeCode(item.id).then(ok2 => { if (ok2) toast.success(inviteCodeRevokedConfirmation()); }); } }); } }); } }])}>
                     <Text variant="caption" color="danger">Révoquer</Text>
                   </Pressable>
                 </View>

@@ -1,4 +1,5 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
+import { AnimatedRowCell, AnimatedRow } from '@/src/components/ui/AnimatedRow';
 import { ActivityIndicator, Alert, Animated, Easing, FlatList, InputAccessoryView, Modal, Platform, Pressable, RefreshControl, ScrollView, StyleSheet, TextInput, View } from 'react-native';
 import { captureRef } from 'react-native-view-shot';
 import * as Sharing from 'expo-sharing';
@@ -514,7 +515,7 @@ function DetailModal({ sale, currency, businessName, singleVendor, role, onClose
       'Le stock sera restauré. Cette action est irréversible.',
       [
         { text: 'Retour', style: 'cancel' },
-        { text: 'Annuler la vente', style: 'destructive', onPress: () => { haptics.destructive(); onCancel(cancelReason); } },
+        { text: 'Annuler la vente', style: 'destructive', onPress: () => { onCancel(cancelReason); } },
       ],
     );
   };
@@ -1338,11 +1339,13 @@ export default function VentesScreen() {
     const sale = selected;
     const ok = await cancelSale(sale.id, businessId, userId, reason);
     if (ok) {
+      haptics.destructive();
       // cancel_sale restores the stock and has no reverse operation, so no Annuler:
       // the message names exactly which sale was cancelled.
       toast.success(saleCancelledConfirmation(sale.total_amount - (sale.discount_amount ?? 0), currency, sale.customer_name));
       setSelected(null);
     } else {
+      haptics.error();
       failAlert('saleNotCancelled', { err: useVentesStore.getState().error, label: 'Réessayer', onPress: () => { void handleCancel(reason); } });
     }
   };
@@ -1441,6 +1444,7 @@ export default function VentesScreen() {
       ) : (
         <FlatList
           data={visibleItems}
+          CellRendererComponent={AnimatedRowCell}
           keyExtractor={item => item.type === 'header' ? `hdr-${item.key}` : item.sale.id}
           contentContainerStyle={styles.list}
           refreshControl={

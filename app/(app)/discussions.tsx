@@ -1,4 +1,5 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
+import { useReduceMotion } from '@/src/hooks/useReduceMotion';
 import {
   Animated as RNAnimated,
   FlatList,
@@ -160,6 +161,7 @@ function MessageBubble({
   displayedName?: string;
 }) {
   const { palette } = useTheme();
+  const reduceMotion = useReduceMotion();
   const styles = useMemo(() => makeStyles(palette), [palette]);
   const time = new Date(msg.created_at).toLocaleTimeString(LOCALE, { hour: '2-digit', minute: '2-digit' });
   const br = bubbleRadius(isOwn, pos);
@@ -192,7 +194,7 @@ function MessageBubble({
         runOnJS(onReply)();
         runOnJS(haptics.tap)();
       }
-      translateX.value = withSpring(0, { damping: 20, stiffness: 400 });
+      translateX.value = reduceMotion ? 0 : withSpring(0, { damping: 20, stiffness: 400 });
     });
 
   // Double-tap the bubble to edit (own text messages, within the 15-minute window).
@@ -447,6 +449,7 @@ function PostCard({ post, isNew, isLiked, isOwnPost, onPress, onLike }: {
 
 export default function DiscussionsScreen() {
   const { palette } = useTheme();
+  const reduceMotion = useReduceMotion();
   const styles = useMemo(() => makeStyles(palette), [palette]);
   const insets = useSafeAreaInsets();
   const { width: screenWidth } = useWindowDimensions();
@@ -538,7 +541,8 @@ export default function DiscussionsScreen() {
 
   // Pulsing red dot animation while recording
   useEffect(() => {
-    if (!isRecording) { pulseAnim.setValue(1); return; }
+    // Reduce motion: the recording dot stays solid — no pulse.
+    if (!isRecording || reduceMotion) { pulseAnim.setValue(1); return; }
     const loop = RNAnimated.loop(
       RNAnimated.sequence([
         RNAnimated.timing(pulseAnim, { toValue: 0.3, duration: 600, useNativeDriver: true }),
@@ -547,7 +551,7 @@ export default function DiscussionsScreen() {
     );
     loop.start();
     return () => loop.stop();
-  }, [isRecording]);
+  }, [isRecording, reduceMotion]);
 
   // ─── Forum state ──────────────────────────────────────────────────────────
   const [selectedCat, setSelectedCat] = useState<'tout' | MarketCategory>('tout');
@@ -780,22 +784,23 @@ export default function DiscussionsScreen() {
   const switchTabAndFadeIn = useCallback((tab: Tab) => {
     setActiveTab(tab);
     if (businessId && (tab === 'boutique' || tab === 'marche')) markRead(tab as 'boutique' | 'marche', businessId);
-    contentAlpha.value = withTiming(1, { duration: 140 });
-  }, [businessId]);
+    contentAlpha.value = reduceMotion ? 1 : withTiming(1, { duration: 140 });
+  }, [businessId, reduceMotion]);
 
   const handleTabChange = useCallback((tab: Tab) => {
+    if (reduceMotion) { switchTabAndFadeIn(tab); return; }
     contentAlpha.value = withTiming(0, { duration: 80 }, (finished) => {
       if (finished) runOnJS(switchTabAndFadeIn)(tab);
     });
-  }, [switchTabAndFadeIn]);
+  }, [switchTabAndFadeIn, reduceMotion]);
 
   const scrollToMessage = useCallback((msgId: string) => {
     const index = listItems.findIndex(item => !isSep(item) && item.id === msgId);
     if (index === -1) return;
-    boutiqueFlatListRef.current?.scrollToIndex({ index, animated: true, viewPosition: 0.5 });
+    boutiqueFlatListRef.current?.scrollToIndex({ index, animated: !reduceMotion, viewPosition: 0.5 });
     setHighlightedMsgId(msgId);
     setTimeout(() => setHighlightedMsgId(null), 1500);
-  }, [listItems]);
+  }, [listItems, reduceMotion]);
 
   const cancelEdit = () => {
     setEditingMsg(null);
@@ -808,7 +813,6 @@ export default function DiscussionsScreen() {
     const code = inviteCode?.code ?? '';
     if (!code) return;
     await Clipboard.setStringAsync(code);
-    haptics.tap();
     toast.success('Code copié');
   }, [inviteCode?.code]);
 

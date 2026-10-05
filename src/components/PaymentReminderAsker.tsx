@@ -12,6 +12,7 @@ import Animated, {
   runOnJS,
   Easing,
 } from 'react-native-reanimated';
+import { useReduceMotion } from '@/src/hooks/useReduceMotion';
 import { Ionicons } from '@expo/vector-icons';
 import { Text } from '@/src/components/ui/Text';
 import { Button } from '@/src/components/ui/Button';
@@ -211,6 +212,7 @@ const STAGGER_MS = 50;
 const ITEM_ENTER_MS = 260;
 
 function ReminderSheet({ visible, onLater, onActivate, palette }: SheetProps) {
+  const reduceMotion = useReduceMotion();
   const scrimOpacity = useSharedValue(0);
   const sheetY = useSharedValue(SHEET_MAX_HEIGHT + 40);
   const dragStartY = useSharedValue(0);
@@ -224,30 +226,45 @@ function ReminderSheet({ visible, onLater, onActivate, palette }: SheetProps) {
   useEffect(() => {
     if (visible) {
       setMounted(true);
-      scrimOpacity.value = withTiming(1, { duration: 250, easing: Easing.out(Easing.ease) });
-      sheetY.value = withSpring(0, { damping: 16, stiffness: 180, mass: 0.9 });
+      if (reduceMotion) {
+        // State changes apply instantly: sheet in place, items shown, no bell swing.
+        scrimOpacity.value = 1;
+        sheetY.value = 0;
+        itemOpacity.forEach(v => { v.value = 1; });
+        itemY.forEach(v => { v.value = 0; });
+        bellRotate.value = 0;
+      } else {
+        scrimOpacity.value = withTiming(1, { duration: 250, easing: Easing.out(Easing.ease) });
+        sheetY.value = withSpring(0, { damping: 16, stiffness: 180, mass: 0.9 });
 
-      itemOpacity.forEach((v, i) => {
-        v.value = withDelay(i * STAGGER_MS, withTiming(1, { duration: ITEM_ENTER_MS, easing: Easing.out(Easing.ease) }));
-      });
-      itemY.forEach((v, i) => {
-        v.value = withDelay(i * STAGGER_MS, withTiming(0, { duration: ITEM_ENTER_MS, easing: Easing.out(Easing.ease) }));
-      });
+        itemOpacity.forEach((v, i) => {
+          v.value = withDelay(i * STAGGER_MS, withTiming(1, { duration: ITEM_ENTER_MS, easing: Easing.out(Easing.ease) }));
+        });
+        itemY.forEach((v, i) => {
+          v.value = withDelay(i * STAGGER_MS, withTiming(0, { duration: ITEM_ENTER_MS, easing: Easing.out(Easing.ease) }));
+        });
 
-      // One gentle swing, after the icon has faded in — never loops.
-      bellRotate.value = withDelay(
-        STAGGER_MS + ITEM_ENTER_MS * 0.4,
-        withSequence(
-          withTiming(12, { duration: 220, easing: Easing.out(Easing.ease) }),
-          withTiming(-12, { duration: 260, easing: Easing.inOut(Easing.ease) }),
-          withTiming(0, { duration: 220, easing: Easing.out(Easing.ease) }),
-        ),
-      );
+        // One gentle swing, after the icon has faded in — never loops.
+        bellRotate.value = withDelay(
+          STAGGER_MS + ITEM_ENTER_MS * 0.4,
+          withSequence(
+            withTiming(12, { duration: 220, easing: Easing.out(Easing.ease) }),
+            withTiming(-12, { duration: 260, easing: Easing.inOut(Easing.ease) }),
+            withTiming(0, { duration: 220, easing: Easing.out(Easing.ease) }),
+          ),
+        );
+      }
     } else if (mounted) {
-      scrimOpacity.value = withTiming(0, { duration: 250, easing: Easing.in(Easing.ease) });
-      sheetY.value = withTiming(SHEET_MAX_HEIGHT + 40, { duration: 300, easing: Easing.in(Easing.ease) }, (finished) => {
-        if (finished) runOnJS(setMounted)(false);
-      });
+      if (reduceMotion) {
+        scrimOpacity.value = 0;
+        sheetY.value = SHEET_MAX_HEIGHT + 40;
+        setMounted(false);
+      } else {
+        scrimOpacity.value = withTiming(0, { duration: 250, easing: Easing.in(Easing.ease) });
+        sheetY.value = withTiming(SHEET_MAX_HEIGHT + 40, { duration: 300, easing: Easing.in(Easing.ease) }, (finished) => {
+          if (finished) runOnJS(setMounted)(false);
+        });
+      }
       itemOpacity.forEach(v => { v.value = 0; });
       itemY.forEach(v => { v.value = 8; });
       bellRotate.value = 0;
@@ -266,7 +283,7 @@ function ReminderSheet({ visible, onLater, onActivate, palette }: SheetProps) {
       if (shouldDismiss) {
         runOnJS(onLater)();
       } else {
-        sheetY.value = withSpring(0, { damping: 16, stiffness: 180, mass: 0.9 });
+        sheetY.value = reduceMotion ? 0 : withSpring(0, { damping: 16, stiffness: 180, mass: 0.9 });
       }
     });
 

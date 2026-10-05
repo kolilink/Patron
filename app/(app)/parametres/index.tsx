@@ -125,6 +125,8 @@ export default function ParametresScreen() {
     setEnabled(value);
     setHapticsEnabled(value);
     void setKV(HAPTICS_KV_KEY, value ? 'true' : 'false');
+    // State first, then fire: turning off lands silent, turning on lands a tick.
+    haptics.toggle(value);
   };
 
   // Per-sale push opt-out — see migration_v184.sql. Optimistic toggle with
@@ -135,6 +137,7 @@ export default function ParametresScreen() {
   const [notifyEverySale, setNotifyEverySale] = useState(session?.user.notify_on_every_sale ?? true);
   const handleToggleNotifyEverySale = async (value: boolean) => {
     setNotifyEverySale(value);
+    haptics.toggle(value);
     const { error } = await supabase.from('profiles').update({ notify_on_every_sale: value }).eq('id', userId);
     if (error) {
       setNotifyEverySale(!value);
@@ -170,7 +173,7 @@ export default function ParametresScreen() {
     }
     const granted = await requestNotificationPermission();
     setPaymentRemindersGranted(granted);
-    if (granted) toast.success('Rappels activés ✓');
+    if (granted) { haptics.toggle(true); toast.success('Rappels activés ✓'); }
   };
 
   // Email recovery linking
