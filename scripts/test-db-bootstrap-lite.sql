@@ -15,6 +15,7 @@ CREATE SCHEMA IF NOT EXISTS auth;
 CREATE TABLE IF NOT EXISTS auth.users (
   id uuid PRIMARY KEY DEFAULT gen_random_uuid(),
   email text, phone text, raw_user_meta_data jsonb DEFAULT '{}'::jsonb,
+  aud text, role text,
   is_anonymous boolean DEFAULT false, created_at timestamptz DEFAULT now());
 CREATE OR REPLACE FUNCTION auth.uid() RETURNS uuid LANGUAGE sql STABLE AS
 $$ SELECT nullif(coalesce(current_setting('request.jwt.claim.sub', true),

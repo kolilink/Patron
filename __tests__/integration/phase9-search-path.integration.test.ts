@@ -30,6 +30,8 @@ describe('enumeration — no public function is left without a pinned search_pat
       FROM pg_proc p
       WHERE p.pronamespace = 'public'::regnamespace AND p.prokind = 'f'
         AND NOT EXISTS (SELECT 1 FROM pg_depend d WHERE d.objid = p.oid AND d.deptype = 'e')
+        -- other suites create transient scaffolding functions named _xxx (e.g. _v230_boom) while running in parallel
+        AND p.proname NOT LIKE '\\_%'
         AND NOT EXISTS (SELECT 1 FROM unnest(coalesce(p.proconfig, '{}')) c WHERE c LIKE 'search_path=%')
       ORDER BY 1`);
     expect(rows.map(r => r.fn)).toEqual([]);

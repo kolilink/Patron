@@ -200,7 +200,9 @@ describe('migration_v230 — delete_business on a business with sales', () => {
     // A BEFORE DELETE trigger on businesses that always fails, so the delete
     // blows up AFTER the triggers were muted.
     await q(`CREATE OR REPLACE FUNCTION _v230_boom() RETURNS trigger LANGUAGE plpgsql AS $$ BEGIN RAISE EXCEPTION 'v230 boom' USING ERRCODE = 'P0001'; END $$`);
-    await q(`CREATE TRIGGER _v230_boom BEFORE DELETE ON businesses FOR EACH ROW EXECUTE FUNCTION _v230_boom()`);
+    // WHEN-scoped to this test's business: the table is shared with every other suite running in parallel,
+    // and an unscoped trigger made unrelated deletes (finalize-account-deletion) fail with 'v230 boom'.
+    await q(`CREATE TRIGGER _v230_boom BEFORE DELETE ON businesses FOR EACH ROW WHEN (OLD.id = '${s.businessId}') EXECUTE FUNCTION _v230_boom()`);
     try {
       await expect(
         asUser(founderId, c => c.query(`SELECT delete_business($1)`, [s.businessId])),
