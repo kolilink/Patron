@@ -256,7 +256,7 @@ export const useProductStore = create<ProductStore>((set, get) => ({
         return;
       }
       if (isStaleBusiness(businessId)) return;
-      set({ error: translateError(err, 'Erreur de chargement'), loading: false, productsFetchedFor: businessId });
+      set({ error: translateError(err, "Le chargement n'a pas abouti."), loading: false, productsFetchedFor: businessId });
     }
   },
 
@@ -281,7 +281,7 @@ export const useProductStore = create<ProductStore>((set, get) => ({
       set({ archivedProducts });
     } catch (err) {
       if (isStaleBusiness(businessId)) return;
-      set({ error: translateError(err, 'Erreur de chargement') });
+      set({ error: translateError(err, "Le chargement n'a pas abouti.") });
     }
   },
 

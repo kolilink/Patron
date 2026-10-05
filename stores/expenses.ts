@@ -122,7 +122,7 @@ export const useExpensesStore = create<ExpensesStore>((set, get) => ({
         return;
       }
       if (isStaleBusiness(businessId)) return;
-      set({ error: translateError(err, 'Erreur de chargement'), loading: false });
+      set({ error: translateError(err, "Le chargement n'a pas abouti."), loading: false });
     }
   },
 

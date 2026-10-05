@@ -78,7 +78,7 @@ export const useAlphaStore = create<AlphaStore>((set, get) => ({
         reportOfflineFallback('alpha.load', err);
         set({ loading: false, offline: true });
       } else {
-        set({ loading: false, error: translateError(err, 'Erreur de chargement') });
+        set({ loading: false, error: translateError(err, "Le chargement n'a pas abouti.") });
       }
     }
   },

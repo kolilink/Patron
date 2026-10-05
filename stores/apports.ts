@@ -119,7 +119,7 @@ export const useAportsStore = create<AportsStore>((set, get) => ({
         set({ loading: false, offline: true, offlineSince: null, error: null });
         return;
       }
-      set({ loading: false, error: translateError(error, 'Erreur de chargement') });
+      set({ loading: false, error: translateError(error, "Le chargement n'a pas abouti.") });
       return;
     }
 

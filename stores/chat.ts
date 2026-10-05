@@ -261,7 +261,7 @@ export const useChatStore = create<ChatStore>((set, get) => ({
         }
         set({ loading: false, offline: true, offlineSince: null });
       } else {
-        set({ loading: false, error: translateError(err, 'Erreur de chargement') });
+        set({ loading: false, error: translateError(err, "Le chargement n'a pas abouti.") });
       }
     }
   },

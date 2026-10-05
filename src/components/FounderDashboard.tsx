@@ -67,7 +67,7 @@ export function FounderDashboard() {
         setKpis(k.data as FounderKpis);
         setLists(l.data as CallLists);
       } catch (err) {
-        if (!cancelled) setError(translateError(err, 'Erreur de chargement'));
+        if (!cancelled) setError(translateError(err, "Le chargement n'a pas abouti."));
       } finally {
         if (!cancelled) setLoading(false);
       }
