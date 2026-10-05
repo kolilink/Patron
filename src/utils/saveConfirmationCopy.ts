@@ -34,6 +34,36 @@ export function cashSaleConfirmation(amount: number, currency: string): string {
   return `Enregistré — vente de ${formatAmount(amount, currency)}.`;
 }
 
+// ── Deletes: undo where it exists, otherwise a message naming exactly what went ──
+export function archivedConfirmation(productName: string): string {
+  return `${productName} archivé.`;
+}
+
+export function saleCancelledConfirmation(amount: number, currency: string, customer?: string | null): string {
+  const amt = formatAmount(amount, currency);
+  return customer ? `Vente annulée : ${customer}, ${amt}.` : `Vente annulée : ${amt}.`;
+}
+
+export function supplierDeletedConfirmation(name: string): string {
+  return `Fournisseur supprimé : ${name}.`;
+}
+
+export function memberRemovedConfirmation(name: string): string {
+  return `${name} retiré de l'équipe.`;
+}
+
+export function inviteCodeRevokedConfirmation(): string {
+  return "Code d'invitation révoqué.";
+}
+
+export function stakeRemovedConfirmation(productName: string, memberName: string): string {
+  return `${productName} retiré pour ${memberName}.`;
+}
+
+export function partnerRemovedConfirmation(name: string): string {
+  return `Partenaire retiré : ${name}.`;
+}
+
 export function productConfirmation(productName: string): string {
   return `Enregistré — ${productName} ajouté.`;
 }

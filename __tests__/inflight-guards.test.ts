@@ -28,8 +28,12 @@ jest.mock('@/lib/supabase', () => ({
     auth: { onAuthStateChange: jest.fn(() => ({ data: { subscription: { unsubscribe: jest.fn() } } })) },
   },
 }));
+const outbox: any[] = [];
 jest.mock('@/lib/db', () => ({
   ...jest.requireActual('@/lib/db'),
+  enqueue: jest.fn(async (operation: string, payload: any) => { outbox.push({ operation, idempotency_key: payload.p_idempotency_key }); }),
+  getAllQueueItemsForOverlay: async () => ({ ok: outbox.map(o => ({ ...o })), corrupt: [] }),
+  getQueueCount: jest.fn(async () => outbox.length),
   getProductCache: jest.fn().mockResolvedValue(null),
   saveProductCache: jest.fn(),
 }));
@@ -134,12 +138,15 @@ describe('double-tap → exactly one execution', () => {
     } as any);
     const { confirmReception } = useFournisseursStore.getState();
     const input = { supplierId: null, lines: [{ product_id: 'p1', variant_id: null, name: 'Riz', qty: 2, unit_cost_cents: 100, sale_price_cents: 150 }], transportCostCents: 0, marginPercent: null, receivedDate: null } as any;
-    const a = confirmReception('biz-1', 'u1', input);
-    const b = confirmReception('biz-1', 'u1', input);
+    outbox.length = 0;
+    const a = confirmReception('biz-1', 'u1', { ...input, idempotencyKey: 'key-dbl' });
+    const b = confirmReception('biz-1', 'u1', { ...input, idempotencyKey: 'key-dbl' });
     release();
     const [ra, rb] = await Promise.all([a, b]);
-    expect(calls.rpc).toBe(1);
-    expect(ra).toBe('po-1');
+    // A réception is queued, not sent: one outbox row, and the direct RPC is never called from the tap.
+    expect(outbox.filter(o => o.operation === 'confirm_reception')).toHaveLength(1);
+    expect(calls.rpc).toBe(0);
+    expect(ra).toBe('key-dbl');
     expect(rb).toBeNull();
   });
 });

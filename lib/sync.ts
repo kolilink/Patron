@@ -213,6 +213,27 @@ function describeQueuedCart(
   return first.variant_name ? `${totalQty} ${first.product_name} ${first.variant_name}` : `${totalQty} ${first.product_name}`;
 }
 
+// po_received after a queued réception reaches the server — the supplier name is
+// looked up best-effort (a failure here must never affect the sync result).
+async function notifyReceptionSynced(payload: Record<string, unknown>): Promise<void> {
+  try {
+    const businessId = payload.p_business_id as string;
+    const lines = (payload.p_lines as { qty?: number }[] | undefined) ?? [];
+    const totalItems = lines.reduce((s, l) => s + (Number(l.qty) || 0), 0);
+    let supplier = 'Marché';
+    if (payload.p_supplier_id) {
+      const { data } = await supabase.from('suppliers').select('name').eq('id', payload.p_supplier_id as string).maybeSingle();
+      supplier = (data as { name?: string } | null)?.name ?? '';
+    }
+    notifyEvent({
+      businessId,
+      eventType: 'po_received',
+      payload: { N: totalItems, supplier },
+      targetRoles: ['administrateur', 'manager', 'vendeur'],
+    });
+  } catch { /* best-effort */ }
+}
+
 // The online path (stores/sales.ts) notifies admins/managers right after a
 // successful submit_sale call — the offline-queue replay skipped this
 // entirely, so sales made offline (this app's core low-connectivity use
@@ -339,6 +360,15 @@ async function executeOp(operation: string, payload: Record<string, unknown>): P
     case 'record_client_payment': {
       const { error } = await supabase.rpc('record_client_payment', payload);
       if (error) throw error;
+      break;
+    }
+    case 'confirm_reception': {
+      // A queued réception. The key is also the order id (migration_v229), so a
+      // replay returns the same order; po_received notifies the team once, here,
+      // at the moment it actually reaches the server.
+      const { error } = await supabase.rpc('confirm_reception', payload);
+      if (error) throw error;
+      void notifyReceptionSynced(payload);
       break;
     }
     case 'create_product': {

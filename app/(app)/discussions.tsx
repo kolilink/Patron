@@ -50,14 +50,15 @@ import { resolveDiscussionsTab } from '@/src/utils/teamsFlag';
 import { useInviterStore } from '@/stores/inviter';
 import { SkeletonList } from '@/src/components/ui/SkeletonPlaceholder';
 import { supabase } from '@/lib/supabase';
-import { generateFallbackName } from '@/lib/id';
+import { generateFallbackName, generateId } from '@/lib/id';
 import { friendlyMessage } from '@/lib/errors';
 import { PostActionsMenu } from '@/src/components/ui/PostActionsMenu';
 import { ConductBanner, ComposerReminder } from '@/src/components/ui/ConductBanner';
 import { PseudoSheet } from '@/src/components/ui/PseudoSheet';
 import type { ChatMessage, MarketPost, MarketCategory } from '@/src/types';
 import { FAILURE_COPY } from '@/src/utils/failureCopy';
-import { failAlert } from '@/src/components/ui/FailureView';
+import { failAlert, FailureView } from '@/src/components/ui/FailureView';
+import { buildFailure, failureReason } from '@/src/utils/failure';
 
 // expo-av's native module only exists once the app has been rebuilt with this
 // dependency linked in — requiring it eagerly would crash older binaries that
@@ -514,6 +515,11 @@ export default function DiscussionsScreen() {
   // ─── Boutique state ───────────────────────────────────────────────────────
   const [text, setText] = useState('');
   const [replyingTo, setReplyingTo] = useState<ChatMessage | null>(null);
+  // A send that did not land. Her text / recording / photo is kept right here and
+  // one tap re-sends THE SAME message (same id, so a first attempt that actually
+  // landed is recognised, never duplicated). Same behaviour as the DM screen.
+  const [sendFailure, setSendFailure] = useState<{ reason?: string; retry: () => Promise<void> } | null>(null);
+  const draftIdRef = useRef<{ content: string; id: string } | null>(null);
   const [editingMsg, setEditingMsg] = useState<ChatMessage | null>(null);
   const [partnerLastRead, setPartnerLastRead] = useState<Date | null>(null);
   const [highlightedMsgId, setHighlightedMsgId] = useState<string | null>(null);
@@ -961,15 +967,25 @@ export default function DiscussionsScreen() {
     if (!uri) return;
 
     haptics.success();
-    await sendVoiceMessage({
-      roomId: boutiqueRoom.id,
-      senderId: userId,
-      senderName: userName,
-      businessId,
-      fileUri: uri,
-      duration: finalDuration,
-      waveform: finalAmplitudes,
-    });
+    const messageId = generateId();
+    const attempt = async () => {
+      setSendFailure(null);
+      const r = await sendVoiceMessage({
+        roomId: boutiqueRoom.id,
+        senderId: userId,
+        senderName: userName,
+        businessId,
+        fileUri: uri,
+        duration: finalDuration,
+        waveform: finalAmplitudes,
+        messageId,
+      });
+      if (!r.ok) {
+        haptics.error();
+        setSendFailure({ reason: failureReason(r.err), retry: attempt });
+      }
+    };
+    await attempt();
   };
 
   const handleSend = async () => {
@@ -997,16 +1013,32 @@ export default function DiscussionsScreen() {
 
     if (!boutiqueRoom?.id) return;
     const reply = replyingTo;
+    // Same text as a failed attempt = a retry of that message (same id).
+    const id = draftIdRef.current?.content === trimmed ? draftIdRef.current.id : generateId();
+    draftIdRef.current = { content: trimmed, id };
+    setSendFailure(null);
     setText('');
     setReplyingTo(null);
     Keyboard.dismiss();
-    await sendMessage({
-      roomId: boutiqueRoom.id,
-      senderId: userId,
-      senderName: userName,
-      content: trimmed,
-      replyTo: reply ? { id: reply.id, content: reply.content, senderName: reply.sender_name || generateFallbackName(reply.sender_id) } : null,
-    });
+    const attempt = async () => {
+      setSendFailure(null);
+      const r = await sendMessage({
+        roomId: boutiqueRoom.id,
+        senderId: userId,
+        senderName: userName,
+        content: trimmed,
+        replyTo: reply ? { id: reply.id, content: reply.content, senderName: reply.sender_name || generateFallbackName(reply.sender_id) } : null,
+        messageId: id,
+      });
+      if (r.ok) { draftIdRef.current = null; return; }
+      // Nothing is lost: the draft goes back into the box (unless she has
+      // already started something new) and the reply context with it.
+      haptics.error();
+      setText(cur => (cur.trim() ? cur : trimmed));
+      if (reply) setReplyingTo(reply);
+      setSendFailure({ reason: failureReason(r.err), retry: attempt });
+    };
+    await attempt();
   };
 
   const handlePickImage = async () => {
@@ -1017,14 +1049,24 @@ export default function DiscussionsScreen() {
     if (result.canceled || !result.assets?.[0]) return;
     const asset = result.assets[0];
     haptics.success();
-    await sendImageMessage({
-      roomId: boutiqueRoom.id,
-      senderId: userId,
-      senderName: userName,
-      fileUri: asset.uri,
-      sourceWidth: asset.width,
-      sourceHeight: asset.height,
-    });
+    const messageId = generateId();
+    const attempt = async () => {
+      setSendFailure(null);
+      const r = await sendImageMessage({
+        roomId: boutiqueRoom.id,
+        senderId: userId,
+        senderName: userName,
+        fileUri: asset.uri,
+        sourceWidth: asset.width,
+        sourceHeight: asset.height,
+        messageId,
+      });
+      if (!r.ok) {
+        haptics.error();
+        setSendFailure({ reason: failureReason(r.err), retry: attempt });
+      }
+    };
+    await attempt();
   };
 
   const closeNewPost = () => {
@@ -1269,6 +1311,19 @@ export default function DiscussionsScreen() {
                   <Pressable onPress={() => setReplyingTo(null)} hitSlop={12} accessibilityLabel="Fermer" accessibilityRole="button">
                     <Ionicons name="close" size={18} color={palette.textSecondary} />
                   </Pressable>
+                </View>
+              ) : null}
+
+              {sendFailure ? (
+                <View style={{ paddingHorizontal: spacing[3], paddingTop: spacing[2] }}>
+                  <FailureView
+                    failure={buildFailure({
+                      what: FAILURE_COPY.messageNotSent.what,
+                      why: sendFailure.reason,
+                      action: { label: 'Réessayer', onPress: () => { void sendFailure.retry(); } },
+                    })}
+                    busy={sending}
+                  />
                 </View>
               ) : null}
 

@@ -1,5 +1,9 @@
 import { useEffect, useMemo, useRef, useState } from 'react';
 import { useInFlight } from '@/src/hooks/useInFlight';
+import { failAlert } from '@/src/components/ui/FailureView';
+import { useSyncStore } from '@/stores/sync';
+import { isQueued } from '@/lib/outbox';
+import { generateId } from '@/lib/id';
 import { QuantityStepper } from '@/src/components/ui/QuantityStepper';
 import { Modal, Platform, Pressable, ScrollView, StyleSheet, TextInput, View } from 'react-native';
 import { SafeAreaView } from 'react-native-safe-area-context';
@@ -174,6 +178,18 @@ export default function ReceptionScreen() {
   // set before the call), so picking a different one there has to be a real
   // UPDATE (updateReceptionSupplier), never just a client-side draft patch.
   const [confirmedPoId, setConfirmedPoId] = useState<string | null>(null);
+  const receptionKeyRef = useRef<string | null>(null);
+  // The key of the reception just confirmed, and whether it is still waiting in
+  // the outbox (dead zone) — drives the honest "pas encore envoyée" line.
+  const [receptionKey, setReceptionKey] = useState<string | null>(null);
+  const [receptionPending, setReceptionPending] = useState(false);
+  const pendingCount = useSyncStore(s => s.pendingCount);
+  useEffect(() => {
+    if (!receptionKey) { setReceptionPending(false); return; }
+    let alive = true;
+    void isQueued('confirm_reception', receptionKey).then(q => { if (alive) setReceptionPending(q); });
+    return () => { alive = false; };
+  }, [receptionKey, pendingCount]);
   const [confirmedSupplierName, setConfirmedSupplierName] = useState('');
   const scrollRef = useRef<ScrollView>(null);
   const lineRefs = useRef<Record<string, View | null>>({});
@@ -240,6 +256,11 @@ export default function ReceptionScreen() {
       // Still pre-save (shouldn't currently happen — the picker only opens
       // from the Confirmé step — kept as a safe fallback).
       update({ supplierId: f?.id ?? null, supplierName: f?.name ?? OTHER_SUPPLIER_NAME });
+      return;
+    }
+    if (receptionPending) {
+      // The order doesn't exist on the server yet: there is nothing to edit.
+      failAlert('supplierNotChangedYet');
       return;
     }
     const ok = await updateReceptionSupplier(confirmedPoId, businessId, userId, f?.id ?? null);
@@ -376,16 +397,26 @@ export default function ReceptionScreen() {
     }
 
     const transportCents = Math.round((parseAmountInput(draft.transportInput, currency) || 0) * 100);
+    // One key per confirmation, reused on every retry: the server books the
+    // delivery once however many times it replays (migration_v229).
+    if (!receptionKeyRef.current) receptionKeyRef.current = generateId();
+    const key = receptionKeyRef.current;
     const poId = await confirmReception(businessId, userId, {
       supplierId: draft.supplierId, poId: draft.poId, lines: rpcLines,
       transportCostCents: transportCents, marginPercent: draft.marginInput ? marginPct : null,
       receivedDate: draft.receivedDate || null,
+      idempotencyKey: key,
     });
 
     if (!poId) {
-      toast.warning('La livraison n\'a pas pu être enregistrée. Réessayez.');
+      // Only the phone's own storage can fail now (a dead zone no longer does):
+      // the draft is untouched, so one tap tries again.
+      haptics.error();
+      failAlert('receptionNotRecorded', { label: 'Réessayer', onPress: () => { void handleConfirm(); } });
       return;
     }
+    setReceptionKey(key);
+    receptionKeyRef.current = null;
 
     haptics.success();
     clearDraft(businessId);
@@ -464,6 +495,7 @@ export default function ReceptionScreen() {
           draft={draft}
           currency={currency}
           linesTotal={linesTotal}
+          pending={receptionPending}
           supplierName={confirmedSupplierName}
           onChangeSupplier={() => setShowSupplierPicker(true)}
           styles={styles}
@@ -838,8 +870,8 @@ function MargeStep({
 
 // ─── Étape 3 : Confirmé ──────────────────────────────────────────────────────
 
-function ConfirmeStep({ draft, currency, linesTotal, supplierName, onChangeSupplier, styles, palette }: {
-  draft: Draft; currency: string; linesTotal: number; supplierName: string; onChangeSupplier: () => void;
+function ConfirmeStep({ draft, currency, linesTotal, pending, supplierName, onChangeSupplier, styles, palette }: {
+  draft: Draft; currency: string; linesTotal: number; pending: boolean; supplierName: string; onChangeSupplier: () => void;
   styles: ReturnType<typeof makeStyles>; palette: Palette;
 }) {
   const newProductCount = draft.lines.filter(l => !l.product_id && l.name.trim()).length;
@@ -858,6 +890,11 @@ function ConfirmeStep({ draft, currency, linesTotal, supplierName, onChangeSuppl
         {newProductCount > 0 ? `+${newProductCount} produit${newProductCount > 1 ? 's' : ''} · ` : ''}
         stock mis à jour · Total {formatAmount(linesTotal, currency)}
       </Text>
+      {pending && (
+        <Text variant="caption" color="secondary" style={{ textAlign: 'center' }}>
+          Pas encore envoyée. Elle partira dès que le téléphone sera connecté.
+        </Text>
+      )}
 
       <Pressable onPress={onChangeSupplier} style={[styles.supplierChip, { marginTop: spacing[6] }]}>
         <Ionicons name="storefront-outline" size={14} color={palette.textSecondary} />

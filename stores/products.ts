@@ -96,7 +96,8 @@ interface ProductStore {
   upsertVariants: (businessId: string, productId: string, userId: string, variants: DraftVariant[]) => Promise<boolean>;
   createProduct: (businessId: string, userId: string, data: CreateProductData) => Promise<boolean>;
   updateProduct: (businessId: string, userId: string, id: string, data: Partial<CreateProductData>) => Promise<boolean>;
-  archiveProduct: (id: string, businessId: string) => Promise<void>;
+  /** true = archived. The caller offers Annuler (restoreProduct) on success. */
+  archiveProduct: (id: string, businessId: string) => Promise<boolean>;
   restoreProduct: (id: string, businessId: string, userId: string) => Promise<void>;
   adjustStock: (
     productId: string,
@@ -437,12 +438,14 @@ export const useProductStore = create<ProductStore>((set, get) => ({
       const { error } = await supabase.from('products').update({ archived: true }).eq('id', id);
       if (error) throw error;
       set(state => ({ products: state.products.filter(p => p.id !== id) }));
+      return true;
     } catch (err) {
       set({ error: translateError(err, "Impossible d'archiver le produit") });
+      return false;
     } finally {
       set(state => ({ archivingIds: state.archivingIds.filter(x => x !== id) }));
     }
-  }).then(r => (r.ran ? r.value : undefined)),
+  }).then(r => (r.ran ? r.value : false)),
 
   restoreProduct: async (id, businessId, userId) => {
     try {

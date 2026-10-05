@@ -661,7 +661,7 @@ export interface RefusedOp {
 
 const OP_LABELS: Record<string, string> = {
   submit_sale: 'Vente', submit_quick_sale: 'Vente', submit_carnet_debt: 'Crédit',
-  record_client_payment: 'Paiement', record_payment: 'Paiement', cancel_sale: 'Annulation',
+  record_client_payment: 'Paiement', record_payment: 'Paiement', cancel_sale: 'Annulation', confirm_reception: 'Livraison',
 };
 
 export async function loadRefusedOps(currentBusinessId: string | null): Promise<RefusedOp[]> {

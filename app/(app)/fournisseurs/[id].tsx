@@ -28,6 +28,8 @@ import {
 import { supabase } from '@/lib/supabase';
 import { formatAmountInput, parseAmountInput, formatAmount } from '@/src/utils/format';
 import { failAlert } from '@/src/components/ui/FailureView';
+import { supplierDeletedConfirmation } from '@/src/utils/saveConfirmationCopy';
+import { toast } from '@/stores/toast';
 
 // iOS-only: suppresses the OS's auto-injected floating "Done" pill above
 // number-pad/decimal-pad keyboards — the pay form below already has a
@@ -234,9 +236,16 @@ export default function FournisseurProfile() {
           text: 'Supprimer', style: 'destructive',
           onPress: () => {
             void runDelete(async () => {
+              const supplierName = fournisseur?.name ?? '';
               const { ok, message } = await deleteFournisseur(id, businessId);
-              if (ok) router.back();
-              else Alert.alert(message ?? 'Impossible de supprimer le fournisseur');
+              if (ok) {
+                // A deleted supplier takes its links and history with it: no Annuler is honest here,
+                // so the message names exactly what was deleted.
+                toast.success(supplierDeletedConfirmation(supplierName));
+                router.back();
+              } else {
+                failAlert('supplierNotDeleted', { why: message ?? undefined, label: 'Retour' });
+              }
             });
           },
         },

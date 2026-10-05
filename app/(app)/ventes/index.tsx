@@ -25,6 +25,8 @@ import { supabase } from '@/lib/supabase';
 import { SkeletonList } from '@/src/components/ui/SkeletonPlaceholder';
 import { EmptyState } from '@/src/components/ui/EmptyState';
 import { failAlert } from '@/src/components/ui/FailureView';
+import { saleCancelledConfirmation } from '@/src/utils/saveConfirmationCopy';
+import { toast } from '@/stores/toast';
 
 // iOS-only: suppresses the OS's auto-injected floating "Done" pill above
 // the numeric keyboard — PaymentSheet already has a persistent, always-
@@ -1333,8 +1335,16 @@ export default function VentesScreen() {
 
   const handleCancel = async (reason: string) => {
     if (!selected) return;
-    const ok = await cancelSale(selected.id, businessId, userId, reason);
-    if (ok) setSelected(null);
+    const sale = selected;
+    const ok = await cancelSale(sale.id, businessId, userId, reason);
+    if (ok) {
+      // cancel_sale restores the stock and has no reverse operation, so no Annuler:
+      // the message names exactly which sale was cancelled.
+      toast.success(saleCancelledConfirmation(sale.total_amount - (sale.discount_amount ?? 0), currency, sale.customer_name));
+      setSelected(null);
+    } else {
+      failAlert('saleNotCancelled', { err: useVentesStore.getState().error, label: 'Réessayer', onPress: () => { void handleCancel(reason); } });
+    }
   };
 
   const handleUpdateClient = async (name: string) => {

@@ -3,6 +3,7 @@ import { supabase } from '@/lib/supabase';
 import { translateError } from '@/lib/errors';
 import { isNetworkError, withTimeout, withNetworkRetry, reportOfflineFallback } from '@/lib/sync';
 import { getKV, setKV } from '@/lib/db';
+import { FAILURE_COPY } from '@/src/utils/failureCopy';
 import { notifyEvent } from '@/src/utils/notifications';
 import { uploadMessageImage } from '@/lib/chatImages';
 import { generateId } from '@/lib/id';
@@ -42,7 +43,8 @@ interface SupportChatStore {
   offline: boolean;
 
   load: (businessId: string) => Promise<void>;
-  sendMessage: (params: { businessId: string; senderName: string; content: string }) => Promise<void>;
+  // ok:true also covers "queued while offline" (nothing is lost); ok:false = it did not go and the caller keeps her text.
+  sendMessage: (params: { businessId: string; senderName: string; content: string }) => Promise<{ ok: boolean; err?: unknown }>;
   sendImageMessage: (params: {
     businessId: string;
     senderName: string;
@@ -50,7 +52,7 @@ interface SupportChatStore {
     sourceWidth?: number;
     sourceHeight?: number;
     caption?: string;
-  }) => Promise<void>;
+  }) => Promise<{ ok: boolean; err?: unknown }>;
   appendMessage: (msg: SupportMessage) => void;
   updateConversation: (conv: SupportConversation) => void;
   submitRating: (conversationId: string, rating: number) => Promise<void>;
@@ -159,7 +161,7 @@ export const useSupportChatStore = create<SupportChatStore>((set, get) => ({
 
   sendMessage: async ({ businessId, senderName, content }) => {
     const trimmed = content.trim();
-    if (!trimmed) return;
+    if (!trimmed) return { ok: true };
     set({ sending: true, error: null });
 
     const localId = `optimistic-${Date.now()}`;
@@ -212,19 +214,21 @@ export const useSupportChatStore = create<SupportChatStore>((set, get) => ({
       void supabase.functions.invoke('generate-support-draft', {
         body: { conversation_id: realMsg.conversation_id },
       });
+      return { ok: true };
     } catch (err) {
       if (isNetworkError(err)) {
         const queue = await getPendingQueue();
         queue.push({ localId, businessId, senderName, content: trimmed, createdAt: optimisticMsg.created_at });
         await setPendingQueue(queue);
         set({ sending: false, offline: true });
-      } else {
-        set(state => ({
-          messages: state.messages.filter(m => m.id !== localId),
-          sending: false,
-          error: translateError(err, 'Erreur d\'envoi'),
-        }));
+        return { ok: true }; // queued on the phone, sent on reconnect — nothing lost
       }
+      set(state => ({
+        messages: state.messages.filter(m => m.id !== localId),
+        sending: false,
+        error: FAILURE_COPY.messageNotSent.what,
+      }));
+      return { ok: false, err };
     }
   },
 
@@ -244,6 +248,7 @@ export const useSupportChatStore = create<SupportChatStore>((set, get) => ({
         sourceWidth,
         sourceHeight,
         storagePath: `support/${businessId}/${messageId}.jpg`,
+        upsert: true,
       });
 
       const { data, error } = await supabase.rpc('send_support_message', {
@@ -279,13 +284,10 @@ export const useSupportChatStore = create<SupportChatStore>((set, get) => ({
       void supabase.functions.invoke('generate-support-draft', {
         body: { conversation_id: realMsg.conversation_id },
       });
+      return { ok: true };
     } catch (err) {
-      set({
-        sending: false,
-        error: isNetworkError(err)
-          ? 'Pas de connexion — réessayez l\'envoi de la photo'
-          : translateError(err, 'Erreur d\'envoi'),
-      });
+      set({ sending: false, error: FAILURE_COPY.imageMessageNotSent.what });
+      return { ok: false, err };
     }
   },
 

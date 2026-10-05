@@ -19,7 +19,7 @@ import { useInFlight } from '@/src/hooks/useInFlight';
 
 const NOUN: Record<string, string> = {
   Vente: 'Vente non enregistrée', Crédit: 'Crédit non enregistré',
-  Paiement: 'Paiement non enregistré', Annulation: 'Annulation non enregistrée', Opération: 'Opération non enregistrée',
+  Paiement: 'Paiement non enregistré', Livraison: 'Livraison non enregistrée', Annulation: 'Annulation non enregistrée', Opération: 'Opération non enregistrée',
 };
 
 export function RefusedOpsNotice() {

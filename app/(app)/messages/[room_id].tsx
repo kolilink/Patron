@@ -30,11 +30,14 @@ import { useAuthStore } from '@/stores/auth';
 import { usePartnershipsStore } from '@/stores/partnerships';
 import { supabase } from '@/lib/supabase';
 import { notifyEvent } from '@/src/utils/notifications';
-import { translateError } from '@/lib/errors';
 import { generateId } from '@/lib/id';
 import type { ChatMessage } from '@/src/types';
 import { FAILURE_COPY } from '@/src/utils/failureCopy';
-import { failAlert } from '@/src/components/ui/FailureView';
+import { failAlert, FailureView } from '@/src/components/ui/FailureView';
+import { buildFailure, failureReason } from '@/src/utils/failure';
+import { haptics } from '@/lib/haptics';
+import { partnerRemovedConfirmation } from '@/src/utils/saveConfirmationCopy';
+import { toast } from '@/stores/toast';
 
 // expo-av's native module only exists once the app has been rebuilt with this
 // dependency linked in — requiring it eagerly would crash older binaries that
@@ -129,7 +132,11 @@ export default function DmChatScreen() {
   const [loadError, setLoadError] = useState(false);
   const [text, setText] = useState('');
   const [sending, setSending] = useState(false);
-  const [sendError, setSendError] = useState('');
+  // A send that did not land: her text stays in the box (or the recording / photo
+  // is kept in the closure) and one tap re-sends the SAME message (same id).
+  const [sendFailure, setSendFailure] = useState<{ reason?: string; retry: () => void } | null>(null);
+  const draftIdRef = useRef<{ content: string; id: string } | null>(null);
+  const handleSendRef = useRef<() => Promise<void>>(async () => {});
 
   // Partner settings modal state
   const [showSettings, setShowSettings] = useState(false);
@@ -230,7 +237,9 @@ export default function DmChatScreen() {
     const content = text.trim();
     if (!content || sending) return;
     setSending(true);
-    setSendError('');
+    setSendFailure(null);
+    const id = draftIdRef.current?.content === content ? draftIdRef.current.id : generateId();
+    draftIdRef.current = { content, id };
     const optimisticId = `opt-${Date.now()}`;
     const optimistic: ChatMessage = {
       id: optimisticId,
@@ -247,11 +256,13 @@ export default function DmChatScreen() {
     try {
       const { data, error } = await supabase
         .from('chat_messages')
-        .insert({ room_id, sender_id: userId, sender_name: userName, content })
+        .insert({ id, room_id, sender_id: userId, sender_name: userName, content })
         .select()
         .single();
-      if (error) throw error;
-      setMessages(prev => prev.map(m => m.id === optimisticId ? (data as ChatMessage) : m));
+      // 23505: this message id is already there — an earlier attempt landed and only its answer was lost.
+      if (error && (error as { code?: string }).code !== '23505') throw error;
+      draftIdRef.current = null;
+      setMessages(prev => prev.map(m => m.id === optimisticId ? ((error ? { ...optimistic, id } : data) as ChatMessage) : m));
 
       // Notify partner's business
       if (partnerBizId) {
@@ -271,11 +282,13 @@ export default function DmChatScreen() {
       // failure: speaks — send failed: message restored in the box + inline error
       setMessages(prev => prev.filter(m => m.id !== optimisticId));
       setText(content);
-      setSendError(translateError(err, FAILURE_COPY.messageNotSent.what));
+      haptics.error();
+      setSendFailure({ reason: failureReason(err), retry: () => { void handleSendRef.current(); } });
     } finally {
       setSending(false);
     }
   }, [text, sending, room_id, userId, userName, businessName, partnerBizId]);
+  handleSendRef.current = handleSend;
 
   // ─── Partner settings save ─────────────────────────────────────────────────
   const handleSaveSettings = useCallback(async () => {
@@ -342,33 +355,42 @@ export default function DmChatScreen() {
       const duration = recDuration;
       const waveform = recAmplitudes;
       setRecDuration(0); setRecAmplitudes([]);
-      setSending(true);
       const messageId = generateId();
-      const storagePath = `${businessId}/${messageId}.m4a`;
-      const base64 = await FileSystem.readAsStringAsync(uri, { encoding: FileSystem.EncodingType.Base64 });
-      const binary = atob(base64);
-      const bytes = new Uint8Array(binary.length);
-      for (let i = 0; i < binary.length; i++) bytes[i] = binary.charCodeAt(i);
-      const { error: uploadErr } = await supabase.storage.from('voice-messages').upload(storagePath, bytes, { contentType: 'audio/mp4', upsert: false });
-      if (uploadErr) throw uploadErr;
-      const { data: urlData } = supabase.storage.from('voice-messages').getPublicUrl(storagePath);
-      const { data, error } = await supabase.from('chat_messages').insert({
-        id: messageId, room_id, sender_id: userId, sender_name: userName, content: '',
-        message_type: 'voice', voice_url: urlData.publicUrl, voice_duration: Math.round(duration), voice_waveform: waveform,
-      }).select().single();
-      if (error) throw error;
-      setMessages(prev => prev.some(m => m.id === messageId) ? prev : [...prev, data as ChatMessage]);
-      setTimeout(() => flatListRef.current?.scrollToEnd({ animated: true }), 50);
-      if (partnerBizId) {
-        const mins = Math.floor(duration / 60);
-        const secs = String(Math.round(duration % 60)).padStart(2, '0');
-        notifyEvent({ businessId: partnerBizId, eventType: 'chat_message', payload: { sender: businessName, preview: `Message vocal · ${mins}:${secs}`, route: `/(app)/messages/${room_id}?partnership_id=${partnership_id}` }, targetRoles: ['administrateur', 'manager'], excludeUserId: userId });
-      }
-    } catch (err) {
-      // failure: speaks — voice message: inline error
-      setSendError(translateError(err, FAILURE_COPY.voiceMessageNotSent.what));
-    } finally {
-      setSending(false);
+      const attempt = async () => {
+        setSending(true);
+        setSendFailure(null);
+        try {
+          const storagePath = `${businessId}/${messageId}.m4a`;
+          const base64 = await FileSystem.readAsStringAsync(uri, { encoding: FileSystem.EncodingType.Base64 });
+          const binary = atob(base64);
+          const bytes = new Uint8Array(binary.length);
+          for (let i = 0; i < binary.length; i++) bytes[i] = binary.charCodeAt(i);
+          const { error: uploadErr } = await supabase.storage.from('voice-messages').upload(storagePath, bytes, { contentType: 'audio/mp4', upsert: true });
+          if (uploadErr) throw uploadErr;
+          const { data: urlData } = supabase.storage.from('voice-messages').getPublicUrl(storagePath);
+          const { data, error } = await supabase.from('chat_messages').insert({
+            id: messageId, room_id, sender_id: userId, sender_name: userName, content: '',
+            message_type: 'voice', voice_url: urlData.publicUrl, voice_duration: Math.round(duration), voice_waveform: waveform,
+          }).select().single();
+          if (error && (error as { code?: string }).code !== '23505') throw error;
+          if (data) setMessages(prev => prev.some(m => m.id === messageId) ? prev : [...prev, data as ChatMessage]);
+          setTimeout(() => flatListRef.current?.scrollToEnd({ animated: true }), 50);
+          if (partnerBizId) {
+            const mins = Math.floor(duration / 60);
+            const secs = String(Math.round(duration % 60)).padStart(2, '0');
+            notifyEvent({ businessId: partnerBizId, eventType: 'chat_message', payload: { sender: businessName, preview: `Message vocal · ${mins}:${secs}`, route: `/(app)/messages/${room_id}?partnership_id=${partnership_id}` }, targetRoles: ['administrateur', 'manager'], excludeUserId: userId });
+          }
+        } catch (err) {
+          // failure: speaks — voice message: the recording is kept; Réessayer re-sends the same message
+          haptics.error();
+          setSendFailure({ reason: failureReason(err), retry: () => { void attempt(); } });
+        } finally {
+          setSending(false);
+        }
+      };
+      await attempt();
+    } catch {
+      // failure: silent — the recorder itself failed to stop/read: there is no recording to keep
     }
   };
 
@@ -380,37 +402,44 @@ export default function DmChatScreen() {
     if (result.canceled || !result.assets?.[0]) return;
     const asset = result.assets[0];
 
-    setSending(true);
     const messageId = generateId();
-    try {
-      const { url, width, height } = await uploadMessageImage({
-        fileUri: asset.uri,
-        sourceWidth: asset.width,
-        sourceHeight: asset.height,
-        storagePath: `chat/${room_id}/${messageId}.jpg`,
-      });
-      const { data, error } = await supabase.from('chat_messages').insert({
-        id: messageId, room_id, sender_id: userId, sender_name: userName, content: '',
-        message_type: 'image', image_url: url, image_width: width, image_height: height,
-      }).select().single();
-      if (error) throw error;
-      setMessages(prev => prev.some(m => m.id === messageId) ? prev : [...prev, data as ChatMessage]);
-      setTimeout(() => flatListRef.current?.scrollToEnd({ animated: true }), 50);
-      if (partnerBizId) {
-        notifyEvent({ businessId: partnerBizId, eventType: 'chat_message', payload: { sender: businessName, preview: 'Photo', route: `/(app)/messages/${room_id}?partnership_id=${partnership_id}` }, targetRoles: ['administrateur', 'manager'], excludeUserId: userId });
+    const attempt = async () => {
+      setSending(true);
+      setSendFailure(null);
+      try {
+        const { url, width, height } = await uploadMessageImage({
+          fileUri: asset.uri,
+          sourceWidth: asset.width,
+          sourceHeight: asset.height,
+          storagePath: `chat/${room_id}/${messageId}.jpg`,
+          upsert: true,
+        });
+        const { data, error } = await supabase.from('chat_messages').insert({
+          id: messageId, room_id, sender_id: userId, sender_name: userName, content: '',
+          message_type: 'image', image_url: url, image_width: width, image_height: height,
+        }).select().single();
+        if (error && (error as { code?: string }).code !== '23505') throw error;
+        if (data) setMessages(prev => prev.some(m => m.id === messageId) ? prev : [...prev, data as ChatMessage]);
+        setTimeout(() => flatListRef.current?.scrollToEnd({ animated: true }), 50);
+        if (partnerBizId) {
+          notifyEvent({ businessId: partnerBizId, eventType: 'chat_message', payload: { sender: businessName, preview: 'Photo', route: `/(app)/messages/${room_id}?partnership_id=${partnership_id}` }, targetRoles: ['administrateur', 'manager'], excludeUserId: userId });
+        }
+      } catch (err) {
+        // failure: speaks — image message: the photo is kept; Réessayer re-sends the same message
+        haptics.error();
+        setSendFailure({ reason: failureReason(err), retry: () => { void attempt(); } });
+      } finally {
+        setSending(false);
       }
-    } catch (err) {
-      // failure: speaks — image message: inline error
-      setSendError(translateError(err, FAILURE_COPY.imageMessageNotSent.what));
-    } finally {
-      setSending(false);
-    }
+    };
+    await attempt();
   };
 
   const handleRemovePartner = useCallback(async () => {
     if (!partnership_id) return;
     try {
       await removePartner(partnership_id, businessId);
+      toast.success(partnerRemovedConfirmation(partner?.display_name ?? 'partenaire'));
       router.back();
     } catch (err) {
       // failure: speaks — remove partner: failAlert + Réessayer
@@ -518,9 +547,16 @@ export default function DmChatScreen() {
           />
         )}
 
-        {sendError ? (
-          <View style={styles.errorStrip}>
-            <Text variant="caption" style={{ color: palette.warning }}>{sendError}</Text>
+        {sendFailure ? (
+          <View style={{ paddingHorizontal: spacing[3], paddingTop: spacing[2] }}>
+            <FailureView
+              failure={buildFailure({
+                what: FAILURE_COPY.messageNotSent.what,
+                why: sendFailure.reason,
+                action: { label: 'Réessayer', onPress: sendFailure.retry },
+              })}
+              busy={sending}
+            />
           </View>
         ) : null}
 
@@ -549,7 +585,7 @@ export default function DmChatScreen() {
             <TextInput
               style={styles.input}
               value={text}
-              onChangeText={t => { setText(t); setSendError(''); }}
+              onChangeText={setText}
               placeholder="Écrire un message…"
               placeholderTextColor={palette.textSecondary}
               multiline

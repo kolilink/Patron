@@ -28,6 +28,8 @@ import { formatAmountInput, parseAmountInput, formatAmount } from '@/src/utils/f
 import { showFailureAlert } from '@/src/components/ui/FailureView';
 import { buildFailure, failureReason } from '@/src/utils/failure';
 import { FAILURE_COPY } from '@/src/utils/failureCopy';
+import { supplierDeletedConfirmation } from '@/src/utils/saveConfirmationCopy';
+import { failAlert } from '@/src/components/ui/FailureView';
 
 // iOS-only: number-pad/decimal-pad keyboards have no built-in return key, so
 // the OS auto-injects its own floating "Done" pill above the keyboard when
@@ -640,7 +642,8 @@ export default function FournisseursScreen() {
                           text: 'Supprimer', style: 'destructive', onPress: async () => {
                             haptics.destructive();
                             const { ok, message } = await deleteFournisseur(item.id, businessId);
-                            if (!ok) Alert.alert(message ?? 'Impossible de supprimer le fournisseur');
+                            if (ok) toast.success(supplierDeletedConfirmation(item.name));
+                            else failAlert('supplierNotDeleted', { why: message ?? undefined });
                           }
                         },
                       ])
