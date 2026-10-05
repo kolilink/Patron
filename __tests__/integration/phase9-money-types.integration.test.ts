@@ -130,6 +130,50 @@ describe('production drift: so_lines.unit_price is real (float4)', () => {
   });
 });
 
+describe('production drift: payments.amount is real AND views depend on it (kpi_core_actions -> kpi_business_activity -> call_list_*)', () => {
+  it('v231 drops and recreates the whole dependent chain with owner, ACL and shape intact', async () => {
+    await inTx(async (c) => {
+      // dependencies first
+      const ORDER = ['kpi_core_actions', 'kpi_business_activity', 'call_list_interview', 'call_list_referral', 'call_list_welcome'];
+      const meta = async (v: string) => (await c.query(
+        `SELECT relacl::text AS acl, pg_get_userbyid(relowner) AS owner, pg_get_viewdef(oid, true) AS def,
+                (SELECT string_agg(attname || ':' || format_type(atttypid, atttypmod), ',' ORDER BY attnum)
+                   FROM pg_attribute WHERE attrelid = pg_class.oid AND attnum > 0 AND NOT attisdropped) AS cols
+         FROM pg_class WHERE relname = $1 AND relnamespace = 'public'::regnamespace`, [v])).rows[0];
+      const before: Record<string, any> = {};
+      for (const v of ORDER) before[v] = await meta(v);
+
+      // Reproduce production: the column is float4 and the views sit on top of it.
+      for (const v of [...ORDER].reverse()) await c.query(`DROP VIEW ${v}`);
+      await c.query(`ALTER TABLE payments ALTER COLUMN amount TYPE real`);
+      for (const v of ORDER) {
+        await c.query(`CREATE VIEW ${v} AS ${before[v].def.replace(/;\s*$/, '')}`);
+        await c.query(`REVOKE ALL ON ${v} FROM PUBLIC, anon, authenticated`);
+        if (String(before[v].acl).includes('service_role')) await c.query(`GRANT ALL ON ${v} TO service_role`);
+      }
+      // sanity: without the fix Postgres refuses this conversion
+      await c.query('SAVEPOINT s');
+      await expect(c.query(`ALTER TABLE payments ALTER COLUMN amount TYPE bigint`)).rejects.toThrow(/depends on|cannot alter type/);
+      await c.query('ROLLBACK TO SAVEPOINT s');
+
+      await c.query(MIGRATION);
+
+      expect(await colType(c, 'payments', 'amount')).toBe('bigint');
+      for (const v of ORDER) {
+        const after = await meta(v);
+        expect(after.owner).toBe(before[v].owner);
+        expect(after.cols).toBe(before[v].cols);
+        expect(after.acl).toBe(before[v].acl);
+        for (const role of ['anon', 'authenticated']) {
+          const r = await c.query(`SELECT has_table_privilege($1, $2, 'SELECT') AS ok`, [role, `public.${v}`]);
+          expect(r.rows[0].ok).toBe(false);
+        }
+        await c.query(`SELECT count(*) FROM ${v}`);
+      }
+    });
+  });
+});
+
 describe('display-unit numeric money (po_lines.unit_cost numeric(15,2))', () => {
   it('a drifted float column becomes numeric(15,2) using the exact decimal the app wrote (12.34, not 12.3400001525879)', async () => {
     // committed seeding (outside the DDL transaction — see inTx)

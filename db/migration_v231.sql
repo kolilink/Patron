@@ -28,8 +28,9 @@
 --       12.34, not 12.3400001525879); RAISES if that text has more decimals
 --       than the target scale (so nothing is rounded silently).
 --   so_lines.unit_price_paid is listed even though NO migration creates it:
---   migration_v104 reads it (qty * COALESCE(unit_price_paid, unit_price)), so
---   production has it. Skipped when the column does not exist.
+--   migration_v104 reads it (qty * COALESCE(unit_price_paid, unit_price)), but
+--   the production pre-flight (2026-10-05) showed it does NOT exist there.
+--   Kept as a harmless guard: skipped when the column does not exist.
 --   After the conversions, any REMAINING real/double column in schema public
 --   whose name looks like money/quantity raises (an unknown drifted column must
 --   surface, not be skipped); other float columns only produce a NOTICE.
@@ -39,9 +40,13 @@
 -- (non-integral rows, rows above 2^24, and per-order line-vs-header mismatches
 -- that would reveal actual damage). Run it BEFORE applying this migration.
 --
--- Dependent views/policies: ALTER COLUMN TYPE is refused by Postgres for a
--- column used in a view or policy. If production has one on a drifted column the
--- migration aborts (nothing applied) with a message naming the column.
+-- Dependent views: ALTER COLUMN TYPE is refused by Postgres for a column used in
+-- a view (production: payments.amount is read by kpi_core_actions, which
+-- kpi_business_activity reads in turn). The migration therefore saves every view
+-- (transitively) depending on a column it is about to convert — definition,
+-- owner, ACL, reloptions — drops them dependents-first, converts, then recreates
+-- them dependencies-first and restores owner/ACL, all inside the same atomic
+-- block. Policies on a drifted column still abort with a message naming it.
 
 DO $$
 DECLARE
@@ -53,7 +58,64 @@ DECLARE
   v_expr   text;
   v_digits int;
   rec      record;
+  vw       record;
 BEGIN
+  DROP TABLE IF EXISTS _v231_views;
+  -- Save + drop views that depend (transitively) on a column still to convert.
+  CREATE TEMP TABLE _v231_views ON COMMIT DROP AS
+  WITH RECURSIVE targets(tbl, col) AS (
+    SELECT * FROM (VALUES
+      ('products','cost_price'),('products','sale_price'),('products','bulk_price'),
+      ('product_variants','cost_price'),('product_variants','sale_price'),
+      ('sale_orders','total_amount'),('sale_orders','discount_amount'),
+      ('so_lines','unit_price'),('so_lines','unit_price_paid'),('so_lines','cost_price_at_sale'),
+      ('payments','amount'),('expenses','amount'),
+      ('supplier_debts','amount'),('supplier_debts','amount_paid'),('supplier_payments','amount_cents'),
+      ('capital_injections','amount'),('investor_balance','balance'),
+      ('investor_payouts','requested_amount'),('investor_payouts','paid_amount'),
+      ('po_receipt_batches','shipping_cost_cents'),('po_receipt_batch_lines','landed_cost_cents'),
+      ('businesses','highest_revenue_milestone_cents'),
+      ('po_lines','unit_cost'),('purchase_orders','total_cost'),('investors','amount'),
+      ('investors','equity_pct'),('membership_product_scope','profit_share'),
+      ('alpha_messages','cost'),('alpha_audit_trail','cost'),
+      ('so_lines','qty'),('stock_moves','qty'),('po_lines','qty_ordered'),('po_lines','qty_received'),
+      ('products','stock_qty'),('products','reorder_level'),
+      ('product_variants','stock_qty'),('product_variants','reorder_level')
+    ) v(tbl, col)
+  ),
+  need AS (  -- columns whose current type is not already the exact target
+    SELECT cl.oid AS relid, a.attnum
+    FROM targets t
+    JOIN pg_class cl ON cl.relname = t.tbl AND cl.relnamespace = 'public'::regnamespace AND cl.relkind = 'r'
+    JOIN pg_attribute a ON a.attrelid = cl.oid AND a.attname = t.col AND NOT a.attisdropped
+    WHERE a.atttypid IN ('real'::regtype, 'double precision'::regtype, 'smallint'::regtype, 'integer'::regtype)
+  ),
+  deps(view_oid, depth) AS (
+    SELECT DISTINCT rw.ev_class, 1
+    FROM need n
+    JOIN pg_depend d ON d.refobjid = n.relid AND d.refobjsubid = n.attnum AND d.classid = 'pg_rewrite'::regclass
+    JOIN pg_rewrite rw ON rw.oid = d.objid
+    JOIN pg_class v ON v.oid = rw.ev_class AND v.relkind = 'v' AND v.oid <> n.relid
+    UNION
+    SELECT rw.ev_class, deps.depth + 1
+    FROM deps
+    JOIN pg_depend d ON d.refobjid = deps.view_oid AND d.classid = 'pg_rewrite'::regclass
+    JOIN pg_rewrite rw ON rw.oid = d.objid
+    JOIN pg_class v ON v.oid = rw.ev_class AND v.relkind = 'v' AND v.oid <> deps.view_oid
+  )
+  SELECT c.oid AS oid, c.relnamespace::regnamespace::text AS sch, c.relname::text AS name,
+         max(deps.depth) AS depth,
+         pg_get_viewdef(c.oid, true) AS def,
+         pg_get_userbyid(c.relowner)::text AS owner,
+         c.relacl::text AS acl, c.reloptions
+  FROM deps JOIN pg_class c ON c.oid = deps.view_oid
+  GROUP BY c.oid, c.relnamespace, c.relname, c.relowner, c.relacl, c.reloptions;
+
+  FOR vw IN SELECT * FROM _v231_views ORDER BY depth DESC LOOP
+    EXECUTE format('DROP VIEW %I.%I', vw.sch, vw.name);
+    RAISE NOTICE 'migration_v231: dropped dependent view %.% (recreated at the end)', vw.sch, vw.name;
+  END LOOP;
+
   -- shortest round-trip text for floats (PG >= 12 default; pin it anyway)
   PERFORM set_config('extra_float_digits', '1', true);
 
@@ -199,5 +261,26 @@ BEGIN
     ELSE
       RAISE NOTICE 'migration_v231: float column %.% (%) left as-is (name does not look like money)', rec.table_name, rec.column_name, rec.data_type;
     END IF;
+  END LOOP;
+
+  -- Recreate the dropped views, dependencies first; restore owner, ACL, options.
+  FOR vw IN SELECT * FROM _v231_views ORDER BY depth ASC LOOP
+    EXECUTE format('CREATE VIEW %I.%I%s AS %s', vw.sch, vw.name,
+      CASE WHEN vw.reloptions IS NULL THEN '' ELSE ' WITH (' || array_to_string(vw.reloptions, ', ') || ')' END,
+      rtrim(vw.def, ';'));
+    EXECUTE format('ALTER VIEW %I.%I OWNER TO %I', vw.sch, vw.name, vw.owner);
+    EXECUTE format('REVOKE ALL ON %I.%I FROM PUBLIC, anon, authenticated, service_role', vw.sch, vw.name);
+    IF vw.acl IS NOT NULL THEN
+      FOR rec IN
+        SELECT x.grantee, x.privilege_type AS priv
+        FROM aclexplode(vw.acl::aclitem[]) x
+      LOOP
+        IF rec.grantee <> 0 AND rec.grantee <> (SELECT oid FROM pg_roles WHERE rolname = vw.owner) THEN
+          EXECUTE format('GRANT %s ON %I.%I TO %I', rec.priv, vw.sch, vw.name,
+                         (SELECT rolname FROM pg_roles WHERE oid = rec.grantee));
+        END IF;
+      END LOOP;
+    END IF;
+    RAISE NOTICE 'migration_v231: recreated view %.%', vw.sch, vw.name;
   END LOOP;
 END $$;

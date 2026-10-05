@@ -45,8 +45,8 @@ See **`docs/phase9-money-columns.md`** (full replay-type table, the three read-o
   detects it (header total ≠ sum of lines).
 * `real::numeric` keeps only 6 significant digits, so the migration converts through `double precision` (exact) or
   the shortest decimal text, never `real → numeric`.
-* `so_lines.unit_price_paid` is read by v104 but **no migration creates it** — production has a column the chain
-  doesn't. The migration handles it if present; the founder's query 1 will show it.
+* `so_lines.unit_price_paid` is read by v104 but no migration creates it; the production pre-flight (2026-10-05) confirmed it does **not** exist there either. The migration skips it when absent.
+
 Tests: `phase9-money-types` (5 of 7 failed against an empty migration; incl. exact preservation of 150 000 000,
 refusal on 1500.5, `unit_price_paid`, `12.34` not `12.3400001525879`, unknown float column aborts, and the report
 RPCs on both `real` and `bigint`).
