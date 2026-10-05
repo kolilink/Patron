@@ -344,7 +344,7 @@ export const useVentesStore = create<VentesStore>((set, get) => ({
         });
         return;
       }
-      set({ loading: false, error: translateError(fetchErr, 'Erreur de chargement'), salesFetchedFor: businessId });
+      set({ loading: false, error: translateError(fetchErr, "Le chargement n'a pas abouti."), salesFetchedFor: businessId });
       return;
     }
     if (!data) { set({ loading: false, salesFetchedFor: businessId }); return; }

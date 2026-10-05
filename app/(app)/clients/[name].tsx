@@ -1,4 +1,5 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
+import { TRUST_LINE } from '@/src/utils/trustLine';
 import { Alert, Animated, InputAccessoryView, Linking, Platform, Pressable, ScrollView, StyleSheet, Text as RNText, TextInput, View } from 'react-native';
 import { Ionicons } from '@expo/vector-icons';
 import { haptics } from '@/lib/haptics';
@@ -29,6 +30,7 @@ import { FAILURE_COPY } from '@/src/utils/failureCopy';
 import { generateId } from '@/lib/id';
 import { selectClientSales, clientBalance } from '@/src/utils/salesTotals';
 import { buildDebtReminderMessage, formatDebtAge, debtAgeTier } from '@/src/utils/clientReminder';
+import { formatDate } from '@/src/utils/dates';
 
 // iOS-only: suppresses the OS's auto-injected floating "Done" pill above
 // the numeric keyboard — the payment sheet already has a persistent,
@@ -148,6 +150,7 @@ function EditModal({
         placeholder="620 00 00 00" keyboardType="phone-pad" />
       <Input label="Notes" value={notes} onChangeText={setNotes}
         placeholder="Notes sur ce client" multiline />
+      <Text variant="caption" color="secondary" style={{ textAlign: 'center' }}>{TRUST_LINE}</Text>
     </FormSheet>
   );
 }
@@ -647,9 +650,7 @@ export default function ClientLedgerScreen() {
       if (key === todayKey) return "Aujourd'hui";
       if (key === yestKey) return 'Hier';
       const d = new Date(key + 'T00:00:00');
-      const opts: Intl.DateTimeFormatOptions = { day: 'numeric', month: 'short' };
-      if (d.getFullYear() !== now.getFullYear()) opts.year = 'numeric';
-      return d.toLocaleDateString('fr-FR', opts);
+      return formatDate(d, d.getFullYear() !== now.getFullYear() ? 'short' : 'dayMonth');
     };
   }, []);
 

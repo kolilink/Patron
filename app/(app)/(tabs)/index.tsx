@@ -41,6 +41,7 @@ import { haptics } from '@/lib/haptics';
 import { toast } from '@/stores/toast';
 import { useInviterStore, buildInviteLink, buildInviteMessage } from '@/stores/inviter';
 import { FAILURE_COPY } from '@/src/utils/failureCopy';
+import { todayIso } from '@/src/utils/dates';
 
 
 interface KPIs {
@@ -448,7 +449,7 @@ export default function AccueilScreen() {
     // network failure here is a no-op, not a fallback trigger (the local
     // estimate is already on screen).
     try {
-      const localDate = new Date().toLocaleDateString('en-CA'); // YYYY-MM-DD device local date
+      const localDate = todayIso(); // YYYY-MM-DD device local date
       const { data, error } = await withTimeout(
         supabase.rpc('get_dashboard_kpis', {
           p_business_id: businessId,

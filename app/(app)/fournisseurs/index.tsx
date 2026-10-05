@@ -33,6 +33,7 @@ import { buildFailure, failureReason } from '@/src/utils/failure';
 import { FAILURE_COPY } from '@/src/utils/failureCopy';
 import { supplierDeletedConfirmation } from '@/src/utils/saveConfirmationCopy';
 import { failAlert } from '@/src/components/ui/FailureView';
+import { formatDate } from '@/src/utils/dates';
 
 // iOS-only: number-pad/decimal-pad keyboards have no built-in return key, so
 // the OS auto-injects its own floating "Done" pill above the keyboard when
@@ -56,11 +57,11 @@ function debtAgeDays(iso: string): number {
 }
 function fmtDebtAge(iso: string): string {
   if (debtAgeDays(iso) === 0) return "Aujourd'hui";
-  return `Enregistrée le ${new Date(iso + 'T00:00:00').toLocaleDateString('fr-FR', { day: 'numeric', month: 'short' })}`;
+  return `Enregistrée le ${formatDate(iso, 'dayMonth')}`;
 }
 
 function fmtDraftDate(createdAt: number): string {
-  return new Date(createdAt).toLocaleDateString('fr-FR', { day: 'numeric', month: 'short' });
+  return formatDate(createdAt, 'dayMonth');
 }
 
 interface FournisseurFormData {
@@ -681,7 +682,7 @@ export default function FournisseursScreen() {
                   <Text variant="label" numberOfLines={1}>{item.name}</Text>
                   <Text variant="caption" color="secondary" numberOfLines={1}>
                     {lastLivraison
-                      ? `${new Date(lastLivraison.ordered_at).toLocaleDateString('fr-FR', { day: 'numeric', month: 'short' })} · ${fmt(lastLivraison.total_cost, currency)}`
+                      ? `${formatDate(lastLivraison.ordered_at, 'dayMonth')} · ${fmt(lastLivraison.total_cost, currency)}`
                       : 'Aucune livraison'}
                   </Text>
                   {owedAmount > 0 && oldestDebtDateMap[item.id] ? (

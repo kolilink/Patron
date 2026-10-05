@@ -70,7 +70,7 @@ export function TrialWelcomeOverlay({ businessName, onStart }: Props) {
           {/* Breathing CTA */}
           <Animated.View style={[styles.ctaWrapper, { transform: [{ scale: breathAnim }] }]}>
             <Button
-              label="Découvrir ma boutique →"
+              label="Découvrir mon commerce →"
               onPress={onStart}
               fullWidth
               size="lg"

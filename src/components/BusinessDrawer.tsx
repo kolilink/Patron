@@ -371,7 +371,7 @@ export function BusinessDrawer() {
                 <View style={styles.footerIcon}>
                   <Ionicons name="add-circle-outline" size={18} color={palette.textSecondary} />
                 </View>
-                <Text style={styles.footerLabel}>Créer un commerce</Text>
+                <Text style={styles.footerLabel}>Ajouter un commerce</Text>
               </Pressable>
             )}
           </View>

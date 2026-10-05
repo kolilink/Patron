@@ -1,4 +1,5 @@
 import { create } from 'zustand';
+import { failureLine } from '@/src/utils/failure';
 import { supabase } from '@/lib/supabase';
 import { translateError } from '@/lib/errors';
 import { isNetworkError, withNetworkRetry, reportOfflineFallback } from '@/lib/sync';
@@ -49,7 +50,7 @@ export const useModerationStore = create<ModerationStore>((set, get) => ({
                 set({ loading: false, error: 'Hors ligne — impossible de charger la file.' });
                 return;
             }
-            set({ loading: false, error: translateError(err, 'Erreur de chargement') });
+            set({ loading: false, error: translateError(err, "Le chargement n'a pas abouti.") });
         }
     },
 
@@ -67,7 +68,7 @@ export const useModerationStore = create<ModerationStore>((set, get) => ({
             }));
         } catch (err) {
             set({ updating: false });
-            toast.warning(translateError(err, "Impossible de mettre à jour l'état"));
+            toast.warning(failureLine('postStateNotChanged', err));
             throw err;
         }
     },
@@ -82,7 +83,7 @@ export const useModerationStore = create<ModerationStore>((set, get) => ({
             }));
             return true;
         } catch (err) {
-            toast.warning(translateError(err, 'Impossible de supprimer le post'));
+            toast.warning(failureLine('postNotDeleted', err));
             return false;
         }
     },
@@ -100,7 +101,7 @@ export const useModerationStore = create<ModerationStore>((set, get) => ({
                     : [...state.blockedIds, blockedId],
             }));
         } catch (err) {
-            toast.warning(translateError(err, 'Impossible de bloquer cet auteur'));
+            toast.warning(failureLine('authorNotBlocked', err));
             throw err;
         }
     },
@@ -114,7 +115,7 @@ export const useModerationStore = create<ModerationStore>((set, get) => ({
                 blockedIds: state.blockedIds.filter(id => id !== blockedId),
             }));
         } catch (err) {
-            toast.warning(translateError(err, 'Impossible de débloquer cet auteur'));
+            toast.warning(failureLine('authorNotUnblocked', err));
             throw err;
         }
     },
@@ -139,7 +140,7 @@ export const useModerationStore = create<ModerationStore>((set, get) => ({
             if (error) throw error;
             toast.success('Merci. Votre signalement a été transmis à la modération.');
         } catch (err) {
-            toast.warning(translateError(err, 'Impossible de signaler ce post'));
+            toast.warning(failureLine('postNotReported', err));
             throw err;
         }
     },

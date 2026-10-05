@@ -137,7 +137,7 @@ export const useEquipeStore = create<EquipeStore>((set, get) => ({
         return;
       }
       console.error('[fetchMembres memberships]', mErr instanceof Error ? mErr.message : (mErr as { message?: string })?.message ?? JSON.stringify(mErr));
-      set({ loading: false, error: translateError(mErr, 'Erreur de chargement'), hasFetched: true });
+      set({ loading: false, error: translateError(mErr, "Le chargement n'a pas abouti."), hasFetched: true });
       return;
     }
 
@@ -192,7 +192,7 @@ export const useEquipeStore = create<EquipeStore>((set, get) => ({
       .select('*')
       .eq('business_id', businessId)
       .order('created_at', { ascending: false });
-    if (error) { set({ loading: false, error: translateError(error, 'Erreur de chargement') }); return; }
+    if (error) { set({ loading: false, error: translateError(error, "Le chargement n'a pas abouti.") }); return; }
 
     const all = (data ?? []) as CodeInvitation[];
     const now = new Date();

@@ -55,7 +55,7 @@ export default function InviteRoute() {
                 // Branch on the internal code, never on the human copy.
                 const networkErr = useInviterStore.getState().errorCode === 'network';
                 toast.warning(networkErr
-                    ? `${FAILURE_COPY.inviteNotOpened.what} Pas de connexion. Rouvrez le lien plus tard.`
+                    ? `${FAILURE_COPY.inviteNotOpened.what} Hors ligne. Rouvrez le lien plus tard.`
                     : FAILURE_COPY.inviteLinkInvalid.what);
                 await clearPendingInviteToken();
                 router.replace('/(app)/(tabs)/');

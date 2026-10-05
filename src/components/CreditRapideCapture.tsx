@@ -1,4 +1,5 @@
 import { useEffect, useMemo, useRef, useState } from 'react';
+import { TRUST_LINE } from '@/src/utils/trustLine';
 import { Animated, InputAccessoryView, Platform, Pressable, ScrollView, StyleSheet, TextInput, View } from 'react-native';
 import { Ionicons } from '@expo/vector-icons';
 import { Button } from '@/src/components/ui/Button';
@@ -356,6 +357,7 @@ export function CreditRapideCapture({ businessId, userId, currency, onViewClient
           {error ? (
             <Text variant="caption" style={{ color: palette.warning, textAlign: 'center' }}>{error}</Text>
           ) : null}
+          <Text variant="caption" color="secondary" style={{ textAlign: 'center' }}>{TRUST_LINE}</Text>
         </>
       )}
 

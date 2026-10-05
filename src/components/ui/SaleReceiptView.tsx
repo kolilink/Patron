@@ -2,6 +2,7 @@ import { Dimensions, StyleSheet, View } from 'react-native';
 import { Text } from './Text';
 import { colors, palette, spacing } from '@/src/theme';
 import { formatAmount } from '@/src/utils/format';
+import { formatDate } from '@/src/utils/dates';
 const W = Dimensions.get('window').width;
 
 export interface ReceiptItem {
@@ -38,11 +39,7 @@ const METHOD_LABELS: Record<string, string> = {
 };
 
 function formatReceiptDate(d: Date): string {
-  const day = d.toLocaleDateString('fr-FR', {
-    day: 'numeric',
-    month: 'long',
-    year: 'numeric',
-  });
+  const day = formatDate(d, 'long');
   const time = d.toLocaleTimeString('fr-FR', { hour: '2-digit', minute: '2-digit' });
   return `${day} · ${time}`;
 }

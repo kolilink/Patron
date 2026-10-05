@@ -1,4 +1,5 @@
 import { useEffect, useMemo, useRef, useState } from 'react';
+import { TRUST_LINE } from '@/src/utils/trustLine';
 import { useReduceMotion } from '@/src/hooks/useReduceMotion';
 import {
   Animated,
@@ -276,6 +277,7 @@ export function FirstRunHeroOverlay({ businessId, userId, currency, onDone }: Pr
                   {error ? (
                     <Text variant="caption" style={{ color: palette.warning, textAlign: 'center' }}>{error}</Text>
                   ) : null}
+                  <Text variant="caption" color="secondary" style={{ textAlign: 'center' }}>{TRUST_LINE}</Text>
                 </View>
               </View>
             ) : (

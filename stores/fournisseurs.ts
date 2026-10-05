@@ -230,7 +230,7 @@ export const useFournisseursStore = create<FournisseursStore>((set, get) => ({
         set({ loading: false, offline: true, offlineSince: null, error: null });
         return;
       }
-      set({ loading: false, error: translateError(suppliersRes.error, 'Erreur de chargement') });
+      set({ loading: false, error: translateError(suppliersRes.error, "Le chargement n'a pas abouti.") });
       return;
     }
     const fournisseurs = (suppliersRes.data ?? []) as Fournisseur[];
@@ -384,7 +384,7 @@ export const useFournisseursStore = create<FournisseursStore>((set, get) => ({
         set({ loading: false, offline: true, offlineSince: null, error: null });
         return;
       }
-      set({ loading: false, error: translateError(error, 'Erreur de chargement') });
+      set({ loading: false, error: translateError(error, "Le chargement n'a pas abouti.") });
       return;
     }
 
