@@ -2,13 +2,17 @@ import { create } from 'zustand';
 import { supabase } from '@/lib/supabase';
 import { translateError } from '@/lib/errors';
 import { generateId, generateFallbackName } from '@/lib/id';
-import { saveProductCache, getProductCache, enqueue, getQueueCount, getCacheTimestamp } from '@/lib/db';
+import { saveProductCache, getProductCache, enqueue, getQueueCount, getCacheTimestamp, saveVariantsCache, getVariantsCache } from '@/lib/db';
 import { isNetworkError, withNetworkRetry, reportOfflineFallback } from '@/lib/sync';
 import { useSyncStore } from '@/stores/sync';
 import { useAuthStore } from '@/stores/auth';
 import { trackEvent } from '@/lib/analytics';
 import { notifyEvent } from '@/src/utils/notifications';
 import { formatAmount } from '@/src/utils/format';
+import { createKeyedInflightGuard } from '@/lib/inflight';
+
+// One archive per product at a time: a double-tap on a slow connection must not fire twice.
+const archiveGuard = createKeyedInflightGuard();
 import type { Product, ProductVariant } from '@/src/types';
 
 // Every fetch* function below is called with a specific businessId, but by
@@ -63,6 +67,8 @@ export interface DraftVariant {
 
 interface ProductStore {
   products: Product[];
+  /** Products whose archive call is in flight — their row shows "Archivage…" and ignores taps. */
+  archivingIds: string[];
   archivedProducts: Product[];
   variantsByProduct: Record<string, ProductVariant[]>;
   vendeurProductScope: string[];  // product IDs; empty = unscoped (see all)
@@ -108,6 +114,7 @@ interface ProductStore {
 
 export const useProductStore = create<ProductStore>((set, get) => ({
   products: [],
+  archivingIds: [],
   archivedProducts: [],
   variantsByProduct: {},
   vendeurProductScope: [],
@@ -423,15 +430,19 @@ export const useProductStore = create<ProductStore>((set, get) => ({
     }
   },
 
-  archiveProduct: async (id, businessId) => {
+  archiveProduct: (id, businessId) =>
+    archiveGuard.run(id, async () => {
+    set(state => ({ archivingIds: [...state.archivingIds, id] }));
     try {
       const { error } = await supabase.from('products').update({ archived: true }).eq('id', id);
       if (error) throw error;
       set(state => ({ products: state.products.filter(p => p.id !== id) }));
     } catch (err) {
       set({ error: translateError(err, "Impossible d'archiver le produit") });
+    } finally {
+      set(state => ({ archivingIds: state.archivingIds.filter(x => x !== id) }));
     }
-  },
+  }).then(r => (r.ran ? r.value : undefined)),
 
   restoreProduct: async (id, businessId, userId) => {
     try {
@@ -503,21 +514,42 @@ export const useProductStore = create<ProductStore>((set, get) => ({
     // Role read from the session directly rather than added as a param —
     // this function has 6 call sites and none of them need to change.
     const role = useAuthStore.getState().session?.activeMembership?.role;
-    const { data, error } = role === 'vendeur'
-      ? await supabase.rpc('get_variants_for_vendeur', { p_product_id: productId, p_business_id: businessId })
-      : await supabase
-        .from('product_variants')
-        .select('*')
-        .eq('product_id', productId)
-        .eq('business_id', businessId)
-        .eq('archived', false)
-        .order('name');
-    if (error || !data) return [];
+    let data: unknown = null;
+    let error: unknown = null;
+    try {
+      const res = await withNetworkRetry(() => role === 'vendeur'
+        ? supabase.rpc('get_variants_for_vendeur', { p_product_id: productId, p_business_id: businessId })
+        : supabase
+          .from('product_variants')
+          .select('*')
+          .eq('product_id', productId)
+          .eq('business_id', businessId)
+          .eq('archived', false)
+          .order('name'));
+      data = res.data;
+      error = res.error;
+    } catch (err) {
+      error = err;
+    }
+    if (error || !data) {
+      // Offline (or a failed fetch): fall back to the last known variant
+      // stock so a variant sale is capped by it, same as a plain product.
+      // No cache → [] as before (nothing to sell against).
+      if (isNetworkError(error)) {
+        const cached = await getVariantsCache(businessId, productId) as ProductVariant[] | null;
+        if (cached && cached.length) {
+          set(state => ({ variantsByProduct: { ...state.variantsByProduct, [productId]: cached } }));
+          return cached;
+        }
+      }
+      return [];
+    }
     const variants: ProductVariant[] = (data as ProductVariant[]).map(v => ({
       ...v,
       sale_price: v.sale_price / 100,
       cost_price: v.cost_price / 100,
     }));
+    void saveVariantsCache(businessId, productId, variants);
     set(state => ({ variantsByProduct: { ...state.variantsByProduct, [productId]: variants } }));
     return variants;
   },
@@ -601,6 +633,6 @@ export const useProductStore = create<ProductStore>((set, get) => ({
   clearError: () => set({ error: null }),
   reset: () => {
     notifiedLowStockIds.clear();
-    set({ products: [], archivedProducts: [], variantsByProduct: {}, vendeurProductScope: [], vendeurScopeAll: true, productsFetchedFor: null, loading: false, error: null, offline: false, offlineSince: null });
+    set({ products: [], archivingIds: [], archivedProducts: [], variantsByProduct: {}, vendeurProductScope: [], vendeurScopeAll: true, productsFetchedFor: null, loading: false, error: null, offline: false, offlineSince: null });
   },
 }));

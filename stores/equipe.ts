@@ -7,6 +7,10 @@ import { notifyEvent } from '@/src/utils/notifications';
 import { saveEquipeCache, getEquipeCache, getCacheTimestamp } from '@/lib/db';
 import { isNetworkError, withTimeout, withNetworkRetry, reportOfflineFallback } from '@/lib/sync';
 import { useAuthStore } from '@/stores/auth';
+import { createInflightGuard } from '@/lib/inflight';
+
+// Revoking a member fires a notification before the delete: a double-tap must not send it twice.
+const removeGuard = createInflightGuard();
 import type { Role, MemberProductStake } from '@/src/types';
 
 // See stores/products.ts for the full explanation.
@@ -268,7 +272,8 @@ export const useEquipeStore = create<EquipeStore>((set, get) => ({
     return true;
   },
 
-  removeMembre: async (membreId) => {
+  removeMembre: (membreId) =>
+    removeGuard.run(async () => {
     set({ saving: true, error: null });
     // Notify BEFORE deleting — after deletion the membership row is gone and dispatch can't validate
     const _membre = get().membres.find(m => m.id === membreId);
@@ -284,7 +289,7 @@ export const useEquipeStore = create<EquipeStore>((set, get) => ({
     if (error) { set({ saving: false, error: translateError(error, "Impossible de retirer ce membre") }); return false; }
     set(state => ({ membres: state.membres.filter(m => m.id !== membreId), saving: false }));
     return true;
-  },
+  }).then(r => (r.ran ? r.value : false)),
 
   updateDisplayName: async (membershipId, name) => {
     set({ saving: true, error: null });

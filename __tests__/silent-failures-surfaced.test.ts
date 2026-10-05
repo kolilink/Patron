@@ -44,7 +44,7 @@ describe('Phase 3 — silent failures surfaced on mutating actions', () => {
     it('equipe/index.tsx surfaces failures for changeRole/removeMembre/revokeCode/updateScopeAll', () => {
         const src = readSource('app/(app)/equipe/index.tsx');
         expect(src).toMatch(/changeRole\(membre\.id,\s*r\)\.then\(ok\s*=>\s*\{[\s\S]*?toast\.warning\(useEquipeStore\.getState\(\)\.error/);
-        expect(src).toMatch(/removeMembre\(membre\.id\)\.then\(ok\s*=>\s*\{[\s\S]*?toast\.warning\(useEquipeStore\.getState\(\)\.error/);
+        expect(src).toMatch(/const ok = await removeMembre\(membre\.id\);[\s\S]*?toast\.warning\(useEquipeStore\.getState\(\)\.error/);
         expect(src).toMatch(/revokeCode\(item\.id\)\.then\(ok\s*=>\s*\{[\s\S]*?toast\.warning\(useEquipeStore\.getState\(\)\.error/);
         expect(src).toMatch(/const ok = await updateScopeAll\(membre\.id,\s*val\);/);
         expect(src).toMatch(/toast\.warning\(useEquipeStore\.getState\(\)\.error \?\? 'Impossible de modifier l\\'accès'\)/);

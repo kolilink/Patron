@@ -277,7 +277,7 @@ function PaymentSheet({ visible, sale, currency, onClose, onConfirm, saving }: P
       footer={
         <View style={styles.sheetFooter}>
           <Button
-            label={saving ? 'Enregistrement…' : 'Confirmer le paiement'}
+            label="Confirmer le paiement" loadingLabel="Enregistrement"
             onPress={handleConfirm}
             loading={saving}
             fullWidth
@@ -863,7 +863,7 @@ function DetailModal({ sale, currency, businessName, singleVendor, role, onClose
                 <View style={{ flexDirection: 'row', gap: spacing[2] }}>
                   <Button label="Annuler" onPress={() => setShowEditClient(false)} variant="outline" style={{ flex: 1 }} />
                   <Button
-                    label={saving ? 'Enregistrement…' : 'Enregistrer'}
+                    label="Enregistrer" loadingLabel="Enregistrement"
                     onPress={() => onUpdateClient(editedClient)}
                     loading={saving}
                     style={{ flex: 1 }}
@@ -951,7 +951,7 @@ function DetailModal({ sale, currency, businessName, singleVendor, role, onClose
                 <View style={{ flexDirection: 'row', gap: spacing[2] }}>
                   <Button label="Annuler" onPress={() => setShowEditSale(false)} variant="outline" style={{ flex: 1 }} />
                   <Button
-                    label={editSaving ? 'Modification…' : 'Modifier'}
+                    label="Modifier" loadingLabel="Modification"
                     onPress={handleEditSubmit}
                     loading={editSaving}
                     style={{ flex: 1 }}
@@ -977,7 +977,7 @@ function DetailModal({ sale, currency, businessName, singleVendor, role, onClose
                 <View style={{ flexDirection: 'row', gap: spacing[2] }}>
                   <Button label="Retour" onPress={() => setShowCancelForm(false)} variant="outline" style={{ flex: 1 }} />
                   <Button
-                    label={saving ? 'Annulation…' : "Confirmer l'annulation"}
+                    label={"Confirmer l'annulation"} loadingLabel="Annulation"
                     onPress={handleCancel}
                     loading={saving}
                     variant="danger"
@@ -1109,7 +1109,7 @@ function FilterSheet({ visible, availableProducts, loadingProducts, selectedProd
 
         <View style={styles.sheetFooter}>
           <Button
-            label={loading ? 'Recherche…' : 'Appliquer'}
+            label="Appliquer" loadingLabel="Recherche"
             onPress={onApply}
             loading={loading}
             fullWidth

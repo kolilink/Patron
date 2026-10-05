@@ -40,6 +40,8 @@ import { productConfirmation } from '@/src/utils/saveConfirmationCopy';
 import { useFournisseursStore, type Fournisseur } from '@/stores/fournisseurs';
 import { haptics } from '@/lib/haptics';
 import { toast } from '@/stores/toast';
+import { QuantityStepper } from '@/src/components/ui/QuantityStepper';
+import { LoadingStatus } from '@/src/components/ui/LoadingStatus';
 import { perUnitCost, totalInvested, unitProfit } from '@/src/utils/productPricing';
 import { formatAmount, formatAmountInput, parseAmountInput, formatAmountValue, formatSignedAmount } from '@/src/utils/format';
 import { OfflineNotice } from '@/src/components/ui/OfflineNotice';
@@ -207,7 +209,7 @@ function SupplierPicker({ fournisseurs, selectedId, onSelect, businessId, userId
           <PhoneInput label="Téléphone (optionnel)" onChange={(e164) => setNewPhone(e164)} strict={false} />
           <View style={{ flexDirection: 'row', gap: spacing[2] }}>
             <Button label="Annuler" onPress={() => { setShowNewForm(false); setNewName(''); setNewPhone(''); }} variant="outline" style={{ flex: 1 }} />
-            <Button label={fSaving ? '…' : 'Créer'} onPress={handleCreate} loading={fSaving} style={{ flex: 1 }} disabled={!newName.trim()} />
+            <Button label="Créer" loadingLabel="Création" onPress={handleCreate} loading={fSaving} style={{ flex: 1 }} disabled={!newName.trim()} />
           </View>
         </View>
       )}
@@ -506,7 +508,7 @@ function ProductFormModal({ visible, editing, onClose, onSave, saving, currency,
       contentContainerStyle={[styles.formStack, { paddingBottom: 16 }]}
       footer={
         <View style={[styles.modalFooter, { paddingBottom: Math.max(insets.bottom, spacing[5]) }]}>
-          <Button label={saving ? (editing ? 'Enregistrement…' : 'Ajout…') : (editing ? 'Enregistrer' : 'Ajouter')} onPress={handleSave}
+          <Button label={editing ? 'Enregistrer' : 'Ajouter'} loadingLabel={editing ? 'Enregistrement' : 'Ajout'} onPress={handleSave}
             loading={saving} fullWidth size="lg" />
         </View>
       }
@@ -632,18 +634,18 @@ function ProductFormModal({ visible, editing, onClose, onSave, saving, currency,
         <View style={styles.fieldBlock}>
           <Text style={styles.fieldLabel}>Quantité achetée</Text>
           <View style={styles.fieldRow}>
-            <TextInput
-              ref={initialStockRef}
-              style={[styles.fieldInput, { flex: 1 }]}
-              value={form.initial_stock}
-              onChangeText={setField('initial_stock')}
-              keyboardType="number-pad"
-              placeholderTextColor={palette.textDisabled}
-              returnKeyType="done"
-              onSubmitEditing={() => Keyboard.dismiss()}
-              onFocus={() => setFocusedPriceField('quantity')}
-              inputAccessoryViewID={Platform.OS === 'ios' ? PRICE_ACCESSORY_ID : undefined}
-            />
+            <View style={{ flex: 1 }}>
+              <QuantityStepper
+                value={form.initial_stock}
+                onChange={setField('initial_stock')}
+                inputRef={initialStockRef}
+                inputStyle={styles.fieldInput}
+                returnKeyType="done"
+                onSubmitEditing={() => Keyboard.dismiss()}
+                onFocus={() => setFocusedPriceField('quantity')}
+                inputAccessoryViewID={PRICE_ACCESSORY_ID}
+              />
+            </View>
             <Text style={styles.unitTag}>pièces</Text>
           </View>
         </View>
@@ -809,7 +811,7 @@ function StockAdjustModal({ visible, product, onClose, onConfirm, saving, curren
       footer={
         <View style={styles.modalFooter}>
           <Button
-            label={saving ? 'Enregistrement…' : 'Confirmer'}
+            label="Confirmer" loadingLabel="Enregistrement"
             onPress={async () => {
               const n = parseInt(qty);
               if (isNaN(n) || n <= 0) { Alert.alert('Entrez une quantité'); return; }
@@ -849,9 +851,12 @@ function StockAdjustModal({ visible, product, onClose, onConfirm, saving, curren
         </Pressable>
       </View>
 
-      <Input
-        label="Quantité" value={qty} onChangeText={setQty} keyboardType="number-pad"
-        inputAccessoryViewID={Platform.OS === 'ios' ? STOCK_ADJUST_ACCESSORY_ID : undefined}
+      <Text variant="label" color="secondary">Quantité</Text>
+      <QuantityStepper
+        value={qty}
+        onChange={setQty}
+        inputStyle={{ fontSize: 18 }}
+        inputAccessoryViewID={STOCK_ADJUST_ACCESSORY_ID}
       />
       <Input label="Note (optionnel)" value={note} onChangeText={setNote}
         placeholder="Livraison, retour client, casse" />
@@ -981,6 +986,8 @@ interface ProductRowProps {
   archived?: boolean;
   /** Only meaningful when product.has_variants — undefined while still loading. */
   variants?: ProductVariant[];
+  /** Archive call in flight: the row shows "Archivage…" and ignores taps. */
+  archiving?: boolean;
 }
 
 function StockStatus({ product, variants }: { product: Product; variants?: ProductVariant[] }) {
@@ -1077,7 +1084,7 @@ function ArchiveSwitch({ value, onChange }: { value: 'actifs' | 'archives'; onCh
   );
 }
 
-function ProductRow({ product, currency, onPress, onLongPress, archived, variants }: ProductRowProps) {
+function ProductRow({ product, currency, onPress, onLongPress, archived, variants, archiving }: ProductRowProps) {
   const { palette } = useTheme();
   const styles = useMemo(() => makeStyles(palette), [palette]);
   const initial = product.name.charAt(0).toUpperCase();
@@ -1109,7 +1116,11 @@ function ProductRow({ product, currency, onPress, onLongPress, archived, variant
   }
 
   return (
-    <Pressable onPress={onPress} style={({ pressed }) => [styles.productRow, pressed && { opacity: 0.65 }]}>
+    <Pressable
+      onPress={onPress}
+      disabled={archiving}
+      style={({ pressed }) => [styles.productRow, (pressed || archiving) && { opacity: archiving ? 0.5 : 0.65 }]}
+    >
       <View style={[styles.productBadge, { opacity: isOutOfStock ? 0.38 : 1 }]}>
         <Text style={styles.productBadgeText}>{initial}</Text>
       </View>
@@ -1125,7 +1136,9 @@ function ProductRow({ product, currency, onPress, onLongPress, archived, variant
             </View>
           ) : null}
         </View>
-        <StockStatus product={product} variants={variants} />
+        {archiving
+          ? <LoadingStatus word="Archivage" color={palette.textSecondary} variant="caption" />
+          : <StockStatus product={product} variants={variants} />}
       </View>
       {/* One non-wrapping row: price, then — only for a real variant product
           — its chevron. Previously the chevron sat absolutely positioned at
@@ -1297,7 +1310,7 @@ export default function CatalogueScreen() {
   const role = session?.activeMembership?.role;
   const canEdit = role === 'administrateur' || role === 'manager';
 
-  const { products, archivedProducts, variantsByProduct, loading, saving, offline, offlineSince, fetchProducts, fetchArchivedProducts, fetchVariants, upsertVariants, createProduct, updateProduct, archiveProduct, restoreProduct, adjustStock, fetchProductStats } =
+  const { products, archivedProducts, variantsByProduct, loading, saving, offline, offlineSince, fetchProducts, fetchArchivedProducts, fetchVariants, upsertVariants, createProduct, updateProduct, archiveProduct, restoreProduct, adjustStock, fetchProductStats, archivingIds } =
     useProductStore();
   const { fournisseurs, fetchFournisseurs } = useFournisseursStore();
 
@@ -1750,6 +1763,7 @@ export default function CatalogueScreen() {
                 currency={currency}
                 archived={tab === 'archives'}
                 variants={variantsByProduct[item.id]}
+                archiving={archivingIds.includes(item.id)}
                 onPress={() => {
                   if (tab === 'archives') {
                     setRestoreSheetProduct(item);

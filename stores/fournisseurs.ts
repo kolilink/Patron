@@ -7,6 +7,11 @@ import { isNetworkError, withTimeout, withNetworkRetry, reportOfflineFallback } 
 import { useProductStore } from '@/stores/products';
 import { useAuthStore } from '@/stores/auth';
 import { notifyEvent } from '@/src/utils/notifications';
+import { createInflightGuard } from '@/lib/inflight';
+
+// A réception books money (stock, cost, transport expense): never twice from a double-tap.
+const receptionGuard = createInflightGuard();
+const supplierDeleteGuard = createInflightGuard();
 
 // See stores/products.ts for the full explanation.
 function isStaleBusiness(businessId: string): boolean {
@@ -246,7 +251,8 @@ export const useFournisseursStore = create<FournisseursStore>((set, get) => ({
     }
   },
 
-  deleteFournisseur: async (id, businessId) => {
+  deleteFournisseur: (id, businessId) =>
+    supplierDeleteGuard.run(async () => {
     try {
       // Try the raw delete FIRST so the DB guard (unpaid debt / purchase
       // orders) can block it with a truthful message and zero side effects.
@@ -275,7 +281,7 @@ export const useFournisseursStore = create<FournisseursStore>((set, get) => ({
       set({ error: message });
       return { ok: false, message };
     }
-  },
+  }).then(r => (r.ran ? r.value : { ok: false, message: null })),
 
   payDebt: async (businessId, supplierId, paymentAmount) => {
     set({ saving: true, error: null });
@@ -375,7 +381,8 @@ export const useFournisseursStore = create<FournisseursStore>((set, get) => ({
     }));
   },
 
-  confirmReception: async (businessId, userId, input) => {
+  confirmReception: (businessId, userId, input) =>
+    receptionGuard.run(async () => {
     set({ saving: true, error: null });
     try {
       // confirm_reception() creates-or-updates the order + lines (creating
@@ -425,7 +432,7 @@ export const useFournisseursStore = create<FournisseursStore>((set, get) => ({
       set({ saving: false, error: isNetworkError(err) ? 'Vérifiez votre connexion' : translateError(err, 'Impossible d\'enregistrer la réception') });
       return null;
     }
-  },
+  }).then(r => (r.ran ? r.value : null)),
 
   recevoirCommande: async (commandeId, businessId, userId, lines, shippingCostCents = 0) => {
     set({ saving: true, error: null });

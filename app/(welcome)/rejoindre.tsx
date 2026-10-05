@@ -12,7 +12,6 @@ import { OtpInput } from '@/src/components/ui/OtpInput';
 import { Text } from '@/src/components/ui/Text';
 import { PhoneInput } from '@/src/components/ui/PhoneInput';
 import { useCountdown } from '@/src/hooks/useCountdown';
-import { formatCountdown } from '@/src/utils/format';
 import { JoinCodeStep } from '@/src/components/JoinCodeStep';
 import { useTheme, radius, spacing } from '@/src/theme';
 import type { Palette } from '@/src/theme';
@@ -177,15 +176,15 @@ export default function RejoindreScreen() {
               <OtpInput key={otpKey} onComplete={handleOtpComplete} disabled={loading} autoFocus whatsappAutofill />
               <Button label="Ouvrir WhatsApp" variant="ghost" onPress={openWhatsApp} />
               <Button
-                label={resendCooldown.isDone ? 'Renvoyer le code' : `Renvoyer le code (${formatCountdown(resendCooldown.secondsLeft)})`}
+                label={resendCooldown.isDone ? 'Renvoyer le code' : `Renvoyer le code dans ${resendCooldown.secondsLeft} s`}
                 variant="ghost"
-                loading={loading}
-                disabled={!resendCooldown.isDone}
+                disabled={!resendCooldown.isDone || loading}
                 onPress={handleResendRejoindre}
               />
               <Button
                 label="Changer de numéro"
                 variant="ghost"
+                disabled={loading}
                 onPress={() => {
                   clearError();
                   setStep('phone');

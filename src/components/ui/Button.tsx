@@ -1,6 +1,5 @@
 import React, { useMemo, useRef } from 'react';
 import {
-  ActivityIndicator,
   Animated,
   Pressable,
   PressableProps,
@@ -15,6 +14,8 @@ import { useTheme } from '../../theme';
 import { radius, spacing, typography } from '../../theme';
 import type { Palette } from '../../theme';
 import { Text } from './Text';
+import { LoadingStatus } from './LoadingStatus';
+import { resolveLoadingWord } from './loadingLanguage';
 
 type Variant = 'primary' | 'secondary' | 'outline' | 'ghost' | 'danger';
 type Size = 'sm' | 'md' | 'lg';
@@ -24,6 +25,8 @@ interface ButtonProps extends Omit<PressableProps, 'style'> {
   size?: Size;
   label: string;
   loading?: boolean;
+  /** Present-participle status word shown while `loading` ("Envoi", "Suppression"…). The dots are added automatically; a loading button never shows a lone spinner and keeps its words. */
+  loadingLabel?: string;
   icon?: React.ReactNode;
   fullWidth?: boolean;
   style?: StyleProp<ViewStyle>;
@@ -40,6 +43,7 @@ export function Button({
   size = 'md',
   label,
   loading = false,
+  loadingLabel,
   icon,
   fullWidth = false,
   disabled,
@@ -91,9 +95,10 @@ export function Button({
       {...props}
     >
       {loading ? (
-        <ActivityIndicator
-          size="small"
-          color={variant === 'outline' || variant === 'ghost' ? palette.primary : palette.textInverse}
+        <LoadingStatus
+          word={resolveLoadingWord(loadingLabel)}
+          color={textColor}
+          textStyle={[typography.labelLarge, labelStyle]}
         />
       ) : (
         <View style={styles.content}>

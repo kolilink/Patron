@@ -1,4 +1,6 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
+import { useInFlight } from '@/src/hooks/useInFlight';
+import { LoadingStatus } from '@/src/components/ui/LoadingStatus';
 import { Alert, Animated, Easing, FlatList, InputAccessoryView, Linking, Modal, Platform, Pressable, ScrollView, Share, StyleSheet, TextInput, View } from 'react-native';
 import { Ionicons } from '@expo/vector-icons';
 import { SafeAreaView } from 'react-native-safe-area-context';
@@ -220,6 +222,10 @@ function MemberDetailSheet({
   const [draftStakes, setDraftStakes] = useState<Record<string, string>>({});
 
   // Payout confirmation
+  // "Retirer" is the control that started the revoke: it shows the progress
+  // itself and swallows further taps until the request settles. (Declared above
+  // the `!membre` early return — hooks must run on every render.)
+  const [removing, runRemove] = useInFlight();
   const [showPayoutSheet, setShowPayoutSheet] = useState(false);
   const [payoutAmountStr, setPayoutAmountStr] = useState('');
   const [pendingPayoutId, setPendingPayoutId] = useState<string | null>(null);
@@ -352,7 +358,8 @@ function MemberDetailSheet({
         style: 'destructive',
         onPress: () => {
           haptics.destructive();
-          removeMembre(membre.id).then(ok => {
+          void runRemove(async () => {
+            const ok = await removeMembre(membre.id);
             if (ok) {
               onClose();
             } else {
@@ -427,14 +434,20 @@ function MemberDetailSheet({
         {/* Role + Remove actions */}
         {!isSelf && (
           <View style={styles.actionRow}>
-            <Pressable style={styles.actionBtn} onPress={handleChangeRole}>
+            <Pressable style={styles.actionBtn} onPress={handleChangeRole} disabled={removing}>
               <Ionicons name="swap-horizontal-outline" size={18} color={palette.primary} />
               <Text variant="bodySmall" style={{ color: palette.primary }}>Changer le rôle</Text>
             </Pressable>
             <View style={styles.actionDivider} />
-            <Pressable style={styles.actionBtn} onPress={handleRemove}>
-              <Ionicons name="person-remove-outline" size={18} color={palette.danger} />
-              <Text variant="bodySmall" style={{ color: palette.danger }}>Retirer</Text>
+            <Pressable style={styles.actionBtn} onPress={handleRemove} disabled={removing}>
+              {removing ? (
+                <LoadingStatus word="Retrait" color={palette.textSecondary} variant="bodySmall" />
+              ) : (
+                <>
+                  <Ionicons name="person-remove-outline" size={18} color={palette.danger} />
+                  <Text variant="bodySmall" style={{ color: palette.danger }}>Retirer</Text>
+                </>
+              )}
             </Pressable>
           </View>
         )}
@@ -598,7 +611,7 @@ function MemberDetailSheet({
 
             {isInvestisseur && scope.length > 0 && (
               <Button
-                label={saving ? 'Enregistrement…' : 'Enregistrer les montants'}
+                label="Enregistrer les montants" loadingLabel="Enregistrement"
                 variant="secondary"
                 size="sm"
                 onPress={handleSaveStakeEdits}
@@ -663,7 +676,7 @@ function MemberDetailSheet({
             </View>
 
             <Button
-              label={investorSaving ? 'Enregistrement…' : 'Confirmer le paiement'}
+              label="Confirmer le paiement" loadingLabel="Enregistrement"
               fullWidth
               size="lg"
               loading={investorSaving}
@@ -893,7 +906,7 @@ function NewCodeModal({ visible, onClose, onGenerate, saving, hasManager, produc
           <View style={styles.mfooter}>
             <Animated.View style={{ transform: [{ scale: pulseAnim }] }}>
               <Button
-                label={saving ? 'Génération…' : 'Générer le code'}
+                label="Générer le code" loadingLabel="Génération"
                 loading={saving}
                 fullWidth
                 size="lg"

@@ -1,4 +1,6 @@
 import { useEffect, useMemo, useState } from 'react';
+import { useInFlight } from '@/src/hooks/useInFlight';
+import { LoadingStatus } from '@/src/components/ui/LoadingStatus';
 import {
   Alert, InputAccessoryView, Linking, Modal,
   Platform, Pressable, ScrollView, StyleSheet, View,
@@ -200,6 +202,9 @@ export default function FournisseurProfile() {
     }
   };
 
+  // The header "…" menu is the control that started the deletion: it shows the
+  // progress itself and ignores further taps until the delete settles.
+  const [deleting, runDelete] = useInFlight();
   const handleDelete = () => {
     // Dead end guard: the v213 trigger refuses deletion when a purchase order
     // exists, but no UI here can remove or reassign that history. Telling the
@@ -221,10 +226,12 @@ export default function FournisseurProfile() {
         { text: 'Annuler', style: 'cancel' },
         {
           text: 'Supprimer', style: 'destructive',
-          onPress: async () => {
-            const { ok, message } = await deleteFournisseur(id, businessId);
-            if (ok) router.back();
-            else Alert.alert(message ?? 'Impossible de supprimer le fournisseur');
+          onPress: () => {
+            void runDelete(async () => {
+              const { ok, message } = await deleteFournisseur(id, businessId);
+              if (ok) router.back();
+              else Alert.alert(message ?? 'Impossible de supprimer le fournisseur');
+            });
           },
         },
       ]
@@ -280,6 +287,7 @@ export default function FournisseurProfile() {
           <Text variant="body" color="secondary">‹ Retour</Text>
         </Pressable>
         <Pressable
+          disabled={deleting}
           onPress={() => Alert.alert(fournisseur?.name ?? 'Fournisseur', undefined, [
             { text: 'Supprimer', style: 'destructive', onPress: handleDelete },
             { text: 'Annuler', style: 'cancel' },
@@ -287,7 +295,9 @@ export default function FournisseurProfile() {
           style={styles.headerBtn}
           accessibilityLabel="Plus d'options"
           accessibilityRole="button">
-          <Ionicons name="ellipsis-horizontal" size={22} color={palette.textSecondary} />
+          {deleting
+            ? <LoadingStatus word="Suppression" color={palette.textSecondary} variant="caption" />
+            : <Ionicons name="ellipsis-horizontal" size={22} color={palette.textSecondary} />}
         </Pressable>
       </View>
 
@@ -443,7 +453,7 @@ export default function FournisseurProfile() {
         footer={
           <View style={styles.mfooter}>
             <Button
-              label={paying ? '…' : 'Confirmer le paiement'}
+              label="Confirmer le paiement" loadingLabel="Paiement"
               loading={paying} fullWidth size="lg"
               onPress={handlePay}
             />

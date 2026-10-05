@@ -38,6 +38,7 @@ import { useQuickClients } from '@/src/hooks/useQuickClients';
 import { CreditRapideCapture } from '@/src/components/CreditRapideCapture';
 import { QuickCaptureSheet } from '@/src/components/QuickCaptureSheet';
 import type { Palette } from '@/src/theme';
+import { stepQuantity } from '@/src/utils/quantity';
 import { formatAmount, formatAmountInput, parseAmountInput } from '@/src/utils/format';
 import { todayIso } from '@/src/utils/dates';
 import type { Product, ProductVariant } from '@/src/types';
@@ -211,8 +212,8 @@ function CartRow({ line, currency, onInc, onDec, onRemove, onToggleBulk, onSetQt
         </View>
       </View>
       <View style={styles.qtyControl}>
-        <Pressable onPress={() => { haptics.throttledSelect(); onDec(); }} style={styles.qtyBtn} hitSlop={10}>
-          <Text variant="label" style={{ color: line.qty === 1 ? palette.danger : palette.textPrimary }}>−</Text>
+        <Pressable onPress={() => { if (line.qty <= 1) return; haptics.throttledSelect(); onDec(); }} style={[styles.qtyBtn, line.qty <= 1 && { opacity: 0.3 }]} hitSlop={10} accessibilityLabel="Diminuer la quantité" accessibilityState={{ disabled: line.qty <= 1 }}>
+          <Text variant="label" style={{ color: line.qty <= 1 ? palette.textDisabled : palette.textPrimary }}>−</Text>
         </Pressable>
         {editing ? (
           <TextInput
@@ -245,6 +246,10 @@ function CartRow({ line, currency, onInc, onDec, onRemove, onToggleBulk, onSetQt
           );
         })()}
       </View>
+      {/* Explicit delete: a stepper stops at 1 (a 0-quantity line is not a state), so removal is its own control. */}
+      <Pressable onPress={onRemove} hitSlop={10} style={styles.removeLineBtn} accessibilityRole="button" accessibilityLabel="Retirer cette ligne">
+        <Ionicons name="trash-outline" size={18} color={palette.textSecondary} />
+      </Pressable>
     </View>
   );
 }
@@ -601,7 +606,7 @@ function PaymentModal({
               />
             ) : (
               <Button
-                label={submitting ? 'Enregistrement…' : (step === 'credit' ? (creditUpfrontCoversAll ? 'Enregistrer la vente' : 'Enregistrer le crédit') : 'Confirmer la vente')}
+                label={(step === 'credit' ? (creditUpfrontCoversAll ? 'Enregistrer la vente' : 'Enregistrer le crédit') : 'Confirmer la vente')} loadingLabel="Enregistrement"
                 onPress={step === 'credit' ? handleConfirmCredit : handleConfirmPay}
                 loading={submitting}
                 fullWidth
@@ -2213,7 +2218,7 @@ export default function VendreScreen() {
               line={line}
               currency={currency}
               onInc={() => setQty(line.product.id, line.qty + 1, line.is_bulk, line.variant_id)}
-              onDec={() => setQty(line.product.id, line.qty - 1, line.is_bulk, line.variant_id)}
+              onDec={() => { if (line.qty > 1) setQty(line.product.id, stepQuantity(line.qty, -1, { min: 1 }), line.is_bulk, line.variant_id); }}
               onRemove={() => removeFromCart(line.product.id, line.is_bulk, line.variant_id)}
               onToggleBulk={() => toggleBulk(line.product.id, line.is_bulk)}
               onSetQty={(qty) => setQty(line.product.id, qty, line.is_bulk, line.variant_id)}
@@ -2501,6 +2506,7 @@ function makeStyles(p: Palette) {
       flexDirection: 'row', alignItems: 'center', borderWidth: 1, borderColor: p.border,
       borderRadius: radius.md, overflow: 'hidden',
     },
+    removeLineBtn: { width: 36, height: 36, alignItems: 'center', justifyContent: 'center', marginLeft: spacing[1] },
     qtyBtn: { width: 32, height: 32, alignItems: 'center', justifyContent: 'center', backgroundColor: p.background },
     qtyNumPress: { minWidth: 36, alignItems: 'center', paddingHorizontal: 4 },
     qtyNum: { minWidth: 36, textAlign: 'center' },
