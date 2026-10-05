@@ -8,9 +8,51 @@ import { useProductStore } from '@/stores/products';
 import { useAuthStore } from '@/stores/auth';
 import { notifyEvent } from '@/src/utils/notifications';
 import { createInflightGuard } from '@/lib/inflight';
+import { enqueueOnce } from '@/lib/outbox';
+import { failureReason } from '@/src/utils/failure';
+import { useSyncStore } from '@/stores/sync';
+import { getProductCache, saveProductCache, getQueueCount, getVariantsCache, saveVariantsCache } from '@/lib/db';
 
 // A réception books money (stock, cost, transport expense): never twice from a double-tap.
 const receptionGuard = createInflightGuard();
+
+// Existing products' stock rises on this phone the moment a réception is queued.
+// Best-effort and session-scoped: the server's numbers replace it after sync
+// (app/(app)/_layout.tsx refetches products when a drain synced something).
+async function applyReceptionStockLocally(
+  businessId: string,
+  lines: { product_id?: string | null; variant_id?: string | null; qty: number }[],
+): Promise<void> {
+  const plain = new Map<string, number>();
+  const variants = new Map<string, Map<string, number>>();
+  for (const l of lines) {
+    if (!l.product_id) continue; // a brand-new product doesn't exist locally yet
+    if (l.variant_id) {
+      const m = variants.get(l.product_id) ?? new Map<string, number>();
+      m.set(l.variant_id, (m.get(l.variant_id) ?? 0) + l.qty);
+      variants.set(l.product_id, m);
+    } else {
+      plain.set(l.product_id, (plain.get(l.product_id) ?? 0) + l.qty);
+    }
+  }
+  if (plain.size > 0) {
+    const cached = await getProductCache(businessId);
+    const base = cached ?? useProductStore.getState().products;
+    if (base.length) {
+      const updated = base.map(p => (plain.has(p.id) ? { ...p, stock_qty: p.stock_qty + (plain.get(p.id) ?? 0) } : p));
+      useProductStore.setState({ products: updated });
+      await saveProductCache(businessId, updated);
+    }
+  }
+  for (const [productId, added] of variants) {
+    const inMemory = useProductStore.getState().variantsByProduct[productId];
+    const base = inMemory ?? (await getVariantsCache(businessId, productId) as import('@/src/types').ProductVariant[] | null);
+    if (!base || !base.length) continue;
+    const next = base.map(v => (added.has(v.id) ? { ...v, stock_qty: v.stock_qty + (added.get(v.id) ?? 0) } : v));
+    useProductStore.setState(state => ({ variantsByProduct: { ...state.variantsByProduct, [productId]: next } }));
+    await saveVariantsCache(businessId, productId, next);
+  }
+}
 const supplierDeleteGuard = createInflightGuard();
 
 // See stores/products.ts for the full explanation.
@@ -88,6 +130,8 @@ export interface ConfirmReceptionInput {
   transportCostCents?: number;
   marginPercent?: number | null;
   receivedDate?: string | null; // 'YYYY-MM-DD' real/backdated delivery date
+  /** Reuse the same key on every retry of the same confirmation; the server books it once. */
+  idempotencyKey?: string;
 }
 
 export interface SupplierDebt {
@@ -381,57 +425,56 @@ export const useFournisseursStore = create<FournisseursStore>((set, get) => ({
     }));
   },
 
+  // Local-write-first, like the sales: the confirmation is written to the durable
+  // outbox and returns at once, so a réception confirmed in a dead zone is not
+  // lost — it drains on reconnect through lib/sync.ts's executeOp, and the
+  // server (migration_v229) books it exactly once however many times it
+  // replays. The idempotency key doubles as the id of the order a new réception
+  // creates, so the returned id is the real order id before it ever syncs.
+  //
+  // What the read side shows while it is queued (honestly): the stock of
+  // EXISTING products rises on this phone straight away (a session-scoped
+  // estimate, replaced by the server's numbers after sync). It can NOT show
+  // yet: products created by this réception, the supplier's debt / the
+  // transport expense / "Argent disponible", the order in the supplier's
+  // history — all of those come from the server and appear after sync.
   confirmReception: (businessId, userId, input) =>
     receptionGuard.run(async () => {
     set({ saving: true, error: null });
+    const key = input.idempotencyKey ?? generateId();
+    const payload = {
+      p_business_id: businessId,
+      p_supplier_id: input.supplierId,
+      p_po_id: input.poId ?? null,
+      p_lines: input.lines.map(l => ({
+        product_id: l.product_id,
+        variant_id: l.variant_id,
+        name: l.name,
+        qty: l.qty,
+        unit_cost_cents: l.unit_cost_cents,
+        sale_price_cents: l.sale_price_cents,
+      })),
+      p_transport_cost_cents: input.transportCostCents ?? 0,
+      p_margin_percent: input.marginPercent ?? null,
+      p_received_date: input.receivedDate ?? null,
+      p_idempotency_key: key,
+    };
     try {
-      // confirm_reception() creates-or-updates the order + lines (creating
-      // any new product along the way) and then calls the existing
-      // receive_purchase_order() to do the real stock/cost/transport work —
-      // see db/migration_v188.sql for why this reuses that RPC outright
-      // instead of duplicating its logic.
-      const { data, error } = await supabase.rpc('confirm_reception', {
-        p_business_id: businessId,
-        p_supplier_id: input.supplierId,
-        p_po_id: input.poId ?? null,
-        p_lines: input.lines.map(l => ({
-          product_id: l.product_id,
-          variant_id: l.variant_id,
-          name: l.name,
-          qty: l.qty,
-          unit_cost_cents: l.unit_cost_cents,
-          sale_price_cents: l.sale_price_cents,
-        })),
-        p_transport_cost_cents: input.transportCostCents ?? 0,
-        p_margin_percent: input.marginPercent ?? null,
-        p_received_date: input.receivedDate ?? null,
-      });
-
-      if (error) {
-        set({ saving: false, error: translateError(error, 'Impossible d\'enregistrer la réception') });
-        return null;
-      }
-
-      await Promise.all([get().fetchCommandes(businessId), get().fetchFournisseurs(businessId)]);
-      void useProductStore.getState().fetchProducts(businessId, userId);
-      set({ saving: false });
-
-      const totalItems = input.lines.reduce((s, l) => s + l.qty, 0);
-      const supplierName = input.supplierId
-        ? get().fournisseurs.find(f => f.id === input.supplierId)?.name ?? ''
-        : 'Marché';
-      notifyEvent({
-        businessId,
-        eventType: 'po_received',
-        payload: { N: totalItems, supplier: supplierName },
-        targetRoles: ['administrateur', 'manager', 'vendeur'],
-      });
-
-      return data as string;
+      await enqueueOnce('confirm_reception', payload);
     } catch (err) {
-      set({ saving: false, error: isNetworkError(err) ? 'Vérifiez votre connexion' : translateError(err, 'Impossible d\'enregistrer la réception') });
+      // The only failure left: the phone itself could not store it. Nothing was recorded.
+      console.error('[confirmReception] local write failed', err);
+      set({ saving: false, error: failureReason(err) ?? null });
       return null;
     }
+    // The write is durable from here on: nothing below may turn this into a failure.
+    try { useSyncStore.setState({ pendingCount: await getQueueCount() }); } catch { /* refreshed on the next sync tick */ }
+    try { await applyReceptionStockLocally(businessId, input.lines); } catch (err) {
+      console.error('[confirmReception] local stock estimate failed (write already succeeded)', err);
+    }
+    set({ saving: false });
+    useSyncStore.getState().kick();
+    return input.poId ?? key;
   }).then(r => (r.ran ? r.value : null)),
 
   recevoirCommande: async (commandeId, businessId, userId, lines, shippingCostCents = 0) => {

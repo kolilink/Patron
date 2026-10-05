@@ -6,6 +6,7 @@ import { isNetworkError, withNetworkRetry, reportOfflineFallback } from '@/lib/s
 import { getKV, setKV, saveChatCache, getChatCache, getCacheTimestamp } from '@/lib/db';
 import { notifyEvent } from '@/src/utils/notifications';
 import { generateId } from '@/lib/id';
+import { FAILURE_COPY } from '@/src/utils/failureCopy';
 import { uploadMessageImage } from '@/lib/chatImages';
 import type { ChatRoom, ChatMessage } from '@/src/types';
 
@@ -19,6 +20,10 @@ function countUnread(messages: ChatMessage[], roomId: string, since: Date, curre
     m => m.room_id === roomId && m.sender_id !== currentUserId && new Date(m.created_at) > since,
   ).length;
 }
+
+export interface SendResult { ok: boolean; err?: unknown }
+
+const isDuplicateKey = (e: unknown) => (e as { code?: string } | null)?.code === '23505';
 
 interface ChatStore {
   boutiqueRoom: ChatRoom | null;
@@ -40,7 +45,11 @@ interface ChatStore {
   setCurrentlyPlayingVoice: (id: string | null) => void;
 
   load: (businessId: string, currentUserId: string) => Promise<void>;
-  sendMessage: (params: { roomId: string; senderId: string; senderName: string; content: string; replyTo?: { id: string; content: string; senderName: string } | null }) => Promise<void>;
+  // Every send returns whether it landed and, if not, why — the screen keeps her
+  // text/recording and offers Réessayer. Passing the same `messageId` again is a
+  // retry of the SAME message: the id is the row's primary key, so a retry whose
+  // first attempt actually landed (response lost) is recognised, not duplicated.
+  sendMessage: (params: { roomId: string; senderId: string; senderName: string; content: string; replyTo?: { id: string; content: string; senderName: string } | null; messageId?: string }) => Promise<SendResult>;
   sendVoiceMessage: (params: {
     roomId: string;
     senderId: string;
@@ -49,7 +58,8 @@ interface ChatStore {
     fileUri: string;          // local file:// URI from expo-av
     duration: number;         // seconds
     waveform: number[];       // amplitude samples 0.0–1.0
-  }) => Promise<void>;
+    messageId?: string;
+  }) => Promise<SendResult>;
   sendImageMessage: (params: {
     roomId: string;
     senderId: string;
@@ -58,7 +68,8 @@ interface ChatStore {
     sourceWidth?: number;
     sourceHeight?: number;
     caption?: string;
-  }) => Promise<void>;
+    messageId?: string;
+  }) => Promise<SendResult>;
   editMessage: (messageId: string, newContent: string) => Promise<void>;
   appendMessage: (msg: ChatMessage) => void;
   updateMessage: (msg: ChatMessage) => void;
@@ -255,8 +266,9 @@ export const useChatStore = create<ChatStore>((set, get) => ({
     }
   },
 
-  sendMessage: async ({ roomId, senderId, senderName, content, replyTo }) => {
+  sendMessage: async ({ roomId, senderId, senderName, content, replyTo, messageId }) => {
     set({ sending: true, error: null });
+    const id = messageId ?? generateId();
     const optimisticMsg: ChatMessage = {
       id: `optimistic-${Date.now()}`,
       room_id: roomId,
@@ -272,7 +284,7 @@ export const useChatStore = create<ChatStore>((set, get) => ({
     get().appendMessage(optimisticMsg);
     try {
       const insertRow = {
-        room_id: roomId, sender_id: senderId, sender_name: senderName, content,
+        id, room_id: roomId, sender_id: senderId, sender_name: senderName, content,
         ...(replyTo ? {
           reply_to_id: replyTo.id,
           reply_to_content: replyTo.content,
@@ -284,10 +296,13 @@ export const useChatStore = create<ChatStore>((set, get) => ({
         .insert(insertRow)
         .select()
         .single();
-      if (error) throw error;
+      // 23505: this very message id is already there — an earlier attempt landed
+      // and only its answer was lost. It IS sent; don't send it twice.
+      if (error && !isDuplicateKey(error)) throw error;
+      const real = (error ? { ...optimisticMsg, id } : data) as ChatMessage;
       // Replace optimistic message with real one
       set(state => ({
-        messages: state.messages.map(m => m.id === optimisticMsg.id ? (data as ChatMessage) : m),
+        messages: state.messages.map(m => m.id === optimisticMsg.id ? real : m),
         sending: false,
       }));
       // Push notification for boutique (private) chat only — Le Marché is intentionally excluded
@@ -304,21 +319,22 @@ export const useChatStore = create<ChatStore>((set, get) => ({
           excludeUserId: senderId,
         });
       }
+      return { ok: true };
     } catch (err) {
-      // Remove optimistic message on failure
+      // Remove the optimistic bubble. Her TEXT is not lost: the caller got
+      // { ok: false } and restores the draft with a Réessayer (see discussions.tsx).
       set(state => ({
         messages: state.messages.filter(m => m.id !== optimisticMsg.id),
         sending: false,
-        error: isNetworkError(err)
-          ? 'Pas de connexion — message non envoyé'
-          : translateError(err, 'Erreur d\'envoi'),
+        error: FAILURE_COPY.messageNotSent.what,
       }));
+      return { ok: false, err };
     }
   },
 
-  sendVoiceMessage: async ({ roomId, senderId, senderName, businessId, fileUri, duration, waveform }) => {
+  sendVoiceMessage: async ({ roomId, senderId, senderName, businessId, fileUri, duration, waveform, messageId: givenId }) => {
     set({ sending: true, error: null });
-    const messageId = generateId();
+    const messageId = givenId ?? generateId();
     const storagePath = `${businessId}/${messageId}.m4a`;
 
     try {
@@ -336,7 +352,7 @@ export const useChatStore = create<ChatStore>((set, get) => ({
 
       const { error: uploadErr } = await supabase.storage
         .from('voice-messages')
-        .upload(storagePath, bytes, { contentType: 'audio/mp4', upsert: false });
+        .upload(storagePath, bytes, { contentType: 'audio/mp4', upsert: true }); // retry of the same message re-uses the path
       if (uploadErr) throw uploadErr;
 
       // Public bucket — permanent URL, no expiry, no tokens
@@ -361,9 +377,9 @@ export const useChatStore = create<ChatStore>((set, get) => ({
         })
         .select()
         .single();
-      if (insertErr) throw insertErr;
+      if (insertErr && !isDuplicateKey(insertErr)) throw insertErr;
 
-      get().appendMessage(data as ChatMessage);
+      if (data) get().appendMessage(data as ChatMessage);
       set({ sending: false });
 
       // Notification: "Mamadou · Message vocal · 0:23" format — no emoji in the OS tray
@@ -382,14 +398,16 @@ export const useChatStore = create<ChatStore>((set, get) => ({
           excludeUserId: senderId,
         });
       }
+      return { ok: true };
     } catch (err) {
-      set({ sending: false, error: translateError(err, 'Impossible d\'envoyer le message vocal') });
+      set({ sending: false, error: FAILURE_COPY.voiceMessageNotSent.what });
+      return { ok: false, err };
     }
   },
 
-  sendImageMessage: async ({ roomId, senderId, senderName, fileUri, sourceWidth, sourceHeight, caption }) => {
+  sendImageMessage: async ({ roomId, senderId, senderName, fileUri, sourceWidth, sourceHeight, caption, messageId: givenId }) => {
     set({ sending: true, error: null });
-    const messageId = generateId();
+    const messageId = givenId ?? generateId();
     const trimmedCaption = (caption ?? '').trim();
 
     try {
@@ -398,6 +416,7 @@ export const useChatStore = create<ChatStore>((set, get) => ({
         sourceWidth,
         sourceHeight,
         storagePath: `chat/${roomId}/${messageId}.jpg`,
+        upsert: true,
       });
 
       const { data, error: insertErr } = await supabase
@@ -415,9 +434,9 @@ export const useChatStore = create<ChatStore>((set, get) => ({
         })
         .select()
         .single();
-      if (insertErr) throw insertErr;
+      if (insertErr && !isDuplicateKey(insertErr)) throw insertErr;
 
-      get().appendMessage(data as ChatMessage);
+      if (data) get().appendMessage(data as ChatMessage);
       set({ sending: false });
 
       const boutiqueRoom = get().boutiqueRoom;
@@ -433,8 +452,10 @@ export const useChatStore = create<ChatStore>((set, get) => ({
           excludeUserId: senderId,
         });
       }
+      return { ok: true };
     } catch (err) {
-      set({ sending: false, error: translateError(err, 'Impossible d\'envoyer l\'image') });
+      set({ sending: false, error: FAILURE_COPY.imageMessageNotSent.what });
+      return { ok: false, err };
     }
   },
 

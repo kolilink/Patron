@@ -47,9 +47,10 @@ import { formatAmount, formatAmountInput, parseAmountInput, formatAmountValue, f
 import { OfflineNotice } from '@/src/components/ui/OfflineNotice';
 import { SkeletonList } from '@/src/components/ui/SkeletonPlaceholder';
 import { activationPriming } from '@/stores/activationPriming';
-import { showFailureAlert } from '@/src/components/ui/FailureView';
+import { showFailureAlert, failAlert } from '@/src/components/ui/FailureView';
 import { buildFailure, failureReason } from '@/src/utils/failure';
 import { FAILURE_COPY } from '@/src/utils/failureCopy';
+import { archivedConfirmation } from '@/src/utils/saveConfirmationCopy';
 
 // ─── Helpers ─────────────────────────────────────────────────────────────────
 
@@ -1546,11 +1547,31 @@ export default function CatalogueScreen() {
         `"${product.name}" sera retiré du catalogue actif. Vous pourrez le réactiver depuis l'onglet Archivés.`,
         [
           { text: 'Annuler', style: 'cancel' },
-          { text: 'Archiver', style: 'destructive', onPress: () => { haptics.destructive(); archiveProduct(product.id, businessId); } },
+          {
+            text: 'Archiver', style: 'destructive',
+            onPress: async () => {
+              haptics.destructive();
+              const archived = await archiveProduct(product.id, businessId);
+              if (!archived) {
+                haptics.error();
+                failAlert('productNotArchived', {
+                  err: useProductStore.getState().error, label: 'Réessayer',
+                  onPress: () => { void archiveProduct(product.id, businessId); },
+                });
+                return;
+              }
+              // Archiving is a flag flip, so it can be undone: Annuler = restoreProduct.
+              useSaveConfirmationStore.getState().show({
+                message: archivedConfirmation(product.name),
+                tone: 'success',
+                undo: async () => { await restoreProduct(product.id, businessId, userId); },
+              });
+            },
+          },
         ],
       );
     }, 350);
-  }, [actionSheetProduct, archiveProduct, businessId]);
+  }, [actionSheetProduct, archiveProduct, restoreProduct, businessId, userId]);
 
   const handleSave = useCallback(
     async (data: CreateProductData, hasVariants: boolean, variants: DraftVariant[]) => {
@@ -1588,7 +1609,7 @@ export default function CatalogueScreen() {
             // create already synced or is still queued offline (archiveProduct
             // is a plain flag flip either way, not a delete — see stores/products.ts).
             undo: savedProduct
-              ? () => archiveProduct(savedProduct.id, businessId)
+              ? async () => { await archiveProduct(savedProduct.id, businessId); }
               : undefined,
             onEdit: savedProduct
               ? () => { setEditingProduct(savedProduct); setShowForm(true); }

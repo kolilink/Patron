@@ -3,8 +3,9 @@ import { supabase } from '@/lib/supabase';
 import { generateId, generateFallbackName } from '@/lib/id';
 import { translateError } from '@/lib/errors';
 import { trackEvent } from '@/lib/analytics';
-import { saveVentesCache, getVentesCache, getCacheTimestamp, enqueue, getQueueCount, getAllQueueItemsForOverlay } from '@/lib/db';
+import { saveVentesCache, getVentesCache, getCacheTimestamp, enqueue, getQueueCount } from '@/lib/db';
 import { failureReason } from '@/src/utils/failure';
+import { enqueueOnce } from '@/lib/outbox';
 import { createKeyedInflightGuard } from '@/lib/inflight';
 import { isNetworkError, withNetworkRetry, reportOfflineFallback } from '@/lib/sync';
 import { useSyncStore } from '@/stores/sync';
@@ -205,13 +206,6 @@ function toOverlaySale(v: Vente): import('@/lib/pendingOverlay').OverlaySale {
 // pair, but the overlay would show it twice until then), and two taps in the
 // same tick must collapse into one call.
 const paymentGuard = createKeyedInflightGuard();
-async function enqueueOnce(operation: string, payload: { p_idempotency_key: string }): Promise<void> {
-  try {
-    const { ok } = await getAllQueueItemsForOverlay();
-    if (ok.some(i => i.operation === operation && i.idempotency_key === payload.p_idempotency_key)) return;
-  } catch { /* can't read the outbox to check: enqueue anyway — the server's claim on the key still dedups */ }
-  await enqueue(operation, payload);
-}
 
 export const useVentesStore = create<VentesStore>((set, get) => ({
   sales: [],

@@ -44,8 +44,8 @@ describe('Phase 3 — silent failures surfaced on mutating actions', () => {
     it('equipe/index.tsx surfaces failures for changeRole/removeMembre/revokeCode/updateScopeAll', () => {
         const src = readSource('app/(app)/equipe/index.tsx');
         expect(src).toMatch(/changeRole\(membre\.id,\s*r\)\.then\(ok\s*=>\s*\{[\s\S]*?toast\.warning\(useEquipeStore\.getState\(\)\.error/);
-        expect(src).toMatch(/const ok = await removeMembre\(membre\.id\);[\s\S]*?toast\.warning\(useEquipeStore\.getState\(\)\.error/);
-        expect(src).toMatch(/revokeCode\(item\.id\)\.then\(ok\s*=>\s*\{[\s\S]*?toast\.warning\(useEquipeStore\.getState\(\)\.error/);
+        expect(src).toMatch(/const ok = await removeMembre\(membre\.id\);[\s\S]*?failAlert\('memberNotRemoved'/);
+        expect(src).toMatch(/revokeCode\(item\.id\)\.then\(ok\s*=>\s*\{[\s\S]*?failAlert\('codeNotRevoked'/);
         expect(src).toMatch(/const ok = await updateScopeAll\(membre\.id,\s*val\);/);
         // Phase 4: failures speak in the one vocabulary (what + one action), not a bare toast.
         expect(src).toMatch(/showFailureAlert\(buildFailure\(\{\s*what: FAILURE_COPY\.memberStakesNotSaved\.what/);

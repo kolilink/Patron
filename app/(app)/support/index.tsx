@@ -2,7 +2,9 @@ import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { FlatList, InteractionManager, KeyboardAvoidingView, Platform, Pressable, StyleSheet, TextInput, View } from 'react-native';
 import * as ImagePicker from 'expo-image-picker';
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
-import { failAlert } from '@/src/components/ui/FailureView';
+import { failAlert, FailureView } from '@/src/components/ui/FailureView';
+import { buildFailure, failureReason } from '@/src/utils/failure';
+import { FAILURE_COPY } from '@/src/utils/failureCopy';
 import { Screen } from '@/src/components/ui/Screen';
 import { router, useFocusEffect } from 'expo-router';
 import { Ionicons } from '@expo/vector-icons';
@@ -73,6 +75,7 @@ export default function SupportScreen() {
   const userName = session?.user.name || 'Membre';
 
   const { conversation, messages, loading, sending, error, offline, load, sendMessage, sendImageMessage, appendMessage, updateConversation } = useSupportChatStore();
+  const [sendFailure, setSendFailure] = useState<{ reason?: string; retry: () => void } | null>(null);
   const [text, setText] = useState('');
   const listRef = useRef<FlatList<GroupedItem<SupportMessage>>>(null);
   const inputRef = useRef<TextInput>(null);
@@ -112,8 +115,15 @@ export default function SupportScreen() {
   const handleSend = async () => {
     const trimmed = text.trim();
     if (!trimmed || sending) return;
+    setSendFailure(null);
     setText('');
-    await sendMessage({ businessId, senderName: userName, content: trimmed });
+    const r = await sendMessage({ businessId, senderName: userName, content: trimmed });
+    if (!r.ok) {
+      // Her text goes back in the box; Réessayer sends it again.
+      haptics.error();
+      setText(cur => (cur.trim() ? cur : trimmed));
+      setSendFailure({ reason: failureReason(r.err), retry: () => { void handleSend(); } });
+    }
   };
 
   const handlePickImage = async () => {
@@ -122,13 +132,21 @@ export default function SupportScreen() {
     const result = await ImagePicker.launchImageLibraryAsync({ mediaTypes: ['images'], quality: 1 });
     if (result.canceled || !result.assets?.[0]) return;
     const asset = result.assets[0];
-    await sendImageMessage({
-      businessId,
-      senderName: userName,
-      fileUri: asset.uri,
-      sourceWidth: asset.width,
-      sourceHeight: asset.height,
-    });
+    const attempt = async () => {
+      setSendFailure(null);
+      const r = await sendImageMessage({
+        businessId,
+        senderName: userName,
+        fileUri: asset.uri,
+        sourceWidth: asset.width,
+        sourceHeight: asset.height,
+      });
+      if (!r.ok) {
+        haptics.error();
+        setSendFailure({ reason: failureReason(r.err), retry: () => { void attempt(); } });
+      }
+    };
+    await attempt();
   };
 
   return (
@@ -196,9 +214,20 @@ export default function SupportScreen() {
           />
         )}
 
-        {error ? (
+        {sendFailure ? (
+          <View style={{ paddingHorizontal: spacing[3], paddingTop: spacing[2] }}>
+            <FailureView
+              failure={buildFailure({
+                what: FAILURE_COPY.messageNotSent.what,
+                why: sendFailure.reason,
+                action: { label: 'Réessayer', onPress: sendFailure.retry },
+              })}
+              busy={sending}
+            />
+          </View>
+        ) : error ? (
           <View style={styles.errorStrip}>
-            <Text variant="caption" style={{ color: palette.danger }}>{error}</Text>
+            <Text variant="caption" style={{ color: palette.warning }}>{error}</Text>
           </View>
         ) : null}
 

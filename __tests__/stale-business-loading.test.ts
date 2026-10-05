@@ -49,6 +49,7 @@ jest.mock('@/lib/db', () => ({
 jest.mock('@/lib/errors', () => ({ translateError: jest.fn((e: unknown) => 'err') }));
 jest.mock('@/lib/id', () => ({ generateId: jest.fn(() => 'id'), generateFallbackName: jest.fn(() => 'Membre') }));
 jest.mock('@/stores/products', () => ({ useProductStore: { getState: () => ({}) } }));
+jest.mock('@/stores/sync', () => ({ useSyncStore: { getState: () => ({ kick: jest.fn() }), setState: jest.fn() } }));
 jest.mock('@/src/utils/notifications', () => ({ notifyEvent: jest.fn() }));
 
 let mockSession: unknown = null;

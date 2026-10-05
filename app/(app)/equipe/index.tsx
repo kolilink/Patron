@@ -31,6 +31,8 @@ import type { Role, MemberProductStake, Product } from '@/src/types';
 import { showFailureAlert } from '@/src/components/ui/FailureView';
 import { buildFailure, failureReason } from '@/src/utils/failure';
 import { FAILURE_COPY } from '@/src/utils/failureCopy';
+import { memberRemovedConfirmation, inviteCodeRevokedConfirmation, stakeRemovedConfirmation, partnerRemovedConfirmation, supplierDeletedConfirmation, saleCancelledConfirmation } from '@/src/utils/saveConfirmationCopy';
+import { failAlert } from '@/src/components/ui/FailureView';
 
 // iOS-only: suppresses the OS's auto-injected floating "Done" pill above
 // the numeric keyboard — the payout sheet's "Confirmer le paiement" button
@@ -333,6 +335,7 @@ function MemberDetailSheet({
           haptics.destructive();
           const ok = await removeScopeProduct(membre.id, productId);
           if (ok) {
+            toast.success(stakeRemovedConfirmation(productName, membre.display_name ?? membre.user_name ?? generateFallbackName(membre.user_id)));
             const rows = await fetchMemberScope(membre.id);
             setScope(rows);
           } else {
@@ -380,10 +383,16 @@ function MemberDetailSheet({
           void runRemove(async () => {
             const ok = await removeMembre(membre.id);
             if (ok) {
+              // A removed member can only come back through a new invitation, so there is no
+              // Annuler — the message names exactly who was removed.
+              toast.success(memberRemovedConfirmation(membre.user_name || generateFallbackName(membre.user_id)));
               onClose();
             } else {
               haptics.error();
-              toast.warning(useEquipeStore.getState().error ?? 'Impossible de retirer ce membre');
+              failAlert('memberNotRemoved', {
+                err: useEquipeStore.getState().error, label: 'Réessayer',
+                onPress: () => { void removeMembre(membre.id).then(ok2 => { if (ok2) { toast.success(memberRemovedConfirmation(membre.user_name || generateFallbackName(membre.user_id))); onClose(); } }); },
+              });
             }
           });
         },
@@ -1248,7 +1257,7 @@ export default function EquipeScreen() {
                         : `Valide · Expire dans ${item.expires_at ? Math.max(1, Math.ceil((new Date(item.expires_at).getTime() - Date.now()) / 3600000)) : '—'} h`}
                     </Text>
                   </View>
-                  <Pressable onPress={() => Alert.alert('Révoquer ce code ?', undefined, [{ text: 'Non', style: 'cancel' }, { text: 'Oui, révoquer', style: 'destructive', onPress: () => { haptics.destructive(); revokeCode(item.id).then(ok => { if (!ok) { haptics.error(); toast.warning(useEquipeStore.getState().error ?? 'Impossible de révoquer le code'); } }); } }])}>
+                  <Pressable onPress={() => Alert.alert('Révoquer ce code ?', undefined, [{ text: 'Non', style: 'cancel' }, { text: 'Oui, révoquer', style: 'destructive', onPress: () => { haptics.destructive(); revokeCode(item.id).then(ok => { if (ok) { toast.success(inviteCodeRevokedConfirmation()); } else { haptics.error(); failAlert('codeNotRevoked', { err: useEquipeStore.getState().error, label: 'Réessayer', onPress: () => { void revokeCode(item.id).then(ok2 => { if (ok2) toast.success(inviteCodeRevokedConfirmation()); }); } }); } }); } }])}>
                     <Text variant="caption" color="danger">Révoquer</Text>
                   </Pressable>
                 </View>

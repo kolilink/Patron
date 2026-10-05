@@ -34,37 +34,9 @@ export type SyncResult = {
 
 let _running = false;
 
-// Shared by isNetworkError() and reportOfflineFallback() — a raw Error
-// instance is the exception, not the rule, in this codebase: by default
-// (no .throwOnError()), a failed Supabase call resolves with a plain
-// PostgrestError-shaped OBJECT ({ message, code, details, hint }), not a
-// thrown Error. String(plainObject) is the literal text "[object Object]",
-// not its message — isNetworkError() has always special-cased this (see
-// __tests__/offline-resilience.test.ts's regression guard); this used to be
-// duplicated ad hoc rather than shared, and reportOfflineFallback() was
-// missing the object-shape branch entirely, so every Sentry event for the
-// (most common) plain-object case logged "[object Object]" instead of the
-// actual message — silently defeating its own purpose.
-function extractErrorMessage(err: unknown): string {
-  if (err instanceof Error) return err.message;
-  if (err && typeof err === 'object' && 'message' in err) return String((err as { message: unknown }).message);
-  return String(err);
-}
-
-export function isNetworkError(err: unknown): boolean {
-  if (err instanceof Error && err.name === 'AbortError') return true;
-  const msg = extractErrorMessage(err).toLowerCase();
-  return (
-    msg.includes('fetch') ||
-    msg.includes('network') ||
-    msg.includes('failed to connect') ||
-    msg.includes('econnrefused') ||
-    msg.includes('etimedout') ||
-    msg.includes('timeout') ||
-    msg.includes('offline') ||
-    msg.includes('load failed')
-  );
-}
+import { isNetworkError, extractErrorMessage } from '@/lib/networkError';
+// Re-exported: callers keep importing isNetworkError from here.
+export { isNetworkError };
 
 // A genuine business rejection is a RAISE EXCEPTION with ERRCODE P0001 — this
 // codebase's convention for French, user-facing rejections (see CLAUDE.md's
@@ -213,6 +185,27 @@ function describeQueuedCart(
   return first.variant_name ? `${totalQty} ${first.product_name} ${first.variant_name}` : `${totalQty} ${first.product_name}`;
 }
 
+// po_received after a queued réception reaches the server — the supplier name is
+// looked up best-effort (a failure here must never affect the sync result).
+async function notifyReceptionSynced(payload: Record<string, unknown>): Promise<void> {
+  try {
+    const businessId = payload.p_business_id as string;
+    const lines = (payload.p_lines as { qty?: number }[] | undefined) ?? [];
+    const totalItems = lines.reduce((s, l) => s + (Number(l.qty) || 0), 0);
+    let supplier = 'Marché';
+    if (payload.p_supplier_id) {
+      const { data } = await supabase.from('suppliers').select('name').eq('id', payload.p_supplier_id as string).maybeSingle();
+      supplier = (data as { name?: string } | null)?.name ?? '';
+    }
+    notifyEvent({
+      businessId,
+      eventType: 'po_received',
+      payload: { N: totalItems, supplier },
+      targetRoles: ['administrateur', 'manager', 'vendeur'],
+    });
+  } catch { /* best-effort */ }
+}
+
 // The online path (stores/sales.ts) notifies admins/managers right after a
 // successful submit_sale call — the offline-queue replay skipped this
 // entirely, so sales made offline (this app's core low-connectivity use
@@ -339,6 +332,15 @@ async function executeOp(operation: string, payload: Record<string, unknown>): P
     case 'record_client_payment': {
       const { error } = await supabase.rpc('record_client_payment', payload);
       if (error) throw error;
+      break;
+    }
+    case 'confirm_reception': {
+      // A queued réception. The key is also the order id (migration_v229), so a
+      // replay returns the same order; po_received notifies the team once, here,
+      // at the moment it actually reaches the server.
+      const { error } = await supabase.rpc('confirm_reception', payload);
+      if (error) throw error;
+      void notifyReceptionSynced(payload);
       break;
     }
     case 'create_product': {
