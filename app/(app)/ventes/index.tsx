@@ -24,6 +24,7 @@ import { haptics } from '@/lib/haptics';
 import { supabase } from '@/lib/supabase';
 import { SkeletonList } from '@/src/components/ui/SkeletonPlaceholder';
 import { EmptyState } from '@/src/components/ui/EmptyState';
+import { failAlert } from '@/src/components/ui/FailureView';
 
 // iOS-only: suppresses the OS's auto-injected floating "Done" pill above
 // the numeric keyboard — PaymentSheet already has a persistent, always-
@@ -419,7 +420,8 @@ function DetailModal({ sale, currency, businessName, singleVendor, role, onClose
       await new Promise<void>(r => setTimeout(r, 350));
       await Sharing.shareAsync(uri, { mimeType: 'image/png', UTI: 'public.png', dialogTitle: 'Partager le reçu' });
     } catch {
-      Alert.alert('Impossible de partager le reçu pour l\'instant.');
+      // failure: speaks — receipt share failed: receiptNotShared
+      failAlert('receiptNotShared');
     }
   };
 

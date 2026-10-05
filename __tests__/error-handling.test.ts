@@ -79,9 +79,9 @@ describe('translateError', () => {
 
   it('translates network errors to French', () => {
     expect(translateError(new Error('network request failed'), 'fallback'))
-      .toBe('Erreur de réseau. Vérifiez votre connexion.');
+      .toBe('Pas de connexion. Vérifiez votre connexion.');
     expect(translateError(new Error('failed to fetch'), 'fallback'))
-      .toBe('Erreur de réseau. Vérifiez votre connexion.');
+      .toBe('Pas de connexion. Vérifiez votre connexion.');
   });
 
   it('translates DB permission errors to French', () => {

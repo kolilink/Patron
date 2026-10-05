@@ -24,6 +24,7 @@ import { ProofPhotoField, type PickedImage } from '@/src/components/ui/ProofPhot
 import { EmptyState } from '@/src/components/ui/EmptyState';
 import { attachTransactionProof } from '@/lib/proofs';
 import { formatAmountInput, parseAmountInput, formatAmount } from '@/src/utils/format';
+import { FAILURE_COPY } from '@/src/utils/failureCopy';
 
 function fmt(n: number, cur: string) { return formatAmount(n, cur); }
 function todayIso() {
@@ -465,7 +466,8 @@ export default function DepensesScreen() {
         });
         await fetchExpenses(businessId);
       } catch {
-        toast.info('Dépense enregistrée — ajoutez l\'image plus tard');
+        // failure: speaks — expense saved, photo not attached: proofNotAttached toast
+        toast.info(`${FAILURE_COPY.proofNotAttached.what} ${FAILURE_COPY.proofNotAttached.why}`);
       }
     }
 

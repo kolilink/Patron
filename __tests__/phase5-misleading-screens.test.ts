@@ -51,7 +51,7 @@ describe('Phase 5 — misleading screens & dead ends', () => {
         const src = readSource('app/(app)/messages/[room_id].tsx');
         expect(src).toMatch(/const \[loadError, setLoadError\] = useState\(false\);/);
         expect(src).toMatch(/const loadMessages = useCallback\(async \(\) => \{/);
-        expect(src).toMatch(/catch \{\s*setLoading\(false\);\s*setLoadError\(true\);\s*\}/);
+        expect(src).toMatch(/catch \{\s*(\/\/ failure:[^\n]*\n\s*)?setLoading\(false\);\s*setLoadError\(true\);\s*\}/);
         expect(src).toMatch(/\) : loadError \? \(\s*<View style=\{styles\.empty\}>/);
         expect(src).toMatch(/Impossible de charger la conversation\./);
         expect(src).toMatch(/accessibilityLabel="Réessayer"/);
@@ -98,7 +98,8 @@ describe('Phase 5 — misleading screens & dead ends', () => {
     it('5.9 app/invite.tsx toasts on invalid/expired token and stores/inviter.ts adds timeouts', () => {
         const invite = readSource('app/invite.tsx');
         expect(invite).toMatch(/import \{ toast \} from '@\/stores\/toast';/);
-        expect(invite).toMatch(/toast\.warning\(networkErr \? 'Problème de connexion, réessayez\.' : "Lien d'invitation invalide ou expiré\."\);/);
+        // Phase 4: the branch is on the internal code, the copy comes from the failure vocabulary.
+        expect(invite).toMatch(/toast\.warning\(networkErr\s*\?[\s\S]*?FAILURE_COPY\.inviteNotOpened\.what[\s\S]*?:\s*FAILURE_COPY\.inviteLinkInvalid\.what\);/);
 
         const store = readSource('stores/inviter.ts');
         expect(store).toMatch(/await withTimeout\(supabase\.rpc\('record_invite_attempt'\)\);/);

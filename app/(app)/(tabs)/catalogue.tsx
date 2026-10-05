@@ -47,6 +47,9 @@ import { formatAmount, formatAmountInput, parseAmountInput, formatAmountValue, f
 import { OfflineNotice } from '@/src/components/ui/OfflineNotice';
 import { SkeletonList } from '@/src/components/ui/SkeletonPlaceholder';
 import { activationPriming } from '@/stores/activationPriming';
+import { showFailureAlert } from '@/src/components/ui/FailureView';
+import { buildFailure, failureReason } from '@/src/utils/failure';
+import { FAILURE_COPY } from '@/src/utils/failureCopy';
 
 // ─── Helpers ─────────────────────────────────────────────────────────────────
 
@@ -1599,11 +1602,19 @@ export default function CatalogueScreen() {
         if (wasNewProduct) activationPriming.maybeTrigger();
       } else {
         haptics.error();
-        toast.warning(useProductStore.getState().error ?? 'Impossible d\'enregistrer le produit');
+        // The sheet stays open with everything typed; one action re-fires the same save.
+        showFailureAlert(buildFailure({
+          what: FAILURE_COPY.productNotSaved.what,
+          why: failureReason(useProductStore.getState().error) ?? FAILURE_COPY.productNotSaved.why,
+          action: { label: 'Réessayer', onPress: () => { void handleSaveRef.current?.(data, hasVariants, variants); } },
+        }));
       }
     },
     [editingProduct, businessId, userId, createProduct, updateProduct, upsertVariants, showSuccess, archiveProduct],
   );
+
+  const handleSaveRef = useRef<typeof handleSave>(handleSave);
+  handleSaveRef.current = handleSave;
 
   const handleAdjust = useCallback(
     async (qty: number, type: 'entree' | 'perte', note: string) => {

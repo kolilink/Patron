@@ -92,6 +92,7 @@ export default function CarnetScreen() {
         ).select('id').single();
         clientId = data?.id ?? null;
       } catch {
+        // failure: control-flow — counts this entry as failed; the batch result tells her how many did not save
         failed++;
         continue;
       }

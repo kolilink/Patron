@@ -9,6 +9,7 @@ import type { Palette } from '@/src/theme';
 import { useAuthStore } from '@/stores/auth';
 import { useInviterStore } from '@/stores/inviter';
 import { toast } from '@/stores/toast';
+import { FAILURE_COPY } from '@/src/utils/failureCopy';
 import { setPendingInviteToken, clearPendingInviteToken } from '@/lib/inviteLink';
 
 // ─── /invite deep-link entry (Phase 2 + Phase 5) ────────────────────────────
@@ -51,9 +52,11 @@ export default function InviteRoute() {
                 // Invalid/expired/revoked → name the failure instead of landing
                 // silently on Home. A network failure (timeout) is told apart so
                 // we never mislabel a blip as a bad link.
-                const err = useInviterStore.getState().error;
-                const networkErr = err === 'Erreur de réseau. Vérifiez votre connexion.';
-                toast.warning(networkErr ? 'Problème de connexion, réessayez.' : "Lien d'invitation invalide ou expiré.");
+                // Branch on the internal code, never on the human copy.
+                const networkErr = useInviterStore.getState().errorCode === 'network';
+                toast.warning(networkErr
+                    ? `${FAILURE_COPY.inviteNotOpened.what} Pas de connexion. Rouvrez le lien plus tard.`
+                    : FAILURE_COPY.inviteLinkInvalid.what);
                 await clearPendingInviteToken();
                 router.replace('/(app)/(tabs)/');
                 return;

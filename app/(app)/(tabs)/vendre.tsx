@@ -56,6 +56,7 @@ import { haptics } from '@/lib/haptics';
 import { SkeletonList } from '@/src/components/ui/SkeletonPlaceholder';
 import { trackEvent } from '@/lib/analytics';
 import { activationPriming } from '@/stores/activationPriming';
+import { failAlert } from '@/src/components/ui/FailureView';
 
 // Product tiles show the bare number — the currency is declared once above
 // the grid instead of repeated on every card. Reuses formatAmount's own
@@ -131,6 +132,7 @@ async function loadDefaultQuickPayMethod(businessId: string): Promise<'especes' 
     for (const [m, c] of counts) if (c > bestCount) { best = m; bestCount = c; }
     return (best === 'orange' || best === 'mtn') ? best : 'especes';
   } catch {
+    // failure: silent — preference read: falls back to cash, never worth interrupting a sale
     return 'especes';
   }
 }
@@ -141,6 +143,7 @@ async function recordQuickPayMethodUsed(businessId: string, method: string) {
     history.push(method);
     await setKV(quickPayHistoryKey(businessId), JSON.stringify(history.slice(-QUICK_PAY_HISTORY_LEN)));
   } catch {
+    // failure: silent — best-effort preference write: the default just doesn't adapt this time
     // Best-effort — a failed write just means the default doesn't adapt this
     // time, never something the merchant needs to see or retry.
   }
@@ -1911,7 +1914,8 @@ export default function VendreScreen() {
       });
       closeConfirmSheet();
     } catch (shareErr) {
-      Alert.alert('Impossible de partager le reçu pour l\'instant.');
+      // failure: speaks — receipt share failed: receiptNotShared
+      failAlert('receiptNotShared');
     } finally {
       setSharingReceipt(false);
     }

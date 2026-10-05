@@ -3,7 +3,9 @@ import { supabase } from '@/lib/supabase';
 import { generateId, generateFallbackName } from '@/lib/id';
 import { translateError } from '@/lib/errors';
 import { trackEvent } from '@/lib/analytics';
-import { saveVentesCache, getVentesCache, getCacheTimestamp, enqueue, getQueueCount } from '@/lib/db';
+import { saveVentesCache, getVentesCache, getCacheTimestamp, enqueue, getQueueCount, getAllQueueItemsForOverlay } from '@/lib/db';
+import { failureReason } from '@/src/utils/failure';
+import { createKeyedInflightGuard } from '@/lib/inflight';
 import { isNetworkError, withNetworkRetry, reportOfflineFallback } from '@/lib/sync';
 import { useSyncStore } from '@/stores/sync';
 import { notifyEvent } from '@/src/utils/notifications';
@@ -128,8 +130,11 @@ interface VentesStore {
   // comment for the full reasoning.
   refreshPendingOverlay: () => Promise<void>;
   loadDetail: (saleId: string) => Promise<void>;
-  recordPayment: (saleId: string, amount: number, method: string, date: string) => Promise<{ ok: boolean; fullyPaid: boolean; paymentId?: string }>;
-  recordClientPayment: (customerName: string, businessId: string, amount: number, method: string, date: string) => Promise<{ ok: boolean; fullySettled: boolean; paymentIds?: string[] }>;
+  // `idempotencyKey` is optional: a caller that may retry after a failure passes the SAME key on every
+  // attempt, so a retry can never record the payment twice (locally or at the server).
+  // `reason` is the one thing worth telling her about a failure (see src/utils/failure.ts), never a raw message.
+  recordPayment: (saleId: string, amount: number, method: string, date: string, idempotencyKey?: string) => Promise<{ ok: boolean; fullyPaid: boolean; paymentId?: string; reason?: string }>;
+  recordClientPayment: (customerName: string, businessId: string, amount: number, method: string, date: string, idempotencyKey?: string) => Promise<{ ok: boolean; fullySettled: boolean; paymentIds?: string[]; reason?: string }>;
   // Reverses one or more payments rows created by recordPayment/recordClientPayment
   // above, via the void_payment RPC (migration_v157.sql). Not offline-queued — a
   // void is a correction that needs a live round trip, same posture as the rest
@@ -193,6 +198,19 @@ function toOverlaySale(v: Vente): import('@/lib/pendingOverlay').OverlaySale {
     lines: (v.lines ?? []).map(l => ({ ...l, variant_id: l.variant_id ?? null, variant_name: l.variant_name ?? null })),
     payments: v.payments ?? [],
   };
+}
+
+// A payment retried after a failure carries the same idempotency key. Locally
+// that must never put a second copy in the outbox (the server would dedup the
+// pair, but the overlay would show it twice until then), and two taps in the
+// same tick must collapse into one call.
+const paymentGuard = createKeyedInflightGuard();
+async function enqueueOnce(operation: string, payload: { p_idempotency_key: string }): Promise<void> {
+  try {
+    const { ok } = await getAllQueueItemsForOverlay();
+    if (ok.some(i => i.operation === operation && i.idempotency_key === payload.p_idempotency_key)) return;
+  } catch { /* can't read the outbox to check: enqueue anyway — the server's claim on the key still dedups */ }
+  await enqueue(operation, payload);
 }
 
 export const useVentesStore = create<VentesStore>((set, get) => ({
@@ -566,7 +584,9 @@ export const useVentesStore = create<VentesStore>((set, get) => ({
   // FIFO fan-out, this always targets exactly one already-known sale_id —
   // lib/pendingOverlay.ts's applyPatchOp handles it as a plain single-sale
   // patch, not the allocateClientPayment loop.
-  recordPayment: async (saleId, amount, method, date) => {
+  recordPayment: async (saleId, amount, method, date, providedKey) => {
+    const idempotencyKey = providedKey ?? generateId();
+    const attempt = await paymentGuard.run(idempotencyKey, async () => {
     set({ saving: true, error: null });
     const sale = get().sales.find(s => s.id === saleId);
     if (!sale) { set({ saving: false }); return { ok: false, fullyPaid: false }; }
@@ -577,7 +597,7 @@ export const useVentesStore = create<VentesStore>((set, get) => ({
     const newAmountPaid = alreadyPaid + amount;
     const fullyPaid = newAmountPaid >= owed - 0.01;
     const amountCents = Math.round(amount * 100);
-    const idempotencyKey = generateId();
+    
 
     // record_payment() re-checks the real remaining balance server-side and
     // rejects the insert if it would overpay — the on-device
@@ -632,14 +652,16 @@ export const useVentesStore = create<VentesStore>((set, get) => ({
     } catch (err) {
       if (isNetworkError(err)) {
         try {
-          await enqueue('record_payment', rpcPayload);
+          await enqueueOnce('record_payment', rpcPayload);
         } catch (enqErr) {
           console.error('[recordPayment] local write failed', enqErr);
           set({ saving: false, error: "Impossible d'enregistrer sur cet appareil. Réessayez." });
-          return { ok: false, fullyPaid: false };
+          return { ok: false, fullyPaid: false, reason: undefined };
         }
-        const count = await getQueueCount();
-        useSyncStore.setState({ pendingCount: count });
+        // The write is durable from here on: nothing below may turn this into a failure.
+        try {
+          useSyncStore.setState({ pendingCount: await getQueueCount() });
+        } catch { /* the count refreshes on the next sync tick */ }
         try {
           await get().refreshPendingOverlay();
         } catch (overlayErr) {
@@ -654,8 +676,10 @@ export const useVentesStore = create<VentesStore>((set, get) => ({
         return { ok: true, fullyPaid };
       }
       set({ saving: false, error: translateError(err, 'Paiement impossible') });
-      return { ok: false, fullyPaid: false };
+      return { ok: false, fullyPaid: false, reason: failureReason(err) };
     }
+  });
+    return attempt.ran ? attempt.value : { ok: false, fullyPaid: false };
   },
 
   // Local-write-first (§5, same shape as stores/sales.ts's three functions).
@@ -667,7 +691,9 @@ export const useVentesStore = create<VentesStore>((set, get) => ({
   // why the mechanism is a dedicated claim table, not a column on
   // `payments` itself (this RPC's FIFO allocation can fan out into a
   // variable number of payments rows per call).
-  recordClientPayment: async (customerName, businessId, amount, method, date) => {
+  recordClientPayment: async (customerName, businessId, amount, method, date, providedKey) => {
+    const idempotencyKey = providedKey ?? generateId();
+    const attempt = await paymentGuard.run(idempotencyKey, async () => {
     set({ saving: true, error: null });
 
     // Cheap local pre-check only (not authoritative — the RPC's own FOR
@@ -679,7 +705,7 @@ export const useVentesStore = create<VentesStore>((set, get) => ({
     );
     if (creditSales.length === 0) {
       set({ saving: false, error: 'Aucun crédit trouvé pour ce client' });
-      return { ok: false, fullySettled: false };
+      return { ok: false, fullySettled: false, reason: 'Aucun crédit trouvé pour ce client.' };
     }
     // Sum of what this client owed right before this payment — used for
     // the "total" credit_paid notification wording ("a totalement payé sa
@@ -694,7 +720,7 @@ export const useVentesStore = create<VentesStore>((set, get) => ({
     // returned id. The live RPC returns those ids (migration_v203).
     let paymentIds: string[] | undefined;
     let fullySettled = false;
-    const idempotencyKey = generateId();
+    
     const rpcPayload = {
       p_business_id: businessId,
       p_customer_name: customerName,
@@ -741,14 +767,16 @@ export const useVentesStore = create<VentesStore>((set, get) => ({
     } catch (err) {
       if (isNetworkError(err)) {
         try {
-          await enqueue('record_client_payment', rpcPayload);
+          await enqueueOnce('record_client_payment', rpcPayload);
         } catch (enqErr) {
           console.error('[recordClientPayment] local write failed', enqErr);
           set({ saving: false, error: "Impossible d'enregistrer sur cet appareil. Réessayez." });
           return { ok: false, fullySettled: false };
         }
-        const count = await getQueueCount();
-        useSyncStore.setState({ pendingCount: count });
+        // The write is durable from here on: nothing below may turn this into a failure.
+        try {
+          useSyncStore.setState({ pendingCount: await getQueueCount() });
+        } catch { /* the count refreshes on the next sync tick */ }
         try {
           await get().refreshPendingOverlay();
         } catch (overlayErr) {
@@ -766,8 +794,10 @@ export const useVentesStore = create<VentesStore>((set, get) => ({
         return { ok: true, fullySettled, paymentIds };
       }
       set({ saving: false, error: translateError(err, 'Paiement impossible') });
-      return { ok: false, fullySettled: false };
+      return { ok: false, fullySettled: false, reason: failureReason(err) };
     }
+  });
+    return attempt.ran ? attempt.value : { ok: false, fullySettled: false };
   },
 
   voidPayments: async (paymentIds, businessId, reason) => {

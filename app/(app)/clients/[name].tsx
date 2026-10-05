@@ -23,6 +23,10 @@ import { saveClientLedgerCache, getClientLedgerCache, getVentesCache } from '@/l
 import { rebuildPendingOverlay, pendingLedgerPayments, type OverlaySale, type PendingLedgerPayment } from '@/lib/pendingOverlay';
 import { isNetworkError, withTimeout } from '@/lib/sync';
 import { OfflineNotice } from '@/src/components/ui/OfflineNotice';
+import { FailureView } from '@/src/components/ui/FailureView';
+import { buildFailure } from '@/src/utils/failure';
+import { FAILURE_COPY } from '@/src/utils/failureCopy';
+import { generateId } from '@/lib/id';
 import { selectClientSales, clientBalance } from '@/src/utils/salesTotals';
 import { buildDebtReminderMessage, formatDebtAge, debtAgeTier } from '@/src/utils/clientReminder';
 
@@ -151,11 +155,13 @@ function EditModal({
 // ─── Payment Modal ────────────────────────────────────────────────────────────
 
 function PayModal({
-  visible, displayName, totalOwed, currency, saving,
+  visible, displayName, totalOwed, currency, saving, failed,
   onClose, onRecord,
 }: {
   visible: boolean; displayName: string; totalOwed: number;
   currency: string; saving: boolean;
+  /** Set when the last attempt did not record. The sheet stays open with her input untouched. */
+  failed: { reason?: string } | null;
   onClose: () => void;
   onRecord: (amount: number, method: string, date: string) => void;
 }) {
@@ -189,6 +195,18 @@ function PayModal({
     onRecord(amount, method, date);
   };
 
+  // The one failure surface: persistent and inline (never a 3-second toast —
+  // unreadable in sunlight), her amount/method/date stay exactly as typed, and
+  // Réessayer re-fires THE SAME data under the SAME idempotency key (see
+  // handleRecord), so retrying can never record the payment twice.
+  const failure = failed
+    ? buildFailure({
+        what: FAILURE_COPY.paymentNotRecorded.what,
+        why: failed.reason ?? FAILURE_COPY.paymentNotRecorded.why,
+        action: { label: 'Réessayer', onPress: handleRecord },
+      })
+    : null;
+
   return (
     <FormSheet
       visible={visible}
@@ -198,10 +216,11 @@ function PayModal({
       contentContainerStyle={styles.pad}
       footer={
         <View style={styles.footer}>
-          <Button
+          {failure && <FailureView failure={failure} busy={saving} />}
+          {!failure && <Button
             label={amount > 0 ? `Enregistrer : ${displayName} a payé ${fmt(amount, currency)}` : 'Confirmer le paiement'} loadingLabel="Enregistrement"
             onPress={handleRecord} loading={saving} fullWidth size="lg" disabled={amount <= 0}
-          />
+          />}
         </View>
       }
       accessory={
@@ -301,6 +320,10 @@ export default function ClientLedgerScreen() {
   const [clientRecord, setClientRecord] = useState<ClientRecord | null>(null);
   const [loadingLocal, setLoadingLocal] = useState(true);
   const [showPayModal, setShowPayModal] = useState(false);
+  const [payFailed, setPayFailed] = useState<{ reason?: string } | null>(null);
+  // One idempotency key per LOGICAL payment: reused when she retries the same
+  // amount/method/date/target, replaced the moment any of them changes.
+  const payAttempt = useRef<{ sig: string; key: string } | null>(null);
   const [showEditModal, setShowEditModal] = useState(false);
   const [showNewCreditSheet, setShowNewCreditSheet] = useState(false);
   const [detailEntry, setDetailEntry] = useState<LedgerEntry | null>(null);
@@ -361,6 +384,7 @@ export default function ClientLedgerScreen() {
       if (isClientId && record) setDisplayName(record.name);
       if (record) void saveClientLedgerCache(recordCacheKey, record);
     } catch {
+      // failure: control-flow — timeout = network error: cached ledger already applied, offline notice speaks
       // timeout — cached value above already applied
     }
   };
@@ -381,6 +405,7 @@ export default function ClientLedgerScreen() {
       const ids = new Set(selectClientSales(useVentesStore.getState().sales, routeParam, isClientId, displayName).map(x => x.id));
       return pendingLedgerPayments(payments, ids);
     } catch {
+      // failure: silent — cache read failure is treated as no cache
       return [];
     }
   };
@@ -447,6 +472,7 @@ export default function ClientLedgerScreen() {
       void saveClientLedgerCache(paymentsCacheKey, payments);
       setLoadingLocal(false);
     } catch {
+      // failure: control-flow — timeout = network error: cache fallback, offline notice speaks
       // timeout — treat exactly like a returned network error above
       const cached = await getClientLedgerCache(paymentsCacheKey) as LedgerPayment[] | null;
       if (cached) setLedgerPayments(cached);
@@ -506,6 +532,7 @@ export default function ClientLedgerScreen() {
       setLedgerLines(labels);
       void saveClientLedgerCache(linesCacheKey, labels);
     } catch {
+      // failure: control-flow — timeout = network error: cached labels already applied
       // timeout — cached value above already applied
     }
   };
@@ -627,13 +654,26 @@ export default function ClientLedgerScreen() {
   }, []);
 
   const handleRecord = useCallback(async (amount: number, method: string, date: string, specificSaleId?: string) => {
-    let result: { ok: boolean; fullyPaid?: boolean; fullySettled?: boolean; paymentId?: string; paymentIds?: string[] };
+    let result: { ok: boolean; fullyPaid?: boolean; fullySettled?: boolean; paymentId?: string; paymentIds?: string[]; reason?: string };
+    const sig = `${specificSaleId ?? 'client'}|${amount}|${method}|${date}`;
+    if (!payAttempt.current || payAttempt.current.sig !== sig) payAttempt.current = { sig, key: generateId() };
+    const idempotencyKey = payAttempt.current.key;
+    setPayFailed(null);
     if (specificSaleId) {
-      result = await recordPayment(specificSaleId, amount, method, date);
+      result = await recordPayment(specificSaleId, amount, method, date, idempotencyKey);
     } else {
-      result = await recordClientPayment(displayName, businessId, amount, method, date);
+      result = await recordClientPayment(displayName, businessId, amount, method, date, idempotencyKey);
+    }
+    if (!result.ok) {
+      // Nothing moved (the write never happened), and her input is still in the
+      // sheet. Say so plainly, in place, and offer the one retry.
+      haptics.error();
+      setPayFailed({ reason: result.reason });
+      return;
     }
     if (result.ok) {
+      payAttempt.current = null;
+      setPayFailed(null);
       setShowPayModal(false);
       haptics.success();
 
@@ -849,7 +889,8 @@ export default function ClientLedgerScreen() {
         totalOwed={totalOwed}
         currency={currency}
         saving={saving}
-        onClose={() => setShowPayModal(false)}
+        failed={payFailed}
+        onClose={() => { setShowPayModal(false); setPayFailed(null); }}
         onRecord={handleRecord}
       />
 

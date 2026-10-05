@@ -25,6 +25,9 @@ import { translateError } from '@/lib/errors';
 import { generateId } from '@/lib/id';
 import { supabase } from '@/lib/supabase';
 import { formatAmountInput, parseAmountInput, formatAmount } from '@/src/utils/format';
+import { showFailureAlert } from '@/src/components/ui/FailureView';
+import { buildFailure, failureReason } from '@/src/utils/failure';
+import { FAILURE_COPY } from '@/src/utils/failureCopy';
 
 // iOS-only: number-pad/decimal-pad keyboards have no built-in return key, so
 // the OS auto-injects its own floating "Done" pill above the keyboard when
@@ -470,7 +473,12 @@ export default function FournisseursScreen() {
         });
         if (sErr) {
           haptics.error();
-          Alert.alert('Erreur', translateError(sErr, 'Impossible de créer le fournisseur'));
+          showFailureAlert(buildFailure({
+            what: FAILURE_COPY.supplierNotCreated.what,
+            err: sErr,
+            why: failureReason(sErr) ?? FAILURE_COPY.supplierNotCreated.why,
+            action: { label: 'Réessayer', onPress: () => { void handleSaveFournisseur(d); } },
+          }));
           return;
         }
         await fetchFournisseurs(businessId);
@@ -494,7 +502,11 @@ export default function FournisseursScreen() {
           supplier_id: supplierId,
         });
         if (pErr) {
-          Alert.alert('Produit non enregistré', `"${np.name}" : ${translateError(pErr, pErr.message)}`);
+          showFailureAlert(buildFailure({
+            what: `Le produit « ${np.name} » n'a pas été enregistré.`,
+            why: failureReason(pErr),
+            action: { label: 'Retour', onPress: () => {} },
+          }));
         } else {
           newProductIds.push(newId);
         }

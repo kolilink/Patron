@@ -39,6 +39,7 @@ import { SkeletonKpiGrid } from '@/src/components/ui/SkeletonPlaceholder';
 import { haptics } from '@/lib/haptics';
 import { toast } from '@/stores/toast';
 import { useInviterStore, buildInviteLink, buildInviteMessage } from '@/stores/inviter';
+import { FAILURE_COPY } from '@/src/utils/failureCopy';
 
 
 interface KPIs {
@@ -196,7 +197,8 @@ export default function AccueilScreen() {
       trackEvent('invite_sent', businessId, userId, { source: 'accueil_header' });
       await Share.share({ message });
     } catch {
-      toast.warning("Impossible d'ouvrir le partage");
+      // failure: speaks — share sheet failed to open: shareNotOpened toast
+      toast.warning(FAILURE_COPY.shareNotOpened.what);
     } finally {
       setInviting(false);
     }
@@ -373,6 +375,7 @@ export default function AccueilScreen() {
         fetchPayouts(businessId, userId);
       }
     } catch (err) {
+      // failure: control-flow — network error flips the offline banner, which speaks
       if (isNetworkError(err)) setIsOffline(true);
     } finally {
       setLoading(false);
@@ -469,6 +472,7 @@ export default function AccueilScreen() {
       setKpis(freshKpis);
       void saveDashboardKpiCache(businessId, freshKpis);
     } catch (err) {
+      // failure: control-flow — network error: the local estimate already on screen stays; anything else rethrows
       if (!isNetworkError(err)) throw err;
       // network error — the local estimate set above is already on screen
     }
@@ -505,6 +509,7 @@ export default function AccueilScreen() {
       setBestSellersBase(base);
       void saveBestSellersCache(businessId, base);
     } catch (err) {
+      // failure: control-flow — network error: the cached ranking stays; anything else rethrows
       if (!isNetworkError(err)) throw err;
     }
   };

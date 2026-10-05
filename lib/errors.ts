@@ -1,3 +1,5 @@
+import { NO_CONNECTION_MESSAGE } from '@/src/utils/failureCopy';
+
 const TRANSLATIONS: [string, string][] = [
   // Auth errors from Supabase
   ['invalid login credentials', 'Email ou mot de passe incorrect'],
@@ -23,10 +25,10 @@ const TRANSLATIONS: [string, string][] = [
   ['anonymous logins are not enabled', 'Les connexions anonymes sont désactivées dans Supabase.'],
   ['anon sign-in', 'Les connexions anonymes sont désactivées dans Supabase.'],
   // Network errors
-  ['network request failed', 'Erreur de réseau. Vérifiez votre connexion.'],
-  ['failed to fetch', 'Erreur de réseau. Vérifiez votre connexion.'],
-  ['networkerror', 'Erreur de réseau. Vérifiez votre connexion.'],
-  ['load failed', 'Erreur de réseau. Vérifiez votre connexion.'],
+  ['network request failed', NO_CONNECTION_MESSAGE],
+  ['failed to fetch', NO_CONNECTION_MESSAGE],
+  ['networkerror', NO_CONNECTION_MESSAGE],
+  ['load failed', NO_CONNECTION_MESSAGE],
   // Database / RLS errors
   ['permission denied', 'Accès refusé'],
   ['row-level security', 'Accès refusé'],

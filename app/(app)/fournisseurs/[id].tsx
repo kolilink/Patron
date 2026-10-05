@@ -27,6 +27,7 @@ import {
 } from '@/stores/fournisseurs';
 import { supabase } from '@/lib/supabase';
 import { formatAmountInput, parseAmountInput, formatAmount } from '@/src/utils/format';
+import { failAlert } from '@/src/components/ui/FailureView';
 
 // iOS-only: suppresses the OS's auto-injected floating "Done" pill above
 // number-pad/decimal-pad keyboards — the pay form below already has a
@@ -182,7 +183,10 @@ export default function FournisseurProfile() {
     try {
       const { error } = await supabase.from('product_suppliers').insert({ product_id: productId, supplier_id: id });
       if (!error) setExtraProductIds(prev => new Set([...prev, productId]));
-    } catch {
+      else failAlert('productNotLinked', { err: error, label: 'Réessayer', onPress: () => { void linkProduct(productId); } });
+    } catch (err) {
+      // failure: speaks — link product: failAlert + Réessayer
+      failAlert('productNotLinked', { err, label: 'Réessayer', onPress: () => { void linkProduct(productId); } });
       // A network timeout here must never leave `linkingProducts` stuck
       // true (it permanently disables the link chip) — see CLAUDE.md's
       // withTimeout() sweep for the established shape of this fix.
@@ -197,8 +201,10 @@ export default function FournisseurProfile() {
       const { error } = await supabase.from('product_suppliers')
         .delete().eq('product_id', productId).eq('supplier_id', id);
       if (!error) setExtraProductIds(prev => { const s = new Set(prev); s.delete(productId); return s; });
-    } catch {
-      // best-effort — no loading flag depends on this
+      else failAlert('productNotUnlinked', { err: error, label: 'Réessayer', onPress: () => { void unlinkProduct(productId); } });
+    } catch (err) {
+      // failure: speaks — unlink product: failAlert + Réessayer
+      failAlert('productNotUnlinked', { err, label: 'Réessayer', onPress: () => { void unlinkProduct(productId); } });
     }
   };
 
