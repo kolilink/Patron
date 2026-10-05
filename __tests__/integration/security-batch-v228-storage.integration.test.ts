@@ -9,13 +9,16 @@
 import { randomUUID } from 'crypto';
 import { createHash } from 'crypto';
 import { createTestUser, createTestBusiness, anonClient, adminClient } from './helpers';
-import { assertLocalDb, q, becomeFounder, resignFounder } from './pg';
+import { assertLocalDb, q, becomeFounder, resignFounder, lockFounder, unlockFounder } from './pg';
 
 // One two-business world for the whole file (the tests use unique object paths
 // and only assert denials / own-object operations, so they don't interfere) —
 // creating fresh users per test multiplied GoTrue load ~12x for no benefit.
 let shared: Awaited<ReturnType<typeof makeWorld>>;
 const world = async () => shared;
+beforeEach(lockFounder);   // serialize founder-critical tests across parallel suites (see pg.ts)
+afterEach(unlockFounder);
+
 beforeAll(async () => {
   assertLocalDb();
   shared = await makeWorld();

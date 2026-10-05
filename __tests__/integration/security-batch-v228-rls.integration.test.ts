@@ -2,9 +2,11 @@
 // Every rejection asserts the exact RLS error AND that the row is unchanged.
 import { randomUUID } from 'crypto';
 import { createTestUser, createTestBusiness, addMember, adminClient } from './helpers';
-import { assertLocalDb, q, becomeFounder, resignFounder } from './pg';
+import { assertLocalDb, q, becomeFounder, resignFounder, lockFounder, unlockFounder } from './pg';
 
 beforeAll(() => assertLocalDb());
+beforeEach(lockFounder);   // serialize founder-critical tests across parallel suites (see pg.ts)
+afterEach(unlockFounder);
 
 const RLS = expect.objectContaining({ code: '42501', message: expect.stringContaining('row-level security') });
 
