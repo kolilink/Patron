@@ -41,3 +41,31 @@ export async function becomeFounder(userId: string): Promise<void> {
 export async function resignFounder(userId: string): Promise<void> {
   await q(`UPDATE profiles SET phone = NULL WHERE id = $1`, [userId]);
 }
+
+// ── Founder mutex ────────────────────────────────────────────────────────────
+// is_founder() matches the ONE founder phone number, and becomeFounder() moves it
+// between users (profiles.phone is UNIQUE, so it first un-crowns whoever holds it).
+// Jest runs suites in parallel workers on one database, so two suites that both call
+// becomeFounder() race: B un-crowns A mid-test and A's founder-gated call fails with
+// "Accès refusé" (CI: migration-v230 "non-founder"/founder-gated tests).
+// A session-level advisory lock serializes ONLY the founder-critical tests; advisory
+// locks belong to a session, so it must be held on one dedicated connection for the
+// whole test (a q()/withPg() call opens and closes its own connection).
+let founderClient: Client | null = null;
+
+export async function lockFounder(): Promise<void> {
+  assertLocalDb();
+  if (founderClient) throw new Error('lockFounder: already held by this suite');
+  const c = new Client({ connectionString: DB_URL });
+  await c.connect();
+  await c.query(`SELECT pg_advisory_lock(hashtext('patron-test-founder'))`);
+  founderClient = c;
+}
+
+export async function unlockFounder(): Promise<void> {
+  const c = founderClient;
+  if (!c) return;
+  founderClient = null;
+  try { await c.query(`SELECT pg_advisory_unlock(hashtext('patron-test-founder'))`); }
+  finally { await c.end(); }   // closing the session also releases any lock
+}

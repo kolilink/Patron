@@ -8,9 +8,11 @@
 // business_data_versions for the business being deleted.
 import { randomUUID } from 'crypto';
 import type { Client } from 'pg';
-import { assertLocalDb, q, withPg, becomeFounder } from './pg';
+import { assertLocalDb, q, withPg, becomeFounder, lockFounder, unlockFounder } from './pg';
 
 beforeAll(() => assertLocalDb());
+beforeEach(lockFounder);   // serialize founder-critical tests across parallel suites (see pg.ts)
+afterEach(unlockFounder);
 
 const TRIGGERS: Array<[string, string]> = [
   ['sale_orders', 'trg_bump_version_sale_orders'],
