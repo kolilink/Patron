@@ -17,6 +17,7 @@
 import { randomUUID } from 'crypto';
 import { createClient, type SupabaseClient } from '@supabase/supabase-js';
 import { adminClient, createTestUser, createTestBusiness, addMember, createTestProduct } from './helpers';
+import { lockFounder, unlockFounder } from './pg';
 
 const FOUNDER_PHONE = '+12672421843';
 const LOCAL_URL = process.env.TEST_SUPABASE_URL || 'http://127.0.0.1:54321';
@@ -69,6 +70,16 @@ async function snapshot(founder: SupabaseClient) {
 }
 
 let founder: { client: SupabaseClient; userId: string };
+
+// Suite-level (not per-test): the founder is crowned ONCE in the beforeAll below and
+// every test relies on it staying crowned. becomeFounder() in other suites (v230,
+// v228-rls, v228-storage) moves the same phone, so without this mutex they steal it
+// mid-suite -> "founder can read every KPI RPC" fails with "Accès refusé". This
+// beforeAll is declared FIRST so it runs before the crowning one. The advisory lock is
+// database-level, so it serializes against the pg.ts-based suites even though this
+// one talks through PostgREST helpers.
+beforeAll(lockFounder);
+afterAll(unlockFounder);
 
 beforeAll(async () => {
   // profiles.phone is unique — free the founder number from any earlier run
