@@ -145,7 +145,7 @@
             Télécharger sur Play Store
         </a>
 
-        <div class="foot">Gratuit et fait pour les commerçants</div>
+        <div class="foot">Gratuit · Fait pour les commerçants</div>
     </div>
 
     <script>
@@ -172,25 +172,14 @@
             }
 
             var id = inviterId();
-            var inviteUrl = id ? 'https://patron.kolilink.com/invite/' + id : '';
 
             var titleEl = document.getElementById('title');
-            var storeIos = document.getElementById('store-ios');
             var storePlay = document.getElementById('store-play');
 
-            // Silent attribution handoff — no UI, no instructions:
-            //   Android: the Play install referrer carries the inviter id.
-            //   iOS: the invite URL is copied when the App Store button is
-            //   tapped; the app recognises it at first launch.
+            // Attribution: the Play install referrer carries the inviter id.
+            // (iOS cold installs are unattributed by design.)
             if (id) {
                 storePlay.href = PLAY_STORE_BASE + '&referrer=' + encodeURIComponent('patron_invite=' + id);
-                storeIos.addEventListener('click', function () {
-                    try {
-                        if (navigator.clipboard && navigator.clipboard.writeText) {
-                            navigator.clipboard.writeText(inviteUrl).catch(function () { });
-                        }
-                    } catch (e) { }
-                });
             }
 
             function setTitle(name) {

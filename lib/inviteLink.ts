@@ -1,6 +1,5 @@
 import * as Linking from 'expo-linking';
 import { trackEvent } from '@/lib/analytics';
-import * as Clipboard from 'expo-clipboard';
 import * as Application from 'expo-application';
 import { Platform } from 'react-native';
 import { getKV, setKV } from '@/lib/db';
@@ -15,9 +14,8 @@ import { getKV, setKV } from '@/lib/db';
 //      Only present when the app was opened from the link while installed.
 //   2. Android Play Install Referrer — `referrer=patron_invite=<id>` survives
 //      the Play Store install and is readable at first launch.
-//   3. iOS clipboard handoff — the landing page silently copies the invite
-//      URL when the App Store button is tapped; we read it once at first
-//      launch and recognise our own invite URL.
+//   No clipboard handoff: nothing writes to or reads the clipboard, so iOS
+//   cold installs (App Store, link never opened in-app) are unattributable.
 //
 // The first id found is persisted in the SQLite kv_store and attributed
 // silently after onboarding (stores/inviter.ts). No id simply means a normal
@@ -80,16 +78,6 @@ export async function capturePendingInviterId(): Promise<string | null> {
     if (!id && Platform.OS === 'android') {
       try {
         id = inviterIdFromReferrer(await Application.getInstallReferrerAsync());
-      } catch {
-        /* ignore */
-      }
-    }
-
-    if (!id && Platform.OS === 'ios') {
-      try {
-        if (await Clipboard.hasStringAsync()) {
-          id = inviterIdFromUrl(await Clipboard.getStringAsync());
-        }
       } catch {
         /* ignore */
       }

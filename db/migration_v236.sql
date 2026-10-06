@@ -76,3 +76,31 @@ $$;
 
 REVOKE EXECUTE ON FUNCTION public.record_invite_attribution(uuid) FROM PUBLIC, anon;
 GRANT EXECUTE ON FUNCTION public.record_invite_attribution(uuid) TO authenticated;
+
+-- Founder metrics: a plain count of installs that came through an invite link
+-- (no rate, no funnel). Real businesses' owners only — test/demo accounts
+-- excluded. iOS cold installs are unattributable (no clipboard handoff), so
+-- this undercounts iOS.
+CREATE OR REPLACE FUNCTION public.get_founder_invite_installs()
+RETURNS bigint
+LANGUAGE plpgsql
+SECURITY DEFINER
+STABLE
+SET search_path = public, pg_temp
+AS $$
+BEGIN
+  IF NOT is_founder() THEN
+    RAISE EXCEPTION 'Accès refusé';
+  END IF;
+  RETURN (
+    SELECT count(*)
+      FROM invite_attributions ia
+      JOIN profiles p ON p.id = ia.invitee_id
+     WHERE COALESCE(p.is_test, false) = false
+       AND p.phone IS NOT NULL AND p.phone <> ''
+  );
+END;
+$$;
+
+REVOKE EXECUTE ON FUNCTION public.get_founder_invite_installs() FROM PUBLIC, anon;
+GRANT EXECUTE ON FUNCTION public.get_founder_invite_installs() TO authenticated;

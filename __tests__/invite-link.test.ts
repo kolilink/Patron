@@ -1,17 +1,12 @@
 // E2E FIX BATCH B — B2(b) token survival. TEST DB only — do not commit.
 //
-// lib/inviteLink.ts imports expo-linking, expo-clipboard and expo-application,
+// lib/inviteLink.ts imports expo-linking and expo-application,
 // none of which have a moduleNameMapper entry (they ship unparsed ESM), so they
 // must be jest.mock'd here. '@/lib/analytics' and '@/lib/db' are mocked too so
 // the module loads hermetically without pulling in posthog/SQLite.
 
 jest.mock('expo-linking', () => ({
     getInitialURL: jest.fn(async () => null),
-}));
-
-jest.mock('expo-clipboard', () => ({
-    hasStringAsync: jest.fn(async () => false),
-    getStringAsync: jest.fn(async () => null),
 }));
 
 jest.mock('expo-application', () => ({

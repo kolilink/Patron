@@ -93,7 +93,6 @@ export const TARGETS = {
   week1:              { green: 60, red: 30, leverage: 0.9 },
   week4:              { green: 40, red: 20, leverage: 0.7 },
   shareRate:          { green: 20, red: 5,  leverage: 0.5 },
-  referralConversion: { green: 30, red: 10, leverage: 0.5 },
   northStarRate:      { green: 25, red: 10, leverage: 0 },
 } satisfies Record<string, Target>;
 
@@ -158,7 +157,6 @@ export function northStar(n: FounderKpis['north_star']): NorthStar {
 
 export interface Referral {
   shareRatePct: number | null;
-  conversionPct: number | null;
   /** referred sign-ups per active business — i × c */
   kFactor: number | null;
   referredActivationPct: number | null;
@@ -168,7 +166,6 @@ export interface Referral {
 export function referral(r: FounderKpis['referral']): Referral {
   return {
     shareRatePct: pct(r.sharing_30d, r.active_30d),
-    conversionPct: pct(r.invites_used_30d, r.invites_created_30d),
     kFactor: r.active_30d > 0 ? r.referred_signups_30d / r.active_30d : null,
     referredActivationPct: pct(r.referred_activated, r.referred_n),
     organicActivationPct: pct(r.organic_activated, r.organic_n),
@@ -236,13 +233,6 @@ function candidates(k: FounderKpis): Candidate[] {
       valuePct: ref.shareRatePct,
       n: k.referral.active_30d,
       action: 'appeler la liste « Parrainage » et demander à chaque commerce très actif d\'inviter un ami commerçant.',
-    },
-    {
-      key: 'referralConversion',
-      label: 'la conversion des invitations',
-      valuePct: ref.conversionPct,
-      n: k.referral.invites_created_30d,
-      action: "tester le lien d'invitation de bout en bout sur un téléphone neuf : les invitations partent mais ne convertissent pas.",
     },
   ];
 }

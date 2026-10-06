@@ -90,11 +90,22 @@ describe('landing page copy', () => {
     expect(html).toContain('Note tes ventes, suis tes crédits avec ou sans internet');
     expect(html).toContain("Télécharger sur l'App Store");
     expect(html).toContain('Télécharger sur Play Store');
-    expect(html).toContain('Gratuit et fait pour les commerçants');
+    expect(html).toContain('Gratuit · Fait pour les commerçants');
     expect(html).toMatch(/\\u00AB ' \+ name \+ ' \\u00BB t\\u2019invite sur Patron\./);
   });
   it('is gone: clipboard button, 3-step instructions, code/token flows', () => {
     expect(html).not.toMatch(/Copier le lien|Lien copié|J'ai déjà Patron|id="bridge"|preview_consumer_invite/);
+  });
+  it('never touches the clipboard (page or app)', () => {
+    expect(html).not.toMatch(/clipboard|execCommand/i);
+    expect(read('lib/inviteLink.ts')).not.toMatch(/Clipboard\.|expo-clipboard/);
+  });
+  it('founder dashboard: no invite conversion card, a plain install count instead', () => {
+    const f = read('src/components/FounderDashboard.tsx');
+    expect(f).not.toMatch(/Conversion des invitations/);
+    expect(f).toMatch(/Installs par invitation/);
+    expect(f).toMatch(/get_founder_invite_installs/);
+    expect(read('src/utils/founderKpis.ts')).not.toMatch(/referralConversion|conversion des invitations/);
   });
   it('OG card matches, and 404.html forwards /invite/<id>', () => {
     for (const f of ['invite/index.html', '404.html']) {
