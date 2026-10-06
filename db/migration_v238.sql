@@ -342,6 +342,23 @@ CREATE TABLE IF NOT EXISTS public.founder_new_user_alerts (
 ALTER TABLE public.founder_new_user_alerts ENABLE ROW LEVEL SECURITY;
 REVOKE ALL ON public.founder_new_user_alerts FROM PUBLIC, anon, authenticated;
 
+-- The only place this migration touches pg_net. A thin wrapper (same
+-- mechanism as v148/v170) so integration tests can substitute a recorder for
+-- THIS public function: the `net` schema belongs to supabase_admin on the real
+-- stack, so a test can't (and mustn't) redefine net.http_post itself.
+CREATE OR REPLACE FUNCTION public.founder_alert_post(p_url text, p_headers jsonb, p_body jsonb)
+RETURNS bigint
+LANGUAGE plpgsql
+SECURITY DEFINER
+SET search_path = public, pg_temp
+AS $$
+BEGIN
+  RETURN net.http_post(url := p_url, headers := p_headers, body := p_body, timeout_milliseconds := 15000);
+END;
+$$;
+
+REVOKE EXECUTE ON FUNCTION public.founder_alert_post(text, jsonb, jsonb) FROM PUBLIC, anon, authenticated;
+
 CREATE OR REPLACE FUNCTION public.notify_founder_new_business()
 RETURNS trigger
 LANGUAGE plpgsql
@@ -381,14 +398,13 @@ BEGIN
     -- delivery attempt in its own subtransaction, so a pg_net problem can
     -- neither lose the row nor block the business insert.
     BEGIN
-      PERFORM net.http_post(
-        url     := 'https://jnxpujsyvbenqgjbvifh.supabase.co/functions/v1/dispatch-notification',
-        headers := jsonb_build_object(
+      PERFORM public.founder_alert_post(
+        'https://jnxpujsyvbenqgjbvifh.supabase.co/functions/v1/dispatch-notification',
+        jsonb_build_object(
           'Content-Type',  'application/json',
           'x-cron-secret', (SELECT decrypted_secret FROM vault.decrypted_secrets WHERE name = 'patron_cron_secret')
         ),
-        body    := jsonb_build_object('business_id', NEW.id, 'event_type', 'founder_new_user', 'payload', '{}'::jsonb),
-        timeout_milliseconds := 15000
+        jsonb_build_object('business_id', NEW.id, 'event_type', 'founder_new_user', 'payload', '{}'::jsonb)
       );
     EXCEPTION WHEN OTHERS THEN
       RAISE WARNING 'founder_new_user push not sent for %: %', NEW.id, SQLERRM;

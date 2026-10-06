@@ -1,6 +1,7 @@
 // migration_v238 — founder KPI rebuild + founder "new user" alert.
-// LOCAL TEST DB ONLY (plain-Postgres pg-role harness; net.http_post is the
-// bootstrap stub, replaced here by a recorder). Run alone:
+// LOCAL TEST DB ONLY. The pg_net call lives behind public.founder_alert_post();
+// this suite swaps THAT function for a recorder (the `net` schema itself is
+// owned by supabase_admin and cannot be touched from tests). Run alone:
 //   npx jest --config jest.integration.config.js founder-kpi-rebuild --runInBand
 import { as, tryAs, seedUser, seedBusiness, seedMember, user, ANON } from './pgrole';
 import { assertLocalDb, becomeFounder, resignFounder, lockFounder, unlockFounder, q } from './pg';
@@ -8,8 +9,7 @@ import { assertLocalDb, becomeFounder, resignFounder, lockFounder, unlockFounder
 beforeAll(() => assertLocalDb());
 
 let founder: string;
-let originalNetDef: string;
-let suiteStart: Date;
+let originalPostDef: string;
 
 const phone = () => `+224${Math.floor(600000000 + Math.random() * 99999999)}`;
 const setPhone = (id: string, p: string | null) => q(`UPDATE profiles SET phone = $2 WHERE id = $1`, [id, p]);
@@ -23,21 +23,22 @@ async function realMerchant(label: string, bizName: string) {
 
 const kpis = async () => (await as(user(founder), c => c.query(`SELECT get_founder_kpis() AS k`))).rows[0].k;
 
+const useRecorder = () => q(`CREATE OR REPLACE FUNCTION public.founder_alert_post(p_url text, p_headers jsonb, p_body jsonb)
+  RETURNS bigint LANGUAGE sql AS
+  $f$ INSERT INTO test_net_calls (url, body, headers) VALUES (p_url, p_body, p_headers); SELECT 1::bigint $f$`);
+
 beforeAll(async () => {
-  suiteStart = new Date();
   await lockFounder();
   founder = await seedUser('founder');
   await becomeFounder(founder);
   // Record every pg_net call so "fires once" is observable.
-  originalNetDef = (await q(`SELECT pg_get_functiondef('net.http_post(text,jsonb,jsonb,jsonb,integer)'::regprocedure) AS d`))[0].d;
+  originalPostDef = (await q(`SELECT pg_get_functiondef('public.founder_alert_post(text,jsonb,jsonb)'::regprocedure) AS d`))[0].d;
   await q(`CREATE TABLE IF NOT EXISTS test_net_calls (id serial, url text, body jsonb, headers jsonb)`);
-  await q(`CREATE OR REPLACE FUNCTION net.http_post(url text, body jsonb DEFAULT '{}', params jsonb DEFAULT '{}',
-    headers jsonb DEFAULT '{}', timeout_milliseconds int DEFAULT 5000) RETURNS bigint LANGUAGE sql AS
-    $f$ INSERT INTO test_net_calls (url, body, headers) VALUES (url, body, headers); SELECT 1::bigint $f$`);
+  await useRecorder();
 });
 
 afterAll(async () => {
-  await q(originalNetDef);
+  await q(originalPostDef);
   await q(`DROP TABLE IF EXISTS test_net_calls`);
   await resignFounder(founder);
   await unlockFounder();
@@ -75,37 +76,39 @@ describe('get_founder_kpis — superset + test/demo exclusion in every denominat
     expect(Object.keys(k.funnel)).toEqual(expect.arrayContaining(['installed', 'median_s', 'ttfv_install_median_s', 'devices_all_time']));
   });
 
-  it('a real merchant moves total_real_businesses; test, test-owner and demo (phone-less) businesses do not', async () => {
-    const before = await kpis();
-
+  it('a real merchant is counted; test, test-owner and demo (phone-less) businesses are not', async () => {
+    // Other suites create businesses concurrently on this same database, so
+    // global before/after deltas are racy. Assert membership of THESE
+    // businesses in the view every KPI is built on, and that the KPI total
+    // agrees with that view (bracketed by two reads of it).
     const real = await realMerchant('real', 'Vrai commerce');
-    const afterReal = await kpis();
-    expect(afterReal.north_star.total_real_businesses).toBe(before.north_star.total_real_businesses + 1);
-    expect(afterReal.north_star.excluded_test).toBe(before.north_star.excluded_test);
-
-    // flagged test business
     const t = await realMerchant('test', 'Commerce test');
     await q(`UPDATE businesses SET is_test = true WHERE id = $1`, [t.biz]);
-    // test OWNER (business itself not flagged)
     const to = await realMerchant('testowner', 'Boutique de l\'équipe');
     await q(`UPDATE profiles SET is_test = true WHERE id = $1`, [to.id]);
-    // demo / abandoned anonymous owner: no verified phone
     const demoOwner = await seedUser('demo');
-    await seedBusiness(demoOwner, 'Boutique Démo');
+    const demoBiz = await seedBusiness(demoOwner, 'Boutique Démo');
 
-    const after = await kpis();
-    expect(after.north_star.total_real_businesses).toBe(afterReal.north_star.total_real_businesses);
-    expect(after.north_star.excluded_test).toBe(afterReal.north_star.excluded_test + 3);
+    const inView = async (id: string) => (await q(`SELECT 1 FROM kpi_businesses WHERE business_id = $1`, [id])).length;
+    expect(await inView(real.biz)).toBe(1);
+    expect(await inView(t.biz)).toBe(0);
+    expect(await inView(to.biz)).toBe(0);
+    expect(await inView(demoBiz)).toBe(0);
 
-    // and the activation / retention cohorts agree
-    expect(after.activation.cohort).toBe(afterReal.activation.cohort);
+    const c1 = Number((await q(`SELECT count(*) AS n FROM kpi_businesses`))[0].n);
+    const k = await kpis();
+    const c2 = Number((await q(`SELECT count(*) AS n FROM kpi_businesses`))[0].n);
+    expect(k.north_star.total_real_businesses).toBeGreaterThanOrEqual(Math.min(c1, c2));
+    expect(k.north_star.total_real_businesses).toBeLessThanOrEqual(Math.max(c1, c2));
+    // the three excluded ones are visible as exclusions, not silently dropped
+    expect(k.north_star.excluded_test).toBeGreaterThanOrEqual(3);
+
     const dir = await as(user(founder), c => c.query(`SELECT get_founder_vendor_directory() AS d`));
     const names = (dir.rows[0].d as any[]).map(r => r.business_name);
     expect(names).toContain('Vrai commerce');
     expect(names).not.toContain('Commerce test');
     expect(names).not.toContain('Boutique de l\'équipe');
     expect(names).not.toContain('Boutique Démo');
-    expect(real.biz).toBeTruthy();
   });
 
   it('invite installs exclude test and phone-less invitees, and agree with get_founder_invite_installs()', async () => {
@@ -133,7 +136,14 @@ describe('get_founder_kpis — superset + test/demo exclusion in every denominat
     const k = await kpis();
     const dir = (await as(user(founder), c => c.query(`SELECT get_founder_vendor_directory() AS d`))).rows[0].d as any[];
     expect(dir.find(r => r.business_name === 'Commerce perdu').lost).toBe(true);
-    expect(k.retention.lost_count).toBe(dir.filter(r => r.lost).length);
+    // The two reads are separate statements while other suites write, so the
+    // counts are bracketed rather than compared for equality.
+    expect(k.retention.lost_count).toBeGreaterThanOrEqual(1);
+    const dirAfter = (await as(user(founder), c => c.query(`SELECT get_founder_vendor_directory() AS d`))).rows[0].d as any[];
+    const lo = Math.min(dir.filter(r => r.lost).length, dirAfter.filter(r => r.lost).length);
+    const hi = Math.max(dir.filter(r => r.lost).length, dirAfter.filter(r => r.lost).length);
+    expect(k.retention.lost_count).toBeGreaterThanOrEqual(lo);
+    expect(k.retention.lost_count).toBeLessThanOrEqual(hi);
   });
 });
 
@@ -199,8 +209,10 @@ describe('founder "new user" alert (trigger on businesses)', () => {
     // The devices a push for THIS business would reach = tokens of its alert's recipient.
     const tokens = await q(`SELECT d.token FROM device_tokens d JOIN founder_new_user_alerts a ON a.recipient_user_id = d.user_id WHERE a.business_id = $1`, [m.biz]);
     expect(tokens.map(t => t.token)).toEqual(['ExponentPushToken[founder]']);
-    const recipients = await q(`SELECT DISTINCT recipient_user_id FROM founder_new_user_alerts WHERE created_at >= $1`, [suiteStart]);
-    expect(recipients.every(r => r.recipient_user_id === founder)).toBe(true);
+    // Scoped to THIS business: other suites run in parallel on the same DB and
+    // some briefly crown their own founder, so a global scan would be racy.
+    const recipients = await q(`SELECT DISTINCT recipient_user_id FROM founder_new_user_alerts WHERE business_id = $1`, [m.biz]);
+    expect(recipients.map(r => r.recipient_user_id)).toEqual([founder]);
     expect(await q(`SELECT 1 FROM founder_new_user_alerts WHERE recipient_user_id IN ($1,$2,$3)`, [vendeur, manager, m.id])).toHaveLength(0);
   });
 
@@ -222,17 +234,14 @@ describe('founder "new user" alert (trigger on businesses)', () => {
   });
 
   it('a failing pg_net can never block business creation, and the alert row survives', async () => {
-    await q(`CREATE OR REPLACE FUNCTION net.http_post(url text, body jsonb DEFAULT '{}', params jsonb DEFAULT '{}',
-      headers jsonb DEFAULT '{}', timeout_milliseconds int DEFAULT 5000) RETURNS bigint LANGUAGE plpgsql AS
-      $f$ BEGIN RAISE EXCEPTION 'pg_net down'; END $f$`);
+    await q(`CREATE OR REPLACE FUNCTION public.founder_alert_post(p_url text, p_headers jsonb, p_body jsonb)
+      RETURNS bigint LANGUAGE plpgsql AS $f$ BEGIN RAISE EXCEPTION 'pg_net down'; END $f$`);
     try {
       const m = await realMerchant('netdown', 'Commerce Réseau');
       expect(await q(`SELECT 1 FROM businesses WHERE id = $1`, [m.biz])).toHaveLength(1);
       expect(await q(`SELECT 1 FROM founder_new_user_alerts WHERE business_id = $1`, [m.biz])).toHaveLength(1);
     } finally {
-      await q(`CREATE OR REPLACE FUNCTION net.http_post(url text, body jsonb DEFAULT '{}', params jsonb DEFAULT '{}',
-        headers jsonb DEFAULT '{}', timeout_milliseconds int DEFAULT 5000) RETURNS bigint LANGUAGE sql AS
-        $f$ INSERT INTO test_net_calls (url, body, headers) VALUES (url, body, headers); SELECT 1::bigint $f$`);
+      await useRecorder();
     }
   });
 
