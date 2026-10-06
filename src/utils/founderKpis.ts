@@ -9,7 +9,9 @@
 export type HealthStatus = 'green' | 'yellow' | 'red';
 
 export interface FounderKpis {
-  north_star: { weekly: number[]; total_real_businesses: number };
+  // Fields marked optional arrived with migration_v238 — builders default them
+  // so a screen shipped before the migration is applied still renders.
+  north_star: { weekly: number[]; total_real_businesses: number; excluded_test?: number };
   funnel: {
     installed: number;
     otp_sent: number;
@@ -32,8 +34,17 @@ export interface FounderKpis {
     ttfv_commerce_median_s: number | null;
     ttfv_commerce_n: number;
     ttfv_under_24h: number;
+    u24_cohort?: number;
+    u24_hit?: number;
+    u24_prev_cohort?: number;
+    u24_prev_hit?: number;
   };
-  retention: { w1_cohort: number; w1_retained: number; w4_cohort: number; w4_retained: number };
+  retention: {
+    w1_cohort: number; w1_retained: number; w4_cohort: number; w4_retained: number;
+    w1_recent_cohort?: number; w1_recent_retained?: number; w1_prev_cohort?: number; w1_prev_retained?: number;
+    w4_recent_cohort?: number; w4_recent_retained?: number; w4_prev_cohort?: number; w4_prev_retained?: number;
+    lost_count?: number;
+  };
   referral: {
     active_30d: number;
     sharing_30d: number;
@@ -44,7 +55,11 @@ export interface FounderKpis {
     referred_activated: number;
     organic_n: number;
     organic_activated: number;
+    invite_installs_total?: number;
+    invite_installs_30d?: number;
+    invite_installs_prev_30d?: number;
   };
+  outreach?: { this_week: number; prev_week: number; total: number };
 }
 
 export interface CallListRow {
@@ -297,4 +312,162 @@ export function formatDuration(seconds: number | null): string {
 
 export function formatPct(value: number | null): string {
   return value === null ? '—' : `${value.toFixed(0)} %`;
+}
+
+// ─── The five cards ───────────────────────────────────────────────────────
+//
+// The founder screen shows exactly these five (+ the funnel below them).
+// Rule for membership: a card stays only if it points at something the
+// founder can DO. FounderDashboard renders from FOUNDER_CARDS, so a card
+// that isn't listed here cannot appear — the visibility test pins the list.
+
+export const FOUNDER_CARDS = ['commerces_actifs', 'retention', 'activation', 'parrainage', 'prospection'] as const;
+export type FounderCardKey = typeof FOUNDER_CARDS[number];
+
+export type TrendDir = 'up' | 'down' | 'flat';
+export interface Trend { dir: TrendDir; label: string }
+
+/** A rate below this many units is noise — no trend is drawn from it. */
+export const TREND_MIN_SAMPLE = 5;
+
+function plural(n: number, one: string, many: string): string {
+  return `${n} ${Math.abs(n) > 1 ? many : one}`;
+}
+
+/** Count vs previous period: "+3 vs semaine précédente". null when there is no previous period. */
+export function countTrend(current: number, previous: number | null | undefined, versus: string): Trend | null {
+  if (previous === null || previous === undefined) return null;
+  const d = current - previous;
+  if (d === 0) return { dir: 'flat', label: `Stable vs ${versus}` };
+  return { dir: d > 0 ? 'up' : 'down', label: `${d > 0 ? '+' : '−'}${Math.abs(d)} vs ${versus}` };
+}
+
+/** Rate vs previous period, in points. Needs a real sample on both sides. */
+export function rateTrend(
+  cur: { hit: number; n: number },
+  prev: { hit: number; n: number },
+  versus: string,
+): Trend | null {
+  if (cur.n < TREND_MIN_SAMPLE || prev.n < TREND_MIN_SAMPLE) return null;
+  const d = Math.round((cur.hit / cur.n) * 100 - (prev.hit / prev.n) * 100);
+  if (d === 0) return { dir: 'flat', label: `Stable vs ${versus}` };
+  return { dir: d > 0 ? 'up' : 'down', label: `${d > 0 ? '+' : '−'}${Math.abs(d)} pts vs ${versus}` };
+}
+
+export interface CommercesActifsCard {
+  current: number;
+  trend: Trend | null;
+  bars: number[];
+  denominator: number;
+  excludedTest: number;
+  caption: string;
+  hint: string;
+}
+
+export function commercesActifsCard(k: FounderKpis): CommercesActifsCard {
+  const ns = northStar(k.north_star);
+  const total = k.north_star.total_real_businesses;
+  const excluded = k.north_star.excluded_test ?? 0;
+  return {
+    current: ns.current,
+    trend: countTrend(ns.current, ns.previous, 'la semaine précédente'),
+    bars: ns.trend,
+    denominator: total,
+    excludedTest: excluded,
+    caption: `sur ${plural(total, 'commerce réel', 'commerces réels')}`
+      + (excluded > 0 ? ` · ${plural(excluded, 'compte test exclu', 'comptes test exclus')}` : ''),
+    hint: ns.delta !== null && ns.delta < 0
+      ? 'Moins de commerces actifs que la semaine dernière : écrivez à ceux qui se sont tus.'
+      : 'Chaque commerce actif compte : gardez le rythme de vos messages.',
+  };
+}
+
+export interface RetentionRow {
+  label: string;
+  pct: number | null;
+  caption: string;
+  target: number;
+  status: HealthStatus | null;
+  trend: Trend | null;
+}
+export interface RetentionCard { rows: RetentionRow[]; lostCount: number; lostLabel: string; hint: string }
+
+export function retentionCard(k: FounderKpis): RetentionCard {
+  const r = k.retention;
+  const mk = (
+    label: string, retained: number, cohort: number, target: { green: number; red: number },
+    recent: { hit: number; n: number }, prev: { hit: number; n: number },
+  ): RetentionRow => {
+    const p = pct(retained, cohort);
+    return {
+      label,
+      pct: p,
+      caption: `${retained} sur ${cohort} · visé ${target.green} %`,
+      target: target.green,
+      status: getHealthStatus(p, target),
+      trend: rateTrend(recent, prev, 'la période précédente'),
+    };
+  };
+  const lost = r.lost_count ?? 0;
+  return {
+    rows: [
+      mk('Semaine 1', r.w1_retained, r.w1_cohort, TARGETS.week1,
+        { hit: r.w1_recent_retained ?? 0, n: r.w1_recent_cohort ?? 0 }, { hit: r.w1_prev_retained ?? 0, n: r.w1_prev_cohort ?? 0 }),
+      mk('Semaine 4', r.w4_retained, r.w4_cohort, TARGETS.week4,
+        { hit: r.w4_recent_retained ?? 0, n: r.w4_recent_cohort ?? 0 }, { hit: r.w4_prev_retained ?? 0, n: r.w4_prev_cohort ?? 0 }),
+    ],
+    lostCount: lost,
+    lostLabel: lost > 0 ? `Voir les ${plural(lost, 'commerce perdu', 'commerces perdus')}` : 'Voir les commerces perdus',
+    hint: 'Un commerce perdu a vendu au moins une fois puis s\'est tu depuis 7 jours : un message suffit souvent.',
+  };
+}
+
+export interface ActivationCard {
+  pct: number | null;
+  caption: string;
+  target: number;
+  status: HealthStatus | null;
+  trend: Trend | null;
+  hint: string;
+}
+
+export function activationCard(k: FounderKpis): ActivationCard {
+  const a = k.activation;
+  const n = a.u24_cohort ?? 0;
+  const hit = a.u24_hit ?? 0;
+  const p = pct(hit, n);
+  return {
+    pct: p,
+    caption: `${hit} sur ${n} commerces créés ces 30 derniers jours · visé ${TARGETS.ttfvUnder24h.green} %`,
+    target: TARGETS.ttfvUnder24h.green,
+    status: getHealthStatus(p, TARGETS.ttfvUnder24h),
+    trend: rateTrend({ hit, n }, { hit: a.u24_prev_hit ?? 0, n: a.u24_prev_cohort ?? 0 }, 'les 30 jours d\'avant'),
+    hint: 'Les nouveaux qui ne notent rien le premier jour reviennent rarement : écrivez-leur le jour même.',
+  };
+}
+
+export interface ParrainageCard { installs: number | null; trend: Trend | null; caption: string; hint: string }
+
+export function parrainageCard(k: FounderKpis, fallbackTotal: number | null): ParrainageCard {
+  const r = k.referral;
+  const total = r.invite_installs_total ?? fallbackTotal;
+  const cur = r.invite_installs_30d;
+  return {
+    installs: total,
+    trend: cur === undefined ? null : countTrend(cur, r.invite_installs_prev_30d ?? 0, 'les 30 jours d\'avant'),
+    caption: 'depuis le début · iOS sous-compté',
+    hint: 'Demandez à vos commerçants les plus actifs d\'inviter un collègue.',
+  };
+}
+
+export interface ProspectionCard { thisWeek: number; trend: Trend | null; caption: string; hint: string }
+
+export function prospectionCard(k: FounderKpis): ProspectionCard {
+  const o = k.outreach ?? { this_week: 0, prev_week: 0, total: 0 };
+  return {
+    thisWeek: o.this_week,
+    trend: countTrend(o.this_week, o.prev_week, 'la semaine dernière'),
+    caption: o.this_week === 1 ? 'vendeur contacté cette semaine' : 'vendeurs contactés cette semaine',
+    hint: 'Le seul chiffre que vous contrôlez entièrement : notez chaque contact avec le « + ».',
+  };
 }

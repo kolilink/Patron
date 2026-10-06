@@ -11,7 +11,10 @@
 // {sender}/{preview} (chat_message). No client name and no amount is ever
 // allowed to leave the server for any event type.
 
-export type EventCategory = 'security' | 'money' | 'ordinary';
+// 'founder' = a push to the founder (support inbox, new-user alert):
+// bypasses the per-user cap and quiet hours — he must never miss one — and is
+// never recorded in push_recipient_log (its category CHECK doesn't allow it).
+export type EventCategory = 'security' | 'money' | 'ordinary' | 'founder';
 
 export interface EventDef {
   // false = accepted, logged, never actually sent — reserves the slot (copy
@@ -164,6 +167,23 @@ export const EVENT_REGISTRY: Record<string, EventDef> = {
     body: generic('Patron vous a répondu. Touchez pour lire.'),
     route: () => '/(app)/support',
     urgent: true,
+    allowedDataKeys: [],
+  },
+
+  // ── founder: a new business just appeared ────────────────────────────────
+  // Fired by the businesses AFTER INSERT trigger (migration_v238.sql) through
+  // a cron-secret call only — index.ts refuses it for any user session and
+  // always resolves the recipient to the founder. The business name in the
+  // body is the ONE exception to the fixed-template rule, and it is never
+  // taken from the caller: index.ts overwrites payload.business_name with
+  // the name read from the businesses row.
+  founder_new_user: {
+    built: true,
+    category: 'founder',
+    subtitle: null,
+    body: (p) => `${String(p.business_name ?? 'Un commerce').slice(0, 60)} vient d'arriver sur Patron.`,
+    route: () => '/(app)/founder-kpi/vendeurs',
+    urgent: false,
     allowedDataKeys: [],
   },
 
@@ -368,10 +388,10 @@ export function isQuietHours(date: Date, timezone?: string | null): boolean {
 // like everything else but may still send during quiet hours. Ordinary is
 // subject to both.
 export function bypassesCap(category: EventCategory): boolean {
-  return category === 'security';
+  return category === 'security' || category === 'founder';
 }
 export function bypassesQuietHours(category: EventCategory): boolean {
-  return category === 'security' || category === 'money';
+  return category === 'security' || category === 'money' || category === 'founder';
 }
 
 export function sanitizeDataPayload(

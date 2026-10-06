@@ -36,7 +36,7 @@ export default function FounderKpiScreen() {
         </Pressable>
         <View style={{ alignItems: 'center' }}>
           <Text variant="h4">KPI</Text>
-          <Text variant="caption" color="secondary" numberOfLines={1}>Croissance — en temps réel</Text>
+          <Text variant="caption" color="secondary" numberOfLines={1}>L’essentiel, en temps réel</Text>
         </View>
         <View style={{ width: 60 }} />
       </View>

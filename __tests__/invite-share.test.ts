@@ -103,7 +103,7 @@ describe('landing page copy', () => {
   it('founder dashboard: no invite conversion card, a plain install count instead', () => {
     const f = read('src/components/FounderDashboard.tsx');
     expect(f).not.toMatch(/Conversion des invitations/);
-    expect(f).toMatch(/Installs par invitation/);
+    expect(f).toMatch(/installs par invitation/i);
     expect(f).toMatch(/get_founder_invite_installs/);
     expect(read('src/utils/founderKpis.ts')).not.toMatch(/referralConversion|conversion des invitations/);
   });

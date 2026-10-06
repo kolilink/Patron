@@ -321,3 +321,23 @@ describe('deep-link route resolution — every push type lands on its exact scre
     expect(EVENT_REGISTRY.chat_message.route({})).toBe('/(app)/discussions');
   });
 });
+
+
+describe('founder_new_user — founder-only new-business alert', () => {
+  const def = EVENT_REGISTRY.founder_new_user;
+
+  it('is registered, built, and bypasses the cap and quiet hours (the founder must never miss it)', () => {
+    expect(def).toBeDefined();
+    expect(def.built).toBe(true);
+    expect(def.category).toBe('founder');
+    expect(bypassesCap(def.category)).toBe(true);
+    expect(bypassesQuietHours(def.category)).toBe(true);
+  });
+
+  it('carries only the business name on the lock screen, and deep-links to the vendor directory', () => {
+    expect(def.body({ business_name: 'Chez Awa' })).toBe("Chez Awa vient d'arriver sur Patron.");
+    expect(def.route({})).toBe('/(app)/founder-kpi/vendeurs');
+    expect(def.allowedDataKeys).toEqual([]);
+    expect(sanitizeDataPayload('founder_new_user', { business_name: 'x', phone: '+224', amount: 5 })).toEqual({});
+  });
+});

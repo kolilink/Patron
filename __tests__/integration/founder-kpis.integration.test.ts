@@ -60,10 +60,17 @@ async function insertSale(businessId: string, sellerId: string, status: 'paye' |
 }
 
 /** The founder's numbers, minus the timestamp that always changes. */
+let excludedTest = 0;
 async function snapshot(founder: SupabaseClient) {
   const { data, error } = await founder.rpc('get_founder_kpis');
   if (error) throw error;
-  const { generated_at: _ignored, ...rest } = data as Record<string, unknown>;
+  const { generated_at: _ignored, ...rest } = data as Record<string, any>;
+  // excluded_test counts the test/demo businesses the denominators leave out —
+  // it is SUPPOSED to rise when a test business is added, so it is asserted
+  // separately below rather than compared for equality.
+  excludedTest = rest.north_star.excluded_test;
+  rest.north_star = { ...rest.north_star };
+  delete rest.north_star.excluded_test;
   const { data: lists, error: listErr } = await founder.rpc('get_founder_call_lists');
   if (listErr) throw listErr;
   return { kpis: rest, lists };
@@ -163,6 +170,7 @@ describe('founder-only access', () => {
 describe('is_test traffic never moves the founder numbers', () => {
   it('test businesses, the founder\'s own shop and test devices change nothing; a real shop does', async () => {
     const before = await snapshot(founder.client);
+    const excludedBefore = excludedTest;
 
     // (a) A business the founder creates is test by construction.
     const founderBiz = await createTestBusiness(founder.client, 'Boutique du fondateur');
@@ -196,6 +204,9 @@ describe('is_test traffic never moves the founder numbers', () => {
 
     const afterTest = await snapshot(founder.client);
     expect(afterTest).toEqual(before);
+    // The two test businesses added above (founder's own + the flagged team
+    // shop) show up as exclusions, visibly, instead of in any denominator.
+    expect(excludedTest).toBeGreaterThanOrEqual(excludedBefore + 2);
 
     // Positive control: the same activity on a real shop DOES move them,
     // so the equality above isn't just a metric that never changes.

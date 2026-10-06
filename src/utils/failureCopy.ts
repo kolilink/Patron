@@ -19,6 +19,7 @@ export const FAILURE_COPY = {
   memberStakesNotSaved: { what: "Les montants n'ont pas été enregistrés." },
   memberStakeNotRemoved: { what: "Le produit n'a pas été retiré." },
   testFlagNotChanged: { what: "Le changement n'a pas été fait." },
+  outreachNotLogged: { what: "Le contact n'a pas été noté." },
   // Messages & community
   partnerRequestNotSent: { what: "La demande n'a pas été envoyée." },
   messageNotEdited: { what: "Le message n'a pas été modifié." },
