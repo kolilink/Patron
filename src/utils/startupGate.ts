@@ -33,3 +33,63 @@ export function scheduleSplashCeiling(d: SplashCeilingDeps): () => void {
   const timer = d.setTimeoutFn(() => { d.hide(); d.onElapsed(); }, d.ms ?? SPLASH_CEILING_MS);
   return () => d.clearTimeoutFn(timer);
 }
+
+// ─── The launch sequence, with every stage bounded ────────────────────────────
+// openDb() (SQLite.openDatabaseAsync + migrations) can hang forever — neither
+// resolving nor rejecting — on a corrupt DB or a sick device. The launch effect
+// awaited Promise.all([initialize(), openDb()]) with no bound, so the whole
+// .then() chain behind it (invite-token capture, install record, app_opened,
+// funnel flush) never ran, and neither did .finally (the freshSessionToken bump).
+// The splash still hid via its own ceiling, but the app ran the entire session
+// with a dead offline layer and no startup telemetry. Same philosophy as the
+// reject-clearing in lib/db.ts: a hung open must not wedge the session.
+
+/** Longest any one startup stage may take before the sequence moves on. */
+export const STARTUP_STAGE_TIMEOUT_MS = 8000;
+
+export const TIMED_OUT = Symbol('startup-stage-timed-out');
+
+/** Resolves with `work`'s result, or with TIMED_OUT (after calling onTimeout) if it takes longer than `ms`. */
+export function raceStartup<T>(work: Promise<T>, ms: number, onTimeout: () => void): Promise<T | typeof TIMED_OUT> {
+  return new Promise((resolve, reject) => {
+    const timer = setTimeout(() => { onTimeout(); resolve(TIMED_OUT); }, ms);
+    work.then(
+      v => { clearTimeout(timer); resolve(v); },
+      e => { clearTimeout(timer); reject(e); },
+    );
+  });
+}
+
+export interface StartupDeps {
+  initialize: () => Promise<unknown>;
+  openDb: () => Promise<unknown>;
+  /** Forget the cached DB promise so a later openDb() retries fresh (lib/db.ts resetDbPromise). */
+  resetDb: () => void;
+  /** Report a stage timeout (Sentry). */
+  reportTimeout: (stage: 'db_open' | 'post_open') => void;
+  /** Everything that needs the KV store: invite-token capture, haptics pref, install record, app_opened, funnel flush. */
+  postOpenSteps: () => Promise<unknown>;
+  /** The old `.finally`: hide-splash scheduling and the freshSessionToken bump. Always runs. */
+  onDone: () => void;
+  timeoutMs?: number;
+}
+
+/**
+ * auth init + SQLite open (bounded) → the KV-dependent steps (bounded) → onDone.
+ * On a stage timeout it reports, (for the open) resets the cached DB promise, and
+ * CONTINUES: the chain always reaches onDone.
+ */
+export async function runStartupSequence(d: StartupDeps): Promise<void> {
+  const ms = d.timeoutMs ?? STARTUP_STAGE_TIMEOUT_MS;
+  try {
+    await raceStartup(Promise.all([d.initialize(), d.openDb()]), ms, () => {
+      d.reportTimeout('db_open');
+      d.resetDb();
+    });
+    await raceStartup(d.postOpenSteps(), ms, () => d.reportTimeout('post_open'));
+  } catch {
+    /* non-fatal — same as before: a failing stage never blocks startup */
+  } finally {
+    d.onDone();
+  }
+}

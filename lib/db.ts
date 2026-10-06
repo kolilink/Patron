@@ -5,6 +5,17 @@ import { encrypt, decrypt } from '@/lib/encryption';
 // Cache the Promise so concurrent callers all await the same migration run.
 let _dbPromise: Promise<SQLite.SQLiteDatabase> | null = null;
 
+/**
+ * Forget a cached open that never settled, so the next openDb() starts a fresh
+ * one. Only the startup timeout calls this (app/_layout.tsx, via
+ * runStartupSequence): a native open that hangs without resolving OR rejecting
+ * would otherwise be handed to every future caller forever — the same wedge the
+ * reject-clearing below prevents for a failed open.
+ */
+export function resetDbPromise(): void {
+  _dbPromise = null;
+}
+
 export function openDb(): Promise<SQLite.SQLiteDatabase> {
   if (!_dbPromise) {
     _dbPromise = (async () => {
