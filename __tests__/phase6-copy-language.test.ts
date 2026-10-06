@@ -24,11 +24,10 @@ describe('Phase 6 — copy & language', () => {
         expect(src).not.toMatch(/error:\s*raw/);
     });
 
-    it('6.2 clientReminder.ts drops the tu/vous clash (Bonjour + commerce)', () => {
-        const src = readSource('src/utils/clientReminder.ts');
-        expect(src).toMatch(/Bonjour \$\{name\},/);
-        expect(src).toMatch(/Vous pouvez passer au commerce/);
-        expect(src).not.toMatch(/Salut \$\{name\}/);
+    it('6.2 the debt reminder (now a receipt image) stays in "vous" with a plain Bonjour', () => {
+        const src = readSource('src/utils/debtReceipt.ts');
+        expect(src).toMatch(/Bonjour \$\{first\},/);
+        expect(src).not.toMatch(/Salut/);
         expect(src).not.toMatch(/à la boutique/);
     });
 

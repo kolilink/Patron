@@ -95,6 +95,17 @@ export const colors = {
     900: '#0F172A',
   },
 
+  // Debt-reminder receipt (paper). Fixed values on purpose — a receipt never
+  // has a dark mode, so these are NOT part of paletteLight/paletteDark.
+  paper: {
+    sheet: '#FBF8F2',
+    rule: '#EFE9DF',
+    ink: '#1C1B1F',
+    soft: '#4A4750',
+    quiet: '#8A8691',
+    accent: '#4B2A5E',
+  },
+
   // Role colors
   role: {
     administrateur: '#4F46E5',

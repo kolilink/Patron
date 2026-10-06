@@ -29,7 +29,9 @@ import { buildFailure } from '@/src/utils/failure';
 import { FAILURE_COPY } from '@/src/utils/failureCopy';
 import { generateId } from '@/lib/id';
 import { selectClientSales, clientBalance } from '@/src/utils/salesTotals';
-import { buildDebtReminderMessage, formatDebtAge, debtAgeTier } from '@/src/utils/clientReminder';
+import { formatDebtAge, debtAgeTier } from '@/src/utils/clientReminder';
+import { DebtReminderSheet } from '@/src/components/DebtReminderSheet';
+import type { DebtReceiptInput } from '@/src/utils/debtReceipt';
 import { formatDate } from '@/src/utils/dates';
 
 // iOS-only: suppresses the OS's auto-injected floating "Done" pill above
@@ -292,7 +294,7 @@ const UUID_RE = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/
 export default function ClientLedgerScreen() {
   const { palette } = useTheme();
   const styles = useMemo(() => makeStyles(palette), [palette]);
-  const { name: encodedName } = useLocalSearchParams<{ name: string }>();
+  const { name: encodedName, remind } = useLocalSearchParams<{ name: string; remind?: string }>();
   const routeParam = decodeURIComponent(encodedName ?? '');
   const isClientId = UUID_RE.test(routeParam);
 
@@ -329,6 +331,7 @@ export default function ClientLedgerScreen() {
   const payAttempt = useRef<{ sig: string; key: string } | null>(null);
   const [showEditModal, setShowEditModal] = useState(false);
   const [showNewCreditSheet, setShowNewCreditSheet] = useState(false);
+  const [showReminder, setShowReminder] = useState(false);
   const [detailEntry, setDetailEntry] = useState<LedgerEntry | null>(null);
   const [successPayment, setSuccessPayment] = useState<{ amount: number; remaining: number } | null>(null);
   const checkScale = useRef(new Animated.Value(0)).current;
@@ -635,6 +638,39 @@ export default function ClientLedgerScreen() {
     return withBalance.reverse(); // newest first — see the ORDER NOTE in the spec this implements
   }, [clientSales, allPayments, ledgerLines]);
 
+  // Everything the reminder receipt shows comes from the same records as the
+  // ledger above: open credit lines (newest first), the most recent payment
+  // against them, and the exact remaining total. Nothing is invented.
+  const reminderInput = useMemo<DebtReceiptInput>(() => {
+    const openCredits = clientSales
+      .filter(s => s.status === 'credit')
+      .sort((a, b) => new Date(b.created_at).getTime() - new Date(a.created_at).getTime());
+    const creditIds = new Set(openCredits.map(s => s.id));
+    const lastPay = allPayments
+      .filter(p => creditIds.has(p.order_id))
+      .sort((a, b) => (b.date.localeCompare(a.date)) || b.created_at.localeCompare(a.created_at))[0];
+    return {
+      businessName: session?.activeBusiness?.name ?? '',
+      clientName: displayName,
+      currency,
+      totalOwed,
+      debts: openCredits.map(s => ({
+        label: ledgerLines[s.id] || null,
+        date: s.sale_date ?? s.created_at.split('T')[0],
+      })),
+      lastPayment: lastPay ? { amount: lastPay.amount, date: lastPay.date } : null,
+    };
+  }, [clientSales, allPayments, ledgerLines, session?.activeBusiness?.name, displayName, currency, totalOwed]);
+
+  // Arrived from the list's "Rappeler": open the preview once the ledger has
+  // loaded, so the receipt never shows a half-loaded balance.
+  const remindHandled = useRef(false);
+  useEffect(() => {
+    if (remind !== '1' || remindHandled.current || loadingLocal || loading || !displayName) return;
+    remindHandled.current = true;
+    if (totalOwed > 0) setShowReminder(true);
+  }, [remind, loadingLocal, loading, displayName, totalOwed]);
+
   // "Aujourd'hui" / "Hier" / "27 sept." — day-level only, never a timestamp.
   // Deliberately shorter than the old day-group header's own date format
   // (which spelled the month out in full) — a carnet line is compact by
@@ -808,23 +844,17 @@ export default function ClientLedgerScreen() {
         {/* Secondary contact row — Rappeler sur WhatsApp + Appeler. Only the
             call half needs a real number on file; the WhatsApp reminder
             still only makes sense while there's an actual debt to mention. */}
-        {clientRecord?.phone && (
-          <View style={styles.contactRow}>
-            {totalOwed > 0 && (
-              <Pressable
-                onPress={() => {
-                  const msg = buildDebtReminderMessage(displayName, fmt(totalOwed, currency));
-                  // Generic wa.me link (no target number) — same pattern the
-                  // list row already uses reliably. Targeting this contact's
-                  // own number here previously failed to open WhatsApp at all.
-                  Linking.openURL(`https://wa.me/?text=${encodeURIComponent(msg)}`).catch(() => { });
-                }}
-                style={[styles.contactBtn, { borderColor: palette.border }]}
-              >
-                <Ionicons name="logo-whatsapp" size={16} color={palette.primary} />
-                <Text variant="label" style={{ color: palette.primary }}>Rappeler</Text>
-              </Pressable>
-            )}
+        <View style={styles.contactRow}>
+          {totalOwed > 0 && (
+            <Pressable
+              onPress={() => setShowReminder(true)}
+              style={[styles.contactBtn, { borderColor: palette.border }]}
+            >
+              <Ionicons name="logo-whatsapp" size={16} color={palette.primary} />
+              <Text variant="label" style={{ color: palette.primary }}>Rappeler</Text>
+            </Pressable>
+          )}
+          {clientRecord?.phone && (
             <Pressable
               onPress={() => Linking.openURL(`tel:${clientRecord.phone}`).catch(() => { })}
               style={[styles.contactBtn, { borderColor: palette.border }]}
@@ -832,8 +862,8 @@ export default function ClientLedgerScreen() {
               <Ionicons name="call-outline" size={16} color={palette.primary} />
               <Text variant="label" style={{ color: palette.primary }}>Appeler</Text>
             </Pressable>
-          </View>
-        )}
+          )}
+        </View>
 
         {/* The carnet page — one continuous list of lines, newest first.
             No day-grouping, no collapsible sections, no summary rows: a
@@ -910,6 +940,13 @@ export default function ClientLedgerScreen() {
           use, pre-scoped to this one customer (no client grid, no way to
           pick someone else). Keyed on visibility so it always starts fresh,
           same convention QuickCaptureSheet's own children use. */}
+      <DebtReminderSheet
+        visible={showReminder}
+        onClose={() => setShowReminder(false)}
+        input={reminderInput}
+        daysOldestDebt={debtAge}
+      />
+
       <FormSheet
         visible={showNewCreditSheet}
         onClose={() => setShowNewCreditSheet(false)}
