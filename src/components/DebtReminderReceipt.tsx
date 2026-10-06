@@ -62,7 +62,7 @@ export const DebtReminderReceipt = forwardRef<View, Props>(function DebtReminder
         {`·  ${content.businessName}  ·`}
       </Text>
 
-      <View style={{ flex: 1, paddingHorizontal: 30 * u, justifyContent: 'center', paddingBottom: 16 * u }}>
+      <View style={{ flex: 1, paddingHorizontal: 35 * u, justifyContent: 'center', paddingBottom: 16 * u }}>
         <Text
           {...T}
           numberOfLines={2}
@@ -72,7 +72,8 @@ export const DebtReminderReceipt = forwardRef<View, Props>(function DebtReminder
         >
           {content.greeting}
         </Text>
-        <View style={{ height: 1.5 * u, backgroundColor: paper.accent, marginVertical: 14 * u, width: '88%' }} />
+        {/* Hairline spanning the full content width, as in the approved mockup. */}
+        <View style={{ height: 0.75 * u, backgroundColor: paper.accent, marginVertical: 14 * u }} />
 
         <Text {...T} style={[styles.sans, t(13.5), { color: paper.soft }]}>{content.context}</Text>
 
