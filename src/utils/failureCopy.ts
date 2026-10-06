@@ -49,7 +49,7 @@ export const FAILURE_COPY = {
   productNotUnlinked: { what: "Le produit n'a pas été délié." },
   receptionNotRecorded: { what: "La livraison n'a pas été enregistrée.", why: SAFE_DATA_WHY },
   supplierNotChangedYet: { what: "Le fournisseur n'a pas été changé.", why: "La livraison n'est pas encore envoyée." },
-  productNotArchived: { what: "Le produit n'a pas été archivé." },
+  productNotArchived: { what: "Le produit n'a pas été désactivé." },
   saleNotCancelled: { what: "La vente n'a pas été annulée." },
   supplierNotDeleted: { what: "Le fournisseur n'a pas été supprimé." },
   memberNotRemoved: { what: "Le membre n'a pas été retiré." },

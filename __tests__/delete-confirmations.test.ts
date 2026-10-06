@@ -15,7 +15,7 @@ const read = (rel: string) => fs.readFileSync(path.resolve(__dirname, '..', rel)
 describe('messages name exactly what was deleted', () => {
   const nbsp = (s: string) => s.replace(/ /g, ' ');
   it('every kind', () => {
-    expect(archivedConfirmation('Riz 5kg')).toBe('Riz 5kg archivé.');
+    expect(archivedConfirmation('Riz 5kg')).toBe('Riz 5kg désactivé.');
     expect(nbsp(saleCancelledConfirmation(45000, 'GNF', 'Aïssatou'))).toBe('Vente annulée : Aïssatou, 45 000 GNF.');
     expect(nbsp(saleCancelledConfirmation(45000, 'GNF'))).toBe('Vente annulée : 45 000 GNF.');
     expect(supplierDeletedConfirmation('Mamadou Diallo')).toBe('Fournisseur supprimé : Mamadou Diallo.');

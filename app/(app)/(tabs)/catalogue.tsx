@@ -992,7 +992,7 @@ interface ProductRowProps {
   archived?: boolean;
   /** Only meaningful when product.has_variants — undefined while still loading. */
   variants?: ProductVariant[];
-  /** Archive call in flight: the row shows "Archivage…" and ignores taps. */
+  /** Deactivate call in flight: the row shows "Désactivation…" and ignores taps. */
   archiving?: boolean;
 }
 
@@ -1029,11 +1029,11 @@ function StockStatus({ product, variants }: { product: Product; variants?: Produ
   );
 }
 
-// ─── Archive switch (Actifs / Archivés) ────────────────────────────────────
+// ─── Archive switch (Actifs / Non actifs) ────────────────────────────────────
 // One sliding-pill control instead of two independent chips sitting side by
 // side — same binary choice, but reads as a single switch with a satisfying
 // slide + settle bounce, not "two buttons that happen to be next to each
-// other". Labels are the real state names (Actifs/Archivés), never a
+// other". Labels are the real state names (Actifs/Non actifs), never a
 // generic ON/OFF baked into the control itself.
 function ArchiveSwitch({ value, onChange }: { value: 'actifs' | 'archives'; onChange: (v: 'actifs' | 'archives') => void }) {
   const { palette } = useTheme();
@@ -1082,7 +1082,7 @@ function ArchiveSwitch({ value, onChange }: { value: 'actifs' | 'archives'; onCh
               fontWeight: value === t ? '700' : '500',
             }}
           >
-            {t === 'actifs' ? 'Actifs' : 'Archivés'}
+            {t === 'actifs' ? 'Actifs' : 'Non actifs'}
           </Text>
         </Pressable>
       ))}
@@ -1143,7 +1143,7 @@ function ProductRow({ product, currency, onPress, onLongPress, archived, variant
           ) : null}
         </View>
         {archiving
-          ? <LoadingStatus word="Archivage" color={palette.textSecondary} variant="caption" />
+          ? <LoadingStatus word="Désactivation" color={palette.textSecondary} variant="caption" />
           : <StockStatus product={product} variants={variants} />}
       </View>
       {/* One non-wrapping row: price, then — only for a real variant product
@@ -1195,7 +1195,7 @@ function RestoreActionSheet({
         <View style={styles.sheetHandle} />
         <View style={styles.actionSheetHeader}>
           <Text variant="h4" numberOfLines={1}>{product.name}</Text>
-          <Text variant="caption" color="secondary">Ce produit est archivé</Text>
+          <Text variant="caption" color="secondary">Ce produit n'est plus actif</Text>
         </View>
         <Pressable
           style={({ pressed }) => [styles.actionRow, pressed && { opacity: 0.65 }]}
@@ -1293,7 +1293,7 @@ function ProductActionSheet({
               onPress={onArchive}
             >
               <Ionicons name="archive-outline" size={22} color={palette.warning} />
-              <Text style={[styles.actionRowLabel, { color: palette.warning }]}>Archiver</Text>
+              <Text style={[styles.actionRowLabel, { color: palette.warning }]}>Désactiver</Text>
             </Pressable>
           </>
         )}
@@ -1424,7 +1424,7 @@ export default function CatalogueScreen() {
       // Also needed on mount (not just on tab switch, see the effect below)
       // so showActivationEmptyState can tell "truly zero products anywhere"
       // apart from "zero active, but some archived" without waiting for the
-      // merchant to visit the Archivés tab first.
+      // merchant to visit the Non actifs tab first.
       fetchArchivedProducts(businessId);
     }
   }, [businessId]);
@@ -1440,6 +1440,13 @@ export default function CatalogueScreen() {
       fetchArchivedProducts(businessId);
     }
   }, [tab, businessId]);
+
+  // The last non-active product was reactivated while this tab was open: the
+  // toggle just disappeared, so land back on Actifs instead of an empty tab
+  // with no control to leave it.
+  useEffect(() => {
+    if (tab === 'archives' && archivedProducts.length === 0) setTab('actifs');
+  }, [tab, archivedProducts.length]);
 
   const onRefresh = useCallback(async () => {
     if (!businessId) return;
@@ -1524,12 +1531,12 @@ export default function CatalogueScreen() {
     setShowActionSheet(false);
     setTimeout(() => {
       Alert.alert(
-        'Archiver ce produit ?',
-        `"${product.name}" sera retiré du catalogue actif. Vous pourrez le réactiver depuis l'onglet Archivés.`,
+        'Désactiver ce produit ?',
+        `"${product.name}" sera retiré du catalogue actif. Vous pourrez le réactiver depuis l'onglet Non actifs.`,
         [
           { text: 'Annuler', style: 'cancel' },
           {
-            text: 'Archiver', style: 'destructive',
+            text: 'Désactiver', style: 'destructive',
             onPress: async () => {
               const archived = await archiveProduct(product.id, businessId);
               if (!archived) {
@@ -1658,7 +1665,7 @@ export default function CatalogueScreen() {
             <Text variant="caption" color="secondary">
               {tab === 'actifs'
                 ? `${products.length} produit${products.length !== 1 ? 's' : ''}`
-                : `${archivedProducts.length} archivé${archivedProducts.length !== 1 ? 's' : ''}`}
+                : `${archivedProducts.length} non actif${archivedProducts.length !== 1 ? 's' : ''}`}
             </Text>
           )}
         </View>
@@ -1672,7 +1679,12 @@ export default function CatalogueScreen() {
 
       {/* Tabs — hidden once the 24h onboarding window has closed on a still
           completely empty catalogue; nothing to switch between yet. */}
-      {!showActivationEmptyState && (
+      {/* The "Non actifs" toggle only exists once at least one product has been
+          deactivated — with none, there is nothing to switch to and the control
+          is pure noise. (archivedProducts is fetched eagerly on mount, so this
+          is reliable before it is ever evaluated; while that fetch is in flight
+          the toggle is simply absent, never flashing in and out.) */}
+      {!showActivationEmptyState && archivedProducts.length > 0 && (
         <View style={styles.tabRow}>
           <ArchiveSwitch value={tab} onChange={setTab} />
         </View>
@@ -1756,8 +1768,8 @@ export default function CatalogueScreen() {
         ) : (
           <EmptyState
             icon="cube-outline"
-            title="Aucun produit archivé pour le moment."
-            subtitle="Les produits que vous archivez apparaîtront ici."
+            title="Aucun produit non actif pour le moment."
+            subtitle="Les produits que vous désactivez apparaîtront ici."
           />
         )
       ) : (
@@ -1961,7 +1973,7 @@ function makeStyles(p: Palette) {
     // Fixed width, not flex/intrinsic — the two switchOption labels below
     // use flex:1 each, so they need a resolved parent width to split
     // evenly; that's also what keeps the sliding thumb's "half the track"
-    // math exact regardless of which label is longer ("Archivés" vs "Actifs").
+    // math exact regardless of which label is longer ("Non actifs" vs "Actifs").
     switchTrack: {
       flexDirection: 'row',
       width: 224, height: 40,
