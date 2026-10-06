@@ -9,6 +9,7 @@ import { OtpInput } from '@/src/components/ui/OtpInput';
 import { Text } from '@/src/components/ui/Text';
 import { useTheme, radius, spacing } from '@/src/theme';
 import type { Palette } from '@/src/theme';
+import { useSessionRedirect } from '@/src/hooks/useSessionRedirect';
 import { useAuthStore } from '@/stores/auth';
 import { toast } from '@/stores/toast';
 import { useCountdown } from '@/src/hooks/useCountdown';
@@ -131,14 +132,7 @@ export default function RecuperationScreen() {
     return () => { cancelled = true; };
   }, [step]);
 
-  useEffect(() => {
-    if (!session) return;
-    if (session.activeBusiness) {
-      router.replace('/(app)/(tabs)/');
-    } else {
-      router.replace('/(app)/onboarding/');
-    }
-  }, [session]);
+  useSessionRedirect();   // deferred until any transition has settled — see src/utils/navGuard.ts
 
   const handleSendCode = async () => {
     clearError();
