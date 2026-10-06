@@ -46,9 +46,8 @@ import { useChatStore } from '@/stores/chat';
 import { useMarketStore } from '@/stores/market';
 import { usePartnershipsStore } from '@/stores/partnerships';
 import { useEquipeStore } from '@/stores/equipe';
+import { enabledDiscussionsTabs, resolveActiveTab, showTabBar, type DiscussionsTab } from '@/src/utils/discussionsTabs';
 import { useTeamsEnabled } from '@/src/hooks/useTeamsEnabled';
-import { resolveDiscussionsTab } from '@/src/utils/teamsFlag';
-import { useInviterStore } from '@/stores/inviter';
 import { SkeletonList } from '@/src/components/ui/SkeletonPlaceholder';
 import { supabase } from '@/lib/supabase';
 import { generateFallbackName, generateId } from '@/lib/id';
@@ -99,7 +98,7 @@ function catFg(category: string, p: Palette): string {
 
 // ─── Types ────────────────────────────────────────────────────────────────────
 
-type Tab = 'boutique' | 'amis' | 'marche';
+type Tab = DiscussionsTab;
 
 type ChatBubbleItem = ChatMessage & { _pos: GroupPos };
 type ListItem = GroupedItem<ChatMessage>;
@@ -120,19 +119,6 @@ function relativeTime(iso: string): string {
   if (diffH < 24) return `Il y a ${diffH} h`;
   if (diffD <= 7) return `Il y a ${diffD} j`;
   return new Intl.DateTimeFormat('fr-FR', { day: 'numeric', month: 'short' }).format(d);
-}
-
-// Phase 5 wording for the friend list: a just-joined inviter reads as
-// "à l'instant" rather than the forum's "maintenant".
-function friendTime(iso: string): string {
-  const diffM = Math.floor((Date.now() - new Date(iso).getTime()) / 60_000);
-  if (diffM < 1) return "À l'instant";
-  if (diffM < 60) return `Il y a ${diffM} min`;
-  const diffH = Math.floor(diffM / 60);
-  if (diffH < 24) return `Il y a ${diffH} h`;
-  const diffD = Math.floor(diffH / 24);
-  if (diffD <= 7) return `Il y a ${diffD} j`;
-  return new Intl.DateTimeFormat('fr-FR', { day: 'numeric', month: 'short' }).format(new Date(iso));
 }
 
 // ─── Sender colour palette ────────────────────────────────────────────────────
@@ -460,9 +446,9 @@ export default function DiscussionsScreen() {
   const businessName = session?.activeBusiness?.name ?? '';
   const role = session?.activeMembership?.role;
   const isAdminOrManager = role === 'administrateur' || role === 'manager';
-  // Team flag (v227): Ma Boutique is the team chat — hidden while false and
-  // the default tab becomes Amis (or Le Marché where Amis isn't offered).
-  // Fail-open: undefined flag → shown. Chat data is never touched.
+  // Team flag (v227) hides Ma Boutique; AMIS_ENABLED (featureFlags.ts) hides
+  // Amis. The tab bar is driven entirely by enabledDiscussionsTabs(). Chat data
+  // is never touched.
   const teamsEnabled = useTeamsEnabled();
   const membres = useEquipeStore(s => s.membres);
 
@@ -485,13 +471,6 @@ export default function DiscussionsScreen() {
     sendPartnerRequest, acceptRequest, declineRequest,
   } = usePartnershipsStore();
 
-  // ─── Consumer invite friends (Phase 5 — "Vous a invité" list) ────────────
-  // User-level, NOT business-level: a fresh sign-up lands here straight after
-  // OTP, and a brand-new business may not have admins settled yet, so this
-  // list must not be gated on isAdminOrManager.
-  const consumerFriends = useInviterStore(s => s.friends);
-  const fetchMyFriends = useInviterStore(s => s.fetchMyFriends);
-
   // ─── Market store (Le Marché forum — independent) ─────────────────────────
   const {
     posts, loading: marketLoading, creating, error: marketError,
@@ -502,17 +481,20 @@ export default function DiscussionsScreen() {
 
   // ─── Shared state ─────────────────────────────────────────────────────────
   const { tab: deepLinkTab } = useLocalSearchParams<{ tab?: string }>();
+  const enabledTabs = useMemo(
+    () => enabledDiscussionsTabs({ teamsEnabled, isAdminOrManager }),
+    [teamsEnabled, isAdminOrManager],
+  );
   const [tabState, setActiveTab] = useState<Tab>('boutique');
-  // Derived, not synced via an effect: while teams are off, 'boutique' can
-  // never be the visible tab (no one-render flash, and a business switch that
-  // flips the flag moves the user off a now-hidden tab automatically).
-  const activeTab: Tab = resolveDiscussionsTab(tabState, teamsEnabled, isAdminOrManager);
+  // Derived, not synced via an effect: whatever is requested (initial state, a
+  // deep link, a flag flip on business switch) can only ever resolve to an
+  // enabled tab, falling back to Le Marché — no flash of a hidden tab.
+  const activeTab: Tab = resolveActiveTab(tabState, enabledTabs);
 
-  // Phase 5 — post-OTP arrival: creer.tsx routes to
-  // /discussions?tab=amis after redeeming the invite, so the new user lands
-  // directly on the Amis tab with their inviter listed.
+  // /discussions?tab=… deep link: resolveActiveTab() sends a disabled or
+  // unknown tab to Le Marché.
   useEffect(() => {
-    if (deepLinkTab === 'amis') setActiveTab('amis');
+    if (deepLinkTab) setActiveTab(deepLinkTab as Tab);
   }, [deepLinkTab]);
 
   // ─── Boutique state ───────────────────────────────────────────────────────
@@ -585,15 +567,6 @@ export default function DiscussionsScreen() {
   const [addPartnerLoading, setAddPartnerLoading] = useState(false);
   const [addPartnerError, setAddPartnerError] = useState('');
   const [addPartnerSuccess, setAddPartnerSuccess] = useState('');
-  // Phase 5 — "J'ai un code": typed entry of a friend's 10-char consumer invite
-  // code (distinct from the business partnership code above). Reached from the
-  // quiet "J'ai un code" link under "+ Inviter" on the empty Amis state.
-  const [showRedeemCode, setShowRedeemCode] = useState(false);
-  const [redeemCodeInput, setRedeemCodeInput] = useState('');
-  const [redeemCodeError, setRedeemCodeError] = useState('');
-  const [redeemCodeLoading, setRedeemCodeLoading] = useState(false);
-  const redeemCode = useInviterStore(s => s.redeemCode);
-
   // ─── Fade transition between tabs ─────────────────────────────────────────
   const contentAlpha = useSharedValue(1);
   const contentStyle = useAnimatedStyle(() => ({ opacity: contentAlpha.value }));
@@ -617,14 +590,6 @@ export default function DiscussionsScreen() {
     loadPartnerships(businessId, userId);
     loadInviteCode(businessId);
   }, [activeTab, businessId, userId, isAdminOrManager]);
-
-  // ─── Load consumer invite friends when amis tab becomes active ────────────
-  // NOT gated on isAdminOrManager: "Vous a invité" is a user-level list and a
-  // brand-new business may not have its admin role settled yet (Phase 5).
-  useEffect(() => {
-    if (activeTab !== 'amis' || !userId) return;
-    fetchMyFriends();
-  }, [activeTab, userId, fetchMyFriends]);
 
   // ─── Mark chat read when rooms load ──────────────────────────────────────
   useEffect(() => {
@@ -854,33 +819,6 @@ export default function DiscussionsScreen() {
       failAlert('requestNotDeclined', { err, label: 'Réessayer', onPress: () => { void handleDeclineRequest(partnershipId, requesterBusinessId); } });
     }
   }, [businessId, businessName, declineRequest]);
-
-  // Phase 5 — "J'ai un code" typed redemption. Every failure (wrong code,
-  // expired, already-redeemed, self-redeem) resolves to the same single "tu"
-  // message the spec prescribes — the server intentionally does not
-  // distinguish codes for anti-enumeration.
-  const handleRedeemCode = useCallback(async () => {
-    if (!redeemCodeInput.trim()) return;
-    setRedeemCodeLoading(true);
-    setRedeemCodeError('');
-    try {
-      const result = await redeemCode(redeemCodeInput);
-      if (!result) {
-        setRedeemCodeError(FAILURE_COPY.codeNotWorking.what);
-        return;
-      }
-      // Success: the joiner now sees the inviter. Refetch the friend list so
-      // the inviter appears immediately, then close the sheet.
-      await fetchMyFriends();
-      setRedeemCodeInput('');
-      setShowRedeemCode(false);
-    } catch {
-      // failure: speaks — invite code redemption: inline codeNotWorking
-      setRedeemCodeError(FAILURE_COPY.codeNotWorking.what);
-    } finally {
-      setRedeemCodeLoading(false);
-    }
-  }, [redeemCodeInput, redeemCode, fetchMyFriends]);
 
   const startRecording = async () => {
     try {
@@ -1114,15 +1052,16 @@ export default function DiscussionsScreen() {
           <Pressable onPress={() => router.back()}>
             <Text variant="body" color="secondary">‹ Retour</Text>
           </Pressable>
-          <Text variant="h4">Discussions</Text>
+          <Text variant="h4">{showTabBar(enabledTabs) ? 'Discussions' : 'Le Marché'}</Text>
           {/* Invisible spacer keeps "Discussions" centered now that the lock
               icon has been removed from the header. */}
           <View style={{ width: 60 }} />
         </View>
 
+        {showTabBar(enabledTabs) && (
         <View style={styles.tabRow}>
           <View style={styles.tabTrack}>
-            {teamsEnabled && (
+            {enabledTabs.includes('boutique') && (
               <Pressable
                 onPress={() => handleTabChange('boutique')}
                 style={[styles.tabSeg, activeTab === 'boutique' && styles.tabSegActive]}
@@ -1135,7 +1074,7 @@ export default function DiscussionsScreen() {
                 </View>
               </Pressable>
             )}
-            {isAdminOrManager && (
+            {enabledTabs.includes('amis') && (
               <Pressable
                 onPress={() => handleTabChange('amis')}
                 style={[styles.tabSeg, activeTab === 'amis' && styles.tabSegActive]}
@@ -1158,6 +1097,7 @@ export default function DiscussionsScreen() {
             </Pressable>
           </View>
         </View>
+        )}
 
         <Animated.View style={[{ flex: 1 }, contentStyle]}>
           {/* Phase 2 — code de conduite pinned only atop the public Le Marché
@@ -1430,7 +1370,7 @@ export default function DiscussionsScreen() {
                 <View style={styles.empty}>
                   <Text variant="body" color="secondary">Chargement…</Text>
                 </View>
-              ) : partners.length === 0 && partnerPending.length === 0 && consumerFriends.length === 0 ? (
+              ) : partners.length === 0 && partnerPending.length === 0 ? (
                 partnersOffline ? (
                   <EmptyState
                     icon="cloud-offline-outline"
@@ -1444,35 +1384,11 @@ export default function DiscussionsScreen() {
                     subtitle="Invitez un commerçant ami pour discuter ici."
                     actionLabel="+ Inviter"
                     onAction={() => setShowShareCode(true)}
-                    linkLabel="J'ai un code"
-                    onLink={() => { setShowRedeemCode(true); setRedeemCodeError(''); }}
                   />
                 )
               ) : (
-                /* ── Has partners or consumer friends ── */
+                /* ── Has partners ── */
                 <ScrollView style={{ flex: 1 }} contentContainerStyle={{ paddingBottom: 32 }}>
-                  {consumerFriends.length > 0 && (
-                    <>
-                      <Text variant="caption" color="secondary" style={styles.amisSectionLabel}>
-                        Vous a invité
-                      </Text>
-                      {consumerFriends.map(f => (
-                        <View key={f.id} style={styles.amisFriendRow}>
-                          <View style={[styles.amisAvatar, { backgroundColor: `${palette.primary}22` }]}>
-                            <Text allowFontScaling={false} style={[styles.amisAvatarText, { color: palette.primary }]}>
-                              {f.friend_name.charAt(0).toUpperCase()}
-                            </Text>
-                          </View>
-                          <View style={{ flex: 1, minWidth: 0 }}>
-                            <Text variant="body" style={{ fontWeight: '600' }} numberOfLines={1}>{f.friend_name}</Text>
-                            <Text variant="caption" color="secondary" numberOfLines={1}>
-                              Vous a invité · {friendTime(f.invited_at)}
-                            </Text>
-                          </View>
-                        </View>
-                      ))}
-                    </>
-                  )}
 
                   {partnerPending.length > 0 && (
                     <>
@@ -1784,50 +1700,6 @@ export default function DiscussionsScreen() {
                 </Text>
               </Pressable>
             </View>
-          </View>
-        </FormSheet>
-
-        {/* ── "J'ai un code" typed redemption modal — reached from the quiet
-          "J'ai un code" link under "+ Inviter" on the empty Amis state. This
-          is the consumer invite-code path (stores/inviter.redeemCode): a
-          friend pastes/typs the 10-char code they received; on success their
-          inviter appears in Amis. Distinct from "Ajouter un ami" above, which
-          is the B2B partnership code. ── */}
-        <FormSheet
-          visible={showRedeemCode}
-          onClose={() => { setShowRedeemCode(false); setRedeemCodeInput(''); setRedeemCodeError(''); }}
-          title="J'ai un code"
-          cancelLabel="Fermer"
-        >
-          <View style={styles.modalContent}>
-            <TextInput
-              style={styles.amisCodeInput}
-              value={redeemCodeInput}
-              onChangeText={t => { setRedeemCodeInput(t.toUpperCase()); setRedeemCodeError(''); }}
-              placeholder="Code reçu (10 caractères)"
-              placeholderTextColor={palette.textSecondary}
-              autoCapitalize="characters"
-              autoCorrect={false}
-              autoFocus
-              returnKeyType="send"
-              onSubmitEditing={handleRedeemCode}
-            />
-            {redeemCodeError ? (
-              <Text variant="caption" style={{ color: palette.warning }}>{redeemCodeError}</Text>
-            ) : null}
-            <Pressable
-              onPress={handleRedeemCode}
-              disabled={redeemCodeLoading || !redeemCodeInput.trim()}
-              style={({ pressed }) => [
-                styles.amisModalBtn,
-                (redeemCodeLoading || !redeemCodeInput.trim()) && { opacity: 0.4 },
-                pressed && { opacity: 0.75 },
-              ]}
-            >
-              <Text style={{ color: palette.textInverse, fontWeight: '600', fontSize: 16 }}>
-                {redeemCodeLoading ? 'Vérification…' : 'Utiliser ce code'}
-              </Text>
-            </Pressable>
           </View>
         </FormSheet>
 

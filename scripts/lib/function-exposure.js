@@ -55,6 +55,8 @@ const EXPOSURE_ALLOWLIST = {
     'Public invite landing page (supabase/functions/invite) calls it with the anon key; returns only {valid, inviter_name}.',
   preview_consumer_invite_code:
     'Same public invite landing page, code variant; returns only {valid, inviter_name}.',
+  preview_inviter:
+    'Public word-of-mouth invite landing page (invite/index.html) calls it with the anon key; returns only {valid, inviter_name}.',
 };
 
 function stripSqlComments(sql) {

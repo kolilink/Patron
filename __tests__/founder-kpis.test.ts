@@ -69,13 +69,13 @@ describe('funnelSteps', () => {
 });
 
 describe('referral four numbers', () => {
-  it('share rate, conversion, K-factor and referred quality', () => {
+  it('share rate, K-factor and referred quality', () => {
     const r = referral(kpis({ referral: {
       active_30d: 20, sharing_30d: 4, invites_created_30d: 10, invites_used_30d: 3, referred_signups_30d: 3,
       referred_n: 3, referred_activated: 3, organic_n: 10, organic_activated: 4,
     } }).referral);
     expect(r.shareRatePct).toBe(20);
-    expect(r.conversionPct).toBe(30);
+    expect(r).not.toHaveProperty('conversionPct');
     expect(r.kFactor).toBeCloseTo(0.15);
     expect(r.referredActivationPct).toBe(100);
     expect(r.organicActivationPct).toBe(40);

@@ -95,14 +95,9 @@ describe('Phase 5 — misleading screens & dead ends', () => {
         expect(src).toMatch(/<Ionicons name="key-outline" size=\{18\} color=\{palette\.primary\} \/>/);
     });
 
-    it('5.9 app/invite.tsx toasts on invalid/expired token and stores/inviter.ts adds timeouts', () => {
-        const invite = readSource('app/invite.tsx');
-        expect(invite).toMatch(/import \{ toast \} from '@\/stores\/toast';/);
-        // Phase 4: the branch is on the internal code, the copy comes from the failure vocabulary.
-        expect(invite).toMatch(/toast\.warning\(networkErr\s*\?[\s\S]*?FAILURE_COPY\.inviteNotOpened\.what[\s\S]*?:\s*FAILURE_COPY\.inviteLinkInvalid\.what\);/);
-
+    it('5.9 stores/inviter.ts times out the attribution RPC and never throws into onboarding', () => {
         const store = readSource('stores/inviter.ts');
-        expect(store).toMatch(/await withTimeout\(supabase\.rpc\('record_invite_attempt'\)\);/);
-        expect(store).toMatch(/await withTimeout\(supabase\.rpc\('resolve_consumer_invite', \{ p_token: token, p_code: code \}\)\);/);
+        expect(store).toMatch(/await withTimeout\(\s*supabase\.rpc\('record_invite_attribution', \{ p_inviter_id: inviterId \}\),?\s*\)/);
+        expect(store).toMatch(/catch \{\s*\/\/ failure: silent/);
     });
 });

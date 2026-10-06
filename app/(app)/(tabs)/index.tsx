@@ -40,7 +40,7 @@ import { buildReportDelta, applyTopSellers, type OverlaySale } from '@/lib/pendi
 import { SkeletonKpiGrid } from '@/src/components/ui/SkeletonPlaceholder';
 import { haptics } from '@/lib/haptics';
 import { toast } from '@/stores/toast';
-import { useInviterStore, buildInviteLink, buildInviteMessage } from '@/stores/inviter';
+import { buildInviteLink, buildInviteMessage } from '@/stores/inviter';
 import { FAILURE_COPY } from '@/src/utils/failureCopy';
 import { todayIso } from '@/src/utils/dates';
 
@@ -179,24 +179,16 @@ export default function AccueilScreen() {
     if (isFounder) void loadFounderConversations();
   }, [isFounder]);
 
-  // ─── Inviter — one-tap invite-a-friend (Phase 1) ─────────────────────────
-  // Creates a single-use 24h smart link + fallback code server-side, then
-  // opens the native share sheet with the prefilled editable French "tu"
-  // message. No rewards/wallet language anywhere — progress only.
+  // ─── Inviter — word-of-mouth share ───────────────────────────────────────
+  // Native share sheet with the plain link patron.kolilink.com/invite/<my-id>.
+  // No code, no expiry, no server round trip — works offline up to the share.
   const [inviting, setInviting] = useState(false);
   const handleInvite = useCallback(async () => {
-    if (inviting) return;
+    if (inviting || !userId) return;
     setInviting(true);
     haptics.tap();
     try {
-      const invite = await useInviterStore.getState().createInvite();
-      if (!invite) {
-        const err = useInviterStore.getState().error;
-        toast.warning(err ?? "Impossible de créer l'invitation");
-        return;
-      }
-      const link = buildInviteLink(invite.token);
-      const message = buildInviteMessage(link, invite.code);
+      const message = buildInviteMessage(buildInviteLink(userId));
       trackEvent('invite_sent', businessId, userId, { source: 'accueil_header' });
       await Share.share({ message });
     } catch {

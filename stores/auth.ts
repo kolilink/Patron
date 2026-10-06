@@ -29,8 +29,7 @@ import { useSupportChatStore } from './supportChat';
 import { trackEvent, identifyUser, resetAnalytics } from '@/lib/analytics';
 import { loginPurchases } from '@/lib/purchases';
 import { notifyEvent } from '@/src/utils/notifications';
-import { useInviterStore } from './inviter';
-import { clearPendingInviteToken } from '@/lib/inviteLink';
+import { clearPendingInviterId } from '@/lib/inviteLink';
 
 // ─── Last phone + biometric refresh token (quick-login) ──────────────────────
 
@@ -165,7 +164,6 @@ function resetAllStores() {
   useInvestorStore.getState().reset();
   usePartnershipsStore.getState().reset();
   useSupportChatStore.getState().reset();
-  useInviterStore.getState().reset();
 }
 
 interface PendingPhoneVerification {
@@ -670,10 +668,10 @@ export const useAuthStore = create<AuthStore>((set, get) => ({
     await clearSessionCache();
     void clearBioRefreshToken();
     await setLocked(false);
-    // B5 — a pending invite token (captured on this device before/while the
+    // B5 — a pending inviter id (captured on this device before/while the
     // previous account was signed in) must not leak into the next account on
     // a shared device.
-    void clearPendingInviteToken();
+    void clearPendingInviterId();
     resetAllStores();
     set({ session: null, locked: false, justAuthenticated: false, error: null, pendingPhoneVerification: null });
 
@@ -736,7 +734,7 @@ export const useAuthStore = create<AuthStore>((set, get) => ({
     setKV(`last_business_${session.user.id}`, businessId).catch(() => { });
     // B5 — switching account/business on a shared device must not carry the
     // previous account's pending invite token into the next one.
-    void clearPendingInviteToken();
+    void clearPendingInviterId();
     resetAllStores();
 
     const nextSession: AppSession = {
