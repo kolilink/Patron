@@ -94,7 +94,7 @@ export default function ModerationScreen() {
         const authorName = active.post_author_name || 'cet auteur';
         Alert.alert(
             `Bloquer ${authorName} ?`,
-            'Ses publications seront masquées et il ne pourra plus interagir.',
+            'Vous ne verrez plus ses publications.',
             [
                 { text: 'Annuler', style: 'cancel' },
                 {
