@@ -6,6 +6,7 @@ import { supabase, clearSupabaseLocalSession, revokeAccessToken } from '@/lib/su
 import { translateError } from '@/lib/errors';
 import { generateId } from '@/lib/id';
 import { syncKnownBusinesses } from '@/lib/knownBusinesses';
+import { clearKpiSnapshot } from '@/src/utils/kpiSnapshot';
 import { ACCOUNT_DELETION_CANCELLED_TOAST } from '@/src/utils/succession';
 import { getKV, setKV } from '@/lib/db';
 import { toast } from './toast';
@@ -89,12 +90,14 @@ async function restoreSessionCache(): Promise<AppSession | null> {
     const countStr = await SecureStore.getItemAsync(`${SESSION_CACHE_KEY}_count`);
     if (!countStr) return null;
     const count = parseInt(countStr, 10);
-    let json = '';
-    for (let i = 0; i < count; i++) {
-      const chunk = await SecureStore.getItemAsync(`${SESSION_CACHE_KEY}_${i}`);
-      if (!chunk) return null;
-      json += chunk;
-    }
+    // One IPC wave over every chunk instead of N sequential native round trips
+    // (this sits on the critical path of every unlock). Same semantics: any
+    // missing chunk means no usable cache.
+    const chunks = await Promise.all(
+      Array.from({ length: count }, (_, i) => SecureStore.getItemAsync(`${SESSION_CACHE_KEY}_${i}`)),
+    );
+    if (chunks.some(c => !c)) return null;
+    const json = chunks.join('');
     const parsed = JSON.parse(json) as AppSession & { isDemoMode?: boolean };
     // Legacy: a session cached by the removed demo mode — never restore it.
     if (parsed.isDemoMode) {
@@ -676,6 +679,8 @@ export const useAuthStore = create<AuthStore>((set, get) => ({
     // a shared device.
     void clearPendingInviterId();
     resetAllStores();
+    // A vendeur's role-scoped Accueil numbers must never reach the next user on this device.
+    clearKpiSnapshot();
     set({ session: null, locked: false, justAuthenticated: false, error: null, pendingPhoneVerification: null });
 
     void (async () => {
