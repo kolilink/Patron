@@ -732,7 +732,7 @@ function VariantSplitRow({ line, onUpdateLine, styles, palette }: {
         onChange={v => onUpdateLine(line.localId, { qty: v })}
         inputStyle={[styles.fieldInput, { color: palette.textPrimary, minHeight: 0 }]}
       />
-      <Text variant="caption" color="secondary">Répartition par variante</Text>
+      <Text variant="caption" color="secondary">Répartition par modèle</Text>
       <View style={styles.variantGrid}>
         {splits.map(v => (
           <View key={v.variant_id} style={styles.variantCell}>
