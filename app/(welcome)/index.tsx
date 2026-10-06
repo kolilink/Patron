@@ -1,4 +1,4 @@
-import { useEffect, useMemo } from 'react';
+import { useMemo, useRef } from 'react';
 import { Pressable, StyleSheet, View } from 'react-native';
 import { router } from 'expo-router';
 import { Screen } from '@/src/components/ui/Screen';
@@ -9,6 +9,8 @@ import { useTheme, spacing } from '@/src/theme';
 import type { Palette } from '@/src/theme';
 import { useAuthStore } from '@/stores/auth';
 import { openSupportChat } from '@/src/utils/whatsapp';
+import { useSessionRedirect } from '@/src/hooks/useSessionRedirect';
+import { createTapGuard } from '@/src/utils/navGuard';
 
 export default function WelcomeScreen() {
   const { palette } = useTheme();
@@ -16,14 +18,15 @@ export default function WelcomeScreen() {
   const session = useAuthStore(s => s.session);
   const error = useAuthStore(s => s.error);
 
-  useEffect(() => {
-    if (!session) return;
-    if (session.activeBusiness) {
-      router.replace('/(app)/(tabs)/');
-    } else {
-      router.replace('/(app)/onboarding/');
-    }
-  }, [session]);
+  // A session means the guard below is already taking her to the app: a tap here
+  // must not start a second navigation that the redirect then lands on top of.
+  useSessionRedirect();
+  const tapGuard = useRef(createTapGuard()).current;
+  const go = (path: '/(welcome)/creer' | '/(welcome)/rejoindre' | '/(welcome)/connexion') => {
+    if (useAuthStore.getState().session) return;   // synchronous: the store, not a stale render
+    if (!tapGuard.allow()) return;                  // a fast double-tap yields ONE transition
+    router.push(path);
+  };
 
   return (
     <Screen>
@@ -42,14 +45,14 @@ export default function WelcomeScreen() {
         <View style={styles.actions}>
           <Button
             label="Ajouter mon commerce"
-            onPress={() => router.push('/(welcome)/creer')}
+            onPress={() => go('/(welcome)/creer')}
             fullWidth
             size="lg"
           />
           <Button
             label="Rejoindre un commerce"
             variant="secondary"
-            onPress={() => router.push('/(welcome)/rejoindre')}
+            onPress={() => go('/(welcome)/rejoindre')}
             fullWidth
             size="lg"
           />
@@ -57,7 +60,7 @@ export default function WelcomeScreen() {
             <Button
               label="Se connecter"
               variant="ghost"
-              onPress={() => router.push('/(welcome)/connexion')}
+              onPress={() => go('/(welcome)/connexion')}
               fullWidth
             />
           )}

@@ -13,6 +13,7 @@ import { Text } from '@/src/components/ui/Text';
 import { PhoneInput } from '@/src/components/ui/PhoneInput';
 import { useTheme, radius, spacing } from '@/src/theme';
 import type { Palette } from '@/src/theme';
+import { useSessionRedirect } from '@/src/hooks/useSessionRedirect';
 import { useAuthStore } from '@/stores/auth';
 import { trackEvent, classifyAuthError } from '@/lib/analytics';
 import { useCountdown } from '@/src/hooks/useCountdown';
@@ -63,16 +64,7 @@ export default function ConnexionScreen() {
     resendCooldown.start(RESEND_COOLDOWN_SECONDS);
   }, [autoOtp]);
 
-  useEffect(() => {
-    if (!session) return;
-    (async () => {
-      if (session.activeBusiness) {
-        router.replace('/(app)/(tabs)/');
-      } else {
-        router.replace('/(app)/onboarding/');
-      }
-    })();
-  }, [session]);
+  useSessionRedirect();   // deferred until any transition has settled — see src/utils/navGuard.ts
 
   const handleContinuer = async () => {
     clearError();
