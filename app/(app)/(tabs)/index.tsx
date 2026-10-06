@@ -44,6 +44,7 @@ import { buildInviteLink, buildInviteMessage } from '@/stores/inviter';
 import { FAILURE_COPY } from '@/src/utils/failureCopy';
 import { todayIso } from '@/src/utils/dates';
 import { homeComparison } from '@/src/utils/dashboardNarrative';
+import { getKpiSnapshot, setKpiSnapshot } from '@/src/utils/kpiSnapshot';
 
 
 interface KPIs {
@@ -215,11 +216,15 @@ export default function AccueilScreen() {
   // src/utils/salesTotals.ts (applyKpiOverlay) for why the two never diverge
   // from the lists.
   const [kpisBase, setKpisBase] = useState<KPIs | null>(null);
-  const [kpis, setKpis] = useState<KPIs | null>(null);
+  // Seeded from the module-scope snapshot when this is the SAME business (a
+  // remount after the lock screen): the numbers are on screen from the very
+  // first paint. A different business, or no snapshot yet, starts empty.
+  const [kpis, setKpis] = useState<KPIs | null>(() => getKpiSnapshot<KPIs>(businessId));
   // Raw server (or cached) month ranking, before pending-sale deltas and the
   // >= 2 filter — `bestSellers` below is derived from this + the overlay.
   const [bestSellersBase, setBestSellersBase] = useState<BestSeller[]>([]);
-  const [loading, setLoading] = useState(true);
+  // No skeleton when the first paint already has this business's numbers.
+  const [loading, setLoading] = useState(() => getKpiSnapshot<KPIs>(businessId) === null);
   const [isOffline, setIsOffline] = useState(false);
   const [investorScope, setInvestorScope] = useState<MemberProductStake[]>([]);
 
@@ -346,17 +351,27 @@ export default function AccueilScreen() {
     if (!businessId) return;
     setIsOffline(false);
     if (loadedForRef.current !== businessId) {
-      // Show skeleton immediately when switching businesses so stale data
-      // from the previous business never shows alongside new-business content.
-      setLoading(true);
-      setBestSellersBase([]);
-      setKpis(null);
-      setKpisBase(null);
+      // A same-business remount (after the lock screen) already has its numbers
+      // on screen from the snapshot: skip the blanking entirely and refresh in
+      // the background. Only a REAL business change blanks and shows the
+      // skeleton — stale data from the previous business must never sit next to
+      // new-business content.
+      const haveSnapshot = getKpiSnapshot<KPIs>(businessId) !== null;
+      if (!haveSnapshot) {
+        setLoading(true);
+        setBestSellersBase([]);
+        setKpis(null);
+        setKpisBase(null);
+      }
       const cachedKpis = await getDashboardKpiCache(businessId) as KPIs | null;
       if (cachedKpis) {
         setKpisBase(cachedKpis);
-        setKpis(await withOutbox(cachedKpis));
-        setLoading(false);
+        if (!haveSnapshot) {
+          const shown = await withOutbox(cachedKpis);
+          setKpis(shown);
+          setKpiSnapshot(businessId, shown);
+          setLoading(false);
+        }
       }
     }
     const today = new Date();
@@ -483,9 +498,13 @@ export default function AccueilScreen() {
     const cachedBase = await getDashboardKpiCache(businessId) as KPIs | null;
     if (cachedBase) {
       setKpisBase(cachedBase);
-      setKpis(await withOutbox(cachedBase));
+      const shown = await withOutbox(cachedBase);
+      setKpis(shown);
+      setKpiSnapshot(businessId, shown);
     } else {
-      setKpis(await computeLocalKpis());
+      const local = await computeLocalKpis();
+      setKpis(local);
+      setKpiSnapshot(businessId, local);
     }
 
     // Background refresh. The read is paired with the outbox (fetchPaired:
@@ -522,7 +541,9 @@ export default function AccueilScreen() {
       };
       setKpisBase(freshKpis);
       void saveDashboardKpiCache(businessId, freshKpis);   // server truth only — never the overlaid figures
-      setKpis(await withOutbox(freshKpis));
+      const shownFresh = await withOutbox(freshKpis);
+      setKpis(shownFresh);
+      setKpiSnapshot(businessId, shownFresh);   // the DISPLAYED (post-overlay) numbers
     } catch (err) {
       // failure: control-flow — network error: base + outbox already on screen; anything else rethrows
       if (!isNetworkError(err)) throw err;
