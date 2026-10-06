@@ -300,7 +300,7 @@ function VariantRow({ variant, currency, fallbackPrice, onChange, onRemove }: Va
   const [priceText, setPriceText] = useState(
     effectiveInitial > 0 ? formatAmountInput(String(Math.round(effectiveInitial)), currency) : ''
   );
-  // The "Tailles et couleurs" toggle sits above the price field in this form,
+  // The "Modèles" toggle sits above the price field in this form,
   // so the first variant row is always created before a price exists to
   // pre-fill from — it's born at sale_price=0. A row that's never been
   // directly typed into keeps tracking the top field live, right up until
@@ -349,7 +349,7 @@ function VariantRow({ variant, currency, fallbackPrice, onChange, onRemove }: Va
         placeholderTextColor={palette.textDisabled}
         inputAccessoryViewID={Platform.OS === 'ios' ? SILENT_ACCESSORY_ID : undefined}
       />
-      <Pressable onPress={onRemove} hitSlop={10} style={{ width: VARIANT_REMOVE_WIDTH, alignItems: 'flex-end' }} accessibilityLabel="Retirer cette variante" accessibilityRole="button">
+      <Pressable onPress={onRemove} hitSlop={10} style={{ width: VARIANT_REMOVE_WIDTH, alignItems: 'flex-end' }} accessibilityLabel="Retirer ce modèle" accessibilityRole="button">
         <Ionicons name="close-circle" size={20} color={palette.textDisabled} />
       </Pressable>
     </View>
@@ -362,7 +362,7 @@ function makeVariantItem(form: FormState, currency: string, overrides?: Partial<
     _touched: false,
     name: '',
     // Always starts at 0, never a one-time snapshot of the top price — every
-    // new row (the first auto-created one or a later "Ajouter une variante")
+    // new row (the first auto-created one or a later "Ajouter un modèle")
     // tracks the top field live via VariantRow's fallbackPrice until the
     // merchant actually types their own value into it. See VariantRow.
     sale_price: 0,
@@ -565,7 +565,7 @@ function ProductFormModal({ visible, editing, onClose, onSave, saving, currency,
       {/* 2 — Variant toggle (early, before prices) */}
       <View style={styles.variantToggleRow}>
         <View style={{ flex: 1 }}>
-          <Text variant="body" color="secondary" style={{ fontFamily: FF.medium }}>Tailles et couleurs</Text>
+          <Text variant="body" color="secondary" style={{ fontFamily: FF.medium }}>Modèles</Text>
         </View>
         <Switch
           value={hasVariants}
@@ -666,7 +666,7 @@ function ProductFormModal({ visible, editing, onClose, onSave, saving, currency,
               style={[styles.fieldLabel, { flex: VARIANT_NAME_FLEX, fontSize: 10, letterSpacing: 0 }]}
               numberOfLines={1}
             >
-              Variantes
+              Modèles
             </Text>
             <Text style={[styles.fieldLabel, { width: VARIANT_QTY_WIDTH, textAlign: 'right' }]}>Qté</Text>
             <Text
@@ -691,12 +691,12 @@ function ProductFormModal({ visible, editing, onClose, onSave, saving, currency,
             onPress={() => setVariantDraft(prev => [...prev, makeVariantItem(form, currency)])}
           >
             <Ionicons name="add-circle-outline" size={18} color={palette.primary} />
-            <Text variant="label" style={{ color: palette.primary, marginLeft: 4 }}>Ajouter une variante</Text>
+            <Text variant="label" style={{ color: palette.primary, marginLeft: 4 }}>Ajouter un modèle</Text>
           </Pressable>
           {totalVariantStock > 0 && (
             <View style={[styles.liveCalcBlock, { borderTopWidth: 0 }]}>
               <Text style={styles.liveCalcText}>
-                Stock total : {totalVariantStock} pièces sur {variantDraft.length} variante{variantDraft.length !== 1 ? 's' : ''}
+                Stock total : {totalVariantStock} pièces sur {variantDraft.length} modèle{variantDraft.length !== 1 ? 's' : ''}
               </Text>
             </View>
           )}
@@ -1260,7 +1260,7 @@ function ProductActionSheet({
           >
             <Ionicons name="create-outline" size={22} color={palette.textPrimary} />
             <Text style={styles.actionRowLabel}>
-              {product.has_variants ? 'Modifier · Gérer les variantes' : 'Modifier'}
+              {product.has_variants ? 'Modifier · Gérer les modèles' : 'Modifier'}
             </Text>
             <Ionicons name="chevron-forward" size={16} color={palette.textDisabled} />
           </Pressable>
