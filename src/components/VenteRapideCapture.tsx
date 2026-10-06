@@ -1,4 +1,4 @@
-import { useMemo, useRef, useState } from 'react';
+import { useEffect, useMemo, useRef, useState } from 'react';
 import { InputAccessoryView, Platform, Pressable, StyleSheet, TextInput, View } from 'react-native';
 import { Ionicons } from '@expo/vector-icons';
 import { Button } from '@/src/components/ui/Button';
@@ -60,6 +60,12 @@ export function VenteRapideCapture({ businessId, userId, currency, onAdded }: Ve
   const nameRef = useRef<TextInput>(null);
   const priceRef = useRef<TextInput>(null);
   const successTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
+
+  // A Crédit↔Vente switch unmounts this component; don't let the pending
+  // confirm timer outlive it.
+  useEffect(() => () => {
+    if (successTimerRef.current) clearTimeout(successTimerRef.current);
+  }, []);
 
   const unitPrice = parseAmountInput(priceStr, currency);
   const total = qty * unitPrice;

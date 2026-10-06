@@ -5,14 +5,14 @@
     <meta charset="utf-8" />
     <meta name="viewport" content="width=device-width, initial-scale=1, maximum-scale=1" />
 
-    <title>On t'invite sur Patron</title>
-    <meta name="description" content="Tes ventes, tes crédits — même sans internet." />
+    <title>On t'invite sur Patron.</title>
+    <meta name="description" content="Note tes ventes, suis tes crédits avec ou sans internet" />
 
     <!-- Static Open Graph / Twitter tags (mirror invite/index.html) so link
        crawlers that land on an unknown path (e.g. /invite/<CODE>, which
        GitHub Pages routes to this 404.html) still get a valid card. -->
-    <meta property="og:title" content="On t'invite sur Patron" />
-    <meta property="og:description" content="Tes ventes, tes crédits — même sans internet." />
+    <meta property="og:title" content="On t'invite sur Patron." />
+    <meta property="og:description" content="Note tes ventes, suis tes crédits avec ou sans internet" />
     <meta property="og:type" content="website" />
     <meta property="og:url" content="https://patron.kolilink.com/invite" />
     <meta property="og:image" content="https://patron.kolilink.com/invite/og.png" />
@@ -21,16 +21,15 @@
     <meta name="twitter:card" content="summary_large_image" />
 
     <script>
-        // GitHub Pages serves this 404.html for any unknown path. The new
-        // link form /invite/<CODE> (10-char manual code) has no static file,
-        // so we route it to the landing page carrying the code as ?c=…
-        // (the ?t= slot is reserved for the link token). Everything else
-        // falls back to the generic invite page.
+        // GitHub Pages serves this 404.html for any unknown path. The invite
+        // link form /invite/<inviter-id> has no static file, so it is routed
+        // to the landing page carrying the id as ?i=… . Anything else falls
+        // back to the generic invite page.
         (function () {
             var path = (window.location.pathname || '').replace(/\/+$/, '');
-            var m = path.match(/^\/invite\/([0-9A-Za-z]{10})$/);
+            var m = path.match(/^\/invite\/([0-9a-fA-F-]{36})$/);
             if (m) {
-                window.location.replace('/invite?c=' + encodeURIComponent(m[1].toUpperCase()));
+                window.location.replace('/invite?i=' + encodeURIComponent(m[1].toLowerCase()));
             } else {
                 window.location.replace('/invite');
             }

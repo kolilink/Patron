@@ -18,8 +18,7 @@ import { ActivationPrimingSheet } from '@/src/components/ActivationPrimingSheet'
 import { Text } from '@/src/components/ui/Text';
 import { useTheme, spacing } from '@/src/theme';
 import { useAuthStore } from '@/stores/auth';
-import { useInviterStore } from '@/stores/inviter';
-import { getPendingInviteToken, clearPendingInviteToken } from '@/lib/inviteLink';
+import { recordPendingInviteAttribution } from '@/stores/inviter';
 import { useChatStore } from '@/stores/chat';
 import { useProductStore } from '@/stores/products';
 import { useVentesStore } from '@/stores/ventes';
@@ -212,27 +211,17 @@ export default function AppLayout() {
     }
   }, [removedBusinessName]);
 
-  // B3 — cold-start race: a pending invite token (captured on this device
-  // before/while the session was being restored) must be redeemed as soon as
-  // the restored session has an active business, instead of being orphaned
-  // while the app silently lands on Home. Runs once per restored business id;
-  // redemption is idempotent server-side so a re-fire clears the token
-  // without double-pushing.
-  const coldStartInviteHandledFor = useRef<string | null>(null);
+  // Word-of-mouth attribution: a pending inviter id (deep link, install
+  // referrer or clipboard handoff captured before/while onboarding) is recorded
+  // silently once the session has an active business. Idempotent server-side;
+  // a network failure keeps the id for the next launch. No UI, no navigation.
+  const inviteAttributionHandledFor = useRef<string | null>(null);
   useEffect(() => {
     const businessId = session?.activeBusiness?.id;
     if (!businessId || !session) return;
-    if (coldStartInviteHandledFor.current === businessId) return;
-    coldStartInviteHandledFor.current = businessId;
-    (async () => {
-      const token = await getPendingInviteToken();
-      if (!token) return;
-      const resolved = await useInviterStore.getState().resolveInvite(token, '');
-      if (resolved) {
-        await clearPendingInviteToken();
-        router.replace('/(app)/discussions?tab=amis');
-      }
-    })();
+    if (inviteAttributionHandledFor.current === businessId) return;
+    inviteAttributionHandledFor.current = businessId;
+    void recordPendingInviteAttribution();
   }, [session?.activeBusiness?.id]);
 
   useEffect(() => {

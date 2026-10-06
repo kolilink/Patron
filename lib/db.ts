@@ -554,6 +554,8 @@ function deriveEntityType(operation: string): string {
     case 'update_expense':
     case 'approve_expense':
     case 'reject_expense':
+    case 'delete_expense':
+    case 'restore_expense':
       return 'depense';
     case 'create_product':
     case 'update_product':
@@ -571,10 +573,22 @@ function deriveEntityType(operation: string): string {
 // payload — needed so a stuck or failed item can be identified and
 // correlated with the eventual server-side row, or across a retry, without
 // ever decrypting anything.
-function extractIdempotencyKey(payload: object): string | null {
-  const key = (payload as Record<string, unknown>).p_idempotency_key;
-  return typeof key === 'string' ? key : null;
+function extractIdempotencyKey(operation: string, payload: object): string | null {
+  const p = payload as Record<string, unknown>;
+  if (typeof p.p_idempotency_key === 'string') return p.p_idempotency_key;
+  // Expense ops are keyed by the expense id: that is what lets an Annuler find
+  // (and cancel) the still-queued create/edit/delete for that very row.
+  if (EXPENSE_OPS.has(operation)) {
+    const id = p.id ?? p.p_expense_id;
+    return typeof id === 'string' ? id : null;
+  }
+  return null;
 }
+
+const EXPENSE_OPS = new Set([
+  'create_expense', 'update_expense', 'approve_expense', 'reject_expense',
+  'delete_expense', 'restore_expense',
+]);
 
 export async function enqueue(operation: string, payload: object): Promise<void> {
   const db = await openDb();
@@ -592,7 +606,7 @@ export async function enqueue(operation: string, payload: object): Promise<void>
     `INSERT INTO sync_queue
        (operation, payload, entity_type, idempotency_key, queued_at, next_attempt_at, status)
      VALUES (?, ?, ?, ?, ?, ?, 'pending')`,
-    [operation, stored, deriveEntityType(operation), extractIdempotencyKey(payload), now, now],
+    [operation, stored, deriveEntityType(operation), extractIdempotencyKey(operation, payload), now, now],
   );
 }
 
@@ -609,6 +623,22 @@ export async function enqueue(operation: string, payload: object): Promise<void>
 // unused, no migration needed to drop it) rather than risk a DROP TABLE
 // against real installed devices that may still have rows in it from
 // before this rework shipped.
+
+/**
+ * Removes every still-pending outbox row for `operation`+`key` (never one that
+ * already failed — those belong to RefusedOpsNotice). Returns how many went.
+ * Used by Annuler: an expense created/edited/deleted moments ago and not yet
+ * synced is undone by cancelling the queued op, not by queueing its opposite.
+ */
+export async function cancelPendingQueueItems(operations: string[], key: string): Promise<number> {
+  const db = await openDb();
+  const marks = operations.map(() => '?').join(',');
+  const res = await db.runAsync(
+    `DELETE FROM sync_queue WHERE status = 'pending' AND idempotency_key = ? AND operation IN (${marks})`,
+    [key, ...operations],
+  );
+  return res.changes ?? 0;
+}
 
 export async function deleteQueueItem(id: number): Promise<void> {
   const db = await openDb();

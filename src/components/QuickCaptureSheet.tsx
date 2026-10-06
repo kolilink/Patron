@@ -150,6 +150,7 @@ export function QuickCaptureSheet({ visible, onClose, businessId, userId, curren
       visible={visible}
       onClose={onClose}
       title={mode === 'credit' ? 'Crédit rapide' : 'Vente rapide'}
+      presentationStyle="fullScreen"
       contentContainerStyle={{ padding: spacing[5], gap: spacing[4] }}
     >
       {/* Vente / Crédit segment — both modes render in place below. */}
