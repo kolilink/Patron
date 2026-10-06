@@ -1,6 +1,5 @@
-import React, { useMemo, useRef } from 'react';
+import React, { useMemo } from 'react';
 import {
-  Animated,
   Pressable,
   PressableProps,
   PressableStateCallbackType,
@@ -55,17 +54,6 @@ export function Button({
 }: ButtonProps) {
   const { palette } = useTheme();
   const styles = useMemo(() => makeStyles(palette), [palette]);
-  const scale = useRef(new Animated.Value(1)).current;
-
-  const handlePressIn = (event: Parameters<NonNullable<PressableProps['onPressIn']>>[0]) => {
-    Animated.timing(scale, { toValue: 0.97, duration: 90, useNativeDriver: true }).start();
-    onPressIn?.(event);
-  };
-  const handlePressOut = (event: Parameters<NonNullable<PressableProps['onPressOut']>>[0]) => {
-    Animated.timing(scale, { toValue: 1, duration: 110, useNativeDriver: true }).start();
-    onPressOut?.(event);
-  };
-
   const isDisabled = disabled || loading;
   const sizeStyle = size === 'sm' ? styles.size_sm : size === 'lg' ? styles.size_lg : styles.size_md;
 
@@ -74,7 +62,15 @@ export function Button({
     styles[variant],
     sizeStyle,
     fullWidth ? styles.fullWidth : null,
-    { transform: [{ scale }] },
+    // NO `transform: [{ scale }]` here. This used to carry an Animated.Value on a
+    // plain Pressable (not an Animated component). React Native only guards that
+    // with a __DEV__ invariant ("You passed an Animated.Value to a normal
+    // component"); in a release build the Animated.Value object reaches native as
+    // a map, and Android's TransformHelper then dies on
+    // ReadableNativeMap.getDouble("scale") — a fatal crash ~3s after launch on
+    // every Android 1.0.9 (101) install (Sentry REACT-NATIVE-B). Press feedback is
+    // the `pressed` style below; do not reintroduce an animated transform on a
+    // non-Animated component.
     pressed ? styles.pressed : null,
     isDisabled ? styles.disabled : null,
     style,
@@ -90,8 +86,8 @@ export function Button({
     <Pressable
       disabled={isDisabled}
       style={getStyle}
-      onPressIn={handlePressIn}
-      onPressOut={handlePressOut}
+      onPressIn={onPressIn}
+      onPressOut={onPressOut}
       {...props}
     >
       {loading ? (
