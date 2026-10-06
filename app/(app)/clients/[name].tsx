@@ -31,7 +31,7 @@ import { generateId } from '@/lib/id';
 import { selectClientSales, clientBalance } from '@/src/utils/salesTotals';
 import { formatDebtAge, debtAgeTier } from '@/src/utils/clientReminder';
 import { DebtReminderSheet } from '@/src/components/DebtReminderSheet';
-import type { DebtReceiptInput } from '@/src/utils/debtReceipt';
+import { lastPaymentFor, type DebtReceiptInput } from '@/src/utils/debtReceipt';
 import { formatDate } from '@/src/utils/dates';
 
 // iOS-only: suppresses the OS's auto-injected floating "Done" pill above
@@ -645,16 +645,8 @@ export default function ClientLedgerScreen() {
     const openCredits = clientSales
       .filter(s => s.status === 'credit')
       .sort((a, b) => new Date(b.created_at).getTime() - new Date(a.created_at).getTime());
-    // One payment can be split across several credit sales (FIFO), which
-    // yields several rows sharing the same created_at — the "last payment"
-    // is their sum, not one fragment. Includes payments that settled a sale
-    // (it left the open list) but not a cash sale's own instant self-payment.
-    const creditIds = new Set(clientSales.filter(s => s.is_credit).map(s => s.id));
-    const received = allPayments.filter(p => creditIds.has(p.order_id) && p.amount > 0);
-    const newest = [...received].sort((a, b) => b.date.localeCompare(a.date) || b.created_at.localeCompare(a.created_at))[0];
-    const lastPay = newest
-      ? { amount: received.filter(p => p.created_at === newest.created_at && p.date === newest.date).reduce((t, p) => t + p.amount, 0), date: newest.date }
-      : undefined;
+    // Only payments against THIS debt's open credit lines (reversals netted out).
+    const lastPay = lastPaymentFor(allPayments, new Set(openCredits.map(s => s.id)));
     return {
       businessName: session?.activeBusiness?.name ?? '',
       clientName: displayName,

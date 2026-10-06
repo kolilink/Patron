@@ -115,3 +115,29 @@ export function buildDebtReceiptContent(input: DebtReceiptInput, tone: ReminderT
     footer: 'Généré par Patron',
   };
 }
+
+export interface LedgerPaymentRow { order_id: string; amount: number; date: string; created_at: string }
+
+/**
+ * The most recent payment actually received against the given debt's sales.
+ * A reversed payment stays in the ledger as the original (+) plus a
+ * compensating (−) row, so each negative cancels one equal positive on the
+ * same sale; what remains is real money received. A payment split across
+ * several sales (FIFO) yields rows sharing one created_at — they are summed.
+ */
+export function lastPaymentFor(rows: LedgerPaymentRow[], saleIds: Set<string>): { amount: number; date: string } | null {
+  const mine = rows.filter(r => saleIds.has(r.order_id));
+  const positives = mine.filter(r => r.amount > 0).sort((a, b) => a.created_at.localeCompare(b.created_at));
+  for (const neg of mine.filter(r => r.amount < 0).sort((a, b) => a.created_at.localeCompare(b.created_at))) {
+    // Cancel the latest equal positive that existed before the reversal.
+    let at = -1;
+    positives.forEach((p, i) => { if (p.order_id === neg.order_id && p.amount === -neg.amount && p.created_at <= neg.created_at) at = i; });
+    if (at >= 0) positives.splice(at, 1);
+  }
+  const newest = [...positives].sort((a, b) => b.date.localeCompare(a.date) || b.created_at.localeCompare(a.created_at))[0];
+  if (!newest) return null;
+  const amount = positives
+    .filter(p => p.created_at === newest.created_at && p.date === newest.date)
+    .reduce((t, p) => t + p.amount, 0);
+  return { amount, date: newest.date };
+}

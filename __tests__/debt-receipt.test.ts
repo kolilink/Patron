@@ -1,5 +1,5 @@
 import {
-  buildDebtReceiptContent, defaultReminderTone, articleLines, firstName, type DebtReceiptInput,
+  buildDebtReceiptContent, defaultReminderTone, lastPaymentFor, articleLines, firstName, type DebtReceiptInput,
 } from '@/src/utils/debtReceipt';
 import { formatAmount } from '@/src/utils/format';
 
@@ -118,5 +118,29 @@ describe('robustness', () => {
   });
   it('zero debts does not throw', () => {
     expect(buildDebtReceiptContent({ ...base, debts: [] }, 'doux').articleLines).toEqual([]);
+  });
+});
+
+describe('lastPaymentFor — only this debt, reversals netted out', () => {
+  const ids = new Set(['s1']);
+  const pay = (id: string, amount: number, date: string, at: string, order = 's1') => ({ order_id: order, amount, date, created_at: at });
+  it('ignores payments on other sales', () => {
+    expect(lastPaymentFor([pay('a', 5000, '2026-10-03', 't2', 'other')], ids)).toBeNull();
+  });
+  it('a reversed payment is not shown', () => {
+    const rows = [pay('a', 10000, '2026-10-02', '2026-10-02T10:00'), pay('b', -10000, '2026-10-02', '2026-10-02T10:05')];
+    expect(lastPaymentFor(rows, ids)).toBeNull();
+  });
+  it('falls back to the previous real payment after a reversal', () => {
+    const rows = [
+      pay('a', 4000, '2026-09-30', '2026-09-30T09:00'),
+      pay('b', 10000, '2026-10-02', '2026-10-02T10:00'),
+      pay('c', -10000, '2026-10-02', '2026-10-02T10:05'),
+    ];
+    expect(lastPaymentFor(rows, ids)).toEqual({ amount: 4000, date: '2026-09-30' });
+  });
+  it('sums a payment split across sales', () => {
+    const rows = [pay('a', 4000, '2026-10-02', 'T', 's1'), pay('b', 6000, '2026-10-02', 'T', 's2')];
+    expect(lastPaymentFor(rows, new Set(['s1', 's2']))).toEqual({ amount: 10000, date: '2026-10-02' });
   });
 });
