@@ -5,7 +5,7 @@ import { router } from 'expo-router';
 import { FormSheet } from '@/src/components/ui/FormSheet';
 import { Text } from '@/src/components/ui/Text';
 import { CreditRapideCapture } from '@/src/components/CreditRapideCapture';
-import { VenteRapideCapture } from '@/src/components/VenteRapideCapture';
+import { VenteRapideCapture, type VenteRapideCaptureHandle } from '@/src/components/VenteRapideCapture';
 import { useTheme, spacing, radius } from '@/src/theme';
 import { formatAmount } from '@/src/utils/format';
 import { useAuthStore } from '@/stores/auth';
@@ -140,6 +140,18 @@ export function QuickCaptureSheet({ visible, onClose, businessId, userId, curren
     setTimeout(onClose, 50);
   };
 
+  // The price field is focused only AFTER the Modal has finished presenting
+  // (onShow) — never by autoFocus during the entrance animation, which drew the
+  // iOS keyboard twice (a ghost above the real one). Switching Crédit → Vente
+  // while the sheet is already open has no animation to collide with, so that
+  // focuses straight away.
+  const venteRef = useRef<VenteRapideCaptureHandle>(null);
+  const presentedRef = useRef(false);
+  useEffect(() => { if (!visible) presentedRef.current = false; }, [visible]);
+  useEffect(() => {
+    if (presentedRef.current && mode === 'vente') venteRef.current?.focusPrice();
+  }, [mode]);
+
   const tickerCount = mode === 'vente' ? venteCount : creditCount;
   const tickerTotalCents = mode === 'vente' ? venteTotalCents : creditTotalCents;
   const tickerNoun = mode === 'vente' ? 'vente' : 'crédit';
@@ -151,6 +163,7 @@ export function QuickCaptureSheet({ visible, onClose, businessId, userId, curren
       onClose={onClose}
       title={mode === 'credit' ? 'Crédit rapide' : 'Vente rapide'}
       presentationStyle="fullScreen"
+      onShow={() => { presentedRef.current = true; if (mode === 'vente') venteRef.current?.focusPrice(); }}
       contentContainerStyle={{ padding: spacing[5], gap: spacing[4] }}
     >
       {/* Vente / Crédit segment — both modes render in place below. */}
@@ -197,6 +210,7 @@ export function QuickCaptureSheet({ visible, onClose, businessId, userId, curren
         />
       ) : (
         <VenteRapideCapture
+          ref={venteRef}
           key={String(visible)}
           businessId={businessId}
           userId={userId}
