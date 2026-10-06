@@ -1,4 +1,4 @@
-import { useEffect, useMemo, useRef, useState } from 'react';
+import { forwardRef, useEffect, useImperativeHandle, useMemo, useRef, useState } from 'react';
 import { Platform, Pressable, StyleSheet, TextInput, View } from 'react-native';
 import { Ionicons } from '@expo/vector-icons';
 import { Button } from '@/src/components/ui/Button';
@@ -40,7 +40,17 @@ interface VenteRapideCaptureProps {
 // product or moving real inventory. "Pas de produit, pas de quantité
 // [inventée]" — the quantity typed here is real and stored, it's just never
 // backed by stock.
-export function VenteRapideCapture({ businessId, userId, currency, onAdded }: VenteRapideCaptureProps) {
+/** Imperative handle: the sheet focuses the price AFTER its entrance animation finishes. */
+export interface VenteRapideCaptureHandle {
+  focusPrice: () => void;
+}
+
+// The price field has NO `autoFocus`: this component remounts (key={String(visible)})
+// exactly while the full-screen Modal runs its entrance animation, so autoFocus made
+// the iOS keyboard animate in at the same time as the sheet — a ghost keyboard drawn
+// above the real one for a moment. QuickCaptureSheet calls focusPrice() from the
+// Modal's onShow instead: one animation at a time.
+export const VenteRapideCapture = forwardRef<VenteRapideCaptureHandle, VenteRapideCaptureProps>(function VenteRapideCapture({ businessId, userId, currency, onAdded }, ref) {
   const { palette } = useTheme();
   const styles = useMemo(() => makeStyles(palette), [palette]);
   const submitQuickSale = useSalesStore(s => s.submitQuickSale);
@@ -60,6 +70,7 @@ export function VenteRapideCapture({ businessId, userId, currency, onAdded }: Ve
 
   const nameRef = useRef<TextInput>(null);
   const priceRef = useRef<TextInput>(null);
+  useImperativeHandle(ref, () => ({ focusPrice: () => priceRef.current?.focus() }), []);
   const successTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
 
   // A Crédit↔Vente switch unmounts this component; don't let the pending
@@ -156,7 +167,6 @@ export function VenteRapideCapture({ businessId, userId, currency, onAdded }: Ve
             keyboardType="numeric"
             returnKeyType="done"
             onSubmitEditing={handleAdd}
-            autoFocus
             inputAccessoryViewID={Platform.OS === 'ios' ? PRICE_ACCESSORY_ID : undefined}
           />
           <Text style={[styles.amountCurrency, { color: palette.textSecondary }]}>{currency}</Text>
@@ -182,7 +192,7 @@ export function VenteRapideCapture({ businessId, userId, currency, onAdded }: Ve
       <KeyboardDoneBar nativeID={PRICE_ACCESSORY_ID} />
     </View>
   );
-}
+});
 
 function makeStyles(p: Palette) {
   return StyleSheet.create({

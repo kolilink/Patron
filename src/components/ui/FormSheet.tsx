@@ -18,6 +18,8 @@ import type { Palette } from '@/src/theme';
 interface FormSheetProps {
   visible: boolean;
   onClose: () => void;
+  /** Fires once the Modal has FINISHED presenting — use it to focus a field so the keyboard never animates alongside the sheet. */
+  onShow?: () => void;
   title: string;
   cancelLabel?: string;
   /** Replaces the default empty right-side header spacer (e.g. a "⋯" menu button). */
@@ -65,6 +67,7 @@ export const FormSheet = forwardRef<ScrollView, FormSheetProps>(function FormShe
   {
     visible,
     onClose,
+    onShow,
     title,
     cancelLabel = 'Annuler',
     headerRight,
@@ -112,6 +115,7 @@ export const FormSheet = forwardRef<ScrollView, FormSheetProps>(function FormShe
       animationType="slide"
       presentationStyle={presentationStyle}
       onRequestClose={onClose}
+      onShow={onShow}
       statusBarTranslucent
       navigationBarTranslucent
       backdropColor={palette.background}
