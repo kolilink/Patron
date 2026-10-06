@@ -63,10 +63,15 @@ async function insertSale(businessId: string, sellerId: string, status: 'paye' |
 async function snapshot(founder: SupabaseClient) {
   const { data, error } = await founder.rpc('get_founder_kpis');
   if (error) throw error;
-  const { generated_at: _ignored, ...rest } = data as Record<string, unknown>;
+  const { generated_at: _ignored, ...rest } = data as Record<string, any>;
+  // v238's excluded_test counts the test/demo businesses the denominators leave out, so it
+  // MOVES when test businesses are added — by design. Pull it out of the "nothing moves"
+  // comparison and assert it separately.
+  const { excluded_test: excludedTest, ...northStar } = rest.north_star ?? {};
+  rest.north_star = northStar;
   const { data: lists, error: listErr } = await founder.rpc('get_founder_call_lists');
   if (listErr) throw listErr;
-  return { kpis: rest, lists };
+  return { kpis: rest, lists, excludedTest: excludedTest as number | undefined };
 }
 
 let founder: { client: SupabaseClient; userId: string };
@@ -195,7 +200,9 @@ describe('is_test traffic never moves the founder numbers', () => {
     expect(fd!.is_test).toBe(true);
 
     const afterTest = await snapshot(founder.client);
-    expect(afterTest).toEqual(before);
+    expect({ kpis: afterTest.kpis, lists: afterTest.lists }).toEqual({ kpis: before.kpis, lists: before.lists });
+    // ...while the test/demo exclusion counter shows the two new test businesses ((a) and (b)).
+    expect(afterTest.excludedTest).toBeGreaterThanOrEqual((before.excludedTest ?? 0) + 2);
 
     // Positive control: the same activity on a real shop DOES move them,
     // so the equality above isn't just a metric that never changes.
