@@ -114,10 +114,12 @@ export function FirstRunHeroOverlay({ businessId, userId, currency, onDone }: Pr
     Animated.timing(fadeAnim, { toValue: 1, duration: 220, useNativeDriver: true }).start();
   };
 
-  const stampCompleted = () => {
+  const stampCompleted = (outcome: 'hero_saved' | 'hero_skipped') => {
     if (stampedRef.current) return;
     stampedRef.current = true;
     void markFirstRunHeroCompleted(businessId);
+    // Once per business, whichever exit came first.
+    trackEvent('onboarding_completed', businessId, userId, { outcome });
   };
 
   const clearDraft = () => {
@@ -131,7 +133,7 @@ export function FirstRunHeroOverlay({ businessId, userId, currency, onDone }: Pr
 
   const handleSkip = () => {
     trackEvent('first_run_hero_skipped', businessId, userId);
-    stampCompleted();
+    stampCompleted('hero_skipped');
     clearDraft();
     onDone();
   };
@@ -174,8 +176,8 @@ export function FirstRunHeroOverlay({ businessId, userId, currency, onDone }: Pr
     }
 
     haptics.heavy();
-    trackEvent('first_run_hero_completed', businessId, userId, { amount_cents: amountCents });
-    stampCompleted();
+    trackEvent('first_run_hero_completed', businessId, userId, { has_debt: true });
+    stampCompleted('hero_saved');
     setTotalCents(c => c + amountCents);
     setLastEntry({ name: trimmedName, amountCents });
     crossfadeTo('payoff');

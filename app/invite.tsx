@@ -1,4 +1,5 @@
 import { useEffect, useMemo, useRef } from 'react';
+import { trackEvent } from '@/lib/analytics';
 import { View, StyleSheet } from 'react-native';
 import { router, useLocalSearchParams } from 'expo-router';
 import { Screen } from '@/src/components/ui/Screen';
@@ -58,6 +59,7 @@ export default function InviteRoute() {
                 return;
             }
 
+            trackEvent('invite_opened', null, null, { source: 'deep_link', has_session: !!session });
             // Persist for the post-OTP onboarding (creer.tsx) to consume.
             await setPendingInviteToken(token);
 

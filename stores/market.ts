@@ -1,4 +1,5 @@
 import { create } from 'zustand';
+import { trackEvent } from '@/lib/analytics';
 import { supabase } from '@/lib/supabase';
 import { translateError } from '@/lib/errors';
 import { isNetworkError, withTimeout, withNetworkRetry, reportOfflineFallback } from '@/lib/sync';
@@ -177,6 +178,7 @@ export const useMarketStore = create<MarketStore>((set, get) => ({
       if (fetchErr) throw fetchErr;
       const created = post as MarketPost;
       get().prependPost(created);
+      trackEvent('post_created', null, null, { category, kind: 'post' });
       if (created.status === 'pending') {
         toast.info('Votre première annonce sera visible après validation par l\'équipe Patron.');
       }

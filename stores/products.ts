@@ -265,7 +265,7 @@ export const useProductStore = create<ProductStore>((set, get) => ({
       });
       if (prodErr) throw prodErr;
       await get().fetchProducts(businessId, userId);
-      trackEvent('product_created', businessId, userId, {
+      trackEvent('product_added', businessId, userId, {
         has_bulk_price: !!(data.bulk_price),
         initial_stock: data.initial_stock,
         has_category: !!(data.category),

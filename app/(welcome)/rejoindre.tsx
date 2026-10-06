@@ -52,6 +52,7 @@ export default function RejoindreScreen() {
     if (result) {
       verificationIdRef.current = result.verificationId;
       phoneRef.current = normalized;
+      trackEvent('otp_sent', null, null, { flow: 'join' });
       setStep('otp');
     } else {
       trackEvent('auth_phone_submit_failed', null, null, {
@@ -63,12 +64,14 @@ export default function RejoindreScreen() {
   const handleOtpComplete = async (code: string) => {
     const ok = await verifyPhoneCode(phoneRef.current, code, verificationIdRef.current);
     if (ok) {
+      trackEvent('otp_verified', null, null, { flow: 'join' });
       await upgradePhone(phoneRef.current);
       if (!useAuthStore.getState().error) {
         setStep('code');
       }
     } else {
-      trackEvent('auth_failed', null, null, {
+      trackEvent('otp_failed', null, null, {
+        flow: 'join',
         reason: classifyAuthError(useAuthStore.getState().error),
       });
       setOtpKey(k => k + 1);

@@ -4,6 +4,10 @@
 // thing with the right params, not that send_alpha_message's SQL is
 // correct — that's __tests__/integration/alpha-chat.integration.test.ts).
 
+// stores/alpha.ts now fires alpha_queried — same PostHog stub every other
+// store test uses (the real client needs AppState at import time).
+jest.mock('@/lib/posthog', () => ({ posthog: null }));
+
 jest.mock('@/lib/supabase', () => ({
   supabase: {
     rpc: jest.fn(),
