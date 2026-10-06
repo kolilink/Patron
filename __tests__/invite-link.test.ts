@@ -27,44 +27,44 @@ jest.mock('@/lib/analytics', () => ({
     trackEvent: jest.fn(),
 }));
 
-import { tokenFromUrl, tokenFromReferrer } from '@/lib/inviteLink';
+import { inviterIdFromUrl, inviterIdFromReferrer, isInviterId } from '@/lib/inviteLink';
 
-describe('B2(b) — invite token length threshold is 10, not 16', () => {
-    it('tokenFromUrl accepts a 10-char manual CODE in the ?t= slot', () => {
-        expect(tokenFromUrl('https://patron.kolilink.com/invite?t=ABCDEFGHJK')).toBe('ABCDEFGHJK');
+const ID = '3f2b8c1e-9a4d-4e57-8b6a-1c2d3e4f5a6b';
+
+describe('word-of-mouth invite link capture', () => {
+    it('reads the inviter id from the https link', () => {
+        expect(inviterIdFromUrl(`https://patron.kolilink.com/invite/${ID}`)).toBe(ID);
     });
 
-    it('tokenFromUrl accepts the long 48-char hex token on the /invite path', () => {
-        const hex = 'a'.repeat(48);
-        expect(tokenFromUrl(`https://patron.kolilink.com/invite?t=${hex}`)).toBe(hex);
+    it('reads it from the custom scheme too', () => {
+        expect(inviterIdFromUrl(`patron://invite/${ID}`)).toBe(ID);
     });
 
-    it('tokenFromUrl accepts the custom scheme (patron://) too', () => {
-        expect(tokenFromUrl('patron://invite?t=ABCDEFGHJK')).toBe('ABCDEFGHJK');
+    it('lower-cases and tolerates a trailing slash', () => {
+        expect(inviterIdFromUrl(`https://patron.kolilink.com/invite/${ID.toUpperCase()}/`)).toBe(ID);
     });
 
-    it('tokenFromUrl rejects a 9-char value — too short to be a real token', () => {
-        expect(tokenFromUrl('https://patron.kolilink.com/invite?t=ABCDEFGHJ')).toBeNull();
+    it('rejects a foreign origin', () => {
+        expect(inviterIdFromUrl(`https://evil.example.com/invite/${ID}`)).toBeNull();
     });
 
-    it('tokenFromUrl rejects a foreign origin even with a 10-char ?t=', () => {
-        expect(tokenFromUrl('https://evil.example.com/invite?t=ABCDEFGHJK')).toBeNull();
+    it('rejects non-uuid segments, the bare /invite and old ?t= links', () => {
+        expect(inviterIdFromUrl('https://patron.kolilink.com/invite/ABCDEFGHJK')).toBeNull();
+        expect(inviterIdFromUrl('https://patron.kolilink.com/invite')).toBeNull();
+        expect(inviterIdFromUrl('https://patron.kolilink.com/invite?t=ABCDEFGHJK')).toBeNull();
+        expect(inviterIdFromUrl(null)).toBeNull();
     });
 
-    it('tokenFromUrl trims whitespace around the token', () => {
-        expect(tokenFromUrl('https://patron.kolilink.com/invite?t=%20ABCDEFGHJK%20')).toBe('ABCDEFGHJK');
+    it('install referrer carries patron_invite=<id>', () => {
+        expect(inviterIdFromReferrer(`patron_invite=${ID}`)).toBe(ID);
+        expect(inviterIdFromReferrer('patron_invite=ABCDEFGHJK')).toBeNull();
+        expect(inviterIdFromReferrer(null)).toBeNull();
+        expect(inviterIdFromReferrer('')).toBeNull();
     });
 
-    it('tokenFromReferrer accepts a 10-char patron_invite value', () => {
-        expect(tokenFromReferrer('patron_invite=ABCDEFGHJK')).toBe('ABCDEFGHJK');
-    });
-
-    it('tokenFromReferrer rejects a 9-char patron_invite value', () => {
-        expect(tokenFromReferrer('patron_invite=ABCDEFGHJ')).toBeNull();
-    });
-
-    it('tokenFromReferrer rejects a missing/empty referrer', () => {
-        expect(tokenFromReferrer(null)).toBeNull();
-        expect(tokenFromReferrer('')).toBeNull();
+    it('isInviterId only accepts uuids', () => {
+        expect(isInviterId(ID)).toBe(true);
+        expect(isInviterId('nope')).toBe(false);
+        expect(isInviterId('')).toBe(false);
     });
 });

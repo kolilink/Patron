@@ -5,15 +5,15 @@
     <meta charset="utf-8" />
     <meta name="viewport" content="width=device-width, initial-scale=1, maximum-scale=1" />
 
-    <title>On t'invite sur Patron</title>
-    <meta name="description" content="Tes ventes, tes crédits — même sans internet." />
+    <title>On t'invite sur Patron.</title>
+    <meta name="description" content="Note tes ventes, suis tes crédits avec ou sans internet" />
 
     <!-- Open Graph / Twitter — the WhatsApp preview card. Static on purpose:
        this page is served by static GitHub Pages, so og:title is the generic
        invitation title (the inviter's name is rendered client-side for humans,
        not for crawlers — WhatsApp's crawler does not run JS). -->
-    <meta property="og:title" content="On t'invite sur Patron" />
-    <meta property="og:description" content="Tes ventes, tes crédits — même sans internet." />
+    <meta property="og:title" content="On t'invite sur Patron." />
+    <meta property="og:description" content="Note tes ventes, suis tes crédits avec ou sans internet" />
     <meta property="og:type" content="website" />
     <meta property="og:url" content="https://patron.kolilink.com/invite" />
     <meta property="og:image" content="https://patron.kolilink.com/invite/og.png" />
@@ -94,15 +94,7 @@
             opacity: .85;
         }
 
-        .btn-ghost {
-            background: transparent;
-            color: #fff;
-            border: 1.5px solid rgba(255, 255, 255, .55);
-        }
 
-        .btn-ghost:active {
-            background: rgba(255, 255, 255, .12);
-        }
 
         .btn-play {
             background: #fff;
@@ -121,18 +113,7 @@
             opacity: .85;
         }
 
-        .store-row {
-            display: flex;
-            gap: 12px;
-            margin: 4px 0 12px;
-        }
 
-        .store-row .btn {
-            flex: 1;
-            font-size: 15px;
-            padding: 14px 10px;
-            margin-bottom: 0;
-        }
 
         .foot {
             margin-top: 8px;
@@ -140,273 +121,102 @@
             opacity: .75;
         }
 
-        .note {
-            font-size: 13px;
-            line-height: 1.45;
-            opacity: .92;
-            margin-top: 18px;
-            text-align: left;
-            background: rgba(255, 255, 255, .12);
-            border-radius: 10px;
-            padding: 12px 14px;
-        }
 
-        .note .step {
-            display: block;
-            margin-bottom: 4px;
-        }
 
-        .hidden {
-            display: none !important;
-        }
     </style>
 </head>
 
 <body>
     <div class="card">
-        <h1 id="title">On t'invite sur Patron</h1>
-        <p class="tagline">Ton carnet de ventes, dans ta poche.<br />Tes ventes, tes crédits — même sans internet.</p>
+        <h1 id="title">On t'invite sur Patron.</h1>
+        <p class="tagline">Note tes ventes, suis tes crédits avec ou sans internet</p>
 
-        <!-- Primary install CTA (set by JS for the visitor's platform) -->
-        <a class="btn btn-primary" id="cta-install" href="https://apps.apple.com/us/app/patron/id6772757310"
-            target="_blank" rel="noopener">Installer Patron</a>
+        <a class="btn btn-primary" id="store-ios" href="https://apps.apple.com/us/app/patron/id6772757310"
+            target="_blank" rel="noopener">Télécharger sur l'App Store</a>
 
-        <!-- Play Store badge (the App Store is the primary CTA above) -->
-        <div class="store-row">
-            <a class="btn btn-play" id="store-play"
-                href="https://play.google.com/store/apps/details?id=com.awall.patron" target="_blank" rel="noopener">
-                <svg class="play-icon" viewBox="0 0 24 24" width="20" height="20" aria-hidden="true">
-                    <path fill="#00D7FE" d="M3 12 12 7.5 12 12Z" />
-                    <path fill="#00F076" d="M3 12 12 12 12 16.5Z" />
-                    <path fill="#FFCE00" d="M12 7.5 21 3 21 12 12 12Z" />
-                    <path fill="#FF3A44" d="M12 12 21 12 21 21 12 16.5Z" />
-                </svg>
-                Télécharger sur Play Store
-            </a>
-        </div>
+        <a class="btn btn-play" id="store-play"
+            href="https://play.google.com/store/apps/details?id=com.awall.patron" target="_blank" rel="noopener">
+            <svg class="play-icon" viewBox="0 0 24 24" width="20" height="20" aria-hidden="true">
+                <path fill="#00D7FE" d="M3 12 12 7.5 12 12Z" />
+                <path fill="#00F076" d="M3 12 12 12 12 16.5Z" />
+                <path fill="#FFCE00" d="M12 7.5 21 3 21 12 12 12Z" />
+                <path fill="#FF3A44" d="M12 12 21 12 21 21 12 16.5Z" />
+            </svg>
+            Télécharger sur Play Store
+        </a>
 
-        <!-- "Already have the app" — custom scheme deep link. Universal links do
-         NOT fire on same-domain navigation inside Safari, so this uses the
-         patron:// scheme; the app's /invite route consumes ?t=… -->
-        <a class="btn btn-ghost" id="cta-open" href="patron://invite">J'ai déjà Patron →</a>
-
-        <!-- WhatsApp in-app browser bridge (iOS): clipboard handoff + Safari exit.
-         Filled in by JS only when the visitor is WhatsApp's webview. -->
-        <div class="note hidden" id="bridge">
-            <span class="step">1. Appuie sur « Copier le lien d'invitation ».</span>
-            <span class="step">2. Installe Patron depuis l'App Store.</span>
-            <span class="step">3. À la première ouverture, Patron lit le lien copié et retrouve ton invitation.</span>
-            <span class="step" id="bridge-status" style="margin-top:6px;font-weight:700"></span>
-        </div>
-
-        <div class="foot">Gratuit · Fait pour les commerçants</div>
+        <div class="foot">Gratuit et fait pour les commerçants</div>
     </div>
 
     <script>
         (function () {
             'use strict';
 
-            // ── Constants (public values, same as the app client) ────────────────
+            // Public values, same as the app client.
             var SUPABASE_URL = 'https://jnxpujsyvbenqgjbvifh.supabase.co';
             var ANON_KEY = 'sb_publishable_z2cta2M53RtwpGoWUV6LMQ_LoUkSjaD';
-            var APP_STORE_URL = 'https://apps.apple.com/us/app/patron/id6772757310';
             var PLAY_STORE_BASE = 'https://play.google.com/store/apps/details?id=com.awall.patron';
-            var TAGLINE = 'Tes ventes, tes crédits — même sans internet.';
-            var DEFAULT_TITLE = "On t'invite sur Patron";
-            var FALLBACK_NAME = 'Ton ami';
+            var UUID_RE = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
 
-            // ── Credential from ?t=… (link token) or /invite/<CODE> path ─────────
-            // Both forms feed the SAME redemption flow. A 10-char CODE is
-            // carried to the app in the ?t= slot (the app's only credential
-            // reader); the server resolves a code in the token slot server-side
-            // (migration_v212). The raw UUID token never leaves the server for
-            // the code form — it maps server-side to the invite record.
-            function tokenFromQuery() {
+            // The inviter id comes from /invite/<id> (404.html forwards that
+            // path here as ?i=<id>). Anything that is not a uuid is ignored.
+            function inviterId() {
                 try {
-                    return new URLSearchParams(window.location.search).get('t') || '';
+                    var q = new URLSearchParams(window.location.search).get('i') || '';
+                    var m = window.location.pathname.replace(/\/+$/, '').match(/^\/invite\/([^\/]+)$/);
+                    var id = (q || (m ? m[1] : '')).trim();
+                    return UUID_RE.test(id) ? id.toLowerCase() : '';
                 } catch (e) {
                     return '';
                 }
             }
 
-            // ?c=… — the manual code (set by 404.html when a /invite/<CODE>
-            // path is routed here). Kept separate from ?t= so the code-ness
-            // survives the redirect.
-            function codeFromQuery() {
-                try {
-                    return new URLSearchParams(window.location.search).get('c') || '';
-                } catch (e) {
-                    return '';
-                }
+            var id = inviterId();
+            var inviteUrl = id ? 'https://patron.kolilink.com/invite/' + id : '';
+
+            var titleEl = document.getElementById('title');
+            var storeIos = document.getElementById('store-ios');
+            var storePlay = document.getElementById('store-play');
+
+            // Silent attribution handoff — no UI, no instructions:
+            //   Android: the Play install referrer carries the inviter id.
+            //   iOS: the invite URL is copied when the App Store button is
+            //   tapped; the app recognises it at first launch.
+            if (id) {
+                storePlay.href = PLAY_STORE_BASE + '&referrer=' + encodeURIComponent('patron_invite=' + id);
+                storeIos.addEventListener('click', function () {
+                    try {
+                        if (navigator.clipboard && navigator.clipboard.writeText) {
+                            navigator.clipboard.writeText(inviteUrl).catch(function () { });
+                        }
+                    } catch (e) { }
+                });
             }
 
-            // /invite/<CODE> — 10-char manual code (unambiguous alphabet,
-            // no I/L/O/U). Case-insensitive.
-            function codeFromPath() {
-                try {
-                    var path = window.location.pathname.replace(/\/+$/, '');
-                    var m = path.match(/^\/invite\/([0-9A-Za-z]{10})$/);
-                    return m ? m[1] : '';
-                } catch (e) {
-                    return '';
-                }
+            function setTitle(name) {
+                var t = name ? '\u00AB ' + name + ' \u00BB t\u2019invite sur Patron.' : "On t'invite sur Patron.";
+                titleEl.textContent = t;
+                document.title = t;
             }
 
-            var queryToken = tokenFromQuery().trim();
-            var pathCode = codeFromPath().trim().toUpperCase();
-            var queryCode = codeFromQuery().trim().toUpperCase();
-            // Prefer the ?t= token; then the ?c= code; then the path code.
-            var token = queryToken || queryCode || pathCode;
-            var isCode = !queryToken && !!(queryCode || pathCode);
-            var inviteUrl = token
-                ? 'https://patron.kolilink.com/invite?t=' + encodeURIComponent(token)
-                : 'https://patron.kolilink.com/invite';
-            var playStoreUrl = token
-                ? PLAY_STORE_BASE + '&referrer=' + encodeURIComponent('patron_invite=' + token)
-                : PLAY_STORE_BASE;
-
-            // ── User-Agent detection ─────────────────────────────────────────────
-            var ua = navigator.userAgent || '';
-            var isCrawler = /whatsapp|telegrambot|twitterbot|facebookexternalhit|facebookcatalog|slackbot|linkedinbot|discordbot|pinterest|line\//i.test(ua);
-            var isWhatsAppInAppBrowser = /whatsapp/i.test(ua) && /mozilla/i.test(ua);
-            var isAndroid = /android/i.test(ua);
-            var isIOS = /iphone|ipad|ipod/i.test(ua);
-
-            // ── Resolve the inviter's display name (anon RPC) ────────────────────
-            function titleFor(valid, name) {
-                if (!valid) return DEFAULT_TITLE;
-                return (name && name.trim() ? name.trim() : FALLBACK_NAME) + " t'invite sur Patron";
-            }
-
-            function resolveInviter(t, codeMode) {
-                if (!t) return Promise.resolve({ valid: false, name: null });
-                var rpcName = codeMode ? 'preview_consumer_invite_code' : 'preview_consumer_invite';
-                var payload = codeMode ? { p_code: t } : { p_token: t };
-                return fetch(SUPABASE_URL + '/rest/v1/rpc/' + rpcName, {
+            // Inviter name (anon RPC). Any failure → the generic headline.
+            if (id) {
+                fetch(SUPABASE_URL + '/rest/v1/rpc/preview_inviter', {
                     method: 'POST',
                     headers: {
                         'Content-Type': 'application/json',
                         'apikey': ANON_KEY,
                         'Authorization': 'Bearer ' + ANON_KEY
                     },
-                    body: JSON.stringify(payload)
+                    body: JSON.stringify({ p_inviter_id: id })
                 })
-                    .then(function (res) {
-                        if (!res.ok) return { valid: false, name: null };
-                        return res.json();
-                    })
+                    .then(function (res) { return res.ok ? res.json() : null; })
                     .then(function (data) {
-                        var valid = !!(data && data.valid);
-                        var name = (data && data.inviter_name) || null;
-                        return { valid: valid, name: name };
+                        var name = data && data.valid && data.inviter_name ? String(data.inviter_name).trim() : '';
+                        setTitle(name);
                     })
-                    .catch(function () {
-                        return { valid: false, name: null };
-                    });
+                    .catch(function () { setTitle(''); });
             }
-
-            // ── Clipboard copy with legacy fallback ──────────────────────────────
-            function copyText(text) {
-                if (navigator.clipboard && navigator.clipboard.writeText) {
-                    return navigator.clipboard.writeText(text).then(function () { return true; });
-                }
-                return new Promise(function (resolve) {
-                    var ta = document.createElement('textarea');
-                    ta.value = text;
-                    ta.setAttribute('readonly', '');
-                    ta.style.position = 'absolute';
-                    ta.style.left = '-9999px';
-                    document.body.appendChild(ta);
-                    ta.select();
-                    try {
-                        var ok = document.execCommand('copy');
-                        resolve(!!ok);
-                    } catch (e) {
-                        resolve(false);
-                    } finally {
-                        document.body.removeChild(ta);
-                    }
-                });
-            }
-
-            // ── Wire the page ────────────────────────────────────────────────────
-            var titleEl = document.getElementById('title');
-            var ctaInstall = document.getElementById('cta-install');
-            var ctaOpen = document.getElementById('cta-open');
-            var storePlay = document.getElementById('store-play');
-            var bridge = document.getElementById('bridge');
-            var bridgeStatus = document.getElementById('bridge-status');
-
-            // Open-in-app: carry the token through the custom scheme deep link.
-            ctaOpen.href = token ? 'patron://invite?t=' + encodeURIComponent(token) : 'patron://invite';
-
-            // Platform-specific primary install CTA.
-            if (isAndroid) {
-                ctaInstall.href = playStoreUrl;
-                ctaInstall.textContent = 'Télécharger sur Google Play';
-                storePlay.href = playStoreUrl;
-            } else if (isIOS && !isWhatsAppInAppBrowser) {
-                ctaInstall.href = APP_STORE_URL;
-                ctaInstall.textContent = "Télécharger sur l'App Store";
-                // Plain iOS Safari (NOT WhatsApp's webview): universal links
-                // don't fire on same-domain navigation, so the token must
-                // survive the App Store install via the clipboard bridge —
-                // the app reads it once at first launch (B2(b)).
-                if (token) {
-                    bridge.classList.remove('hidden');
-                    ctaOpen.textContent = "Copier le lien d'invitation";
-                    ctaOpen.href = '#';
-                    ctaOpen.addEventListener('click', function (ev) {
-                        ev.preventDefault();
-                        copyText(inviteUrl).then(function (ok) {
-                            bridgeStatus.textContent = ok ? 'Lien copié ✓' : 'Copie impossible — copie-le manuellement : ' + inviteUrl;
-                        });
-                    });
-                }
-            } else {
-                // Desktop / unknown: keep the App Store link; Play Store badge below.
-                ctaInstall.href = APP_STORE_URL;
-                ctaInstall.textContent = 'Installer Patron';
-            }
-
-            // WhatsApp in-app browser bridge. Universal links don't fire inside the
-            // WhatsApp webview, so the page itself is the escape hatch:
-            //   • Android → the intent:// link auto-opens the Play Store (with the
-            //     install referrer carrying the token).
-            //   • iOS → copy the invite link to the clipboard (the app reads it at
-            //     first launch), plus the App Store install button.
-            if (isWhatsAppInAppBrowser) {
-                if (isAndroid) {
-                    // Replace the whole primary action with an auto-escape to Play Store.
-                    var intent = 'intent://play.google.com/store/apps/details?id=com.awall.patron&referrer='
-                        + encodeURIComponent('patron_invite=' + token)
-                        + '#Intent;scheme=https;action=android.intent.action.VIEW;end';
-                    ctaInstall.href = intent;
-                    ctaInstall.textContent = 'Ouvrir dans Play Store';
-                    ctaOpen.classList.add('hidden');
-                    bridge.classList.add('hidden');
-                } else if (isIOS) {
-                    bridge.classList.remove('hidden');
-                    // Turn the primary CTA into the clipboard handoff.
-                    ctaInstall.href = APP_STORE_URL;
-                    ctaInstall.textContent = "Installer depuis l'App Store";
-                    ctaOpen.textContent = "Copier le lien d'invitation";
-                    ctaOpen.href = '#';
-                    ctaOpen.addEventListener('click', function (ev) {
-                        ev.preventDefault();
-                        copyText(inviteUrl).then(function (ok) {
-                            bridgeStatus.textContent = ok ? 'Lien copié ✓' : 'Copie impossible — copie-le manuellement : ' + inviteUrl;
-                        });
-                    });
-                }
-            }
-
-            // Resolve the inviter name and update the headline (human visitors).
-            resolveInviter(token, isCode).then(function (r) {
-                var t = titleFor(r.valid, r.name);
-                titleEl.textContent = t;
-                document.title = t;
-            });
         })();
     </script>
 </body>

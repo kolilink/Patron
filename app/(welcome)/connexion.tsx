@@ -14,8 +14,6 @@ import { PhoneInput } from '@/src/components/ui/PhoneInput';
 import { useTheme, radius, spacing } from '@/src/theme';
 import type { Palette } from '@/src/theme';
 import { useAuthStore } from '@/stores/auth';
-import { useInviterStore } from '@/stores/inviter';
-import { getPendingInviteToken, clearPendingInviteToken } from '@/lib/inviteLink';
 import { trackEvent, classifyAuthError } from '@/lib/analytics';
 import { useCountdown } from '@/src/hooks/useCountdown';
 import { getKV, setKV } from '@/lib/db';
@@ -68,18 +66,6 @@ export default function ConnexionScreen() {
   useEffect(() => {
     if (!session) return;
     (async () => {
-      // B3 — a pending invite token is finally consumed on login, not orphaned:
-      // the user lands in Amis with the inviter listed instead of being
-      // silently dropped onto Home/onboarding while the token rots in KV.
-      const token = await getPendingInviteToken();
-      if (token) {
-        const resolved = await useInviterStore.getState().resolveInvite(token, '');
-        if (resolved) {
-          await clearPendingInviteToken();
-          router.replace('/(app)/discussions?tab=amis');
-          return;
-        }
-      }
       if (session.activeBusiness) {
         router.replace('/(app)/(tabs)/');
       } else {

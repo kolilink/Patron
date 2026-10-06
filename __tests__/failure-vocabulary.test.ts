@@ -94,9 +94,10 @@ describe('control flow uses codes, never human copy', () => {
     expect(classifyFailure({ code: 'P0001', message: 'x' })).toBe('rejected');
     expect(classifyFailure(new Error('whatever'))).toBe('unknown');
   });
-  it('app/invite.tsx branches on errorCode, not on the French sentence', () => {
-    const src = read('app/invite.tsx');
-    expect(src).toMatch(/errorCode === 'network'/);
+  it('invite attribution branches on isNetworkError(), never on a French sentence', () => {
+    const src = read('stores/inviter.ts');
+    expect(src).toMatch(/isNetworkError\(error\)/);
     expect(src).not.toMatch(/===\s*['"`][^'"`]*(connexion|réseau|invalide)[^'"`]*['"`]/i);
   });
+
 });

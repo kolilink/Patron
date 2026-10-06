@@ -196,11 +196,6 @@ export function BusinessDrawer() {
     router.push('/(app)/alpha');
   };
 
-  const handleInvitations = () => {
-    closeBusinessDrawer();
-    router.push('/(app)/invitations');
-  };
-
   return (
     <Modal
       visible={modalVisible}
@@ -350,15 +345,6 @@ export function BusinessDrawer() {
                 <Ionicons name="sparkles-outline" size={18} color={palette.textSecondary} />
               </View>
               <Text style={[styles.footerLabel, { flex: 1 }]}>Assistant IA</Text>
-            </Pressable>
-            {/* Invitations — sender-side hygiene: who redeemed each link and
-                when, instant revocation (Phase 6). Lives in the drawer next
-                to the other person-level entries, not on Home. */}
-            <Pressable onPress={handleInvitations} style={({ pressed }) => [styles.footerRow, pressed && { opacity: 0.6 }]}>
-              <View style={styles.footerIcon}>
-                <Ionicons name="person-add-outline" size={18} color={palette.textSecondary} />
-              </View>
-              <Text style={[styles.footerLabel, { flex: 1 }]}>Invitations</Text>
             </Pressable>
             <Pressable onPress={handleJoin} style={({ pressed }) => [styles.footerRow, pressed && { opacity: 0.6 }]}>
               <View style={styles.footerIcon}>

@@ -30,7 +30,7 @@ jest.mock('@/lib/posthog', () => ({ posthog: null }));
 
 import { supabase } from '@/lib/supabase';
 import { useAuthStore } from '@/stores/auth';
-import { isTeamsEnabled, resolveDiscussionsTab, teamSurfaces } from '@/src/utils/teamsFlag';
+import { isTeamsEnabled, teamSurfaces } from '@/src/utils/teamsFlag';
 import type { Business, Membership } from '@/src/types';
 
 const ROOT = path.resolve(__dirname, '..');
@@ -52,10 +52,10 @@ describe('isTeamsEnabled — fail-open', () => {
 });
 
 describe('teamSurfaces', () => {
-  it('flag false → every team surface hidden, default Discussions tab is Amis', () => {
+  it('flag false → every team surface hidden, default Discussions tab is Le Marché (Amis is flagged off)', () => {
     expect(teamSurfaces({ teams_enabled: false })).toEqual({
       equipeEntry: false, apportsEntry: false, maBoutiqueTab: false, roleBadges: false,
-      defaultDiscussionsTab: 'amis',
+      defaultDiscussionsTab: 'marche',
     });
   });
   it('flag true → everything shown, default tab is Ma Boutique', () => {
@@ -71,18 +71,6 @@ describe('teamSurfaces', () => {
   });
 });
 
-describe('resolveDiscussionsTab', () => {
-  it('moves off a hidden Ma Boutique: Amis for admin/manager, Le Marché otherwise', () => {
-    expect(resolveDiscussionsTab('boutique', false, true)).toBe('amis');
-    expect(resolveDiscussionsTab('boutique', false, false)).toBe('marche');
-  });
-  it('leaves Ma Boutique alone when teams are on, and never touches other tabs', () => {
-    expect(resolveDiscussionsTab('boutique', true, true)).toBe('boutique');
-    expect(resolveDiscussionsTab('amis', false, true)).toBe('amis');
-    expect(resolveDiscussionsTab('marche', false, false)).toBe('marche');
-  });
-});
-
 describe('screens actually use the flag (source guards)', () => {
   const plus = read('app/(app)/(tabs)/plus.tsx');
   it('Plus: every Équipe / Apports route is behind teamsEnabled', () => {
@@ -95,10 +83,10 @@ describe('screens actually use the flag (source guards)', () => {
     expect(i).toBeGreaterThan(0);
     expect(plus.slice(Math.max(0, i - 700), i)).toMatch(/\{teamsEnabled && \(/);
   });
-  it('Discussions: the Ma Boutique tab is behind teamsEnabled and the tab is resolved', () => {
+  it('Discussions: the Ma Boutique tab is behind the enabled-tabs config and the tab is resolved', () => {
     const d = read('app/(app)/discussions.tsx');
-    expect(d).toMatch(/\{teamsEnabled && \(\s*<Pressable\s+onPress=\{\(\) => handleTabChange\('boutique'\)\}/);
-    expect(d).toMatch(/resolveDiscussionsTab\(tabState, teamsEnabled, isAdminOrManager\)/);
+    expect(d).toMatch(/\{enabledTabs\.includes\('boutique'\) && \(\s*<Pressable\s+onPress=\{\(\) => handleTabChange\('boutique'\)\}/);
+    expect(d).toMatch(/resolveActiveTab\(tabState, enabledTabs\)/);
   });
   it('BusinessDrawer: role labels are behind the per-business flag', () => {
     expect(read('src/components/BusinessDrawer.tsx')).toMatch(/isTeamsEnabled\(m\.business\) &&/);
