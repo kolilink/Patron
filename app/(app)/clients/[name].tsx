@@ -645,10 +645,16 @@ export default function ClientLedgerScreen() {
     const openCredits = clientSales
       .filter(s => s.status === 'credit')
       .sort((a, b) => new Date(b.created_at).getTime() - new Date(a.created_at).getTime());
-    const creditIds = new Set(openCredits.map(s => s.id));
-    const lastPay = allPayments
-      .filter(p => creditIds.has(p.order_id))
-      .sort((a, b) => (b.date.localeCompare(a.date)) || b.created_at.localeCompare(a.created_at))[0];
+    // One payment can be split across several credit sales (FIFO), which
+    // yields several rows sharing the same created_at — the "last payment"
+    // is their sum, not one fragment. Includes payments that settled a sale
+    // (it left the open list) but not a cash sale's own instant self-payment.
+    const creditIds = new Set(clientSales.filter(s => s.is_credit).map(s => s.id));
+    const received = allPayments.filter(p => creditIds.has(p.order_id) && p.amount > 0);
+    const newest = [...received].sort((a, b) => b.date.localeCompare(a.date) || b.created_at.localeCompare(a.created_at))[0];
+    const lastPay = newest
+      ? { amount: received.filter(p => p.created_at === newest.created_at && p.date === newest.date).reduce((t, p) => t + p.amount, 0), date: newest.date }
+      : undefined;
     return {
       businessName: session?.activeBusiness?.name ?? '',
       clientName: displayName,
@@ -658,7 +664,7 @@ export default function ClientLedgerScreen() {
         label: ledgerLines[s.id] || null,
         date: s.sale_date ?? s.created_at.split('T')[0],
       })),
-      lastPayment: lastPay ? { amount: lastPay.amount, date: lastPay.date } : null,
+      lastPayment: lastPay ?? null,
     };
   }, [clientSales, allPayments, ledgerLines, session?.activeBusiness?.name, displayName, currency, totalOwed]);
 
@@ -844,7 +850,7 @@ export default function ClientLedgerScreen() {
         {/* Secondary contact row — Rappeler sur WhatsApp + Appeler. Only the
             call half needs a real number on file; the WhatsApp reminder
             still only makes sense while there's an actual debt to mention. */}
-        <View style={styles.contactRow}>
+        {(totalOwed > 0 || clientRecord?.phone) && <View style={styles.contactRow}>
           {totalOwed > 0 && (
             <Pressable
               onPress={() => setShowReminder(true)}
@@ -863,7 +869,7 @@ export default function ClientLedgerScreen() {
               <Text variant="label" style={{ color: palette.primary }}>Appeler</Text>
             </Pressable>
           )}
-        </View>
+        </View>}
 
         {/* The carnet page — one continuous list of lines, newest first.
             No day-grouping, no collapsible sections, no summary rows: a
