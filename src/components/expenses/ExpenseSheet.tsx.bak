@@ -18,7 +18,6 @@ import { formatDate } from '@/src/utils/dates';
 import {
   pressKey, keypadValue, recentTemplates, searchProducts, rankLinkedProducts, pinRecents,
   type KeypadKey, type RepeatTemplate,
-  showProductRow,
 } from '@/src/utils/expenseUtils';
 import type { CreateExpenseData } from '@/stores/expenses';
 import type { Expense } from '@/src/types';
