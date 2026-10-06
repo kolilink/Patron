@@ -31,3 +31,5 @@ export async function getKV(_key: string): Promise<null> { return null; }
 export async function setKV(_key: string, _value: string): Promise<void> { }
 
 export async function wipeAccountLocalData(): Promise<void> {}
+
+export function resetDbPromise(): void {}

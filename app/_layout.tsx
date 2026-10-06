@@ -1,6 +1,6 @@
 import '@/lib/startupTiming';
 import * as Sentry from '@sentry/react-native';
-import { useEffect, useRef } from 'react';
+import { useEffect, useRef, useState } from 'react';
 import { View } from 'react-native';
 import { GestureHandlerRootView } from 'react-native-gesture-handler';
 import { Stack, useSegments } from 'expo-router';
@@ -22,7 +22,7 @@ import {
 } from '@expo-google-fonts/inter';
 import { PostHogProvider } from 'posthog-react-native';
 import { useAuthStore } from '@/stores/auth';
-import { getKV, openDb } from '@/lib/db';
+import { getKV, openDb, resetDbPromise } from '@/lib/db';
 import { capturePendingInviterId } from '@/lib/inviteLink';
 import { setEnabled, HAPTICS_KV_KEY } from '@/lib/haptics';
 import { ThemeProvider } from '@/src/theme';
@@ -32,6 +32,7 @@ import { recordInstallIfFirstOpen, recordFunnelStep, flushFunnelOutbox } from '@
 import { PrivacyShield } from '@/src/components/PrivacyShield';
 import { configurePurchases } from '@/lib/purchases';
 import { withStartupTiming, reportFirstScreenRender, reportFirstInteraction } from '@/lib/startupTiming';
+import { runStartupSequence, scheduleSplashCeiling, startupReady } from '@/src/utils/startupGate';
 
 // Only active when EXPO_PUBLIC_SENTRY_DSN is set (no-op in local dev without it)
 if (process.env.EXPO_PUBLIC_SENTRY_DSN) {
@@ -64,7 +65,10 @@ const ALL_FONTS = {
 function RootLayout() {
   const initialize = useAuthStore(s => s.initialize);
   const session = useAuthStore(s => s.session);
-  const [fontsLoaded] = useFonts(ALL_FONTS);
+  // fontError is NOT discarded: a failing font must be identified (Sentry below)
+  // and must never hold the app hostage (see src/utils/startupGate.ts).
+  const [fontsLoaded, fontError] = useFonts(ALL_FONTS);
+  const [ceilingElapsed, setCeilingElapsed] = useState(false);
   // Route TEMPLATE ("/(app)/clients/[name]"), never the concrete path or
   // its params — those carry a client's name, a phone, ids (spec §0: zero
   // PII in events). useSegments() returns the template segments.
@@ -111,44 +115,70 @@ function RootLayout() {
     }
   }, [session]);
 
+  // Hard ceiling, deliberately NOT gated on fonts (or auth, or db): whatever
+  // never settles, the splash is dismissed after SPLASH_CEILING_MS. hideAsync is
+  // idempotent, so this is harmless when the normal path already hid it.
+  useEffect(() => scheduleSplashCeiling({
+    hide: () => { SplashScreen.hideAsync().catch(() => { /* already hidden */ }); },
+    onElapsed: () => setCeilingElapsed(true),
+    setTimeoutFn: (cb, ms) => setTimeout(cb, ms),
+    clearTimeoutFn: h => clearTimeout(h as ReturnType<typeof setTimeout>),
+  }), []);
+
+  // Identify the failing font on this Samsung. Guarded by the same DSN check as
+  // Sentry.init() above — never call into an uninitialised native SDK.
   useEffect(() => {
-    if (!fontsLoaded) return;
+    if (fontError && process.env.EXPO_PUBLIC_SENTRY_DSN) {
+      Sentry.captureException(fontError, { tags: { area: 'fonts' } });
+    }
+  }, [fontError]);
+
+  const ready = startupReady(fontsLoaded, fontError, ceilingElapsed);
+
+  useEffect(() => {
+    if (!ready) return;
     // Hard ceiling so a stuck init can never pin the splash forever; the
     // normal path hides it only after the first screen has painted (below).
     const timeout = setTimeout(() => SplashScreen.hideAsync(), 2000);
-    Promise.all([
-      withStartupTiming('auth_check', initialize()),
-      withStartupTiming('db_open', openDb()),
-    ]).then(() => {
-      // Best-effort: capture a deferred invite token (install referrer /
-      // clipboard) now that the KV store is open. Never blocks startup —
-      // a missing token just means a normal sign-up, never a dead end.
-      return capturePendingInviterId();
-    }).then(async () => {
-      // Haptics master switch — hydrate the persisted preference once the KV
-      // store is open. Default ON: only an explicit stored 'false' silences.
-      await getKV(HAPTICS_KV_KEY).then(v => setEnabled(v !== 'false')).catch(() => { });
-      // Measurement (docs/measurement.md): first-open install record, the
-      // cold-start app_opened, and a retry of any funnel steps still queued.
-      await loadDeviceTestFlag();
-      await recordInstallIfFirstOpen();
-      trackEvent('app_opened', null, null, { source: 'cold_start' });
-      void flushFunnelOutbox();
-    }).catch(() => {
-      /* non-fatal */
-    }).finally(() => {
-      clearTimeout(timeout);
-      // Hold the splash until the first screen has actually painted — two
-      // animation frames after init resolves lets the router commit and the
-      // native view draw, so there's no unbranded flash between the splash
-      // fade and first paint.
-      requestAnimationFrame(() => requestAnimationFrame(() => SplashScreen.hideAsync()));
-      // A real cold start — one half of PaymentReminderAsker's "fresh
-      // session" trigger condition (the other half is a 10+min-backgrounded
-      // return, bumped from app/(app)/_layout.tsx's own AppState handler).
-      useAuthStore.setState(s => ({ freshSessionToken: s.freshSessionToken + 1 }));
+    void runStartupSequence({
+      initialize: () => withStartupTiming('auth_check', initialize()),
+      openDb: () => withStartupTiming('db_open', openDb()),
+      resetDb: resetDbPromise,
+      reportTimeout: stage => {
+        // Guarded like every Sentry call here — never into an uninitialised native SDK.
+        if (process.env.EXPO_PUBLIC_SENTRY_DSN) {
+          Sentry.captureMessage(`startup_${stage}_timeout`, { level: 'error', tags: { area: 'startup' } });
+        }
+      },
+      postOpenSteps: async () => {
+        // Best-effort: capture a deferred invite token (install referrer /
+        // clipboard) now that the KV store is open. Never blocks startup —
+        // a missing token just means a normal sign-up, never a dead end.
+        await capturePendingInviterId();
+        // Haptics master switch — hydrate the persisted preference once the KV
+        // store is open. Default ON: only an explicit stored 'false' silences.
+        await getKV(HAPTICS_KV_KEY).then(v => setEnabled(v !== 'false')).catch(() => { });
+        // Measurement (docs/measurement.md): first-open install record, the
+        // cold-start app_opened, and a retry of any funnel steps still queued.
+        await loadDeviceTestFlag();
+        await recordInstallIfFirstOpen();
+        trackEvent('app_opened', null, null, { source: 'cold_start' });
+        void flushFunnelOutbox();
+      },
+      onDone: () => {
+        clearTimeout(timeout);
+        // Hold the splash until the first screen has actually painted — two
+        // animation frames after init resolves lets the router commit and the
+        // native view draw, so there's no unbranded flash between the splash
+        // fade and first paint.
+        requestAnimationFrame(() => requestAnimationFrame(() => SplashScreen.hideAsync()));
+        // A real cold start — one half of PaymentReminderAsker's "fresh
+        // session" trigger condition (the other half is a 10+min-backgrounded
+        // return, bumped from app/(app)/_layout.tsx's own AppState handler).
+        useAuthStore.setState(s => ({ freshSessionToken: s.freshSessionToken + 1 }));
+      },
     });
-  }, [fontsLoaded]);
+  }, [ready]);
 
   return (
     <GestureHandlerRootView style={{ flex: 1 }}>
