@@ -10,7 +10,7 @@ import {
   type ScrollViewProps,
   type ViewStyle,
 } from 'react-native';
-import { SafeAreaView, type Edge } from 'react-native-safe-area-context';
+import { SafeAreaView, useSafeAreaInsets, type Edge } from 'react-native-safe-area-context';
 import { Text } from './Text';
 import { useTheme, spacing } from '@/src/theme';
 import type { Palette } from '@/src/theme';
@@ -91,7 +91,20 @@ export const FormSheet = forwardRef<ScrollView, FormSheetProps>(function FormShe
   // iOS fullScreen has no sheet chrome handling the top, so it needs the
   // same top inset as Android.
   const needsTopInset = Platform.OS === 'android' || presentationStyle === 'fullScreen';
-  const edges: Edge[] = needsTopInset ? ['top', 'bottom'] : ['bottom'];
+
+  // iOS fullScreen: the header must clear the status bar / Dynamic Island from
+  // the very first frame. The Modal's own <SafeAreaView> measures its inset
+  // from the Modal's native window only AFTER the first layout, so on the first
+  // presentation `edges: ['top']` can resolve to 0 and the header ("Annuler")
+  // draws underneath the clock — untappable until something forces a re-layout
+  // (switching Crédit/Vente did). This component renders in the main tree, so
+  // the ROOT provider's insets are already correct when the sheet opens; apply
+  // them explicitly as padding and leave only 'bottom' to the native view.
+  const rootInsets = useSafeAreaInsets();
+  const explicitTopInset = Platform.OS === 'ios' && presentationStyle === 'fullScreen' ? rootInsets.top : 0;
+  const edges: Edge[] = explicitTopInset > 0
+    ? ['bottom']
+    : needsTopInset ? ['top', 'bottom'] : ['bottom'];
 
   return (
     <Modal
@@ -110,7 +123,7 @@ export const FormSheet = forwardRef<ScrollView, FormSheetProps>(function FormShe
         keyboardVerticalOffset={Platform.OS === 'ios' && presentationStyle !== 'fullScreen' ? 46 : 0}
         style={{ flex: 1, backgroundColor: palette.background }}
       >
-        <SafeAreaView style={styles.safe} edges={edges}>
+        <SafeAreaView style={[styles.safe, explicitTopInset > 0 && { paddingTop: explicitTopInset }]} edges={edges}>
           <View style={styles.header}>
             <Pressable onPress={onClose} style={styles.cancel}>
               <Text variant="body" color="secondary">{cancelLabel}</Text>
