@@ -5,19 +5,9 @@
     "scheme": "patron",
     "version": "1.0.7",
     "orientation": "portrait",
-    "icon": "./assets/icon.png",
+    "icon": "./assets/icon-1024.png",
     "userInterfaceStyle": "automatic",
     "newArchEnabled": true,
-    "splash": {
-      "image": "./assets/splash.png",
-      "resizeMode": "cover",
-      "backgroundColor": "#F5F7FA",
-      "dark": {
-        "image": "./assets/splash-dark.png",
-        "resizeMode": "cover",
-        "backgroundColor": "#000000"
-      }
-    },
     "ios": {
       "supportsTablet": false,
       "bundleIdentifier": "com.awall.patron",
@@ -62,8 +52,9 @@
     "android": {
       "package": "com.awall.patron",
       "adaptiveIcon": {
-        "foregroundImage": "./assets/adaptive-icon.png",
-        "backgroundColor": "#ffffff"
+        "foregroundImage": "./assets/adaptive-icon-foreground.png",
+        "monochromeImage": "./assets/adaptive-icon-monochrome.png",
+        "backgroundColor": "#5046E3"
       },
       "intentFilters": [
         {
@@ -82,16 +73,6 @@
           ]
         }
       ],
-      "splash": {
-        "image": "./assets/splash.png",
-        "resizeMode": "cover",
-        "backgroundColor": "#F5F7FA",
-        "dark": {
-          "image": "./assets/splash-dark.png",
-          "resizeMode": "cover",
-          "backgroundColor": "#000000"
-        }
-      },
       "edgeToEdgeEnabled": true,
       "predictiveBackGestureEnabled": false,
       "softwareKeyboardLayoutMode": "pan",
@@ -101,10 +82,11 @@
       "blockedPermissions": [
         "android.permission.READ_EXTERNAL_STORAGE",
         "android.permission.WRITE_EXTERNAL_STORAGE"
-      ]
+      ],
+      "icon": "./assets/icon-1024.png"
     },
     "web": {
-      "favicon": "./assets/favicon.png"
+      "favicon": "./assets/favicon-64.png"
     },
     "updates": {
       "url": "https://u.expo.dev/9cd0ec2b-0dc9-49f3-ba97-999bb31a0252",
@@ -125,10 +107,19 @@
       "@sentry/react-native",
       "expo-localization",
       [
+        "expo-splash-screen",
+        {
+          "image": "./assets/splash-icon.png",
+          "imageWidth": 200,
+          "resizeMode": "contain",
+          "backgroundColor": "#5046E3"
+        }
+      ],
+      [
         "expo-notifications",
         {
           "icon": "./assets/notification-icon.png",
-          "color": "#6366F1",
+          "color": "#5046E3",
           "sounds": [
             "./assets/sounds/patron_default.wav",
             "./assets/sounds/patron_urgent.wav"
