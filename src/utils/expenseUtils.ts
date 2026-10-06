@@ -173,3 +173,23 @@ export function pinRecents(stored: string[], ranked: string[], limit = 6): strin
   }
   return kept;
 }
+
+/**
+ * Whether the optional "Produit (facultatif)" row is shown in the expense sheet.
+ * - products exist → shown as always;
+ * - a product is already linked → shown, so its chip (and × to remove) stays
+ *   even if that product was archived since;
+ * - products haven't finished loading for THIS business → shown ("no products"
+ *   vs "not loaded yet" is ambiguous — see the store's productsFetchedFor
+ *   comment — so the row never flashes in after load);
+ * - confirmed empty (fetched for this business, no active product, nothing
+ *   linked) → hidden: no dead picker with nothing in it.
+ */
+export function showProductRow(o: {
+  activeProductCount: number;
+  productId: string | null;
+  productsFetchedFor: string | null;
+  businessId: string;
+}): boolean {
+  return o.activeProductCount > 0 || !!o.productId || o.productsFetchedFor !== o.businessId;
+}

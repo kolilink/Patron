@@ -113,3 +113,28 @@ describe('product search / récents', () => {
     expect(pinRecents(['a'], ['a', 'b', 'c', 'd', 'e', 'f', 'g'], 3)).toEqual(['a', 'b', 'c']);
   });
 });
+
+describe('showProductRow — the optional "Produit (facultatif)" row', () => {
+  const { showProductRow } = jest.requireActual('@/src/utils/expenseUtils') as typeof import('@/src/utils/expenseUtils');
+  const BIZ = 'biz-1';
+
+  it('(a) products present → row visible', () => {
+    expect(showProductRow({ activeProductCount: 3, productId: null, productsFetchedFor: BIZ, businessId: BIZ })).toBe(true);
+  });
+  it('(b) fetched for this business + zero products + nothing linked → row absent', () => {
+    expect(showProductRow({ activeProductCount: 0, productId: null, productsFetchedFor: BIZ, businessId: BIZ })).toBe(false);
+  });
+  it('(c) a product already linked + zero (active) products → chip stays visible', () => {
+    expect(showProductRow({ activeProductCount: 0, productId: 'p-archived', productsFetchedFor: BIZ, businessId: BIZ })).toBe(true);
+  });
+  it('not loaded yet for THIS business (never, or another business) → shown, so it does not flash in later', () => {
+    expect(showProductRow({ activeProductCount: 0, productId: null, productsFetchedFor: null, businessId: BIZ })).toBe(true);
+    expect(showProductRow({ activeProductCount: 0, productId: null, productsFetchedFor: 'other', businessId: BIZ })).toBe(true);
+  });
+  it('the sheet wraps the whole block in it and nothing else changed', () => {
+    const src = require('fs').readFileSync(require('path').resolve(__dirname, '../src/components/expenses/ExpenseSheet.tsx'), 'utf8');
+    expect(src).toMatch(/\{showProductRow\(\{ activeProductCount: activeProducts\.length, productId, productsFetchedFor, businessId \}\) && \(/);
+    expect(src).toMatch(/productsFetchedFor \} = useProductStore\(\)/);
+    expect(src).toMatch(/Choisir un produit/);
+  });
+});
