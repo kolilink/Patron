@@ -24,7 +24,11 @@ describe('expenses visibility guard — the repo', () => {
     const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'exp-vis-'));
     try {
       for (const f of fs.readdirSync(DB)) {
-        if (f === 'migration_v235.sql' || !/^(schema\.sql|migration_v\d+\.sql)$/.test(f)) continue;
+        // History as it stood BEFORE v235: skip v235 itself and every later migration
+        // (a later one, e.g. v240's get_dashboard_kpis, re-defines a function through
+        // expenses_visible and would legitimately hide the violation).
+        const version = /^migration_v(\d+)\.sql$/.exec(f)?.[1];
+        if ((version && Number(version) >= 235) || !/^(schema\.sql|migration_v\d+\.sql)$/.test(f)) continue;
         fs.copyFileSync(path.join(DB, f), path.join(dir, f));
       }
       const v = findExpenseVisibilityViolations(dir) as string[];
