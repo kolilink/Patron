@@ -67,7 +67,7 @@ export interface DraftVariant {
 
 interface ProductStore {
   products: Product[];
-  /** Products whose archive call is in flight — their row shows "Archivage…" and ignores taps. */
+  /** Products whose archive call is in flight — their row shows "Désactivation…" and ignores taps. */
   archivingIds: string[];
   archivedProducts: Product[];
   variantsByProduct: Record<string, ProductVariant[]>;
@@ -440,7 +440,7 @@ export const useProductStore = create<ProductStore>((set, get) => ({
       set(state => ({ products: state.products.filter(p => p.id !== id) }));
       return true;
     } catch (err) {
-      set({ error: translateError(err, "Impossible d'archiver le produit") });
+      set({ error: translateError(err, "Impossible de désactiver le produit") });
       return false;
     } finally {
       set(state => ({ archivingIds: state.archivingIds.filter(x => x !== id) }));

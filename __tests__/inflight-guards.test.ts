@@ -92,7 +92,7 @@ describe('double-tap → exactly one execution', () => {
     const { archiveProduct } = useProductStore.getState();
     const p1 = archiveProduct('prod-1', 'biz-1');
     const p2 = archiveProduct('prod-1', 'biz-1');
-    expect(useProductStore.getState().archivingIds).toEqual(['prod-1']); // the row can show "Archivage…" at once
+    expect(useProductStore.getState().archivingIds).toEqual(['prod-1']); // the row can show "Désactivation…" at once
     release();
     await Promise.all([p1, p2]);
     expect(calls.update).toBe(1);
@@ -160,9 +160,9 @@ describe('screens wire the guard to the tapped control', () => {
     expect(src).toMatch(/saving=\{saving \|\| confirming\}/);
     expect(src).toMatch(/loadingLabel="Enregistrement"/);
   });
-  it('archive: the product row shows "Archivage" and is disabled', () => {
+  it('archive: the product row shows "Désactivation" and is disabled', () => {
     const src = read('app/(app)/(tabs)/catalogue.tsx');
-    expect(src).toMatch(/word="Archivage"/);
+    expect(src).toMatch(/word="Désactivation"/);
     expect(src).toMatch(/disabled=\{archiving\}/);
   });
   it('supplier deletion: the header control shows "Suppression" and is disabled', () => {
