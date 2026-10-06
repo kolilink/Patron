@@ -5,7 +5,9 @@ import {
   ORDINARY_CAP,
   bypassesCap,
   bypassesQuietHours,
+  chimeFor,
   isQuietHours,
+  soundFieldFor,
 } from './registry.ts';
 import { composePush } from './compose.ts';
 
@@ -313,9 +315,9 @@ serve(async (req) => {
     // timezone, needed for the per-device quiet-hours check below)
     const { data: tokenRows } = await supabase
       .from('device_tokens')
-      .select('token, user_id, timezone')
+      .select('token, user_id, timezone, platform')
       .in('user_id', userIds);
-    let tokens = (tokenRows ?? []) as { token: string; user_id: string; timezone: string | null }[];
+    let tokens = (tokenRows ?? []) as { token: string; user_id: string; timezone: string | null; platform: string | null }[];
 
     // Quiet hours (21:00–07:00 in the RECIPIENT'S OWN device timezone,
     // falling back to UTC — a null timezone means the device predates
@@ -359,8 +361,10 @@ serve(async (req) => {
     // it is never just `...payload` anymore.
     const { title, subtitle, body, route, data: pushData } = composePush(event_type, bizName, payload, business_id);
     const isUrgent = eventDef.urgent;
-    const soundFile = isUrgent ? 'patron_urgent.wav' : 'patron_default.wav';
-    const channelId = isUrgent ? 'patron_urgent' : 'patron_default';
+    // Sound/channel come from the event (and, for debt reminders, the tier),
+    // not from the urgency flag alone — see chimeFor in registry.ts.
+    const chime = chimeFor(event_type, payload, eventDef);
+    const channelId = chime;
     const categoryId = CATEGORY_MAP[event_type];
 
     const CHUNK = 100;
@@ -368,13 +372,13 @@ serve(async (req) => {
 
     for (let i = 0; i < tokens.length; i += CHUNK) {
       const chunk = tokens.slice(i, i + CHUNK);
-      const messages = chunk.map(({ token: to, user_id }) => ({
+      const messages = chunk.map(({ token: to, user_id, platform }) => ({
         to,
         title,
         ...(subtitle ? { subtitle } : {}),
         body,
         data: pushData,
-        sound: soundFile,
+        sound: soundFieldFor(chime, platform),
         channelId,
         badge: badgeByUser.get(user_id) ?? 1,
         ...(categoryId ? { categoryIdentifier: categoryId } : {}),

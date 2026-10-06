@@ -24,6 +24,9 @@ jobs:
       - name: Type check
         run: npx tsc --noEmit
 
+      - name: Install numpy (notification-chime determinism test)
+        run: python3 -m pip install --quiet numpy
+
       - name: Run tests
         run: npm test
 

@@ -384,6 +384,37 @@ export function isQuietHours(date: Date, timezone?: string | null): boolean {
   return h >= QUIET_HOURS_START || h < QUIET_HOURS_END;
 }
 
+// ─── Notification sound ──────────────────────────────────────────────────
+// Two bundled chimes (scripts/audio/generate_chimes.py):
+//   patron_chime          calm, two notes   — reminders at 7 days, nudges, everything non-urgent
+//   patron_chime_urgent   brighter, three   — reminders at 30 days, the founder's new-user alert,
+//                                             and every event the registry already marks urgent
+// The chime NAME is also the Android channel id (channel sounds are permanent
+// once a channel exists, so the new sound needed new channel ids —
+// src/components/NotificationSetup.tsx creates them). iOS needs the file
+// extension in the payload; Android plays whatever its channel carries.
+export type Chime = 'patron_chime' | 'patron_chime_urgent';
+
+export function chimeFor(
+  eventType: string,
+  payload: Record<string, unknown>,
+  def: Pick<EventDef, 'urgent'>,
+): Chime {
+  if (eventType === 'founder_new_user') return 'patron_chime_urgent';
+  if (eventType === 'debt_aging_reminder') {
+    // The 7-day and 30-day tiers share one event; any 30-day debt makes it the firm one.
+    return Number(payload.count_30d) > 0 ? 'patron_chime_urgent' : 'patron_chime';
+  }
+  return def.urgent ? 'patron_chime_urgent' : 'patron_chime';
+}
+
+// The `sound` field of the Expo push message for one device. A device whose
+// binary predates the chimes simply falls back to the OS default sound
+// (iOS: unknown file name; Android: unknown channel id) — never an error.
+export function soundFieldFor(chime: Chime, platform: string | null | undefined): string {
+  return platform === 'ios' ? `${chime}.caf` : 'default';
+}
+
 // Security bypasses both the cap and quiet hours. Money movement is capped
 // like everything else but may still send during quiet hours. Ordinary is
 // subject to both.
