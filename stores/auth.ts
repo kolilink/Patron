@@ -6,6 +6,7 @@ import { supabase, clearSupabaseLocalSession, revokeAccessToken } from '@/lib/su
 import { translateError } from '@/lib/errors';
 import { generateId } from '@/lib/id';
 import { syncKnownBusinesses } from '@/lib/knownBusinesses';
+import { ACCOUNT_DELETION_CANCELLED_TOAST } from '@/src/utils/succession';
 import { getKV, setKV } from '@/lib/db';
 import { toast } from './toast';
 import { isLocked, setLocked } from '@/lib/lock';
@@ -343,7 +344,7 @@ async function loadSession(userId: string, authPhone?: string | null, skipCache 
   if (p.pending_deletion_at) {
     (async () => {
       const { error } = await supabase.from('profiles').update({ pending_deletion_at: null }).eq('id', userId);
-      if (!error) toast.success('Bon retour ! La suppression de votre compte a été annulée.');
+      if (!error) toast.success(ACCOUNT_DELETION_CANCELLED_TOAST);
     })().catch(() => { });
   }
 

@@ -296,7 +296,9 @@ describe('fix #4 — sole-admin leave cleans up non-cascading references (migrat
         expect(codes![0].used_by_business_id).toBeNull();
     });
 
-    it('still refuses a sole admin to leave when other members remain', async () => {
+    // CHANGED by migration_v239: the refusal is kept (the business would be left with
+    // nobody in charge) but its message is now the succession sentence, not "retirez-les".
+    it('still refuses the LAST admin to leave when other members remain', async () => {
         const admin = await createTestUser('leave-blocked-admin');
         const vendeur = await createTestUser('leave-blocked-vendeur');
         const businessId = await createTestBusiness(admin.client, 'Boutique Blocked');
@@ -308,7 +310,7 @@ describe('fix #4 — sole-admin leave cleans up non-cascading references (migrat
         });
 
         expect(error).not.toBeNull();
-        expect(error!.message).toMatch(/a d'autres membres actifs/);
+        expect(error!.message).toBe('Vous êtes le seul gérant de Boutique Blocked. Désignez un successeur avant de quitter.');
         expect(await businessExists(businessId)).toBe(true);
     });
 });

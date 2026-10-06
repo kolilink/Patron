@@ -16,6 +16,7 @@ export const FAILURE_COPY = {
   supplierNotCreated: { what: "Le fournisseur n'a pas été créé.", why: SAFE_DATA_WHY },
   supplierProductNotSaved: { what: "Ce produit n'a pas été enregistré." },
   leaveNotDone: { what: "Vous n'avez pas quitté le commerce." },
+  successorNotDesignated: { what: "Le successeur n'a pas été désigné.", why: SAFE_DATA_WHY },
   memberStakesNotSaved: { what: "Les montants n'ont pas été enregistrés." },
   memberStakeNotRemoved: { what: "Le produit n'a pas été retiré." },
   testFlagNotChanged: { what: "Le changement n'a pas été fait." },
