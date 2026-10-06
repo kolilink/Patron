@@ -19,12 +19,14 @@ const ID = '3f2b8c1e-9a4d-4e57-8b6a-1c2d3e4f5a6b';
 const read = (rel: string) => readFileSync(join(__dirname, '..', rel), 'utf8');
 
 describe('share link + message', () => {
-  it('link is patron.kolilink.com/invite/<inviter-id>, no code or expiry', () => {
-    expect(buildInviteLink(ID)).toBe(`https://patron.kolilink.com/invite/${ID}`);
+  it('link is patron.kolilink.com/invite/?i=<inviter-id>, no code or expiry', () => {
+    expect(buildInviteLink(ID)).toBe(`https://patron.kolilink.com/invite/?i=${ID}`);
+    // never the bare path: GitHub Pages 404s it and WhatsApp won't preview a non-200 URL
+    expect(buildInviteLink(ID)).not.toMatch(/\/invite\/[0-9a-f-]{36}$/i);
   });
   it('message is the exact word-of-mouth copy, link last, no code line', () => {
     const m = buildInviteMessage(buildInviteLink(ID));
-    expect(m).toBe(`Je note mes ventes et mes crédits avec Patron, même sans internet et c’est gratuit : https://patron.kolilink.com/invite/${ID}`);
+    expect(m).toBe(`Je note mes ventes et mes crédits avec Patron, même sans internet et c’est gratuit : https://patron.kolilink.com/invite/?i=${ID}`);
     expect(m).not.toMatch(/Code/);
   });
 });

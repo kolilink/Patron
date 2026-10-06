@@ -180,7 +180,8 @@ export default function AccueilScreen() {
   }, [isFounder]);
 
   // ─── Inviter — word-of-mouth share ───────────────────────────────────────
-  // Native share sheet with the plain link patron.kolilink.com/invite/<my-id>.
+  // Native share sheet with the link patron.kolilink.com/invite/?i=<my-id>
+  // (the ?i= form is a 200 page, so WhatsApp can build a preview card).
   // No code, no expiry, no server round trip — works offline up to the share.
   const [inviting, setInviting] = useState(false);
   const handleInvite = useCallback(async () => {

@@ -31,6 +31,25 @@ describe('word-of-mouth invite link capture', () => {
         expect(inviterIdFromUrl(`https://patron.kolilink.com/invite/${ID}`)).toBe(ID);
     });
 
+    it('reads the ?i= form the app now shares (with and without the trailing slash)', () => {
+        expect(inviterIdFromUrl(`https://patron.kolilink.com/invite/?i=${ID}`)).toBe(ID);
+        expect(inviterIdFromUrl(`https://patron.kolilink.com/invite?i=${ID}`)).toBe(ID);
+        expect(inviterIdFromUrl(`https://patron.kolilink.com/invite/?i=${ID.toUpperCase()}`)).toBe(ID);
+        expect(inviterIdFromUrl(`patron://invite?i=${ID}`)).toBe(ID);
+    });
+
+    it('rejects a non-uuid ?i=, ?i= on a foreign origin, and ?i= outside /invite', () => {
+        expect(inviterIdFromUrl('https://patron.kolilink.com/invite/?i=ABCDEFGHJK')).toBeNull();
+        expect(inviterIdFromUrl('https://patron.kolilink.com/invite/?i=')).toBeNull();
+        expect(inviterIdFromUrl(`https://evil.example.com/invite/?i=${ID}`)).toBeNull();
+        expect(inviterIdFromUrl(`https://patron.kolilink.com/privacy.html?i=${ID}`)).toBeNull();
+    });
+
+    it('a share link built by the app round-trips through the parser', () => {
+        const { buildInviteLink } = jest.requireActual('@/stores/inviter') as typeof import('@/stores/inviter');
+        expect(inviterIdFromUrl(buildInviteLink(ID))).toBe(ID);
+    });
+
     it('reads it from the custom scheme too', () => {
         expect(inviterIdFromUrl(`patron://invite/${ID}`)).toBe(ID);
     });

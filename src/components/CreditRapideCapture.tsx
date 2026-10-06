@@ -1,9 +1,10 @@
 import { useEffect, useMemo, useRef, useState } from 'react';
 import { TRUST_LINE } from '@/src/utils/trustLine';
-import { Animated, InputAccessoryView, Platform, Pressable, ScrollView, StyleSheet, TextInput, View } from 'react-native';
+import { Animated, Platform, Pressable, ScrollView, StyleSheet, TextInput, View } from 'react-native';
 import { Ionicons } from '@expo/vector-icons';
 import { Button } from '@/src/components/ui/Button';
 import { Text } from '@/src/components/ui/Text';
+import { KeyboardDoneBar } from '@/src/components/ui/KeyboardDoneBar';
 import { useTheme, spacing, radius, fontFamily, CLIENT_AVATAR_PALETTE } from '@/src/theme';
 import type { Palette } from '@/src/theme';
 import { formatAmountInput, parseAmountInput, formatAmount } from '@/src/utils/format';
@@ -421,11 +422,7 @@ export function CreditRapideCapture({ businessId, userId, currency, onViewClient
         </Pressable>
       ) : null}
 
-      {Platform.OS === 'ios' && (
-        <InputAccessoryView nativeID={AMOUNT_ACCESSORY_ID}>
-          <View style={{ height: 0 }} />
-        </InputAccessoryView>
-      )}
+      <KeyboardDoneBar nativeID={AMOUNT_ACCESSORY_ID} />
     </View>
   );
 }

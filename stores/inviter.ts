@@ -11,9 +11,18 @@ import { getPendingInviterId, clearPendingInviterId } from '@/lib/inviteLink';
 
 const INVITE_BASE_URL = 'https://patron.kolilink.com/invite';
 
-/** The share link for a given inviter (their own user id). */
+/**
+ * The share link for a given inviter (their own user id), in the `?i=` form:
+ *   https://patron.kolilink.com/invite/?i=<uuid>
+ * NOT the bare path /invite/<uuid>: the site is GitHub Pages, which has no
+ * file at that path and answers HTTP 404, and WhatsApp's crawler will not
+ * build a preview card for a non-200 URL (og tags are irrelevant on a 404).
+ * The ?i= form is a real page (invite/index.html) that returns 200 with the
+ * og tags. Old path-form links still work for people (404.html forwards them
+ * to ?i=) and in the app (lib/inviteLink.ts accepts both forms).
+ */
 export function buildInviteLink(inviterId: string): string {
-    return `${INVITE_BASE_URL}/${encodeURIComponent(inviterId)}`;
+    return `${INVITE_BASE_URL}/?i=${encodeURIComponent(inviterId)}`;
 }
 
 /** The prefilled, editable share message. */

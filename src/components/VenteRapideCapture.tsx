@@ -1,8 +1,9 @@
 import { useEffect, useMemo, useRef, useState } from 'react';
-import { InputAccessoryView, Platform, Pressable, StyleSheet, TextInput, View } from 'react-native';
+import { Platform, Pressable, StyleSheet, TextInput, View } from 'react-native';
 import { Ionicons } from '@expo/vector-icons';
 import { Button } from '@/src/components/ui/Button';
 import { Text } from '@/src/components/ui/Text';
+import { KeyboardDoneBar } from '@/src/components/ui/KeyboardDoneBar';
 import { useTheme, spacing, radius, fontFamily } from '@/src/theme';
 import type { Palette } from '@/src/theme';
 import { formatAmount, formatAmountInput, parseAmountInput } from '@/src/utils/format';
@@ -178,11 +179,7 @@ export function VenteRapideCapture({ businessId, userId, currency, onAdded }: Ve
         <Text variant="caption" style={{ color: palette.warning, textAlign: 'center' }}>{error}</Text>
       ) : null}
 
-      {Platform.OS === 'ios' && (
-        <InputAccessoryView nativeID={PRICE_ACCESSORY_ID}>
-          <View style={{ height: 0 }} />
-        </InputAccessoryView>
-      )}
+      <KeyboardDoneBar nativeID={PRICE_ACCESSORY_ID} />
     </View>
   );
 }
