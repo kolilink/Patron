@@ -551,28 +551,6 @@ export default function FournisseursScreen() {
     }
   };
 
-  const fabScale = useRef(new Animated.Value(1)).current;
-  const fabOpacity = useRef(new Animated.Value(1)).current;
-  const fabReduceMotion = useReduceMotion();
-  useEffect(() => {
-    if (fabReduceMotion) { fabScale.setValue(1); fabOpacity.setValue(1); return; }
-    const easing = Easing.inOut(Easing.sin);
-    const loop = Animated.loop(
-      Animated.sequence([
-        Animated.parallel([
-          Animated.timing(fabScale, { toValue: 1.06, duration: 2000, easing, useNativeDriver: true }),
-          Animated.timing(fabOpacity, { toValue: 0.85, duration: 2000, easing, useNativeDriver: true }),
-        ]),
-        Animated.parallel([
-          Animated.timing(fabScale, { toValue: 1, duration: 2000, easing, useNativeDriver: true }),
-          Animated.timing(fabOpacity, { toValue: 1, duration: 2000, easing, useNativeDriver: true }),
-        ]),
-      ])
-    );
-    loop.start();
-    return () => loop.stop();
-  }, [fabReduceMotion]);
-
   return (
     <Screen>
       <View style={styles.hdr}>
@@ -744,7 +722,7 @@ export default function FournisseursScreen() {
       />
 
       {(
-        <Animated.View style={[styles.fabContainer, { opacity: fabOpacity, transform: [{ scale: fabScale }] }]}>
+        <View style={styles.fabContainer}>
           <Pressable
             onPress={() => router.push('/(app)/fournisseurs/reception')}
             style={({ pressed }) => [styles.fabExtended, pressed && { opacity: 0.82 }]}
@@ -754,7 +732,7 @@ export default function FournisseursScreen() {
             <Ionicons name="add" size={20} color={palette.textInverse} />
             <Text style={styles.fabExtendedLabel}>Livraison</Text>
           </Pressable>
-        </Animated.View>
+        </View>
       )}
     </Screen>
   );

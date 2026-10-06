@@ -5,7 +5,6 @@ import { router, useFocusEffect, useLocalSearchParams } from 'expo-router';
 import {
   Alert,
   Animated,
-  Easing,
   FlatList,
   InputAccessoryView,
   Keyboard,
@@ -1413,27 +1412,6 @@ export default function CatalogueScreen() {
     }
   }, [editingProduct, businessId]);
 
-  const fabScale = useRef(new Animated.Value(1)).current;
-  const fabOpacity = useRef(new Animated.Value(1)).current;
-
-  useEffect(() => {
-    const easing = Easing.inOut(Easing.sin);
-    const loop = Animated.loop(
-      Animated.sequence([
-        Animated.parallel([
-          Animated.timing(fabScale, { toValue: 1.06, duration: 2000, easing, useNativeDriver: true }),
-          Animated.timing(fabOpacity, { toValue: 0.85, duration: 2000, easing, useNativeDriver: true }),
-        ]),
-        Animated.parallel([
-          Animated.timing(fabScale, { toValue: 1, duration: 2000, easing, useNativeDriver: true }),
-          Animated.timing(fabOpacity, { toValue: 1, duration: 2000, easing, useNativeDriver: true }),
-        ]),
-      ])
-    );
-    loop.start();
-    return () => loop.stop();
-  }, []);
-
   const showSuccess = useCallback((msg: string) => {
     setSuccessMsg(msg);
     setTimeout(() => setSuccessMsg(''), 2500);
@@ -1943,7 +1921,7 @@ export default function CatalogueScreen() {
       />
 
       {canEdit && tab === 'actifs' && products.length > 0 && (
-        <Animated.View style={[styles.fabContainer, { opacity: fabOpacity, transform: [{ scale: fabScale }] }]}>
+        <View style={styles.fabContainer}>
           <Pressable
             onPress={() => { setEditingProduct(null); setPrefillProductName(undefined); setShowForm(true); }}
             style={({ pressed }) => [styles.fabExtended, pressed && { opacity: 0.82 }]}
@@ -1953,7 +1931,7 @@ export default function CatalogueScreen() {
             <Ionicons name="add" size={20} color={palette.textInverse} />
             <Text style={styles.fabExtendedLabel}>Produit</Text>
           </Pressable>
-        </Animated.View>
+        </View>
       )}
     </Screen>
   );
