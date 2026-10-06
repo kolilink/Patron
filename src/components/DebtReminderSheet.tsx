@@ -54,6 +54,7 @@ export function DebtReminderSheet({ visible, onClose, input, daysOldestDebt }: P
       const uri = await captureRef(receiptRef, {
         format: 'png', quality: 1, width: RECEIPT_EXPORT_WIDTH, height: RECEIPT_EXPORT_HEIGHT,
       });
+      if (!(await Sharing.isAvailableAsync())) { failAlert('receiptNotShared'); return; }
       await Sharing.shareAsync(uri, { mimeType: 'image/png', UTI: 'public.png', dialogTitle: 'Envoyer le rappel' });
     } catch {
       // failure: speaks — capture or share sheet failed: receiptNotShared

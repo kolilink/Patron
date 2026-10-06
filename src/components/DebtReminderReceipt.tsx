@@ -1,7 +1,7 @@
 import { forwardRef } from 'react';
 import { Platform, StyleSheet, Text, View } from 'react-native';
 import { colors, fontFamily } from '@/src/theme';
-import type { DebtReceiptContent } from '@/src/utils/debtReceipt';
+import { fitScale, GREETING_FIT_CHARS, REMAINING_FIT_CHARS, type DebtReceiptContent } from '@/src/utils/debtReceipt';
 
 // Portrait 4:5 (1080×1350 when captured). Everything is laid out in design
 // units on a 360×450 sheet and multiplied by width/360, so the on-screen
@@ -68,7 +68,7 @@ export const DebtReminderReceipt = forwardRef<View, Props>(function DebtReminder
           numberOfLines={2}
           adjustsFontSizeToFit
           minimumFontScale={0.35}
-          style={[{ fontFamily: SERIF, color: paper.ink }, t(36, { lineHeight: 44 * u })]}
+          style={[{ fontFamily: SERIF, color: paper.ink }, t(36 * fitScale(content.greeting, GREETING_FIT_CHARS, true), { lineHeight: 44 * u })]}
         >
           {content.greeting}
         </Text>
@@ -93,7 +93,7 @@ export const DebtReminderReceipt = forwardRef<View, Props>(function DebtReminder
             numberOfLines={1}
             adjustsFontSizeToFit
             minimumFontScale={0.2}
-            style={[{ flex: 1, fontFamily: SERIF, color: paper.ink }, t(36, { lineHeight: 46 * u })]}
+            style={[{ flex: 1, fontFamily: SERIF, color: paper.ink }, t(36 * fitScale(content.remainingLine, REMAINING_FIT_CHARS), { lineHeight: 46 * u })]}
           >
             {content.remainingLine}
           </Text>

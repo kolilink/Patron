@@ -1,5 +1,5 @@
 import {
-  buildDebtReceiptContent, defaultReminderTone, lastPaymentFor, articleLines, firstName, type DebtReceiptInput,
+  buildDebtReceiptContent, defaultReminderTone, lastPaymentFor, articleLines, firstName, fitScale, REMAINING_FIT_CHARS, GREETING_FIT_CHARS, type DebtReceiptInput,
 } from '@/src/utils/debtReceipt';
 import { formatAmount } from '@/src/utils/format';
 
@@ -119,6 +119,23 @@ describe('robustness', () => {
   it('zero debts does not throw', () => {
     expect(buildDebtReceiptContent({ ...base, debts: [] }, 'doux').articleLines).toEqual([]);
   });
+});
+
+describe('fitScale — the value only ever shrinks, never gets cut', () => {
+  it('short values stay at full size', () => {
+    expect(fitScale('Il reste : 25 000 GNF', REMAINING_FIT_CHARS)).toBe(1);
+    expect(fitScale('Bonjour Mariam,', GREETING_FIT_CHARS, true)).toBe(1);
+  });
+  it('a 9-digit GNF and a long USD amount scale below 1 but stay positive', () => {
+    const gnf = fitScale('Il reste : 123 456 789 012 GNF', REMAINING_FIT_CHARS);
+    expect(gnf).toBeGreaterThan(0.5);
+    expect(gnf).toBeLessThan(1);
+  });
+  it('a 40-char single-word name shrinks by its longest word, a spaced name does not', () => {
+    expect(fitScale('Bonjour ' + 'A'.repeat(40) + ',', GREETING_FIT_CHARS, true)).toBeLessThan(0.5);
+    expect(fitScale('Bonjour Mariam Diallo Camara,', GREETING_FIT_CHARS, true)).toBe(1);
+  });
+  it('empty text does not divide by zero', () => expect(fitScale('', 10)).toBe(1));
 });
 
 describe('lastPaymentFor — only this debt, reversals netted out', () => {

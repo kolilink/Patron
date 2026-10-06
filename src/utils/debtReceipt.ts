@@ -47,6 +47,24 @@ export interface DebtReceiptContent {
 }
 
 export const MAX_ARTICLE_LINES = 3;
+
+/**
+ * Deterministic pre-scale (1 = full size) so a long value fits BEFORE the
+ * native `adjustsFontSizeToFit` runs — that prop is the second layer, not the
+ * only one, because it behaves differently on Android inside a flex row. A
+ * value is never cut: it only gets smaller. `fitChars` = how many characters
+ * fit at full size; `byLongestWord` measures the longest unbreakable word
+ * (for text that may wrap, like the greeting).
+ */
+export function fitScale(text: string, fitChars: number, byLongestWord = false): number {
+  const len = byLongestWord
+    ? Math.max(1, ...text.split(/\s+/).map(w => w.length))
+    : Math.max(1, text.length);
+  return Math.min(1, fitChars / len);
+}
+// Measured against the 360-unit design sheet at the 36-unit display size.
+export const REMAINING_FIT_CHARS = 24;
+export const GREETING_FIT_CHARS = 16;
 const MAX_LABEL_CHARS = 70;
 
 const COPY: Record<ReminderTone, { context: string; demande: string[]; close: string }> = {
