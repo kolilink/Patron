@@ -149,31 +149,54 @@ export default function ParametresScreen() {
     );
   };
 
-  // "Rappels de paiement" — unlike the boolean above, this toggle is a
-  // live reflection of the OS notification-permission state, not its own
-  // stored preference: there's no app-level "on/off" for a permission the
-  // OS itself owns. Not-determined → the toggle fires the real system
-  // prompt; denied → deep-links to OS settings (the only way back once
-  // denied); granted → reflects on, and tapping it again is a no-op (you
-  // can't programmatically revoke what the OS granted). Re-checked on every
-  // focus so coming back from a Settings visit updates it immediately.
+  // "Rappels de paiement" — gated by TWO independent things, and the switch
+  // is only "on" when both are true: the OS notification permission (owned by
+  // the OS — can be asked for, never revoked from here) AND the stored
+  // preference profiles.debt_reminders_enabled (migration_v237), which the
+  // server enforces: with it off the debt-aging digest never targets this
+  // user, so "off" really means nothing fires. Turning it on when the OS
+  // permission is missing runs the permission flow first (not-determined →
+  // system prompt; denied → deep-link to OS settings). Permission is
+  // re-checked on every focus so returning from a Settings visit updates it.
   const [paymentRemindersGranted, setPaymentRemindersGranted] = useState(false);
   const [paymentRemindersCanAsk, setPaymentRemindersCanAsk] = useState(true);
+  const [paymentRemindersPref, setPaymentRemindersPref] = useState(session?.user.debt_reminders_enabled ?? true);
   const refreshPaymentReminderPerm = useCallback(async () => {
     const perm = await checkNotificationPermission();
     setPaymentRemindersGranted(!!perm?.granted);
     setPaymentRemindersCanAsk(perm?.canAskAgain !== false);
   }, []);
   useFocusEffect(useCallback(() => { void refreshPaymentReminderPerm(); }, [refreshPaymentReminderPerm]));
+  const savePaymentRemindersPref = async (value: boolean): Promise<boolean> => {
+    setPaymentRemindersPref(value);
+    const { error } = await supabase.from('profiles').update({ debt_reminders_enabled: value }).eq('id', userId);
+    if (error) {
+      setPaymentRemindersPref(!value);
+      failAlert('settingNotChanged', { why: NO_CONNECTION_WHY, label: 'Réessayer', onPress: () => { void handleTogglePaymentReminders(value); } });
+      return false;
+    }
+    useAuthStore.setState(state =>
+      state.session ? { session: { ...state.session, user: { ...state.session.user, debt_reminders_enabled: value } } } : {},
+    );
+    return true;
+  };
   const handleTogglePaymentReminders = async (value: boolean) => {
-    if (!value || paymentRemindersGranted) return; // no real "off" action to take
-    if (!paymentRemindersCanAsk) {
-      Linking.openSettings().catch(() => { });
+    if (!value) {
+      haptics.toggle(false);
+      await savePaymentRemindersPref(false);
       return;
     }
-    const granted = await requestNotificationPermission();
-    setPaymentRemindersGranted(granted);
-    if (granted) { haptics.toggle(true); toast.success('Rappels activés ✓'); }
+    let granted = paymentRemindersGranted;
+    if (!granted) {
+      if (!paymentRemindersCanAsk) {
+        Linking.openSettings().catch(() => { });
+        return;
+      }
+      granted = await requestNotificationPermission();
+      setPaymentRemindersGranted(granted);
+      if (!granted) return;
+    }
+    if (await savePaymentRemindersPref(true)) { haptics.toggle(true); toast.success('Rappels activés ✓'); }
   };
 
   // Email recovery linking
@@ -879,11 +902,11 @@ export default function ParametresScreen() {
               <View style={{ flex: 1, marginRight: spacing[3] }}>
                 <Text variant="body">Rappels de paiement</Text>
                 <Text variant="caption" color="secondary">
-                  Un rappel quand un client vous doit de l'argent depuis 7 jours
+                  Un rappel quand des crédits ont une semaine ou un mois
                 </Text>
               </View>
               <Switch
-                value={paymentRemindersGranted}
+                value={paymentRemindersGranted && paymentRemindersPref}
                 onValueChange={handleTogglePaymentReminders}
                 trackColor={{ false: palette.border, true: palette.primary }}
                 thumbColor={palette.surface}
