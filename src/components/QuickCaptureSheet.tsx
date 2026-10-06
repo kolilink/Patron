@@ -1,4 +1,4 @@
-import { useEffect, useRef, useState } from 'react';
+import { useEffect, useLayoutEffect, useRef, useState } from 'react';
 import { useReduceMotion } from '@/src/hooks/useReduceMotion';
 import { Animated, Pressable, View } from 'react-native';
 import { router } from 'expo-router';
@@ -122,7 +122,13 @@ export function QuickCaptureSheet({ visible, onClose, businessId, userId, curren
 
   // Reopen on whichever segment the caller asked for (defaults to Crédit),
   // and reset both session tallies fresh — a new opening is a new sitting.
-  useEffect(() => {
+  // useLayoutEffect, not useEffect: FormSheet keeps this component mounted
+  // while hidden, so `mode` still holds the previous opening's value on the
+  // first render of a new one. A passive effect runs AFTER paint, so the
+  // first frame read "Crédit rapide" and then snapped to "Vente rapide"
+  // (seen on video after tapping "Enregistrer une vente"). A layout effect's
+  // setState re-renders synchronously before the screen is painted.
+  useLayoutEffect(() => {
     if (!visible) return;
     setMode(initialMode);
     setVenteCount(0); setVenteTotalCents(0);

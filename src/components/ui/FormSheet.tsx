@@ -1,5 +1,6 @@
-import React, { forwardRef, useMemo, type ReactNode } from 'react';
+import React, { forwardRef, useEffect, useMemo, type ReactNode } from 'react';
 import {
+  Keyboard,
   KeyboardAvoidingView,
   Modal,
   Platform,
@@ -81,6 +82,17 @@ export const FormSheet = forwardRef<ScrollView, FormSheetProps>(function FormShe
 ) {
   const { palette } = useTheme();
   const styles = useMemo(() => makeStyles(palette), [palette]);
+
+  // When the sheet hides, the keyboard must always go. A Modal that hides
+  // while one of its TextInputs is still first responder unmounts it without
+  // resigning — and an InputAccessoryView keeps the responder chain alive —
+  // so iOS never dismisses the keyboard and it floats over the screen below
+  // with no focused input (a "zombie keyboard", seen on video after tapping
+  // "Annuler" in Vente rapide). Keyboard.dismiss() with no keyboard open is a
+  // no-op, so this is safe on every sheet, on mount and on every close.
+  useEffect(() => {
+    if (!visible) Keyboard.dismiss();
+  }, [visible]);
 
   // Forcing statusBarTranslucent means this window now draws behind the
   // status bar, so — unlike the pre-fix screens — the header needs its own
