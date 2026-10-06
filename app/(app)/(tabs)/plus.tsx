@@ -4,7 +4,6 @@ import type { ReactElement, ReactNode } from 'react';
 import { router } from 'expo-router';
 import { Screen } from '@/src/components/ui/Screen';
 import { Ionicons } from '@expo/vector-icons';
-import { Button } from '@/src/components/ui/Button';
 import { Card } from '@/src/components/ui/Card';
 import { Text } from '@/src/components/ui/Text';
 import { useTheme, spacing, ROLE_COLORS as ROLE_COLORS_LIGHT, ROLE_COLORS_DARK } from '@/src/theme';
@@ -232,8 +231,20 @@ export default function PlusScreen() {
           </View>
         )}
 
+        {/* A routine action gets a quiet row, not a red block: same elevated
+            card as every other section (see MenuGroup), one plain row, danger
+            text color, NO icon and NO chevron — it ends something, it doesn't
+            navigate anywhere. The confirmation Alert (handleLogout) is unchanged. */}
         <View style={styles.section}>
-          <Button label="Se déconnecter" variant="danger" onPress={handleLogout} fullWidth />
+          <Card padded={false} elevated style={styles.menuGroup}>
+            <Pressable
+              onPress={handleLogout}
+              style={({ pressed }) => [styles.menuRow, pressed && styles.menuRowPressed]}
+              accessibilityRole="button"
+            >
+              <Text variant="label" color="danger">Se déconnecter</Text>
+            </Pressable>
+          </Card>
         </View>
       </ScrollView>
     </Screen>
