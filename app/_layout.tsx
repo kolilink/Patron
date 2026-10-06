@@ -25,7 +25,7 @@ import {
 } from '@expo-google-fonts/inter';
 import { PostHogProvider } from 'posthog-react-native';
 import { useAuthStore } from '@/stores/auth';
-import { openDb } from '@/lib/db';
+import { openDb, resetDbPromise } from '@/lib/db';
 import { capturePendingInviterId } from '@/lib/inviteLink';
 import { ThemeProvider } from '@/src/theme';
 import { ConfirmSheetHost } from '@/src/components/ui/ConfirmSheet';
@@ -35,7 +35,7 @@ import { identifyUser, resetAnalytics, trackEvent, analyticsIsTest, loadDeviceTe
 import { recordInstallIfFirstOpen, recordFunnelStep, flushFunnelOutbox } from '@/lib/funnel';
 import { configurePurchases } from '@/lib/purchases';
 import { withStartupTiming, reportFirstScreenRender, reportFirstInteraction } from '@/lib/startupTiming';
-import { createSplashHider, scheduleFontCeiling, scheduleSplashCeiling, startupReady } from '@/src/utils/startupGate';
+import { createSplashHider, scheduleFontCeiling, scheduleSplashCeiling, startupReady, runStartupSequence } from '@/src/utils/startupGate';
 
 // Only active when EXPO_PUBLIC_SENTRY_DSN is set (no-op in local dev without it)
 if (process.env.EXPO_PUBLIC_SENTRY_DSN) {
@@ -162,42 +162,50 @@ function RootLayout() {
   useEffect(() => {
     if (!ready) return;
     // No fixed timeout here any more: the splash lifts when init completes (below), with the safety
-    // ceiling above as the only backstop for an init that never settles.
-    // Connectivity first: awaited (capped at ~1.2s) alongside init so the app
-    // already knows if it is offline before the first screen paints.
-    Promise.all([
-      withStartupTiming('connectivity', initConnectivity()),
-      withStartupTiming('auth_check', initialize()),
+    // ceiling above as the only backstop for an init that never settles. The sequence itself is bounded:
+    // each stage (auth+open, then the KV-dependent steps) is raced against 8s, so a hung SQLite open can
+    // never leave the app half-initialised — the chain always reaches onDone.
+    void runStartupSequence({
+      // Connectivity first: awaited (capped at ~1.2s) alongside init so the app
+      // already knows if it is offline before the first screen paints.
+      initialize: () => Promise.all([
+        withStartupTiming('connectivity', initConnectivity()),
+        withStartupTiming('auth_check', initialize()),
+      ]),
       // The outbox count is read INSIDE the db-open step, so it is known before the splash
       // lifts: nothing may paint a pendingCount of 0 and then flash to N after a kill/reopen.
-      withStartupTiming('db_open', openDb().then(() => useSyncStore.getState().refreshCount())),
-    ]).then(() => {
-      // Best-effort: capture a deferred invite token (install referrer /
-      // clipboard) now that the KV store is open. Never blocks startup —
-      // a missing token just means a normal sign-up, never a dead end.
-      return capturePendingInviterId();
-    }).then(async () => {
-      // Haptics are always on (2026-10-14): the user-facing master switch
-      // and its persisted 'false' are gone — lib/haptics defaults to on
-      // and nothing in the app turns it off anymore.
-      // Measurement (docs/measurement.md): first-open install record, the
-      // cold-start app_opened, and a retry of any funnel steps still queued.
-      await loadDeviceTestFlag();
-      await recordInstallIfFirstOpen();
-      trackEvent('app_opened', null, null, { source: 'cold_start' });
-      void flushFunnelOutbox();
-    }).catch(() => {
-      /* non-fatal */
-    }).finally(() => {
-      // Hold the splash until the first screen has actually painted — two
-      // animation frames after init resolves lets the router commit and the
-      // native view draw, so there's no unbranded flash between the splash
-      // fade and first paint.
-      requestAnimationFrame(() => requestAnimationFrame(() => { splash.hide(); }));
-      // A real cold start — one half of PaymentReminderAsker's "fresh
-      // session" trigger condition (the other half is a 10+min-backgrounded
-      // return, bumped from app/(app)/_layout.tsx's own AppState handler).
-      useAuthStore.setState(s => ({ freshSessionToken: s.freshSessionToken + 1 }));
+      openDb: () => withStartupTiming('db_open', openDb().then(() => useSyncStore.getState().refreshCount())),
+      resetDb: resetDbPromise,
+      reportTimeout: stage => {
+        // Guarded like every Sentry call here — never into an uninitialised native SDK.
+        if (process.env.EXPO_PUBLIC_SENTRY_DSN) {
+          Sentry.captureMessage(`startup_${stage}_timeout`, { level: 'error', tags: { area: 'startup' } });
+        }
+      },
+      postOpenSteps: async () => {
+        // Best-effort: capture a deferred invite token (install referrer /
+        // clipboard) now that the KV store is open. Never blocks startup —
+        // a missing token just means a normal sign-up, never a dead end.
+        await capturePendingInviterId();
+        // Haptics are always on (2026-10-14): nothing to hydrate any more.
+        // Measurement (docs/measurement.md): first-open install record, the
+        // cold-start app_opened, and a retry of any funnel steps still queued.
+        await loadDeviceTestFlag();
+        await recordInstallIfFirstOpen();
+        trackEvent('app_opened', null, null, { source: 'cold_start' });
+        void flushFunnelOutbox();
+      },
+      onDone: () => {
+        // Hold the splash until the first screen has actually painted — two
+        // animation frames after init resolves lets the router commit and the
+        // native view draw, so there's no unbranded flash between the splash
+        // fade and first paint.
+        requestAnimationFrame(() => requestAnimationFrame(() => { splash.hide(); }));
+        // A real cold start — one half of PaymentReminderAsker's "fresh
+        // session" trigger condition (the other half is a 10+min-backgrounded
+        // return, bumped from app/(app)/_layout.tsx's own AppState handler).
+        useAuthStore.setState(s => ({ freshSessionToken: s.freshSessionToken + 1 }));
+      },
     });
   }, [ready]);
 
