@@ -15,7 +15,7 @@ import { Button } from '@/src/components/ui/Button';
 import { Text } from '@/src/components/ui/Text';
 import { useTheme, radius, spacing } from '@/src/theme';
 import type { Palette } from '@/src/theme';
-import { formatAmount, formatAmountInput, parseAmountInput } from '@/src/utils/format';
+import { formatAmount, formatAmountInput, parseAmountInput, amountInputToCents } from '@/src/utils/format';
 import { useAuthStore } from '@/stores/auth';
 import { useSalesStore } from '@/stores/sales';
 import { generateId } from '@/lib/id';
@@ -55,10 +55,10 @@ export default function CarnetScreen() {
 
   const handleAdd = () => {
     const trimmedName = name.trim();
-    const parsed = Math.round(parseAmountInput(amount, currency));
-    if (!trimmedName || isNaN(parsed) || parsed <= 0) return;
+    const amountCents = amountInputToCents(amount, currency);
+    if (!trimmedName || amountCents === null) return;
 
-    setEntries(prev => [...prev, { id: generateId(), name: trimmedName, amountCents: parsed * 100 }]);
+    setEntries(prev => [...prev, { id: generateId(), name: trimmedName, amountCents }]);
     setName('');
     setAmount('');
     haptics.tap();

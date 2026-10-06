@@ -150,6 +150,18 @@ export function parseAmountInput(formatted: string, currency: string): number {
   return isNaN(n) ? 0 : n;
 }
 
+/**
+ * Typed amount -> integer cents, or null when empty / not a positive number.
+ * Rounds to the currency's minor units (half-up, decimal-exact) BEFORE x100 —
+ * never to whole major units (10,99 USD is 1099 cents, not 1100).
+ */
+export function amountInputToCents(formatted: string, currency: string): number | null {
+  const parsed = parseAmountInput(formatted, currency);
+  if (isNaN(parsed) || parsed <= 0) return null;
+  const cents = Math.round(roundHalfUp(parsed, Math.min(minorUnits(currency), 2)) * 100);
+  return cents > 0 ? cents : null;
+}
+
 export function formatMargin(profit: number, revenue: number): string {
   if (revenue <= 0) return '';
   const pct = roundHalfUp((profit / revenue) * 100, 0);

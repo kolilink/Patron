@@ -4,7 +4,7 @@
 import {
   formatAmount as realFormatAmount, formatAmountValue as realFormatAmountValue,
   formatSignedAmount as realFormatSignedAmount, formatMargin, formatCount as realFormatCount,
-  minorUnits, roundHalfUp, formatAmountInput, parseAmountInput,
+  minorUnits, roundHalfUp, formatAmountInput, parseAmountInput, amountInputToCents,
 } from '@/src/utils/format';
 
 // Thousands are grouped with U+00A0 (never wraps mid-number); the space before
@@ -140,5 +140,21 @@ describe('related formatters share the same rules', () => {
     expect(parseAmountInput('960,000', 'XOF')).toBe(960000);
     expect(formatAmountInput('12,5', 'USD')).toBe('12.5');
     expect(parseAmountInput('1 234,50', 'EUR')).toBe(1234.5);
+  });
+});
+
+describe('amountInputToCents (carnet bulk entry)', () => {
+  it('keeps minor units instead of rounding to whole major units', () => {
+    expect(amountInputToCents('10,99', 'USD')).toBe(1099);
+    expect(amountInputToCents('10,995', 'USD')).toBe(1100);
+    expect(amountInputToCents('10', 'USD')).toBe(1000);
+  });
+  it('whole-unit currencies', () => {
+    expect(amountInputToCents('1099', 'GNF')).toBe(109900);
+  });
+  it('rejects empty / non-numeric / zero', () => {
+    expect(amountInputToCents('', 'USD')).toBeNull();
+    expect(amountInputToCents('abc', 'USD')).toBeNull();
+    expect(amountInputToCents('0', 'GNF')).toBeNull();
   });
 });
