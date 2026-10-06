@@ -3,7 +3,7 @@
     "name": "Patron",
     "slug": "patron",
     "scheme": "patron",
-    "version": "1.0.7",
+    "version": "1.0.9",
     "orientation": "portrait",
     "icon": "./assets/icon-1024.png",
     "userInterfaceStyle": "automatic",
