@@ -50,6 +50,9 @@ export interface User {
   // member) without touching any other notification type. See CLAUDE.md /
   // the notification-fatigue research this was added against.
   notify_on_every_sale: boolean;
+  // "Rappels de paiement" switch (migration_v237) — server-enforced: with it off
+  // the debt-aging digest never targets this user. Defaults true.
+  debt_reminders_enabled?: boolean;
   // Team/test account — excluded from every founder KPI (migration_v209).
   is_test?: boolean;
   created_at: string;

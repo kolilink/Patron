@@ -6,8 +6,8 @@ import {
   bypassesCap,
   bypassesQuietHours,
   isQuietHours,
-  sanitizeDataPayload,
 } from './registry.ts';
+import { composePush } from './compose.ts';
 
 const corsHeaders = {
   'Access-Control-Allow-Origin': '*',
@@ -15,48 +15,6 @@ const corsHeaders = {
 };
 
 const EXPO_PUSH_URL = 'https://exp.host/--/api/v2/push/send';
-
-// ─── Titles ───────────────────────────────────────────────────────────────
-// Every event's title is the business name, EXCEPT chat_message, where the
-// sender name IS the point (named exception to the lock-screen rule).
-const EVENT_TITLES: Record<string, string> = {
-  sale_completed: '✅ Vente enregistrée',
-  sale_cancelled: '⚠️ Vente annulée',
-  sale_edited: '✏️ Vente modifiée',
-  low_stock: '📦 Stock bas', // product name is appended, e.g. "📦 Stock bas : Riz"
-  partnership_request: '🤝 Demande de partenariat',
-  partnership_accepted: '🤝 Partenariat accepté',
-  partnership_declined: '🤝 Demande refusée',
-  consumer_invite_accepted: '🎉 Un ami t\'a rejoint',
-  support_message: '💬 Nouveau message',
-  support_reply: '💬 Réponse du support',
-  alpha_quota_reset: '✨ Alpha',
-  daily_digest: '🌙 Votre journée',
-  activation_nudge_1: '💰 Un client vous doit de l\'argent ?',
-  activation_nudge_2: '⏰ Une minute suffit',
-  // second_action_reminder's title is contextual (product/debt/sale) — see
-  // SECOND_ACTION_TITLES and buildTitle below, not this fixed map.
-  revenue_milestone: '🎉 Nouveau cap franchi',
-  debt_aging_reminder: '💰 Un crédit vieillit',
-};
-
-const SECOND_ACTION_TITLES: Record<string, string> = {
-  product: '📦 Premier produit ajouté',
-  debt: '💰 Première dette notée',
-  sale: '✅ Première vente notée',
-};
-
-function buildTitle(eventType: string, bizName: string, p: Record<string, unknown>): string {
-  if (eventType === 'chat_message') return String(p.sender ?? bizName);
-  if (eventType === 'low_stock') {
-    const label = p.variant ? `${p.product ?? ''} · ${p.variant}` : (p.product ?? '');
-    return `📦 Stock bas : ${label}`;
-  }
-  if (eventType === 'second_action_reminder') {
-    return SECOND_ACTION_TITLES[String(p.action_type)] ?? '✅ Première action notée';
-  }
-  return EVENT_TITLES[eventType] ?? bizName;
-}
 
 // ─── iOS notification action categories ─────────────────────────────────────
 // categoryIdentifier must match what's registered in NotificationSetup.tsx
@@ -387,11 +345,7 @@ serve(async (req) => {
     // registry's FIXED templates (lock-screen rule: no client name or amount
     // ever leaves the server for these). `data` is whitelist-sanitized too —
     // it is never just `...payload` anymore.
-    const title = buildTitle(event_type, bizName, payload);
-    const subtitle = eventDef.subtitle;
-    const body = eventDef.body(payload);
-    const route = eventDef.route(payload);
-    const safeData = sanitizeDataPayload(event_type, payload);
+    const { title, subtitle, body, route, data: pushData } = composePush(event_type, bizName, payload, business_id);
     const isUrgent = eventDef.urgent;
     const soundFile = isUrgent ? 'patron_urgent.wav' : 'patron_default.wav';
     const channelId = isUrgent ? 'patron_urgent' : 'patron_default';
@@ -407,7 +361,7 @@ serve(async (req) => {
         title,
         ...(subtitle ? { subtitle } : {}),
         body,
-        data: { route, event_type, business_id, ...safeData },
+        data: pushData,
         sound: soundFile,
         channelId,
         badge: badgeByUser.get(user_id) ?? 1,

@@ -359,6 +359,7 @@ async function loadSession(userId: string, authPhone?: string | null, skipCache 
     language: p.language ?? 'fr',
     recovery_email: p.recovery_email ?? null,
     notify_on_every_sale: p.notify_on_every_sale ?? true,
+    debt_reminders_enabled: p.debt_reminders_enabled ?? true,
     is_test: p.is_test ?? false,
     created_at: p.created_at,
     updated_at: p.updated_at,
@@ -598,6 +599,7 @@ export const useAuthStore = create<AuthStore>((set, get) => ({
         language: 'fr',
         recovery_email: null,
         notify_on_every_sale: true,
+        debt_reminders_enabled: true,
         created_at: new Date().toISOString(),
         updated_at: new Date().toISOString(),
       };

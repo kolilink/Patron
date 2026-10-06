@@ -19,7 +19,7 @@ describe('item 1 — switches fire haptics.toggle with the new value', () => {
   it('parametres: notify-every-sale and payment reminders toggle', () => {
     const s = read('app/(app)/parametres/index.tsx');
     expect(s).toMatch(/setNotifyEverySale\(value\);\s*haptics\.toggle\(value\)/);
-    expect(s).toMatch(/if \(granted\) \{ haptics\.toggle\(true\)/);
+    expect(s).toMatch(/savePaymentRemindersPref\(true\)\) \{ haptics\.toggle\(true\)/);
   });
   it('catalogue variants + partner share-stock switches', () => {
     expect(read('app/(app)/(tabs)/catalogue.tsx')).toMatch(/onValueChange=\{v => \{\s*haptics\.toggle\(v\);/);
