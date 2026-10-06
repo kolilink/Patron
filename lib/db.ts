@@ -490,6 +490,31 @@ async function migrate(db: SQLite.SQLiteDatabase): Promise<void> {
   }
 }
 
+// Device-level settings that are NOT part of an account and survive an account
+// deletion: theme, haptics, and the anonymous install/funnel identity.
+export const DEVICE_LEVEL_KV_KEYS = [
+  'app_theme_preference', 'app_haptics_enabled',
+  'analytics_device_id', 'analytics_installed_at', 'analytics_device_is_test', 'funnel_outbox',
+];
+
+/**
+ * Account deletion: remove every trace of the account from this phone's SQLite —
+ * every cache table, the sync outbox and dead-letter rows, and every kv_store
+ * entry except the device-level settings above (last phone/email used, drafts,
+ * per-user flags are all gone). Schema (and _migrations) stay. Call AFTER
+ * logout() so nothing re-caches in between. Never throws into the caller's flow
+ * beyond what the caller chooses to catch.
+ */
+export async function wipeAccountLocalData(): Promise<void> {
+  const db = await openDb();
+  const tables = await db.getAllAsync<{ name: string }>(
+    "SELECT name FROM sqlite_master WHERE type = 'table' AND name NOT LIKE 'sqlite_%' AND name NOT IN ('_migrations', 'kv_store')",
+  );
+  for (const t of tables) await db.execAsync(`DELETE FROM "${t.name}"`);
+  const marks = DEVICE_LEVEL_KV_KEYS.map(() => '?').join(',');
+  await db.runAsync(`DELETE FROM kv_store WHERE key NOT IN (${marks})`, DEVICE_LEVEL_KV_KEYS);
+}
+
 export async function getKV(key: string): Promise<string | null> {
   const db = await openDb();
   const row = await db.getFirstAsync<{ value: string }>('SELECT value FROM kv_store WHERE key = ?', [key]);

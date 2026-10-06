@@ -29,3 +29,5 @@ export async function saveApportsCache(_businessId: string, _data: unknown[]): P
 export async function getApportsCache(_businessId: string): Promise<null> { return null; }
 export async function getKV(_key: string): Promise<null> { return null; }
 export async function setKV(_key: string, _value: string): Promise<void> { }
+
+export async function wipeAccountLocalData(): Promise<void> {}

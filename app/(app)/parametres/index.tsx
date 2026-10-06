@@ -18,7 +18,7 @@ import { generateFallbackName } from '@/lib/id';
 import { supabase } from '@/lib/supabase';
 import { translateError } from '@/lib/errors';
 import { haptics, setEnabled, isHapticsEnabled, HAPTICS_KV_KEY } from '@/lib/haptics';
-import { getKV, setKV } from '@/lib/db';
+import { getKV, setKV, wipeAccountLocalData } from '@/lib/db';
 import { toast } from '@/stores/toast';
 import { checkNotificationPermission, requestNotificationPermission } from '@/src/components/NotificationSetup';
 import { toUnicodeBold } from '@/src/utils/format';
@@ -28,6 +28,8 @@ import { buildFailure } from '@/src/utils/failure';
 import { FAILURE_COPY, NO_CONNECTION_MESSAGE } from '@/src/utils/failureCopy';
 import { NO_CONNECTION_WHY, serverSentence } from '@/src/utils/failure';
 import { failAlert } from '@/src/components/ui/FailureView';
+import { SuccessionSheet } from '@/src/components/SuccessionSheet';
+import { planLeave, successionBlockers } from '@/src/utils/succession';
 
 // Must match the list in creer.tsx — all currencies we support
 const CURRENCIES = ['GNF', 'XOF', 'XAF', 'NGN', 'GHS', 'MAD', 'DZD', 'TND', 'EGP', 'KES', 'ZAR', 'ETB', 'AED', 'SAR', 'USD', 'EUR', 'GBP', 'CNY', 'CAD', 'CHF', 'INR'];
@@ -254,6 +256,9 @@ export default function ParametresScreen() {
   }, [isDirty]);
 
   const [deleteTarget, setDeleteTarget] = useState<'account' | 'business' | null>(null);
+  // Last administrateur of a business that still has a team: pick a successor
+  // first (SuccessionSheet), then carry on with `then`.
+  const [succession, setSuccession] = useState<{ businessId: string; businessName: string; then: 'leave' | 'account' } | null>(null);
   const [deleteInput, setDeleteInput] = useState('');
   const [deleting, setDeleting] = useState(false);
 
@@ -449,7 +454,7 @@ export default function ParametresScreen() {
     if (!business?.id) return;
 
     const { data: others, error } = await supabase
-      .from('memberships').select('id')
+      .from('memberships').select('role')
       .eq('business_id', business.id).neq('user_id', userId);
 
     if (error) {
@@ -457,10 +462,15 @@ export default function ParametresScreen() {
       return;
     }
 
-    if (others && others.length > 0) {
-      Alert.alert('Suppression impossible', `${business.name} a d'autres membres. Retirez-les avant de quitter.`);
+    // Mirrors the server matrix (migration_v239): alone → quitting deletes the
+    // business (typed confirmation); another gérant present → plain leave;
+    // last gérant with a team → pick a successor first, never "retirez-les".
+    const plan = planLeave('administrateur', others ?? []);
+    if (plan === 'succession') {
+      setSuccession({ businessId: business.id, businessName: business.name ?? 'ce commerce', then: 'leave' });
       return;
     }
+    if (plan === 'leave') { handleLeave(); return; }
 
     resetDeleteFlow();
     setDeleteTarget('business');
@@ -481,25 +491,25 @@ export default function ParametresScreen() {
     setDeleting(true);
 
     try {
+      // Only the SOLE administrateur of a business that still has a team is
+      // held back — and not with "retirez-les": they pick a successor first
+      // (SuccessionSheet), then come back here. Solely-owned businesses (nobody
+      // else in them) and businesses with another gérant never block.
       const adminMemberships = (session?.memberships ?? []).filter(m => m.role === 'administrateur');
-
       if (adminMemberships.length > 0) {
         const { data: others } = await supabase
-          .from('memberships').select('business_id')
+          .from('memberships').select('business_id, role')
           .in('business_id', adminMemberships.map(m => m.business_id)).neq('user_id', userId);
-
-        const blockingIds = new Set((others ?? []).map(o => o.business_id));
-        if (blockingIds.size > 0) {
-          const names = adminMemberships
-            .filter(m => blockingIds.has(m.business_id))
-            .map(m => m.business?.name ?? 'un commerce')
-            .join(', ');
+        const byBusiness: Record<string, { role: string }[]> = {};
+        for (const o of others ?? []) (byBusiness[o.business_id] ??= []).push({ role: o.role });
+        const [first] = successionBlockers(
+          adminMemberships.map(m => ({ business_id: m.business_id, name: m.business?.name ?? 'ce commerce' })),
+          byBusiness,
+        );
+        if (first) {
           setDeleting(false);
           resetDeleteFlow();
-          Alert.alert(
-            'Suppression impossible',
-            `Vous êtes gérant de : ${names}.\n\nRetirez tous les autres membres de ces commerces, ou quittez-les depuis cet écran, avant de supprimer votre compte.`,
-          );
+          setSuccession({ businessId: first.business_id, businessName: first.name, then: 'account' });
           return;
         }
       }
@@ -568,10 +578,18 @@ export default function ParametresScreen() {
         return;
       }
 
+      // Signed out and wiped IMMEDIATELY — not after an OK tap: from this
+      // moment the phone holds nothing of the account. logout() clears the
+      // session, secure-storage caches and every store; wipeAccountLocalData()
+      // empties SQLite (caches, outbox) so no sale or client lingers on-device.
+      await useAuthStore.getState().logout();
+      try { await wipeAccountLocalData(); } catch {
+        // failure: silent — logout already cleared the session; the on-device caches are encrypted with a key that
+        // logout leaves in place only until the next sign-in, and a failed wipe must never block the exit
+      }
       Alert.alert(
         'Compte programmé pour suppression',
         'Votre compte sera définitivement supprimé dans 30 jours.\n\nReconnectez-vous à tout moment avant cette date pour annuler.',
-        [{ text: 'OK', onPress: async () => { await useAuthStore.getState().logout(); } }],
       );
     } catch {
       // failure: speaks — delete account OTP step: inline
@@ -1076,6 +1094,23 @@ export default function ParametresScreen() {
 
         </ScrollView>
       </KeyboardAvoidingView>
+
+      <SuccessionSheet
+        visible={!!succession}
+        onClose={() => setSuccession(null)}
+        businessId={succession?.businessId ?? ''}
+        businessName={succession?.businessName ?? ''}
+        userId={userId}
+        onDesignated={() => {
+          const next = succession;
+          setSuccession(null);
+          // After promotion, carry on: the leave confirmation, or back to the
+          // typed account-deletion confirmation (which re-checks any other
+          // business that still needs a successor).
+          if (next?.then === 'leave') setTimeout(() => handleLeave(), 400);
+          if (next?.then === 'account') { resetDeleteFlow(); setDeleteTarget('account'); }
+        }}
+      />
     </Screen>
   );
 }
