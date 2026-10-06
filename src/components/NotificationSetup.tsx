@@ -23,27 +23,36 @@ function getNotifications(): typeof Notifications | null {
 }
 
 // ─── Android notification channels ──────────────────────────────────────────
-// Channels are created once. Sound and importance are permanent per channel.
-// patron_default: soft sound, medium importance — informational events
-// patron_urgent:  sharp double sound, high importance — events needing action
+// Channels are created once. Sound and importance are permanent per channel —
+// that is why the new chimes got NEW channel ids (patron_chime[_urgent])
+// instead of editing patron_default/patron_urgent: an installed device would
+// keep the old sound forever. The server sends the chime name as channelId
+// (supabase/functions/dispatch-notification/registry.ts, chimeFor).
+// patron_chime:         calm two-note chime, medium importance — reminders, nudges, info
+// patron_chime_urgent:  brighter three-note chime, high importance — firm reminders, alerts
+// The two legacy channels are removed so Android settings don't list two
+// "Patron" entries; a push still addressed to one just falls back to the OS
+// default channel, never an error.
 async function ensureAndroidChannels(N: typeof Notifications): Promise<void> {
   if (Platform.OS !== 'android') return;
   await Promise.all([
-    N.setNotificationChannelAsync('patron_default', {
+    N.setNotificationChannelAsync('patron_chime', {
       name: 'Patron',
       importance: N.AndroidImportance.DEFAULT,
-      sound: 'patron_default.wav',
+      sound: 'patron_chime.ogg',
       vibrationPattern: [0, 180],
       lightColor: colors.primary[500],
     }),
-    N.setNotificationChannelAsync('patron_urgent', {
+    N.setNotificationChannelAsync('patron_chime_urgent', {
       name: 'Patron — Urgent',
       importance: N.AndroidImportance.HIGH,
-      sound: 'patron_urgent.wav',
+      sound: 'patron_chime_urgent.ogg',
       vibrationPattern: [0, 200, 100, 200],
       lightColor: colors.warning[500],
     }),
   ]);
+  await Promise.all(['patron_default', 'patron_urgent'].map(id =>
+    N.deleteNotificationChannelAsync(id).catch(() => { /* already gone */ })));
 }
 
 // ─── iOS notification categories (action buttons) ────────────────────────────

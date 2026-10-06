@@ -106,6 +106,7 @@
       "expo-updates",
       "@sentry/react-native",
       "expo-localization",
+      "./plugins/withPatronChimes",
       [
         "expo-splash-screen",
         {
