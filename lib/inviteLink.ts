@@ -6,7 +6,7 @@ import { getKV, setKV } from '@/lib/db';
 
 // ─── Invite-link capture (word-of-mouth) ────────────────────────────────────
 //
-// A shared link is https://patron.kolilink.com/invite/<inviter-id> (the
+// A shared link is https://patron.kolilink.com/invite/?i=<inviter-id> (the
 // sharer's own user id). The id reaches a fresh install through independent
 // channels, each fallible and non-destructive:
 //
@@ -30,8 +30,9 @@ export function isInviterId(value: string | null | undefined): value is string {
 }
 
 // Accepted forms (our own origin/scheme only, so a foreign link can't plant an id):
-//   https://patron.kolilink.com/invite/<id>
-//   patron://invite/<id>
+//   https://patron.kolilink.com/invite/?i=<id>   (what the app shares — a 200 page, so WhatsApp previews it)
+//   https://patron.kolilink.com/invite/<id>      (older shared links)
+//   patron://invite/<id>   and   patron://invite?i=<id>
 export function inviterIdFromUrl(url: string | null | undefined): string | null {
   if (!url) return null;
   try {
@@ -42,8 +43,13 @@ export function inviterIdFromUrl(url: string | null | undefined): string | null 
     // https → pathname "/invite/<id>"; custom scheme → host "invite", pathname "/<id>".
     const segments = [schemeOk ? parsed.hostname : '', ...parsed.pathname.split('/')].filter(Boolean);
     const i = segments.indexOf('invite');
-    const id = i >= 0 ? segments[i + 1]?.trim().toLowerCase() : undefined;
-    return isInviterId(id) ? id : null;
+    if (i < 0) return null;
+    // Path form first, then the ?i= query form. Only read under the /invite
+    // path, so `?i=` on some other page of ours can't plant an id.
+    const fromPath = segments[i + 1]?.trim().toLowerCase();
+    if (isInviterId(fromPath)) return fromPath;
+    const fromQuery = parsed.searchParams.get('i')?.trim().toLowerCase();
+    return isInviterId(fromQuery) ? fromQuery : null;
   } catch {
     return null;
   }

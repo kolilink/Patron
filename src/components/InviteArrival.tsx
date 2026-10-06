@@ -12,7 +12,8 @@ import { isInviterId, setPendingInviterId } from '@/lib/inviteLink';
 // ─── /invite deep-link arrival (word-of-mouth) ──────────────────────────────
 //
 // Link forms (both land here via app/invite/[id].tsx or app/invite.tsx):
-//   https://patron.kolilink.com/invite/<inviter-id>   (Universal/App Link)
+//   https://patron.kolilink.com/invite/?i=<inviter-id>  (Universal/App Link — the shared form)
+//   https://patron.kolilink.com/invite/<inviter-id>     (older shared links)
 //   patron://invite/<inviter-id>                       (custom scheme)
 //
 // The id is persisted and attributed silently, then the user goes through the
