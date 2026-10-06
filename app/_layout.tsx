@@ -1,6 +1,6 @@
 import '@/lib/startupTiming';
 import * as Sentry from '@sentry/react-native';
-import { useEffect, useRef } from 'react';
+import { useEffect, useRef, useState } from 'react';
 import { View } from 'react-native';
 import { GestureHandlerRootView } from 'react-native-gesture-handler';
 import { Stack, useSegments } from 'expo-router';
@@ -32,6 +32,7 @@ import { recordInstallIfFirstOpen, recordFunnelStep, flushFunnelOutbox } from '@
 import { PrivacyShield } from '@/src/components/PrivacyShield';
 import { configurePurchases } from '@/lib/purchases';
 import { withStartupTiming, reportFirstScreenRender, reportFirstInteraction } from '@/lib/startupTiming';
+import { scheduleSplashCeiling, startupReady } from '@/src/utils/startupGate';
 
 // Only active when EXPO_PUBLIC_SENTRY_DSN is set (no-op in local dev without it)
 if (process.env.EXPO_PUBLIC_SENTRY_DSN) {
@@ -64,7 +65,10 @@ const ALL_FONTS = {
 function RootLayout() {
   const initialize = useAuthStore(s => s.initialize);
   const session = useAuthStore(s => s.session);
-  const [fontsLoaded] = useFonts(ALL_FONTS);
+  // fontError is NOT discarded: a failing font must be identified (Sentry below)
+  // and must never hold the app hostage (see src/utils/startupGate.ts).
+  const [fontsLoaded, fontError] = useFonts(ALL_FONTS);
+  const [ceilingElapsed, setCeilingElapsed] = useState(false);
   // Route TEMPLATE ("/(app)/clients/[name]"), never the concrete path or
   // its params — those carry a client's name, a phone, ids (spec §0: zero
   // PII in events). useSegments() returns the template segments.
@@ -111,8 +115,28 @@ function RootLayout() {
     }
   }, [session]);
 
+  // Hard ceiling, deliberately NOT gated on fonts (or auth, or db): whatever
+  // never settles, the splash is dismissed after SPLASH_CEILING_MS. hideAsync is
+  // idempotent, so this is harmless when the normal path already hid it.
+  useEffect(() => scheduleSplashCeiling({
+    hide: () => { SplashScreen.hideAsync().catch(() => { /* already hidden */ }); },
+    onElapsed: () => setCeilingElapsed(true),
+    setTimeoutFn: (cb, ms) => setTimeout(cb, ms),
+    clearTimeoutFn: h => clearTimeout(h as ReturnType<typeof setTimeout>),
+  }), []);
+
+  // Identify the failing font on this Samsung. Guarded by the same DSN check as
+  // Sentry.init() above — never call into an uninitialised native SDK.
   useEffect(() => {
-    if (!fontsLoaded) return;
+    if (fontError && process.env.EXPO_PUBLIC_SENTRY_DSN) {
+      Sentry.captureException(fontError, { tags: { area: 'fonts' } });
+    }
+  }, [fontError]);
+
+  const ready = startupReady(fontsLoaded, fontError, ceilingElapsed);
+
+  useEffect(() => {
+    if (!ready) return;
     // Hard ceiling so a stuck init can never pin the splash forever; the
     // normal path hides it only after the first screen has painted (below).
     const timeout = setTimeout(() => SplashScreen.hideAsync(), 2000);
@@ -148,7 +172,7 @@ function RootLayout() {
       // return, bumped from app/(app)/_layout.tsx's own AppState handler).
       useAuthStore.setState(s => ({ freshSessionToken: s.freshSessionToken + 1 }));
     });
-  }, [fontsLoaded]);
+  }, [ready]);
 
   return (
     <GestureHandlerRootView style={{ flex: 1 }}>
