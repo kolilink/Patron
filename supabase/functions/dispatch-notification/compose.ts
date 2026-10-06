@@ -17,6 +17,7 @@ export const EVENT_TITLES: Record<string, string> = {
   consumer_invite_accepted: '🎉 Un ami t\'a rejoint',
   support_message: '💬 Nouveau message',
   support_reply: '💬 Réponse du support',
+  founder_new_user: 'New user',
   alpha_quota_reset: '✨ Alpha',
   daily_digest: '🌙 Votre journée',
   activation_nudge_1: '💰 Un client vous doit de l\'argent ?',

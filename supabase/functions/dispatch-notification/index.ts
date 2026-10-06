@@ -60,7 +60,7 @@ const FOUNDER_EVENTS = new Set(['support_reply']);
 const CRON_EVENTS = new Set([
   'alpha_quota_reset', 'daily_digest',
   'activation_nudge_1', 'activation_nudge_2', 'second_action_reminder',
-  'revenue_milestone', 'debt_aging_reminder',
+  'revenue_milestone', 'debt_aging_reminder', 'founder_new_user',
 ]);
 
 async function callerIsFounder(supabase: ReturnType<typeof createClient>, userId: string): Promise<boolean> {
@@ -125,6 +125,15 @@ serve(async (req) => {
     const isCronCall = CRON_EVENTS.has(event_type)
       && !!cronSecret
       && req.headers.get('x-cron-secret') === cronSecret;
+
+    // founder_new_user is a server-originated alert (businesses trigger). No
+    // user session may ever send it — a member could otherwise push an
+    // arbitrary-looking message to the founder.
+    if (event_type === 'founder_new_user' && !isCronCall) {
+      return new Response(JSON.stringify({ error: 'Accès refusé' }), {
+        status: 403, headers: { ...corsHeaders, 'Content-Type': 'application/json' },
+      });
+    }
 
     let callerUserId: string | null = null;
     if (!isCronCall) {
@@ -195,6 +204,9 @@ serve(async (req) => {
 
     const bizName = (biz as { name: string }).name || 'Patron';
 
+    // Name comes from the row, never from the caller.
+    if (event_type === 'founder_new_user') payload = { business_name: bizName };
+
     // Auto-inject business name for member_removed
     if (event_type === 'member_removed' && !payload.business) {
       payload = { ...payload, business: bizName };
@@ -242,7 +254,7 @@ serve(async (req) => {
       userIds = (target_user_ids && target_user_ids.length > 0)
         ? derived.filter(id => (target_user_ids as string[]).includes(id))
         : derived;
-    } else if (event_type === 'support_message') {
+    } else if (event_type === 'support_message' || event_type === 'founder_new_user') {
       // Always routes to the founder himself, regardless of any target_roles/
       // target_user_ids the caller passed — he is not a member of business_id,
       // so the memberships-based resolution below can never find him.
@@ -396,7 +408,7 @@ serve(async (req) => {
     // Per-recipient rows feed the cap check above — only recorded for
     // categories the cap actually applies to (ordinary/money); security
     // bypasses the cap so there's nothing useful to log against it.
-    if (eventDef.category !== 'security') {
+    if (eventDef.category !== 'security' && eventDef.category !== 'founder') {
       await supabase.from('push_recipient_log').insert(
         [...new Set(tokens.map(t => t.user_id))].map(user_id => ({
           user_id, event_type, category: eventDef.category,

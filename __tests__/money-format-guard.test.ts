@@ -27,10 +27,6 @@ const RULES: { name: string; re: RegExp }[] = [
 // Each entry must still match something (asserted below) so this can't rot.
 const NON_MONEY_ALLOWLIST: Record<string, { rules: string[]; reason: string }> = {
   [path.join('src', 'utils', 'founderKpis.ts')]: { rules: ['toFixed/toPrecision'], reason: 'retention percentages' },
-  [path.join('src', 'components', 'FounderDashboard.tsx')]: {
-    rules: ['toFixed/toPrecision', "manual '+' sign"],
-    reason: 'k-factor ratio and a shop-count delta',
-  },
 };
 
 function walk(dir: string, out: string[] = []): string[] {
