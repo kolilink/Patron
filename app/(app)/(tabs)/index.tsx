@@ -43,6 +43,7 @@ import { toast } from '@/stores/toast';
 import { buildInviteLink, buildInviteMessage } from '@/stores/inviter';
 import { FAILURE_COPY } from '@/src/utils/failureCopy';
 import { todayIso } from '@/src/utils/dates';
+import { homeComparison } from '@/src/utils/dashboardNarrative';
 import { getKpiSnapshot, setKpiSnapshot } from '@/src/utils/kpiSnapshot';
 
 
@@ -50,6 +51,10 @@ interface KPIs {
   revenue_today: number;
   revenue_yesterday: number;
   revenue_month: number;
+  // Last calendar month's paid revenue (get_dashboard_kpis, migration_v240).
+  // Optional: an older cache, or a server that hasn't got v240 yet, simply
+  // omits it — read as 0 (then "Ce mois" shows whenever there is revenue).
+  revenue_last_month?: number;
   sales_today: number;
   credit_total: number;
   credit_count: number;
@@ -527,6 +532,7 @@ export default function AccueilScreen() {
         revenue_today: Number(d.revenue_today) / 100,
         revenue_yesterday: Number(d.revenue_yesterday) / 100,
         revenue_month: Number(d.revenue_month) / 100,
+        revenue_last_month: Number(d.revenue_last_month ?? 0) / 100,
         sales_today: Number(d.sales_today),
         credit_total: Number(d.credit_total) / 100,
         credit_count: Number(d.credit_count),
@@ -682,24 +688,23 @@ export default function AccueilScreen() {
   // The ONLY conditional line here, deliberately — no time-of-day greeting
   // variants, no tips, no streaks. Once the first-sale day has passed, this
   // never says "Première vente" again for this business (falls through to
-  // the ordinary Ce mois/Même niveau qu'hier comparison instead) — a
+  // the ordinary comparison instead — see below) — a
   // one-time acknowledgment, not a recurring one.
   const monthRevenue = kpis?.revenue_month ?? 0;
-  const hasMonthRevenue = monthRevenue > 0;
-  const comparisonText = !hasEverSold
-    ? 'Bienvenue'
-    : isFirstSaleToday
-      ? 'Première vente enregistrée ✓'
-      : isEvening
-        ? (hasMonthRevenue ? `Ce mois : ${amtOrMask(monthRevenue)}` : '')
-        : "Même niveau qu'hier";
-  // Only a genuine GAIN earns the loud solid pill. A down day shows nothing
-  // at all — the hero amount already says it, and an extra red "de moins
-  // qu'hier" is just a frustrating reminder the owner doesn't need. A flat
-  // day stays plain text, and "Bienvenue"/"Première vente"/"Ce mois" aren't
-  // deltas at all, so they never pill.
-  const showDeltaPill = hasEverSold && !isFirstSaleToday && !isEvening && delta > 0;
-  const hideComparison = hasEverSold && !isFirstSaleToday && !isEvening && delta < 0;
+  const lastMonthRevenue = kpis?.revenue_last_month ?? 0;
+  // The home speaks ONLY on genuine gains. "Même niveau qu'hier" is gone (flat
+  // day → nothing), a down day shows nothing, and "Ce mois : X" appears only
+  // when this month is strictly ahead of last month (never zero, never lower
+  // or equal). "Bienvenue" / "Première vente enregistrée ✓" are one-time
+  // acknowledgments, untouched. See src/utils/dashboardNarrative.ts.
+  const showMonthLine = monthRevenue > lastMonthRevenue;
+  const comparison = homeComparison({ hasEverSold, isFirstSaleToday, isEvening, delta, monthRevenue, lastMonthRevenue });
+  const showDeltaPill = comparison.kind === 'pill';
+  const comparisonText =
+    comparison.kind === 'welcome' ? 'Bienvenue'
+    : comparison.kind === 'first_sale' ? 'Première vente enregistrée ✓'
+    : comparison.kind === 'month' ? `Ce mois : ${amtOrMask(monthRevenue)}`
+    : '';
 
   return (
     <KeyboardAvoidingView style={{ flex: 1, backgroundColor: palette.background }} behavior={Platform.OS === 'ios' ? 'padding' : undefined}>
@@ -969,7 +974,7 @@ export default function AccueilScreen() {
                       {`${deltaAmt} de plus qu'hier`}
                     </Pill>
                   </View>
-                ) : !hideComparison && comparisonText ? (
+                ) : comparisonText ? (
                   <View style={styles.heroComparison}>
                     <Text variant="caption" color="secondary">{comparisonText}</Text>
                   </View>
@@ -1049,7 +1054,7 @@ export default function AccueilScreen() {
               )}
 
               {/* ── Zone 3: Month context — hidden in evening/night (already in comparison) ── */}
-              {dayPart !== 'evening' && dayPart !== 'night' && hasMonthRevenue ? (
+              {dayPart !== 'evening' && dayPart !== 'night' && showMonthLine ? (
                 <Text variant="caption" color="secondary" style={styles.monthLine}>
                   Ce mois : {amtOrMask(monthRevenue)}
                 </Text>
