@@ -285,6 +285,17 @@ export const paletteDark = {
   tabBarIndicator: 'rgba(167,139,250,0.30)',
 } as const;
 
+// Brand moments (splash, app-lock screen, privacy shield) are MODE-INDEPENDENT:
+// the same purple field + white mark in light and dark mode, matching
+// app.json's splash/adaptive-icon backgroundColor. Deliberately NOT part of
+// `palette` — it never varies by scheme, and a palette token would invite
+// reuse as an ordinary in-app color.
+export const brand = {
+  purple: '#5046E3',
+  onPurple: '#FFFFFF',
+  onPurpleMuted: 'rgba(255,255,255,0.7)',
+} as const;
+
 export type Palette = { readonly [K in keyof typeof paletteLight]: string };
 
 // Keep static export for legacy imports — always resolves to light; screens use useTheme() for dynamic palette

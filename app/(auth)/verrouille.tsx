@@ -1,10 +1,10 @@
 import { useEffect, useMemo, useRef, useState } from 'react';
-import { Animated, InteractionManager, Platform, Pressable, StyleSheet, View, useWindowDimensions } from 'react-native';
+import { Animated, Image, InteractionManager, Platform, Pressable, StyleSheet, useWindowDimensions } from 'react-native';
+import { StatusBar } from 'expo-status-bar';
 import { router } from 'expo-router';
 import { Screen } from '@/src/components/ui/Screen';
 import { Text } from '@/src/components/ui/Text';
-import { useTheme, spacing, fontFamily } from '@/src/theme';
-import type { Palette } from '@/src/theme';
+import { spacing, fontFamily, brand } from '@/src/theme';
 import { useAuthStore, getLastBusinessName } from '@/stores/auth';
 
 // OS-native re-entry only: Face ID/Touch ID (or the OS's own device-credential
@@ -18,9 +18,8 @@ import { useAuthStore, getLastBusinessName } from '@/stores/auth';
 // never shown. The full-screen opaque Screen below is also the recent-apps
 // privacy shield, even when auth itself is skipped.
 export default function VerrouilleScreen() {
-  const { palette } = useTheme();
   const { height } = useWindowDimensions();
-  const styles = useMemo(() => makeStyles(palette, height), [palette, height]);
+  const styles = useMemo(() => makeStyles(height), [height]);
   const unlockWithBiometric = useAuthStore(s => s.unlockWithBiometric);
 
   const [businessName, setBusinessName] = useState<string | null>(null);
@@ -79,19 +78,19 @@ export default function VerrouilleScreen() {
   }, []);
 
   return (
-    <Screen>
+    <Screen style={styles.screen}>
+      {/* Brand moment: purple field in both modes, so light status-bar content. */}
+      <StatusBar style="light" />
       <Animated.View style={[styles.content, { opacity: fadeOpacity }]}>
         {/* Tapping anywhere re-invokes the OS prompt (a cancel/interruption
             leaves the user here with no duplicated error text). unlockWithBiometric's
             own in-flight guard drops a stacked call while a native sheet is
             already up, so this can't double-fire a prompt. */}
         <Pressable style={styles.centerBlock} onPress={attemptBiometric}>
-          <View style={styles.mark}>
-            <Text style={styles.markLetter}>P</Text>
-          </View>
+          <Image source={require('@/assets/mark-white.png')} style={styles.mark} resizeMode="contain" />
           {businessName ? <Text style={styles.businessName}>{businessName}</Text> : null}
-          <Text variant="h1" style={styles.centerText}>Bon retour</Text>
-          <Text variant="body" color="secondary" style={styles.centerText}>
+          <Text variant="h1" style={[styles.centerText, styles.onPurple]}>Bon retour</Text>
+          <Text variant="body" style={[styles.centerText, styles.onPurpleMuted]}>
             Déverrouillez Patron pour continuer.
           </Text>
         </Pressable>
@@ -100,8 +99,9 @@ export default function VerrouilleScreen() {
   );
 }
 
-function makeStyles(p: Palette, viewportHeight: number) {
+function makeStyles(viewportHeight: number) {
   return StyleSheet.create({
+    screen: { backgroundColor: brand.purple },
     content: { flex: 1 },
     // The content block (mark → "Bon retour" → instruction) is centered in the
     // remaining space above an ~8% viewport-height bottom reserve, which lifts
@@ -112,19 +112,16 @@ function makeStyles(p: Palette, viewportHeight: number) {
       paddingHorizontal: spacing[6],
       paddingBottom: Math.round(viewportHeight * 0.08),
     },
-    // Brand purple lives here only — nowhere else on this screen.
-    mark: {
-      width: 72, height: 72, borderRadius: 20,
-      backgroundColor: p.primary, alignItems: 'center', justifyContent: 'center',
-      marginBottom: spacing[4],
-    },
-    // No exact <Text variant> matches these two, so fontFamily + lineHeight
-    // are set explicitly and together — never fontSize/fontWeight alone.
-    // This app's fonts are separate files per weight (see FF in
+    // Same white mark as the splash screen (assets/mark-white.png), ~120dp.
+    mark: { width: 120, height: 120, marginBottom: spacing[4] },
+    // No exact <Text variant> matches the business name, so fontFamily +
+    // lineHeight are set explicitly and together — never fontSize/fontWeight
+    // alone. This app's fonts are separate files per weight (see FF in
     // src/theme/typography.ts), so a bare `fontWeight` does nothing; and an
     // enlarged fontSize with no matching lineHeight clips the glyph's top.
-    markLetter: { fontFamily: fontFamily.bold, fontSize: 32, lineHeight: 40, color: p.textInverse },
-    businessName: { fontFamily: fontFamily.semibold, fontSize: 17, lineHeight: 28, color: p.textPrimary, marginBottom: spacing[1] },
+    businessName: { fontFamily: fontFamily.semibold, fontSize: 17, lineHeight: 28, color: brand.onPurple, marginBottom: spacing[1] },
     centerText: { textAlign: 'center' },
+    onPurple: { color: brand.onPurple },
+    onPurpleMuted: { color: brand.onPurpleMuted },
   });
 }

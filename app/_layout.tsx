@@ -29,6 +29,7 @@ import { ThemeProvider } from '@/src/theme';
 import { posthog } from '@/lib/posthog';
 import { identifyUser, resetAnalytics, trackEvent, analyticsIsTest, loadDeviceTestFlag } from '@/lib/analytics';
 import { recordInstallIfFirstOpen, recordFunnelStep, flushFunnelOutbox } from '@/lib/funnel';
+import { PrivacyShield } from '@/src/components/PrivacyShield';
 import { configurePurchases } from '@/lib/purchases';
 import { withStartupTiming, reportFirstScreenRender, reportFirstInteraction } from '@/lib/startupTiming';
 
@@ -112,6 +113,8 @@ function RootLayout() {
 
   useEffect(() => {
     if (!fontsLoaded) return;
+    // Hard ceiling so a stuck init can never pin the splash forever; the
+    // normal path hides it only after the first screen has painted (below).
     const timeout = setTimeout(() => SplashScreen.hideAsync(), 2000);
     Promise.all([
       withStartupTiming('auth_check', initialize()),
@@ -135,7 +138,11 @@ function RootLayout() {
       /* non-fatal */
     }).finally(() => {
       clearTimeout(timeout);
-      SplashScreen.hideAsync();
+      // Hold the splash until the first screen has actually painted — two
+      // animation frames after init resolves lets the router commit and the
+      // native view draw, so there's no unbranded flash between the splash
+      // fade and first paint.
+      requestAnimationFrame(() => requestAnimationFrame(() => SplashScreen.hideAsync()));
       // A real cold start — one half of PaymentReminderAsker's "fresh
       // session" trigger condition (the other half is a 10+min-backgrounded
       // return, bumped from app/(app)/_layout.tsx's own AppState handler).
@@ -158,6 +165,7 @@ function RootLayout() {
         <PostHogProvider client={posthog} autocapture>
           <ThemeProvider>
             <Stack screenOptions={{ headerShown: false, animation: 'fade' }} />
+            <PrivacyShield />
           </ThemeProvider>
         </PostHogProvider>
       </View>
