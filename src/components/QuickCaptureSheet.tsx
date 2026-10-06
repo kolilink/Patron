@@ -1,5 +1,6 @@
 import { useEffect, useRef, useState } from 'react';
-import { AccessibilityInfo, Animated, Pressable, View } from 'react-native';
+import { useReduceMotion } from '@/src/hooks/useReduceMotion';
+import { Animated, Pressable, View } from 'react-native';
 import { router } from 'expo-router';
 import { FormSheet } from '@/src/components/ui/FormSheet';
 import { Text } from '@/src/components/ui/Text';
@@ -95,13 +96,8 @@ export function QuickCaptureSheet({ visible, onClose, businessId, userId, curren
   const [venteTotalCents, setVenteTotalCents] = useState(0);
   const [creditCount, setCreditCount] = useState(0);
   const [creditTotalCents, setCreditTotalCents] = useState(0);
-  const [reduceMotion, setReduceMotion] = useState(false);
+  const reduceMotion = useReduceMotion();
 
-  useEffect(() => {
-    AccessibilityInfo.isReduceMotionEnabled().then(setReduceMotion).catch(() => {});
-    const sub = AccessibilityInfo.addEventListener('reduceMotionChanged', setReduceMotion);
-    return () => sub.remove();
-  }, []);
 
   // Suppress ActivationForkOverlay for as long as this sheet is open — same
   // fix already applied to vendre.tsx's credit mode. Un-suppressing is
@@ -154,6 +150,7 @@ export function QuickCaptureSheet({ visible, onClose, businessId, userId, curren
       visible={visible}
       onClose={onClose}
       title={mode === 'credit' ? 'Crédit rapide' : 'Vente rapide'}
+      presentationStyle="fullScreen"
       contentContainerStyle={{ padding: spacing[5], gap: spacing[4] }}
     >
       {/* Vente / Crédit segment — both modes render in place below. */}

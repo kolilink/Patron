@@ -1,6 +1,7 @@
 import { useEffect, useMemo, useRef, useState } from 'react';
+import { TRUST_LINE } from '@/src/utils/trustLine';
+import { useReduceMotion } from '@/src/hooks/useReduceMotion';
 import {
-  AccessibilityInfo,
   Animated,
   Keyboard,
   KeyboardAvoidingView,
@@ -73,7 +74,7 @@ export function FirstRunHeroOverlay({ businessId, userId, currency, onDone }: Pr
   const [lastEntry, setLastEntry] = useState<{ name: string; amountCents: number } | null>(
     draftMatches ? initialDraft!.lastEntry : null,
   );
-  const [reduceMotion, setReduceMotion] = useState(false);
+  const reduceMotion = useReduceMotion();
 
   const nameRef = useRef<TextInput>(null);
   const fadeAnim = useRef(new Animated.Value(1)).current;
@@ -86,11 +87,6 @@ export function FirstRunHeroOverlay({ businessId, userId, currency, onDone }: Pr
   // above implying the flag was already stamped this session.
   const stampedRef = useRef(draftMatches && initialDraft!.phase === 'payoff');
 
-  useEffect(() => {
-    AccessibilityInfo.isReduceMotionEnabled().then(setReduceMotion).catch(() => { });
-    const sub = AccessibilityInfo.addEventListener('reduceMotionChanged', setReduceMotion);
-    return () => sub.remove();
-  }, []);
 
   // Mirror every in-progress change straight into useAuthStore.heroDraft so
   // a lock mid-flow has nothing to lose — see the rehydration comment above.
@@ -281,6 +277,7 @@ export function FirstRunHeroOverlay({ businessId, userId, currency, onDone }: Pr
                   {error ? (
                     <Text variant="caption" style={{ color: palette.warning, textAlign: 'center' }}>{error}</Text>
                   ) : null}
+                  <Text variant="caption" color="secondary" style={{ textAlign: 'center' }}>{TRUST_LINE}</Text>
                 </View>
               </View>
             ) : (

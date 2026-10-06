@@ -114,7 +114,10 @@ describe('A2 — get_best_sellers / get_order_cogs: original bodies untouched, g
     expect(r2.error).toEqual(REFUSED);
   });
 
-  it('a member still gets the real rows (admin and vendeur)', async () => {
+  // Phase 9 (migration_v232): this used to assert that a vendeur ALSO got the
+  // business-wide ranking and COGS — i.e. it pinned the leak. A vendeur now sees only
+  // their own sales in get_best_sellers and is refused get_order_cogs (cost data).
+  it('admin gets the real rows; a vendeur gets only THEIR OWN sales and no COGS', async () => {
     const { client: owner, userId: ownerId } = await createTestUser('owner');
     const biz = await createTestBusiness(owner, 'Commerce');
     const productId = await createTestProduct(biz, ownerId, { sale_price: 250000 });
@@ -131,14 +134,20 @@ describe('A2 — get_best_sellers / get_order_cogs: original bodies untouched, g
     });
     expect(sale.error).toBeNull();
 
-    for (const c of [owner, seller]) {
-      const bs = await c.rpc('get_best_sellers', { p_business_id: biz, p_month_start: '2020-01-01' });
-      expect(bs.error).toBeNull();
-      expect(bs.data).toEqual([expect.objectContaining({ product_id: productId, total_qty: 2 })]);
-      const cg = await c.rpc('get_order_cogs', { p_business_id: biz, p_since_date: '2020-01-01' });
-      expect(cg.error).toBeNull();
-      expect(Array.isArray(cg.data)).toBe(true);
-    }
+    const bs = await owner.rpc('get_best_sellers', { p_business_id: biz, p_month_start: '2020-01-01' });
+    expect(bs.error).toBeNull();
+    expect(bs.data).toEqual([expect.objectContaining({ product_id: productId, total_qty: 2 })]);
+    const cg = await owner.rpc('get_order_cogs', { p_business_id: biz, p_since_date: '2020-01-01' });
+    expect(cg.error).toBeNull();
+    expect(Array.isArray(cg.data)).toBe(true);
+
+    // the vendeur made no sale: the admin's sale must be invisible to them
+    const vbs = await seller.rpc('get_best_sellers', { p_business_id: biz, p_month_start: '2020-01-01' });
+    expect(vbs.error).toBeNull();
+    expect(vbs.data).toEqual([]);
+    const vcg = await seller.rpc('get_order_cogs', { p_business_id: biz, p_since_date: '2020-01-01' });
+    expect(vcg.data).toBeNull();
+    expect(vcg.error).toEqual(REFUSED);
   });
 });
 

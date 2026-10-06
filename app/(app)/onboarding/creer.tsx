@@ -7,8 +7,6 @@ import { BusinessDetailsStep } from '@/src/components/BusinessDetailsStep';
 import { useTheme, radius, spacing } from '@/src/theme';
 import type { Palette } from '@/src/theme';
 import { useAuthStore } from '@/stores/auth';
-import { useInviterStore } from '@/stores/inviter';
-import { getPendingInviteToken, clearPendingInviteToken } from '@/lib/inviteLink';
 import { inferCurrency } from '@/src/constants/currency';
 import { isFounderPhone } from '@/src/utils/founder';
 
@@ -26,19 +24,6 @@ export default function CreerCommerceScreen() {
     clearError();
     await createBusiness({ name: data.name, currency: data.currency, referralCode: data.referralCode });
     if (!useAuthStore.getState().error) {
-      // B3 — an existing user who carried a pending invite token (universal
-      // link, install referrer, or clipboard handoff) into the "add a
-      // business" flow must redeem it here, not lose it. Mirrors the
-      // post-OTP arrival path in app/(welcome)/creer.tsx.
-      const token = await getPendingInviteToken();
-      if (token) {
-        const resolved = await useInviterStore.getState().resolveInvite(token, '');
-        if (resolved) {
-          await clearPendingInviteToken();
-          router.replace('/(app)/discussions?tab=amis');
-          return;
-        }
-      }
       router.replace('/(app)/(tabs)/');
     }
   };

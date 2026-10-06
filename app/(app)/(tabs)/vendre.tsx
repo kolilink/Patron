@@ -1024,11 +1024,13 @@ function PaymentModal({
                   <>
                     {/* Nouveau client — always first */}
                     <Pressable
-                      onPress={() => { setShowNewClientForm(true); Keyboard.dismiss(); }}
+                      onPress={() => { if (filteredClients.length === 0 && clientSearch.trim()) setNewClientName(clientSearch.trim()); setShowNewClientForm(true); Keyboard.dismiss(); }}
                       style={({ pressed }) => [styles.clientResultRow, styles.clientResultRowNew, pressed && { opacity: 0.55 }]}
                     >
                       <Ionicons name="add-circle-outline" size={16} color={palette.primary} />
-                      <Text variant="body" style={{ color: palette.primary, fontFamily: fontFamily.semibold }}>Nouveau client</Text>
+                      <Text variant="body" style={{ color: palette.primary, fontFamily: fontFamily.semibold }}>
+                        {filteredClients.length === 0 && clientSearch.trim() ? `+ Nouveau client « ${clientSearch.trim()} »` : 'Nouveau client'}
+                      </Text>
                     </Pressable>
 
                     {filteredClients.length === 0 && clientSearch.length > 0 ? (
@@ -1915,6 +1917,7 @@ export default function VendreScreen() {
       closeConfirmSheet();
     } catch (shareErr) {
       // failure: speaks — receipt share failed: receiptNotShared
+      haptics.error();
       failAlert('receiptNotShared');
     } finally {
       setSharingReceipt(false);

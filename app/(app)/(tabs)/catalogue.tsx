@@ -1,4 +1,6 @@
 import React, { useCallback, useEffect, useMemo, useRef, useState } from 'react';
+import { AnimatedRowCell, AnimatedRow } from '@/src/components/ui/AnimatedRow';
+import { markRowRemoved } from '@/src/utils/rowMotion';
 import { router, useFocusEffect, useLocalSearchParams } from 'expo-router';
 import {
   Alert,
@@ -568,6 +570,7 @@ function ProductFormModal({ visible, editing, onClose, onSave, saving, currency,
         <Switch
           value={hasVariants}
           onValueChange={v => {
+            haptics.toggle(v);
             setHasVariants(v);
             if (v && variantDraft.length === 0) {
               setVariantDraft([makeVariantItem(form, currency)]);
@@ -1550,7 +1553,6 @@ export default function CatalogueScreen() {
           {
             text: 'Archiver', style: 'destructive',
             onPress: async () => {
-              haptics.destructive();
               const archived = await archiveProduct(product.id, businessId);
               if (!archived) {
                 haptics.error();
@@ -1560,6 +1562,8 @@ export default function CatalogueScreen() {
                 });
                 return;
               }
+              haptics.destructive();
+              markRowRemoved(product.id); // so Annuler fades the row back in
               // Archiving is a flag flip, so it can be undone: Annuler = restoreProduct.
               useSaveConfirmationStore.getState().show({
                 message: archivedConfirmation(product.name),
@@ -1789,6 +1793,7 @@ export default function CatalogueScreen() {
             style={{ flex: 1 }}
             data={displayList}
             keyExtractor={p => p.id}
+            CellRendererComponent={AnimatedRowCell}
             renderItem={({ item }) => (
               <ProductRow
                 product={item}

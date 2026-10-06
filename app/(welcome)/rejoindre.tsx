@@ -16,8 +16,6 @@ import { JoinCodeStep } from '@/src/components/JoinCodeStep';
 import { useTheme, radius, spacing } from '@/src/theme';
 import type { Palette } from '@/src/theme';
 import { useAuthStore } from '@/stores/auth';
-import { useInviterStore } from '@/stores/inviter';
-import { getPendingInviteToken, clearPendingInviteToken } from '@/lib/inviteLink';
 import { trackEvent, classifyAuthError } from '@/lib/analytics';
 import { openWhatsApp } from '@/src/utils/whatsapp';
 
@@ -43,18 +41,6 @@ export default function RejoindreScreen() {
     clearError();
     await joinBusiness(code);
     if (!useAuthStore.getState().error) {
-      // Consume a pending consumer-invite token (Amis) carried from a deep
-      // link, install referrer, or clipboard handoff — the invitee must not
-      // lose the Amis landing just because they joined a business by code.
-      const token = await getPendingInviteToken();
-      if (token) {
-        const resolved = await useInviterStore.getState().resolveInvite(token, '');
-        if (resolved) {
-          await clearPendingInviteToken();
-          router.replace('/(app)/discussions?tab=amis');
-          return;
-        }
-      }
       router.replace('/(app)/(tabs)/');
     }
   };

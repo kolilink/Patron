@@ -19,6 +19,7 @@ import Animated, {
   Extrapolation,
   Easing,
 } from 'react-native-reanimated';
+import { useReduceMotion } from '@/src/hooks/useReduceMotion';
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
 import { router } from 'expo-router';
 import { Ionicons } from '@expo/vector-icons';
@@ -75,6 +76,7 @@ export function BusinessDrawer() {
   const isFounder = isFounderPhone(session?.user.phone);
   const founderUnreadTotal = useSupportChatStore(s => s.founderUnreadTotal);
 
+  const reduceMotion = useReduceMotion();
   const translateX = useSharedValue(-DRAWER_WIDTH);
   const dragStartX = useSharedValue(-DRAWER_WIDTH);
   const [modalVisible, setModalVisible] = useState(false);
@@ -84,18 +86,26 @@ export function BusinessDrawer() {
     if (businessDrawerOpen) {
       setSearch('');
       setModalVisible(true);
-      translateX.value = withTiming(0, { duration: DRAWER_OPEN_DURATION, easing: DRAWER_EASE });
+      translateX.value = reduceMotion
+        ? 0
+        : withTiming(0, { duration: DRAWER_OPEN_DURATION, easing: DRAWER_EASE });
     } else {
-      translateX.value = withTiming(-DRAWER_WIDTH, { duration: DRAWER_CLOSE_DURATION, easing: DRAWER_EASE }, (finished) => {
-        if (finished) {
-          runOnJS(setModalVisible)(false);
-          // Signals ActivationForkOverlay (and anything else waiting) that
-          // this Modal is genuinely gone now, not just that close was
-          // requested — see businessDrawerFullyClosed's doc comment in
-          // stores/auth.ts for why the distinction matters.
-          runOnJS(markBusinessDrawerFullyClosed)();
-        }
-      });
+      // Signals ActivationForkOverlay (and anything else waiting) that
+      // this Modal is genuinely gone now, not just that close was
+      // requested — see businessDrawerFullyClosed's doc comment in
+      // stores/auth.ts for why the distinction matters.
+      if (reduceMotion) {
+        translateX.value = -DRAWER_WIDTH;
+        setModalVisible(false);
+        markBusinessDrawerFullyClosed();
+      } else {
+        translateX.value = withTiming(-DRAWER_WIDTH, { duration: DRAWER_CLOSE_DURATION, easing: DRAWER_EASE }, (finished) => {
+          if (finished) {
+            runOnJS(setModalVisible)(false);
+            runOnJS(markBusinessDrawerFullyClosed)();
+          }
+        });
+      }
     }
   }, [businessDrawerOpen]);
 
@@ -120,7 +130,7 @@ export function BusinessDrawer() {
       if (shouldClose) {
         runOnJS(closeBusinessDrawer)();
       } else {
-        translateX.value = withTiming(0, { duration: 200, easing: DRAWER_EASE });
+        translateX.value = reduceMotion ? 0 : withTiming(0, { duration: 200, easing: DRAWER_EASE });
       }
     });
 
@@ -184,11 +194,6 @@ export function BusinessDrawer() {
   const handleAlpha = () => {
     closeBusinessDrawer();
     router.push('/(app)/alpha');
-  };
-
-  const handleInvitations = () => {
-    closeBusinessDrawer();
-    router.push('/(app)/invitations');
   };
 
   return (
@@ -341,15 +346,6 @@ export function BusinessDrawer() {
               </View>
               <Text style={[styles.footerLabel, { flex: 1 }]}>Assistant IA</Text>
             </Pressable>
-            {/* Invitations — sender-side hygiene: who redeemed each link and
-                when, instant revocation (Phase 6). Lives in the drawer next
-                to the other person-level entries, not on Home. */}
-            <Pressable onPress={handleInvitations} style={({ pressed }) => [styles.footerRow, pressed && { opacity: 0.6 }]}>
-              <View style={styles.footerIcon}>
-                <Ionicons name="person-add-outline" size={18} color={palette.textSecondary} />
-              </View>
-              <Text style={[styles.footerLabel, { flex: 1 }]}>Invitations</Text>
-            </Pressable>
             <Pressable onPress={handleJoin} style={({ pressed }) => [styles.footerRow, pressed && { opacity: 0.6 }]}>
               <View style={styles.footerIcon}>
                 <Ionicons name="key-outline" size={18} color={palette.textSecondary} />
@@ -361,7 +357,7 @@ export function BusinessDrawer() {
                 <View style={styles.footerIcon}>
                   <Ionicons name="add-circle-outline" size={18} color={palette.textSecondary} />
                 </View>
-                <Text style={styles.footerLabel}>Créer un commerce</Text>
+                <Text style={styles.footerLabel}>Ajouter un commerce</Text>
               </Pressable>
             )}
           </View>

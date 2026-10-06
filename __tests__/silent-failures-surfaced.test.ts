@@ -19,14 +19,14 @@ describe('Phase 3 — silent failures surfaced on mutating actions', () => {
     it('market.ts toggleCommentLike toasts on real errors (silent only for Auto-upvotes)', () => {
         const src = readSource('stores/market.ts');
         expect(src).toMatch(/toggleCommentLike:[\s\S]*?catch\s*\(err\)/);
-        expect(src).toMatch(/if\s*\(!msg\.includes\('Auto-upvotes'\)\)\s*\{[\s\S]*?toast\.warning\('Impossible d\\'enregistrer le like\. Réessayez\.'\)/);
+        expect(src).toMatch(/if\s*\(!msg\.includes\('Auto-upvotes'\)\)\s*\{[\s\S]*?toast\.warning\(failureLine\('likeNotSaved'\)\)/);
         // No bare `catch {` remains on the like/comment-like paths.
         expect(src).not.toMatch(/catch\s*\{\s*\n\s*\/\/\s*Revert all three/);
     });
 
     it('market.ts addComment toasts before re-throwing', () => {
         const src = readSource('stores/market.ts');
-        expect(src).toMatch(/sendingComment: false\s*\}\);\s*toast\.warning\(translateError\(err,\s*'Impossible de publier le commentaire'\)\)/);
+        expect(src).toMatch(/sendingComment: false\s*\}\);\s*toast\.warning\(failureLine\('commentNotPublished',\s*err\)\)/);
     });
 
     it('fournisseurs.ts updateReceptionSupplier sets error state instead of bare catch', () => {
@@ -38,7 +38,7 @@ describe('Phase 3 — silent failures surfaced on mutating actions', () => {
     it('partnerships.ts loadInviteCode + regenerateInviteCode surface errors', () => {
         const src = readSource('stores/partnerships.ts');
         expect(src).toMatch(/inviteCodeLoading: false,\s*error:\s*translateError\(err,\s*'Impossible de charger le code d\\'invitation'\)/);
-        expect(src).toMatch(/inviteCodeLoading: false\s*\}\);\s*toast\.warning\(translateError\(err,\s*'Impossible de régénérer le code d\\'invitation'\)\)/);
+        expect(src).toMatch(/inviteCodeLoading: false\s*\}\);\s*toast\.warning\(failureLine\('inviteCodeNotRenewed',\s*err\)\)/);
     });
 
     it('equipe/index.tsx surfaces failures for changeRole/removeMembre/revokeCode/updateScopeAll', () => {

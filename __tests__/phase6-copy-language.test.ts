@@ -66,24 +66,23 @@ describe('Phase 6 — copy & language', () => {
         expect(src).not.toMatch(/Regardez votre téléphone pour continuer\./);
     });
 
-    it('6.7 both rejoindre flows consume the pending invite token (Amis landing)', () => {
+    it('6.7 the staff join flows no longer route into Amis (attribution is silent, in (app)/_layout)', () => {
         const welcome = readSource('app/(welcome)/rejoindre.tsx');
         const onboarding = readSource('app/(app)/onboarding/rejoindre.tsx');
         for (const src of [welcome, onboarding]) {
-            expect(src).toMatch(/getPendingInviteToken/);
-            expect(src).toMatch(/resolveInvite\(token, ''\)/);
-            expect(src).toMatch(/discussions\?tab=amis/);
+            expect(src).not.toMatch(/discussions\?tab=amis/);
+            expect(src).toMatch(/joinBusiness\(/);
         }
+        expect(readSource('app/(app)/_layout.tsx')).toMatch(/recordPendingInviteAttribution\(\)/);
     });
 
-    it('6.8 onboarding carnet, accueil, plus and invitations copy fixes', () => {
+    it('6.8 onboarding carnet, accueil and plus copy fixes', () => {
         expect(readSource('app/(app)/onboarding/carnet.tsx')).toMatch(/L'argent qu'on me doit/);
         expect(readSource('app/(app)/(tabs)/index.tsx')).toMatch(/Votre commerce est prêt !/);
         const plus = readSource('app/(app)/(tabs)/plus.tsx');
         expect(plus).toMatch(/'Investisseur'/);
         expect(plus).toMatch(/'Gérant adjoint'/);
         expect(plus).not.toMatch(/'Observateur'/);
-        expect(readSource('app/(app)/invitations.tsx')).toMatch(/Envoyez-le en privé/);
     });
 
     it('6.9 recuperation.tsx binds emailOtpLoading (not the session loading flag) and PhoneInput label is explicit', () => {

@@ -18,8 +18,6 @@ import { BusinessDetailsStep } from '@/src/components/BusinessDetailsStep';
 import { useTheme, spacing, radius } from '@/src/theme';
 import type { Palette } from '@/src/theme';
 import { useAuthStore } from '@/stores/auth';
-import { useInviterStore } from '@/stores/inviter';
-import { getPendingInviteToken, clearPendingInviteToken } from '@/lib/inviteLink';
 import { recordFunnelStep } from '@/lib/funnel';
 import { trackEvent, classifyAuthError } from '@/lib/analytics';
 import { useCountdown } from '@/src/hooks/useCountdown';
@@ -58,20 +56,6 @@ export default function CreerScreen() {
     clearError();
     await createBusiness({ name: data.name, currency: data.currency });
     if (!useAuthStore.getState().error) {
-      // Phase 5 — post-OTP arrival: if this device carried a pending invite
-      // token (universal link, install referrer, or clipboard handoff),
-      // redeem it now that the user is authenticated and has a business.
-      // On success land in Amis with the inviter listed; otherwise the
-      // generic Home is the safe fallback (never a dead end).
-      const token = await getPendingInviteToken();
-      if (token) {
-        const resolved = await useInviterStore.getState().resolveInvite(token, '');
-        if (resolved) {
-          await clearPendingInviteToken();
-          router.replace('/(app)/discussions?tab=amis');
-          return;
-        }
-      }
       router.replace('/(app)/(tabs)/');
     }
   };

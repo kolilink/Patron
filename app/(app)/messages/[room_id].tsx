@@ -38,6 +38,7 @@ import { buildFailure, failureReason } from '@/src/utils/failure';
 import { haptics } from '@/lib/haptics';
 import { partnerRemovedConfirmation } from '@/src/utils/saveConfirmationCopy';
 import { toast } from '@/stores/toast';
+import { formatDate } from '@/src/utils/dates';
 
 // expo-av's native module only exists once the app has been rebuilt with this
 // dependency linked in — requiring it eagerly would crash older binaries that
@@ -66,7 +67,7 @@ function dateLabel(iso: string): string {
   const yesterday = new Date(now);
   yesterday.setDate(now.getDate() - 1);
   if (sameDay(d, yesterday)) return 'Hier';
-  return d.toLocaleDateString('fr', { weekday: 'long', day: 'numeric', month: 'long' });
+  return formatDate(d, 'weekdayLong');
 }
 
 function timeLabel(iso: string): string {
@@ -439,10 +440,12 @@ export default function DmChatScreen() {
     if (!partnership_id) return;
     try {
       await removePartner(partnership_id, businessId);
+      haptics.destructive();
       toast.success(partnerRemovedConfirmation(partner?.display_name ?? 'partenaire'));
       router.back();
     } catch (err) {
       // failure: speaks — remove partner: failAlert + Réessayer
+      haptics.error();
       failAlert('partnerNotRemoved', { err, label: 'Réessayer', onPress: () => { void handleRemovePartner(); } });
     }
   }, [partnership_id, businessId, removePartner]);
@@ -652,7 +655,7 @@ export default function DmChatScreen() {
           </View>
           <Switch
             value={shareStockToggle}
-            onValueChange={setShareStockToggle}
+            onValueChange={v => { haptics.toggle(v); setShareStockToggle(v); }}
             trackColor={{ true: palette.primary }}
           />
         </View>

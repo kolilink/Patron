@@ -1,4 +1,5 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
+import { AnimatedRowCell, AnimatedRow } from '@/src/components/ui/AnimatedRow';
 import { ActivityIndicator, Alert, Animated, Easing, FlatList, InputAccessoryView, Modal, Platform, Pressable, RefreshControl, ScrollView, StyleSheet, TextInput, View } from 'react-native';
 import { captureRef } from 'react-native-view-shot';
 import * as Sharing from 'expo-sharing';
@@ -27,6 +28,7 @@ import { EmptyState } from '@/src/components/ui/EmptyState';
 import { failAlert } from '@/src/components/ui/FailureView';
 import { saleCancelledConfirmation } from '@/src/utils/saveConfirmationCopy';
 import { toast } from '@/stores/toast';
+import { formatDate } from '@/src/utils/dates';
 
 // iOS-only: suppresses the OS's auto-injected floating "Done" pill above
 // the numeric keyboard — PaymentSheet already has a persistent, always-
@@ -115,7 +117,7 @@ function methodLabel(m: string) {
 
 function fmtDate(iso: string) {
   const d = iso.includes('T') ? new Date(iso) : new Date(iso + 'T00:00:00');
-  return d.toLocaleDateString('fr-FR', { day: 'numeric', month: 'short', year: 'numeric' });
+  return formatDate(d, 'short');
 }
 
 function todayISO() { return new Date().toISOString().split('T')[0]; }
@@ -194,9 +196,7 @@ function buildGroupedList(sales: Vente[], currency: string): ListItem[] {
       } else if (key === yesterdayKey) {
         label = 'Hier';
       } else {
-        const opts: Intl.DateTimeFormatOptions = { weekday: 'long', day: 'numeric', month: 'long' };
-        if (d.getFullYear() !== currentYear) opts.year = 'numeric';
-        const s = d.toLocaleDateString('fr-FR', opts);
+        const s = formatDate(d, d.getFullYear() !== currentYear ? 'weekdayLongYear' : 'weekdayLong');
         label = s.charAt(0).toUpperCase() + s.slice(1);
       }
       dayStats.set(key, { label, count: 0, total: 0, hasCredit: false });
@@ -514,7 +514,7 @@ function DetailModal({ sale, currency, businessName, singleVendor, role, onClose
       'Le stock sera restauré. Cette action est irréversible.',
       [
         { text: 'Retour', style: 'cancel' },
-        { text: 'Annuler la vente', style: 'destructive', onPress: () => { haptics.destructive(); onCancel(cancelReason); } },
+        { text: 'Annuler la vente', style: 'destructive', onPress: () => { onCancel(cancelReason); } },
       ],
     );
   };
@@ -1338,11 +1338,13 @@ export default function VentesScreen() {
     const sale = selected;
     const ok = await cancelSale(sale.id, businessId, userId, reason);
     if (ok) {
+      haptics.destructive();
       // cancel_sale restores the stock and has no reverse operation, so no Annuler:
       // the message names exactly which sale was cancelled.
       toast.success(saleCancelledConfirmation(sale.total_amount - (sale.discount_amount ?? 0), currency, sale.customer_name));
       setSelected(null);
     } else {
+      haptics.error();
       failAlert('saleNotCancelled', { err: useVentesStore.getState().error, label: 'Réessayer', onPress: () => { void handleCancel(reason); } });
     }
   };
@@ -1427,6 +1429,8 @@ export default function VentesScreen() {
             icon="receipt-outline"
             title="Aucune vente pour le moment."
             subtitle="Vos ventes apparaîtront ici."
+            actionLabel={canSell ? '+ Enregistrer une vente' : undefined}
+            onAction={canSell ? () => router.push('/(app)/(tabs)/vendre') : undefined}
           />
         ) : (
           <View style={styles.emptyState}>
@@ -1441,6 +1445,7 @@ export default function VentesScreen() {
       ) : (
         <FlatList
           data={visibleItems}
+          CellRendererComponent={AnimatedRowCell}
           keyExtractor={item => item.type === 'header' ? `hdr-${item.key}` : item.sale.id}
           contentContainerStyle={styles.list}
           refreshControl={

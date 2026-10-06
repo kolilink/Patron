@@ -8,12 +8,12 @@ import Animated, {
     interpolate,
     interpolateColor,
     useAnimatedStyle,
-    useReducedMotion,
     useSharedValue,
     withSpring,
     withTiming,
     type SharedValue,
 } from 'react-native-reanimated';
+import { useReduceMotion } from '@/src/hooks/useReduceMotion';
 import { useTheme, FLOATING_TAB_BAR_HEIGHT, FLOATING_TAB_BAR_GAP } from '@/src/theme';
 import { haptics } from '@/lib/haptics';
 
@@ -171,7 +171,7 @@ export function FloatingTabBar({
     showLabels = false,
 }: FloatingTabBarProps) {
     const { palette, resolvedScheme } = useTheme();
-    const reduceMotion = useReducedMotion();
+    const reduceMotion = useReduceMotion();
 
     const [barWidth, setBarWidth] = useState(0);
     const [keyboardVisible, setKeyboardVisible] = useState(false);

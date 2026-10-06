@@ -337,7 +337,7 @@ export default function AlphaScreen() {
         {offline && (
           <View style={{ paddingHorizontal: spacing[4], paddingTop: spacing[1] }}>
             <Text variant="caption" color="secondary">
-              Pas de connexion — Alpha nécessite une connexion internet
+              Hors ligne — Alpha nécessite une connexion internet
             </Text>
           </View>
         )}

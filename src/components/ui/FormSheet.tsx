@@ -22,8 +22,10 @@ interface FormSheetProps {
   cancelLabel?: string;
   /** Replaces the default empty right-side header spacer (e.g. a "⋯" menu button). */
   headerRight?: ReactNode;
-  /** iOS-only native sheet chrome — ignored on Android, which is always full-screen. */
-  presentationStyle?: 'pageSheet' | 'formSheet';
+  /** iOS-only native presentation — ignored on Android, which is always full-screen.
+   * 'fullScreen' covers the presenting screen entirely (no app chrome peeking
+   * above the sheet); the sheet styles leave it visible. */
+  presentationStyle?: 'pageSheet' | 'formSheet' | 'fullScreen';
   /** Rendered below the scroll content, still inside the KeyboardAvoidingView (e.g. a submit button). */
   footer?: ReactNode;
   /** Rendered after everything else (e.g. an iOS InputAccessoryView). */
@@ -86,7 +88,10 @@ export const FormSheet = forwardRef<ScrollView, FormSheetProps>(function FormShe
   // navigationBarTranslucent needs the same for the bottom inset, which was
   // already applied everywhere. iOS's native sheet chrome already handles
   // both, so it only ever needs 'bottom'.
-  const edges: Edge[] = Platform.OS === 'android' ? ['top', 'bottom'] : ['bottom'];
+  // iOS fullScreen has no sheet chrome handling the top, so it needs the
+  // same top inset as Android.
+  const needsTopInset = Platform.OS === 'android' || presentationStyle === 'fullScreen';
+  const edges: Edge[] = needsTopInset ? ['top', 'bottom'] : ['bottom'];
 
   return (
     <Modal
@@ -100,7 +105,9 @@ export const FormSheet = forwardRef<ScrollView, FormSheetProps>(function FormShe
     >
       <KeyboardAvoidingView
         behavior={Platform.OS === 'ios' ? 'padding' : undefined}
-        keyboardVerticalOffset={Platform.OS === 'ios' ? 46 : 0}
+        // 46 compensates for the sheet's own top offset; a full-screen modal
+        // starts at the screen top, so there is nothing to compensate.
+        keyboardVerticalOffset={Platform.OS === 'ios' && presentationStyle !== 'fullScreen' ? 46 : 0}
         style={{ flex: 1, backgroundColor: palette.background }}
       >
         <SafeAreaView style={styles.safe} edges={edges}>

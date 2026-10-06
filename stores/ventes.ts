@@ -130,6 +130,10 @@ interface VentesStore {
   // synced baseline underneath it. See lib/pendingOverlay.ts's own header
   // comment for the full reasoning.
   refreshPendingOverlay: () => Promise<void>;
+  // Read-only twin of refreshPendingOverlay for the dashboard: the synced
+  // baseline (ventes_cache) and the outbox-aware list built from it, for the
+  // session's default scope. Sets no state.
+  readOverlayPair: () => Promise<{ baseline: Vente[]; overlay: Vente[] }>;
   loadDetail: (saleId: string) => Promise<void>;
   // `idempotencyKey` is optional: a caller that may retry after a failure passes the SAME key on every
   // attempt, so a retry can never record the payment twice (locally or at the server).
@@ -216,6 +220,20 @@ export const useVentesStore = create<VentesStore>((set, get) => ({
   offline: false,
   offlineSince: null,
 
+  readOverlayPair: async () => {
+    const session = useAuthStore.getState().session;
+    if (!session?.activeBusiness) return { baseline: [], overlay: [] };
+    const businessId = session.activeBusiness.id;
+    const isVendeur = session.activeMembership?.role === 'vendeur';
+    const cacheKey = `${businessId}:${isVendeur ? session.user.id : 'all'}`;
+    // Baseline = the untouched synced cache, never in-memory `sales` (see
+    // refreshPendingOverlay's note on why re-folding a patched list double-applies).
+    const cached = (await getVentesCache(cacheKey)) as Vente[] | null;
+    const baseline = (cached ?? []).map(toOverlaySale);
+    const { sales } = await rebuildPendingOverlay(baseline, currentOverlayContext());
+    return { baseline: (cached ?? []) as Vente[], overlay: sales as Vente[] };
+  },
+
   refreshPendingOverlay: async () => {
     const session = useAuthStore.getState().session;
     if (!session?.activeBusiness) return;
@@ -241,10 +259,8 @@ export const useVentesStore = create<VentesStore>((set, get) => ({
     // Re-reading the untouched cache every time avoids this class of bug
     // entirely: nothing here is ever partially-applied, because the
     // baseline never carries any prior overlay effect at all.
-    const cached = (await getVentesCache(cacheKey)) as Vente[] | null;
-    const syncedBaseline = (cached ?? []).map(toOverlaySale);
-    const { sales } = await rebuildPendingOverlay(syncedBaseline, currentOverlayContext());
-    set({ sales: sales as Vente[] });
+    const { overlay } = await get().readOverlayPair();
+    set({ sales: overlay });
   },
 
   fetchSales: async (businessId, sellerId, since, limit, status) => {
@@ -344,7 +360,7 @@ export const useVentesStore = create<VentesStore>((set, get) => ({
         });
         return;
       }
-      set({ loading: false, error: translateError(fetchErr, 'Erreur de chargement'), salesFetchedFor: businessId });
+      set({ loading: false, error: translateError(fetchErr, "Le chargement n'a pas abouti."), salesFetchedFor: businessId });
       return;
     }
     if (!data) { set({ loading: false, salesFetchedFor: businessId }); return; }

@@ -1,4 +1,5 @@
 import { create } from 'zustand';
+import { failureLine } from '@/src/utils/failure';
 import { supabase } from '@/lib/supabase';
 import { translateError } from '@/lib/errors';
 import { getKV, setKV, savePartnershipsCache, getPartnershipsCache, getCacheTimestamp } from '@/lib/db';
@@ -213,7 +214,7 @@ export const usePartnershipsStore = create<PartnershipsStore>((set, get) => ({
       set({ inviteCode: { code: data as string, expires_at }, inviteCodeLoading: false });
     } catch (err) {
       set({ inviteCodeLoading: false });
-      toast.warning(translateError(err, 'Impossible de régénérer le code d\'invitation'));
+      toast.warning(failureLine('inviteCodeNotRenewed', err));
     }
   },
 

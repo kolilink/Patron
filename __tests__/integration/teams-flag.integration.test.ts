@@ -77,7 +77,7 @@ describe('teams_enabled — column shape and default', () => {
     expect((row as any).teams_enabled).toBe(false);
     expect(teamSurfaces(row as any)).toEqual({
       equipeEntry: false, apportsEntry: false, maBoutiqueTab: false, roleBadges: false,
-      defaultDiscussionsTab: 'amis',
+      defaultDiscussionsTab: 'marche',
     });
   });
 });
@@ -166,7 +166,7 @@ describe('teams_enabled — "give it back" (flip false → true) is visibility-o
     // OFF: UI hidden, but the server still serves everything — nothing deleted, nothing restricted.
     const { data: rowOff } = await owner.from('businesses').select('*').eq('id', biz).single();
     expect(teamSurfaces(rowOff as any, true)).toEqual({
-      equipeEntry: false, apportsEntry: false, maBoutiqueTab: false, roleBadges: false, defaultDiscussionsTab: 'amis',
+      equipeEntry: false, apportsEntry: false, maBoutiqueTab: false, roleBadges: false, defaultDiscussionsTab: 'marche',
     });
     const before = await snapshot();
     expect(before.members).toBe(2);

@@ -11,6 +11,7 @@ import { useAuthStore } from '@/stores/auth';
 import { useSupportChatStore } from '@/stores/supportChat';
 import { isFounderPhone } from '@/src/utils/founder';
 import type { SupportConversation } from '@/src/types';
+import { formatDate } from '@/src/utils/dates';
 
 function relativeTime(iso: string): string {
   const diffMs = Date.now() - new Date(iso).getTime();
@@ -21,7 +22,7 @@ function relativeTime(iso: string): string {
   if (diffM < 60) return `${diffM}min`;
   if (diffH < 24) return `${diffH}h`;
   if (diffD <= 7) return `${diffD}j`;
-  return new Date(iso).toLocaleDateString('fr-FR', { day: 'numeric', month: 'short' });
+  return formatDate(iso, 'dayMonth');
 }
 
 export default function SupportInboxScreen() {
@@ -68,7 +69,7 @@ export default function SupportInboxScreen() {
         <SkeletonList count={6} />
       ) : founderConversations.length === 0 ? (
         <View style={styles.empty}>
-          <Text variant="body" color="secondary">Aucune conversation pour l'instant</Text>
+          <Text variant="body" color="secondary">Aucune conversation pour le moment.</Text>
         </View>
       ) : (
         <FlatList<SupportConversation>

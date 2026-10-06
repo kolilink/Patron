@@ -1,4 +1,5 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
+import { useReduceMotion } from '@/src/hooks/useReduceMotion';
 import { InputAccessoryView, KeyboardAvoidingView, Modal, Platform, Pressable, ScrollView, Share, StyleSheet, TextInput, View } from 'react-native';
 import { Gesture, GestureDetector } from 'react-native-gesture-handler';
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
@@ -24,7 +25,8 @@ import { useVentesStore } from '@/stores/ventes';
 import { useChatStore } from '@/stores/chat';
 import { useSupportChatStore } from '@/stores/supportChat';
 import { isFounderPhone } from '@/src/utils/founder';
-import { useRapportsStore } from '@/stores/rapports';
+import { useRapportsStore, fetchPaired } from '@/stores/rapports';
+import { useSyncStore } from '@/stores/sync';
 import { useEquipeStore } from '@/stores/equipe';
 import { useInvestorStore } from '@/stores/investor';
 import type { MemberProductStake } from '@/src/types';
@@ -33,13 +35,14 @@ import { debtAgeTier } from '@/src/utils/clientReminder';
 import { supabase } from '@/lib/supabase';
 import { isNetworkError, withTimeout } from '@/lib/sync';
 import { saveDashboardKpiCache, getDashboardKpiCache, saveBestSellersCache, getBestSellersCache, getKV, setKV } from '@/lib/db';
-import { computeLocalKpis as kpisFromLocalState } from '@/src/utils/salesTotals';
+import { computeLocalKpis as kpisFromLocalState, applyKpiOverlay } from '@/src/utils/salesTotals';
 import { buildReportDelta, applyTopSellers, type OverlaySale } from '@/lib/pendingOverlay';
 import { SkeletonKpiGrid } from '@/src/components/ui/SkeletonPlaceholder';
 import { haptics } from '@/lib/haptics';
 import { toast } from '@/stores/toast';
-import { useInviterStore, buildInviteLink, buildInviteMessage } from '@/stores/inviter';
+import { buildInviteLink, buildInviteMessage } from '@/stores/inviter';
 import { FAILURE_COPY } from '@/src/utils/failureCopy';
+import { todayIso } from '@/src/utils/dates';
 
 
 interface KPIs {
@@ -50,7 +53,6 @@ interface KPIs {
   credit_total: number;
   credit_count: number;
   low_stock: number;
-  expenses_month: number;
   // Lifetime — the business's very first real (status='paye') sale ever,
   // null if none yet. Drives the one-time "Première vente notée ✓"
   // acknowledgment; never scoped to today/this month like the rest of KPIs.
@@ -139,6 +141,7 @@ function KpiCard({ label, value, sub, onPress, tone, icon }: {
 }
 
 export default function AccueilScreen() {
+  const reduceMotion = useReduceMotion();
   const { palette } = useTheme();
   const insets = useSafeAreaInsets();
   const styles = useMemo(() => makeStyles(palette, insets.bottom), [palette, insets.bottom]);
@@ -176,24 +179,16 @@ export default function AccueilScreen() {
     if (isFounder) void loadFounderConversations();
   }, [isFounder]);
 
-  // ─── Inviter — one-tap invite-a-friend (Phase 1) ─────────────────────────
-  // Creates a single-use 24h smart link + fallback code server-side, then
-  // opens the native share sheet with the prefilled editable French "tu"
-  // message. No rewards/wallet language anywhere — progress only.
+  // ─── Inviter — word-of-mouth share ───────────────────────────────────────
+  // Native share sheet with the plain link patron.kolilink.com/invite/<my-id>.
+  // No code, no expiry, no server round trip — works offline up to the share.
   const [inviting, setInviting] = useState(false);
   const handleInvite = useCallback(async () => {
-    if (inviting) return;
+    if (inviting || !userId) return;
     setInviting(true);
     haptics.tap();
     try {
-      const invite = await useInviterStore.getState().createInvite();
-      if (!invite) {
-        const err = useInviterStore.getState().error;
-        toast.warning(err ?? "Impossible de créer l'invitation");
-        return;
-      }
-      const link = buildInviteLink(invite.token);
-      const message = buildInviteMessage(link, invite.code);
+      const message = buildInviteMessage(buildInviteLink(userId));
       trackEvent('invite_sent', businessId, userId, { source: 'accueil_header' });
       await Share.share({ message });
     } catch {
@@ -209,6 +204,11 @@ export default function AccueilScreen() {
   const { snapshot: rapportsSnapshot, fetchReportsSnapshot } = useRapportsStore();
   const { fetchMemberScope } = useEquipeStore();
   const { balance, payouts, saving: investorSaving, fetchBalance, fetchPayouts, requestPayout } = useInvestorStore();
+  // `kpisBase` = the last server read (or its cache), never touched by the
+  // outbox; `kpis` = what is shown = base + what the outbox still holds. See
+  // src/utils/salesTotals.ts (applyKpiOverlay) for why the two never diverge
+  // from the lists.
+  const [kpisBase, setKpisBase] = useState<KPIs | null>(null);
   const [kpis, setKpis] = useState<KPIs | null>(null);
   // Raw server (or cached) month ranking, before pending-sale deltas and the
   // >= 2 filter — `bestSellers` below is derived from this + the overlay.
@@ -345,9 +345,11 @@ export default function AccueilScreen() {
       setLoading(true);
       setBestSellersBase([]);
       setKpis(null);
+      setKpisBase(null);
       const cachedKpis = await getDashboardKpiCache(businessId) as KPIs | null;
       if (cachedKpis) {
-        setKpis(cachedKpis);
+        setKpisBase(cachedKpis);
+        setKpis(await withOutbox(cachedKpis));
         setLoading(false);
       }
     }
@@ -367,7 +369,9 @@ export default function AccueilScreen() {
       await Promise.all([
         fetchProducts(businessId, userId, membershipId, role),
         ventesReady.then(() => loadKpis()),
-        loadBestSellers(),
+        // Best sellers no longer render on Accueil; only an investisseur's own
+        // stake figures ("Vos produits") still read them.
+        isInvestisseur ? loadBestSellers() : Promise.resolve(),
       ]);
       if (isInvestisseur && membershipId) {
         fetchMemberScope(membershipId).then(rows => setInvestorScope(rows)).catch(() => { });
@@ -382,6 +386,29 @@ export default function AccueilScreen() {
       loadedForRef.current = businessId;
     }
   }, [businessId, userId, isInvestisseur, isVendeur, membershipId, role]);
+
+  // Any change to the sales the lists read (a local write, a refetch) re-derives
+  // the dashboard from the same server base — no remount, no refocus. Held while
+  // a drain is running: ops leave the outbox before the next server read lands,
+  // and recomputing in that gap would drop them from the total.
+  const syncing = useSyncStore(s => s.syncing);
+  useEffect(() => {
+    if (!kpisBase || syncing) return;
+    let alive = true;
+    void withOutbox(kpisBase).then(k => { if (alive) setKpis(k); }).catch(() => { /* keep what is shown */ });
+    return () => { alive = false; };
+  }, [ventesSales, kpisBase, syncing]);
+
+  // A sync pass that sent something: re-read the server base now, so the numbers
+  // settle on the server's truth without waiting for a refocus.
+  const syncedCount = useSyncStore(s => s.lastResult?.synced ?? 0);
+  const lastResult = useSyncStore(s => s.lastResult);
+  const seenResult = useRef<unknown>(useSyncStore.getState().lastResult);
+  useEffect(() => {
+    if (!lastResult || seenResult.current === lastResult) return;
+    seenResult.current = lastResult;
+    if (syncedCount > 0) loadAll();
+  }, [lastResult, syncedCount, loadAll]);
 
   // Reload every time this tab gains focus (catches sales made in caisse)
   useFocusEffect(
@@ -436,22 +463,40 @@ export default function AccueilScreen() {
     });
   };
 
-  const loadKpis = async () => {
-    // Local-first: render immediately from cache + the current sales
-    // overlay, before ever touching the network. Hydration order per the
-    // approved plan: cache -> overlay -> render -> background refresh.
-    setKpis(await computeLocalKpis());
+  // Server base + whatever the outbox still holds (never a server number shown
+  // as current while ops are pending).
+  const withOutbox = async (base: KPIs): Promise<KPIs> => {
+    const { baseline, overlay } = await useVentesStore.getState().readOverlayPair();
+    return applyKpiOverlay(base, overlay, baseline);
+  };
 
-    // Background refresh — only ever upgrades what's already showing; a
-    // network failure here is a no-op, not a fallback trigger (the local
-    // estimate is already on screen).
+  const loadKpis = async () => {
+    // Local-first: render immediately from the last server base + the outbox,
+    // before touching the network. With no base at all (first ever open,
+    // nothing cached) the list-derived estimate stands in.
+    const cachedBase = await getDashboardKpiCache(businessId) as KPIs | null;
+    if (cachedBase) {
+      setKpisBase(cachedBase);
+      setKpis(await withOutbox(cachedBase));
+    } else {
+      setKpis(await computeLocalKpis());
+    }
+
+    // Background refresh. The read is paired with the outbox (fetchPaired:
+    // waits out a running drain and retries when the queue moved during the
+    // call), so the base never already contains an op the overlay will add
+    // again. A network failure is a no-op — what is on screen is already
+    // base + outbox.
     try {
-      const localDate = new Date().toLocaleDateString('en-CA'); // YYYY-MM-DD device local date
-      const { data, error } = await withTimeout(
-        supabase.rpc('get_dashboard_kpis', {
-          p_business_id: businessId,
-          p_today: localDate,
-        }),
+      const localDate = todayIso(); // YYYY-MM-DD device local date
+      const { result: { data, error } } = await fetchPaired(
+        () => withTimeout(
+          supabase.rpc('get_dashboard_kpis', {
+            p_business_id: businessId,
+            p_today: localDate,
+          }),
+        ),
+        r => !!r.error,
       );
       if (error) {
         if (isNetworkError(error)) return;
@@ -466,15 +511,14 @@ export default function AccueilScreen() {
         credit_total: Number(d.credit_total) / 100,
         credit_count: Number(d.credit_count),
         low_stock: Number(d.low_stock),
-        expenses_month: Number(d.expenses_month) / 100,
         first_sale_at: (d.first_sale_at as string | null) ?? null,
       };
-      setKpis(freshKpis);
-      void saveDashboardKpiCache(businessId, freshKpis);
+      setKpisBase(freshKpis);
+      void saveDashboardKpiCache(businessId, freshKpis);   // server truth only — never the overlaid figures
+      setKpis(await withOutbox(freshKpis));
     } catch (err) {
-      // failure: control-flow — network error: the local estimate already on screen stays; anything else rethrows
+      // failure: control-flow — network error: base + outbox already on screen; anything else rethrows
       if (!isNetworkError(err)) throw err;
-      // network error — the local estimate set above is already on screen
     }
   };
 
@@ -559,15 +603,6 @@ export default function AccueilScreen() {
     return { agingCount, oldestDays };
   }, [ventesSales]);
 
-  const visibleBestSellers = useMemo(() => {
-    const archivedIds = new Set(products.filter(p => p.archived).map(p => p.id));
-    if (isInvestisseur && investorScope.length > 0) {
-      const scopeIds = new Set(investorScope.map(s => s.product_id));
-      return bestSellers.filter(bs => scopeIds.has(bs.product_id) && !archivedIds.has(bs.product_id));
-    }
-    return bestSellers.filter(bs => !archivedIds.has(bs.product_id));
-  }, [bestSellers, products, isInvestisseur, investorScope]);
-
   // Investor gain: sum profit_share% of each assigned product's gross margin this month.
   // Gross margin per product = revenue - (qty sold × cost_price). Expenses are business-level
   // overhead and are not deducted here since the stake is in individual product margins.
@@ -586,7 +621,6 @@ export default function AccueilScreen() {
 
   const pendingPayout = payouts.find(p => p.status === 'en_attente');
 
-  const monthNet = rapportsSnapshot?.net_profit ?? 0;
   const monthOrderCount = rapportsSnapshot?.period_order_count ?? 0;
 
   const salesCount = kpis?.sales_today ?? 0;
@@ -666,7 +700,7 @@ export default function AccueilScreen() {
         <Modal
           visible={showCarnetSheet}
           transparent
-          animationType="slide"
+          animationType={reduceMotion ? 'none' : 'slide'}
           onRequestClose={() => setShowCarnetSheet(false)}
           statusBarTranslucent
           navigationBarTranslucent
@@ -803,11 +837,9 @@ export default function AccueilScreen() {
                   </View>
                   <View style={[styles.heroComparison, { marginTop: spacing[3] }]}>
                     <Text variant="caption" color="secondary">
-                      {monthNet > 0
-                        ? `Ce mois, bénéfice de ${formatAmount(monthNet, currency)} · ${monthOrderCount} vente${monthOrderCount !== 1 ? 's' : ''}`
-                        : monthOrderCount > 0
-                          ? `Ce mois · ${monthOrderCount} vente${monthOrderCount !== 1 ? 's' : ''}`
-                          : 'Aucune vente ce mois'}
+                      {monthOrderCount > 0
+                        ? `Ce mois · ${monthOrderCount} vente${monthOrderCount !== 1 ? 's' : ''}`
+                        : 'Aucune vente ce mois'}
                     </Text>
                   </View>
                 </Card>
@@ -994,26 +1026,6 @@ export default function AccueilScreen() {
                 />
               )}
 
-              {/* ── Best sellers ── */}
-              {visibleBestSellers.length > 0 && (
-                <View style={styles.section}>
-                  <Text variant="label" color="secondary" style={styles.sectionTitle}>
-                    Produits qui marchent
-                  </Text>
-                  {visibleBestSellers.map((bs, i) => (
-                    <View key={bs.product_id} style={styles.bsRow}>
-                      <Text variant="caption" style={{ width: 20, color: palette.textSecondary }}>#{i + 1}</Text>
-                      <Text variant="body" style={{ flex: 1 }} numberOfLines={1}>{bs.product_name}</Text>
-                      <View style={{ alignItems: 'flex-end' }}>
-                        <Text variant="label">{amtOrMask(bs.total_revenue)}</Text>
-                        <Text variant="caption" color="secondary">{bs.total_qty} unité{bs.total_qty > 1 ? 's' : ''}</Text>
-                      </View>
-                    </View>
-                  ))}
-                </View>
-              )}
-
-
               {/* ── Zone 3: Month context — hidden in evening/night (already in comparison) ── */}
               {dayPart !== 'evening' && dayPart !== 'night' && hasMonthRevenue ? (
                 <Text variant="caption" color="secondary" style={styles.monthLine}>
@@ -1028,7 +1040,7 @@ export default function AccueilScreen() {
         <Modal
           visible={showWithdrawSheet}
           transparent
-          animationType="slide"
+          animationType={reduceMotion ? 'none' : 'slide'}
           onRequestClose={() => setShowWithdrawSheet(false)}
           statusBarTranslucent
           navigationBarTranslucent

@@ -78,7 +78,7 @@ export const useAlphaStore = create<AlphaStore>((set, get) => ({
         reportOfflineFallback('alpha.load', err);
         set({ loading: false, offline: true });
       } else {
-        set({ loading: false, error: translateError(err, 'Erreur de chargement') });
+        set({ loading: false, error: translateError(err, "Le chargement n'a pas abouti.") });
       }
     }
   },
@@ -152,7 +152,7 @@ export const useAlphaStore = create<AlphaStore>((set, get) => ({
           set({
             sending: false,
             error: isNetworkError(invokeErr)
-              ? 'Pas de connexion — réessayez.'
+              ? 'Hors ligne — réessayez.'
               : translateError(invokeErr, "Alpha n'a pas pu répondre"),
           });
         }
@@ -182,7 +182,7 @@ export const useAlphaStore = create<AlphaStore>((set, get) => ({
         sending: false,
         offline: netErr ? true : state.offline,
         error: netErr
-          ? 'Pas de connexion — Alpha nécessite une connexion internet.'
+          ? 'Hors ligne — Alpha nécessite une connexion internet.'
           : translateError(err, raw ?? "Erreur d'envoi"),
       }));
       return false;

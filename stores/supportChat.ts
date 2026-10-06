@@ -154,7 +154,7 @@ export const useSupportChatStore = create<SupportChatStore>((set, get) => ({
         reportOfflineFallback('supportChat.load', err);
         set({ loading: false, offline: true });
       } else {
-        set({ loading: false, error: translateError(err, 'Erreur de chargement') });
+        set({ loading: false, error: translateError(err, "Le chargement n'a pas abouti.") });
       }
     }
   },
@@ -389,7 +389,7 @@ export const useSupportChatStore = create<SupportChatStore>((set, get) => ({
 
       set({ founderConversations: withNames, founderUnreadTotal: unreadTotal, founderLoading: false });
     } catch (err) {
-      set({ founderLoading: false, founderError: translateError(err, 'Erreur de chargement') });
+      set({ founderLoading: false, founderError: translateError(err, "Le chargement n'a pas abouti.") });
     }
   },
 
@@ -421,7 +421,7 @@ export const useSupportChatStore = create<SupportChatStore>((set, get) => ({
 
       await supabase.rpc('mark_support_read', { p_conversation_id: conversationId, p_as_founder: true });
     } catch (err) {
-      set({ founderDetailLoading: false, founderError: translateError(err, 'Erreur de chargement') });
+      set({ founderDetailLoading: false, founderError: translateError(err, "Le chargement n'a pas abouti.") });
     }
   },
 

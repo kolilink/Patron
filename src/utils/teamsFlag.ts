@@ -15,21 +15,7 @@ export function isTeamsEnabled(
   return business?.teams_enabled !== false;
 }
 
-export type DiscussionsTab = 'boutique' | 'amis' | 'marche';
-
-/**
- * The tab Discussions actually shows. While teams are off, Ma Boutique (the
- * team chat) can never be visible: it falls back to Amis (offered to
- * admin/manager) or Le Marché. Other tabs are never touched.
- */
-export function resolveDiscussionsTab(
-  requested: DiscussionsTab,
-  teamsEnabled: boolean,
-  isAdminOrManager: boolean,
-): DiscussionsTab {
-  if (requested === 'boutique' && !teamsEnabled) return isAdminOrManager ? 'amis' : 'marche';
-  return requested;
-}
+import { enabledDiscussionsTabs, resolveActiveTab } from '@/src/utils/discussionsTabs';
 
 /**
  * Every team surface the flag controls, in one place — the single source of
@@ -45,6 +31,6 @@ export function teamSurfaces(
     apportsEntry: on,       // Plus menu → Apports / Mes apports
     maBoutiqueTab: on,      // Discussions → Ma Boutique
     roleBadges: on,         // "Vous êtes Gérant", drawer role labels
-    defaultDiscussionsTab: resolveDiscussionsTab('boutique', on, isAdminOrManager),
+    defaultDiscussionsTab: resolveActiveTab('boutique', enabledDiscussionsTabs({ teamsEnabled: on, isAdminOrManager })),
   };
 }

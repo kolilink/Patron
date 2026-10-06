@@ -1,4 +1,5 @@
 import { useEffect, useMemo, useRef, useState } from 'react';
+import { TRUST_LINE } from '@/src/utils/trustLine';
 import { Animated, InputAccessoryView, Platform, Pressable, ScrollView, StyleSheet, TextInput, View } from 'react-native';
 import { Ionicons } from '@expo/vector-icons';
 import { Button } from '@/src/components/ui/Button';
@@ -38,6 +39,17 @@ import { trackEvent } from '@/lib/analytics';
 
 const AMOUNT_ACCESSORY_ID = 'creditRapideAmountAccessory';
 const MAX_GRID_CLIENTS = 8; // "5-8 recent/frequent, visible on open" — the research's own number
+// Height of one chip row (56 avatar + 4 gap + caption line) — reserved while
+// the first client load is in flight so nothing below the grid jumps when the
+// chips arrive.
+const GRID_PLACEHOLDER_HEIGHT = 78;
+// Upper bound on how long the chip row is held back. The clients query has no
+// client-side timeout of its own (global fetch abort is 15s), and "Nouveau" —
+// the primary action when a business has no history, or no connection — must
+// never wait that long. Past this, the grid renders with whatever has loaded
+// (possibly just "Nouveau") and chips that arrive later pop in; accepted for
+// the slow/offline case only.
+const GRID_GATE_MAX_MS = 1500;
 
 interface CreditRapideCaptureProps {
   businessId: string;
@@ -79,7 +91,16 @@ export function CreditRapideCapture({ businessId, userId, currency, onViewClient
   // Bumped after every successful add so the recency ranking is live within
   // one rapid multi-entry session, not just on next mount.
   const [refreshKey, setRefreshKey] = useState(0);
-  const { clients } = useQuickClients(businessId, refreshKey);
+  // Only the very first load gates the grid (`loaded` never goes back to
+  // false for the same business) — a refreshKey refetch after an add keeps
+  // showing the previous list until the new one swaps in atomically.
+  const { clients, loaded: clientsLoaded } = useQuickClients(businessId, refreshKey);
+  const [gateTimedOut, setGateTimedOut] = useState(false);
+  useEffect(() => {
+    const t = setTimeout(() => setGateTimedOut(true), GRID_GATE_MAX_MS);
+    return () => clearTimeout(t);
+  }, []);
+  const gridReady = clientsLoaded || gateTimedOut;
 
   type Phase = 'pick' | 'amount';
   const [phase, setPhase] = useState<Phase>(initialClient ? 'amount' : 'pick');
@@ -98,12 +119,30 @@ export function CreditRapideCapture({ businessId, userId, currency, onViewClient
   const amountRef = useRef<TextInput>(null);
   const blinkAnim = useRef(new Animated.Value(0)).current;
   const blinkLoopRef = useRef<Animated.CompositeAnimation | null>(null);
+  // Deferred focus (one at a time) and the post-save reset are both tracked
+  // so an unmount (e.g. Crédit→Vente switch) cancels them instead of letting
+  // them fire into a screen that has moved on; a phase change also cancels a
+  // still-pending focus, which would otherwise target the wrong phase's
+  // field. The reset timer is deliberately NOT cancelled by phase changes —
+  // it's what clears `success`, and dropping it would leave handleAdd's
+  // `if (success) return` guard stuck on.
+  const focusTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
+  const resetTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
+  const cancelFocus = () => { if (focusTimerRef.current) { clearTimeout(focusTimerRef.current); focusTimerRef.current = null; } };
+  const focusLater = (ref: { current: TextInput | null }) => {
+    cancelFocus();
+    focusTimerRef.current = setTimeout(() => { focusTimerRef.current = null; ref.current?.focus(); }, 80);
+  };
+  useEffect(() => () => {
+    cancelFocus();
+    if (resetTimerRef.current) clearTimeout(resetTimerRef.current);
+  }, []);
 
   // Mirrors pickClient's own focus behavior — initialClient lands directly
   // on 'amount' phase (set in the useState initializers above), so nothing
   // else would ever focus this field otherwise.
   useEffect(() => {
-    if (initialClient) setTimeout(() => amountRef.current?.focus(), 80);
+    if (initialClient) focusLater(amountRef);
     // Deliberately mount-only — initialClient is fixed for this component's
     // whole lifetime (the host remounts it fresh per open, same as every
     // other consumer of this component).
@@ -174,7 +213,7 @@ export function CreditRapideCapture({ businessId, userId, currency, onViewClient
     setClientId(c.id);
     setError(null);
     setPhase('amount');
-    setTimeout(() => amountRef.current?.focus(), 80);
+    focusLater(amountRef);
   };
 
   const pickNew = () => {
@@ -183,10 +222,11 @@ export function CreditRapideCapture({ businessId, userId, currency, onViewClient
     setClientId(undefined);
     setError(null);
     setPhase('amount');
-    setTimeout(() => nameRef.current?.focus(), 80);
+    focusLater(nameRef);
   };
 
   const backToPick = () => {
+    cancelFocus(); // a pending focus must not fire against the grid
     setPhase('pick');
     setError(null);
   };
@@ -232,7 +272,8 @@ export function CreditRapideCapture({ businessId, userId, currency, onViewClient
     setSuccess(true);
     setSessionCount(c => c + 1);
     setRefreshKey(k => k + 1);
-    setTimeout(() => {
+    resetTimerRef.current = setTimeout(() => {
+      resetTimerRef.current = null;
       setSuccess(false);
       // initialClient mode has no grid to return to — one credit for this
       // one customer is the whole point, so close the host's sheet instead
@@ -248,6 +289,13 @@ export function CreditRapideCapture({ businessId, userId, currency, onViewClient
     <View style={styles.content}>
       {phase === 'pick' ? (
         <>
+          {/* Chips appear together or not at all: until the first load
+              resolves (or GRID_GATE_MAX_MS passes) the row is reserved
+              empty space — including "Nouveau", so it doesn't sit alone
+              and then get pushed around by the rest. */}
+          {!gridReady ? (
+            <View style={{ height: GRID_PLACEHOLDER_HEIGHT }} />
+          ) : (
           <View style={styles.grid}>
             {filteredClients.map(c => {
               const { bg, initial } = initialsAvatar(c.name);
@@ -275,8 +323,9 @@ export function CreditRapideCapture({ businessId, userId, currency, onViewClient
               <Text variant="caption" style={{ color: palette.primary, fontFamily: fontFamily.semibold }}>Nouveau</Text>
             </Pressable>
           </View>
+          )}
 
-          {(clients.length > MAX_GRID_CLIENTS || searching) && (
+          {gridReady && (clients.length > MAX_GRID_CLIENTS || searching) && (
             <TextInput
               style={[styles.search, { color: palette.textPrimary, borderColor: palette.border }]}
               value={search}
@@ -356,6 +405,7 @@ export function CreditRapideCapture({ businessId, userId, currency, onViewClient
           {error ? (
             <Text variant="caption" style={{ color: palette.warning, textAlign: 'center' }}>{error}</Text>
           ) : null}
+          <Text variant="caption" color="secondary" style={{ textAlign: 'center' }}>{TRUST_LINE}</Text>
         </>
       )}
 

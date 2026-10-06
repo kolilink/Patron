@@ -10,6 +10,7 @@ import Animated, {
   type SharedValue,
 } from 'react-native-reanimated';
 import { useTheme } from '@/src/theme';
+import { useReduceMotion } from '@/src/hooks/useReduceMotion';
 import { spacing } from '@/src/theme';
 import type { Palette } from '@/src/theme';
 
@@ -19,14 +20,17 @@ const SHIMMER_DURATION = 1000;
 function useShimmerProgress(): SharedValue<number> {
   const { width } = useWindowDimensions();
   const progress = useSharedValue(-SHIMMER_W);
+  const reduceMotion = useReduceMotion();
   useEffect(() => {
+    // Reduce motion: shimmer parked off-screen — a plain static placeholder.
+    if (reduceMotion) { cancelAnimation(progress); progress.value = -SHIMMER_W; return; }
     progress.value = withRepeat(
       withTiming(width + SHIMMER_W, { duration: SHIMMER_DURATION, easing: Easing.linear }),
       -1,
       false,
     );
     return () => { cancelAnimation(progress); };
-  }, [width]);
+  }, [width, reduceMotion]);
   return progress;
 }
 

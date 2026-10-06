@@ -29,8 +29,7 @@ import { useSupportChatStore } from './supportChat';
 import { trackEvent, identifyUser, resetAnalytics } from '@/lib/analytics';
 import { loginPurchases } from '@/lib/purchases';
 import { notifyEvent } from '@/src/utils/notifications';
-import { useInviterStore } from './inviter';
-import { clearPendingInviteToken } from '@/lib/inviteLink';
+import { clearPendingInviterId } from '@/lib/inviteLink';
 
 // ─── Last phone + biometric refresh token (quick-login) ──────────────────────
 
@@ -165,7 +164,6 @@ function resetAllStores() {
   useInvestorStore.getState().reset();
   usePartnershipsStore.getState().reset();
   useSupportChatStore.getState().reset();
-  useInviterStore.getState().reset();
 }
 
 interface PendingPhoneVerification {
@@ -361,6 +359,7 @@ async function loadSession(userId: string, authPhone?: string | null, skipCache 
     language: p.language ?? 'fr',
     recovery_email: p.recovery_email ?? null,
     notify_on_every_sale: p.notify_on_every_sale ?? true,
+    debt_reminders_enabled: p.debt_reminders_enabled ?? true,
     is_test: p.is_test ?? false,
     created_at: p.created_at,
     updated_at: p.updated_at,
@@ -600,6 +599,7 @@ export const useAuthStore = create<AuthStore>((set, get) => ({
         language: 'fr',
         recovery_email: null,
         notify_on_every_sale: true,
+        debt_reminders_enabled: true,
         created_at: new Date().toISOString(),
         updated_at: new Date().toISOString(),
       };
@@ -670,10 +670,10 @@ export const useAuthStore = create<AuthStore>((set, get) => ({
     await clearSessionCache();
     void clearBioRefreshToken();
     await setLocked(false);
-    // B5 — a pending invite token (captured on this device before/while the
+    // B5 — a pending inviter id (captured on this device before/while the
     // previous account was signed in) must not leak into the next account on
     // a shared device.
-    void clearPendingInviteToken();
+    void clearPendingInviterId();
     resetAllStores();
     set({ session: null, locked: false, justAuthenticated: false, error: null, pendingPhoneVerification: null });
 
@@ -736,7 +736,7 @@ export const useAuthStore = create<AuthStore>((set, get) => ({
     setKV(`last_business_${session.user.id}`, businessId).catch(() => { });
     // B5 — switching account/business on a shared device must not carry the
     // previous account's pending invite token into the next one.
-    void clearPendingInviteToken();
+    void clearPendingInviterId();
     resetAllStores();
 
     const nextSession: AppSession = {
@@ -1189,7 +1189,19 @@ export const useAuthStore = create<AuthStore>((set, get) => ({
       // Lift anonymous flag (and set the verified phone) — refused server-side
       // unless this user has a completed phone verification.
       const { error: upgradeErr } = await supabase.rpc('upgrade_anonymous_user');
-      if (upgradeErr) throw upgradeErr;
+      if (upgradeErr) {
+        // create-phone-verification no longer says up front that a number is
+        // already registered (it would be a phone-number directory — Phase 9).
+        // The caller has just proven they hold this number, so the refusal that
+        // can only mean "this number already has an account" is surfaced here as
+        // the same PHONE_EXISTS the sign-up screens already render ("Ce numéro a
+        // déjà un compte → Se connecter"). Every other branch of the RPC is
+        // unreachable right after a successful verification for a fresh session.
+        if (upgradeErr.code === 'P0001' && /Accès refusé/.test(upgradeErr.message)) {
+          throw new Error('PHONE_EXISTS');
+        }
+        throw upgradeErr;
+      }
       // Refresh the JWT so the new is_anonymous=false claim takes effect immediately.
       const { data: refreshData } = await supabase.auth.refreshSession();
       if (refreshData.session) void saveBioRefreshToken(refreshData.session.refresh_token);
@@ -1210,7 +1222,9 @@ export const useAuthStore = create<AuthStore>((set, get) => ({
         set({ session: appSession, justAuthenticated: true, loading: false, pendingPhoneVerification: null });
       }
     } catch (err) {
-      set({ error: translateError(err, 'Vérification échouée'), loading: false });
+      // Only the literal code is passed through, never the raw message.
+      const code = err instanceof Error && err.message === 'PHONE_EXISTS' ? 'PHONE_EXISTS' : null;
+      set({ error: code ?? translateError(err, 'Vérification échouée'), loading: false });
     }
   },
 
@@ -1258,7 +1272,10 @@ export const useAuthStore = create<AuthStore>((set, get) => ({
         set({ session: appSession, justAuthenticated: true, loading: false, pendingPhoneVerification: null });
       }
     } catch (err) {
-      set({ error: translateError(err, 'Connexion échouée'), loading: false });
+      // restore-phone-session answers PHONE_NOT_FOUND once the caller has proven
+      // they hold the number (create-phone-verification no longer does — Phase 9).
+      const code = err instanceof Error && err.message === 'PHONE_NOT_FOUND' ? 'PHONE_NOT_FOUND' : null;
+      set({ error: code ?? translateError(err, 'Connexion échouée'), loading: false });
     }
   },
 

@@ -32,6 +32,22 @@ const generic = (text: string) => () => text;
 const routeWithId = (base: string, idKey: string) =>
   (p: Record<string, unknown>) => p[idKey] ? `${base}/${p[idKey]}` : base;
 
+// "Un crédit a une semaine." / "{n} crédits ont une semaine." / "... un mois."
+// / both at once. Counts only — never a name or an amount.
+function debtAgingPart(n: number, label: string): string {
+  return n === 1 ? `un crédit a ${label}` : `${n} crédits ont ${label}`;
+}
+export function debtAgingBody(p: Record<string, unknown>): string {
+  const n7 = Math.max(0, Math.floor(Number(p.count_7d) || 0));
+  const n30 = Math.max(0, Math.floor(Number(p.count_30d) || 0));
+  const parts: string[] = [];
+  if (n7 > 0) parts.push(debtAgingPart(n7, 'une semaine'));
+  if (n30 > 0) parts.push(debtAgingPart(n30, 'un mois'));
+  if (parts.length === 0) return 'Des crédits attendent un rappel.';
+  const text = parts.join(', ');
+  return `${text.charAt(0).toUpperCase()}${text.slice(1)}.`;
+}
+
 export const EVENT_REGISTRY: Record<string, EventDef> = {
   // ── 1-4, money/ordinary, admin+manager ──────────────────────────────────
   sale_completed: {
@@ -243,15 +259,24 @@ export const EVENT_REGISTRY: Record<string, EventDef> = {
     urgent: false,
     allowedDataKeys: [],
   },
+  // Per-business daily DIGEST (migration_v237.sql, send-debt-reminders): one
+  // push per business per Conakry day at most, counts only. Lock-screen safe
+  // by construction — the payload carries two integers (and, when every due
+  // debt belongs to one client, that client's opaque id for the deep link);
+  // never a name, never an amount.
   debt_aging_reminder: {
-    built: false,
-    notBuiltReason: 'No debt-age computation/per-debt throttle exists; Rappeler sheet does not exist.',
+    built: true,
     category: 'ordinary',
     subtitle: null,
-    body: generic('Touchez pour le relancer en un message.'),
-    route: routeWithId('/(app)/clients', 'client_id'),
+    body: (p) => debtAgingBody(p),
+    // One client -> that client's carnet (its "Rappeler" button opens the
+    // WhatsApp draft); several -> the "doivent" list, oldest debt first, each
+    // row with its own "Rappeler". No new screen.
+    route: (p) => p.client_id
+      ? `/(app)/clients/${encodeURIComponent(String(p.client_id))}`
+      : '/(app)/clients?filter=doivent',
     urgent: false,
-    allowedDataKeys: ['client_id'],
+    allowedDataKeys: ['count_7d', 'count_30d', 'client_id'],
   },
 
   // ── Grandfathered — already live, unchanged copy/audience, added only so

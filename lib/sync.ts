@@ -251,6 +251,34 @@ async function notifyQueuedSaleSynced(payload: Record<string, unknown>, saleId: 
   }
 }
 
+// A vendeur's expense waits for a manager's approval: tell the managers once the
+// row actually exists server-side (the old online path did this right after the
+// insert). Best-effort — a lookup failure must never affect the sync result.
+async function notifyQueuedExpenseSynced(payload: Record<string, unknown>): Promise<void> {
+  try {
+    if (payload.status !== 'en_attente') return;
+    const businessId = payload.business_id as string;
+    const { useAuthStore } = await import('@/stores/auth');
+    const session = useAuthStore.getState().session;
+    const { data: biz } = await supabase.from('businesses').select('currency').eq('id', businessId).maybeSingle();
+    const currency = (biz as { currency?: string } | null)?.currency ?? 'GNF';
+    notifyEvent({
+      businessId,
+      eventType: 'expense_submitted',
+      payload: {
+        name: session?.user.name || 'Vendeur',
+        amount: formatAmount((payload.amount as number) / 100, currency),
+        description: String(payload.description ?? ''),
+        expense_id: payload.id,
+        business_id: businessId,
+      },
+      targetRoles: ['administrateur', 'manager'],
+    });
+  } catch {
+    // Best-effort.
+  }
+}
+
 async function executeOp(operation: string, payload: Record<string, unknown>): Promise<void> {
   switch (operation) {
     case 'submit_sale': {
@@ -276,6 +304,20 @@ async function executeOp(operation: string, payload: Record<string, unknown>): P
     }
     case 'create_expense': {
       const { error } = await supabase.from('expenses').insert(payload);
+      // 23505 = this exact expense id already landed (the first attempt got
+      // through and only its response was lost): that is success, not a refusal.
+      if (error && (error as { code?: string }).code !== '23505') throw error;
+      if (!error) void notifyQueuedExpenseSynced(payload);
+      break;
+    }
+    case 'delete_expense': {
+      // Soft delete (migration_v234) — idempotent, so a replay is harmless.
+      const { error } = await supabase.rpc('soft_delete_expense', payload);
+      if (error) throw error;
+      break;
+    }
+    case 'restore_expense': {
+      const { error } = await supabase.rpc('restore_expense', payload);
       if (error) throw error;
       break;
     }

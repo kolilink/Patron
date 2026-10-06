@@ -1,4 +1,5 @@
 import { useEffect, useMemo, useState } from 'react';
+import { haptics } from '@/lib/haptics';
 import { useInFlight } from '@/src/hooks/useInFlight';
 import { LoadingStatus } from '@/src/components/ui/LoadingStatus';
 import {
@@ -30,6 +31,7 @@ import { formatAmountInput, parseAmountInput, formatAmount } from '@/src/utils/f
 import { failAlert } from '@/src/components/ui/FailureView';
 import { supplierDeletedConfirmation } from '@/src/utils/saveConfirmationCopy';
 import { toast } from '@/stores/toast';
+import { formatDate } from '@/src/utils/dates';
 
 // iOS-only: suppresses the OS's auto-injected floating "Done" pill above
 // number-pad/decimal-pad keyboards — the pay form below already has a
@@ -60,7 +62,7 @@ function LivraisonDetail({ livraison, fournisseurName, currency, businessId, can
 }) {
   const { palette } = useTheme();
   const styles = useMemo(() => makeStyles(palette), [palette]);
-  const dateLabel = new Date(livraison.ordered_at).toLocaleDateString('fr-FR', { day: 'numeric', month: 'short' });
+  const dateLabel = formatDate(livraison.ordered_at, 'dayMonth');
   return (
     <Modal visible animationType="slide" presentationStyle="formSheet" onRequestClose={onClose} statusBarTranslucent navigationBarTranslucent backdropColor={palette.background}>
       <SafeAreaView style={styles.modalSafe} edges={Platform.OS === 'android' ? ['top', 'bottom'] : ['bottom']}>
@@ -185,9 +187,10 @@ export default function FournisseurProfile() {
     try {
       const { error } = await supabase.from('product_suppliers').insert({ product_id: productId, supplier_id: id });
       if (!error) setExtraProductIds(prev => new Set([...prev, productId]));
-      else failAlert('productNotLinked', { err: error, label: 'Réessayer', onPress: () => { void linkProduct(productId); } });
+      else { haptics.error(); failAlert('productNotLinked', { err: error, label: 'Réessayer', onPress: () => { void linkProduct(productId); } }); }
     } catch (err) {
       // failure: speaks — link product: failAlert + Réessayer
+      haptics.error();
       failAlert('productNotLinked', { err, label: 'Réessayer', onPress: () => { void linkProduct(productId); } });
       // A network timeout here must never leave `linkingProducts` stuck
       // true (it permanently disables the link chip) — see CLAUDE.md's
@@ -203,9 +206,10 @@ export default function FournisseurProfile() {
       const { error } = await supabase.from('product_suppliers')
         .delete().eq('product_id', productId).eq('supplier_id', id);
       if (!error) setExtraProductIds(prev => { const s = new Set(prev); s.delete(productId); return s; });
-      else failAlert('productNotUnlinked', { err: error, label: 'Réessayer', onPress: () => { void unlinkProduct(productId); } });
+      else { haptics.error(); failAlert('productNotUnlinked', { err: error, label: 'Réessayer', onPress: () => { void unlinkProduct(productId); } }); }
     } catch (err) {
       // failure: speaks — unlink product: failAlert + Réessayer
+      haptics.error();
       failAlert('productNotUnlinked', { err, label: 'Réessayer', onPress: () => { void unlinkProduct(productId); } });
     }
   };
@@ -239,11 +243,13 @@ export default function FournisseurProfile() {
               const supplierName = fournisseur?.name ?? '';
               const { ok, message } = await deleteFournisseur(id, businessId);
               if (ok) {
+                haptics.destructive();
                 // A deleted supplier takes its links and history with it: no Annuler is honest here,
                 // so the message names exactly what was deleted.
                 toast.success(supplierDeletedConfirmation(supplierName));
                 router.back();
               } else {
+                haptics.error();
                 failAlert('supplierNotDeleted', { why: message ?? undefined, label: 'Retour' });
               }
             });
@@ -417,7 +423,7 @@ export default function FournisseurProfile() {
                 <View key={p.id} style={styles.orderRow}>
                   <View style={{ flex: 1 }}>
                     <Text variant="body">
-                      {new Date(p.paid_at).toLocaleDateString('fr-FR', { day: 'numeric', month: 'long', year: 'numeric' })}
+                      {formatDate(p.paid_at, 'long')}
                     </Text>
                     {p.note ? <Text variant="caption" color="secondary">{p.note}</Text> : null}
                   </View>
@@ -438,7 +444,7 @@ export default function FournisseurProfile() {
               style={({ pressed }) => [styles.orderRow, pressed && { opacity: 0.6 }]}>
               <View style={{ flex: 1 }}>
                 <Text variant="body">
-                  {new Date(livraison.ordered_at).toLocaleDateString('fr-FR', { day: 'numeric', month: 'long', year: 'numeric' })}
+                  {formatDate(livraison.ordered_at, 'long')}
                 </Text>
                 <Text variant="caption" color="secondary">{fmt(livraison.total_cost, currency)}</Text>
               </View>

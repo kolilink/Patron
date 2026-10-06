@@ -1,4 +1,5 @@
 import { useCallback, useMemo, useState } from 'react';
+import { haptics } from '@/lib/haptics';
 import { Alert, Linking, Pressable, StyleSheet, View } from 'react-native';
 import { useFocusEffect } from 'expo-router';
 import { Text } from '@/src/components/ui/Text';
@@ -46,6 +47,7 @@ export function FounderDashboard() {
 
   const [kpis, setKpis] = useState<FounderKpis | null>(null);
   const [lists, setLists] = useState<CallLists | null>(null);
+  const [inviteInstalls, setInviteInstalls] = useState<number | null>(null);
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const [reloadToken, setReloadToken] = useState(0);
@@ -56,17 +58,20 @@ export function FounderDashboard() {
       setLoading(true);
       setError(null);
       try {
-        const [k, l] = await Promise.all([
+        const [k, l, inv] = await Promise.all([
           withTimeout(supabase.rpc('get_founder_kpis')),
           withTimeout(supabase.rpc('get_founder_call_lists')),
+          withTimeout(supabase.rpc('get_founder_invite_installs')),
         ]);
         if (k.error) throw k.error;
         if (l.error) throw l.error;
         if (cancelled) return;
         setKpis(k.data as FounderKpis);
         setLists(l.data as CallLists);
+        // A plain count; a failure here must not blank the rest of the dashboard.
+        setInviteInstalls(inv.error ? null : Number(inv.data ?? 0));
       } catch (err) {
-        if (!cancelled) setError(translateError(err, 'Erreur de chargement'));
+        if (!cancelled) setError(translateError(err, "Le chargement n'a pas abouti."));
       } finally {
         if (!cancelled) setLoading(false);
       }
@@ -86,7 +91,7 @@ export function FounderDashboard() {
           text: 'Marquer test',
           onPress: async () => {
             const { error: e } = await supabase.rpc('set_business_is_test', { p_business_id: row.business_id, p_is_test: true });
-            if (e) showFailureAlert(buildFailure({ what: FAILURE_COPY.testFlagNotChanged.what, why: failureReason(e), action: { label: 'Retour', onPress: () => {} } }));
+            if (e) { haptics.error(); showFailureAlert(buildFailure({ what: FAILURE_COPY.testFlagNotChanged.what, why: failureReason(e), action: { label: 'Retour', onPress: () => {} } })); }
             else reload();
           },
         },
@@ -242,10 +247,10 @@ export function FounderDashboard() {
             palette={palette} styles={styles}
           />
           <StatCard
-            label="Conversion des invitations"
-            value={formatPct(ref.conversionPct)}
-            caption={`${kpis.referral.invites_used_30d} / ${kpis.referral.invites_created_30d} liens`}
-            status={getHealthStatus(ref.conversionPct, TARGETS.referralConversion)}
+            label="Installs par invitation"
+            value={inviteInstalls === null ? '—' : String(inviteInstalls)}
+            caption="depuis le début · iOS sous-compté"
+            status={null}
             palette={palette} styles={styles}
           />
           <StatCard

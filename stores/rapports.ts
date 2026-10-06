@@ -329,7 +329,7 @@ async function waitForIdleSync(): Promise<void> {
 
 // Runs `run` (the server fetch) bracketed by two outbox reads. Returns the
 // result with the overlay it is valid against; retries when the outbox moved.
-async function fetchPaired<R>(run: () => Promise<R>, isFailure: (r: R) => boolean): Promise<{ result: R; pairing: Pairing }> {
+export async function fetchPaired<R>(run: () => Promise<R>, isFailure: (r: R) => boolean): Promise<{ result: R; pairing: Pairing }> {
   let last: { result: R; pairing: Pairing } | null = null;
   for (let attempt = 0; attempt < MAX_PAIR_ATTEMPTS; attempt++) {
     await waitForIdleSync();

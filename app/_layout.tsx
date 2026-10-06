@@ -23,7 +23,7 @@ import {
 import { PostHogProvider } from 'posthog-react-native';
 import { useAuthStore } from '@/stores/auth';
 import { getKV, openDb } from '@/lib/db';
-import { capturePendingInviteToken } from '@/lib/inviteLink';
+import { capturePendingInviterId } from '@/lib/inviteLink';
 import { setEnabled, HAPTICS_KV_KEY } from '@/lib/haptics';
 import { ThemeProvider } from '@/src/theme';
 import { posthog } from '@/lib/posthog';
@@ -123,7 +123,7 @@ function RootLayout() {
       // Best-effort: capture a deferred invite token (install referrer /
       // clipboard) now that the KV store is open. Never blocks startup —
       // a missing token just means a normal sign-up, never a dead end.
-      return capturePendingInviteToken();
+      return capturePendingInviterId();
     }).then(async () => {
       // Haptics master switch — hydrate the persisted preference once the KV
       // store is open. Default ON: only an explicit stored 'false' silences.

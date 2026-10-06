@@ -44,7 +44,18 @@ function migrationFiles() {
     .map(x => x.file);
 }
 
+// This script DROPs the public schema. Refuse to run against anything that is
+// not a local database (a mistyped TEST_DATABASE_URL pointing at production
+// must not be able to wipe it).
+function assertLocalDbUrl(url) {
+  const host = new URL(url).hostname;
+  if (host !== '127.0.0.1' && host !== 'localhost') {
+    throw new Error(`Refusing to run: DB host "${host}" is not a local test database`);
+  }
+}
+
 async function main() {
+  assertLocalDbUrl(DB_URL);
   const client = new Client({ connectionString: DB_URL });
   await client.connect();
 

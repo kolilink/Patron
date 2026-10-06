@@ -23,6 +23,7 @@ import { useAportsStore, type Apport } from '@/stores/apports';
 import { haptics } from '@/lib/haptics';
 import { toast } from '@/stores/toast';
 import { FAILURE_COPY } from '@/src/utils/failureCopy';
+import { formatDate } from '@/src/utils/dates';
 
 // iOS-only: suppresses the OS's auto-injected floating "Done" pill above
 // the numeric keyboard — this form already has a persistent, always-
@@ -36,7 +37,7 @@ function todayISO() {
 
 function fmtDate(iso: string) {
   const d = new Date(iso + 'T00:00:00');
-  return d.toLocaleDateString('fr-FR', { day: 'numeric', month: 'short', year: 'numeric' });
+  return formatDate(d, 'short');
 }
 
 function scaledFontSize(str: string): number {

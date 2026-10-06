@@ -49,7 +49,7 @@ describe('notification registry — allowlist', () => {
   });
 
   it('dormant engines (no schema/cron/UI at all) are marked built:false', () => {
-    const dormant = ['sale_edited', 'alpha_quota_reset', 'revenue_milestone', 'debt_aging_reminder'];
+    const dormant = ['sale_edited', 'alpha_quota_reset', 'revenue_milestone'];
     for (const type of dormant) {
       expect(EVENT_REGISTRY[type].built).toBe(false);
     }
@@ -89,11 +89,11 @@ describe('lock-screen payload sanitization', () => {
     expect(out).toEqual({ sale_id: 'xyz' });
   });
 
-  it('debt_aging_reminder: strips client name/amount/days, keeps only client_id', () => {
+  it('debt_aging_reminder: strips client name/amount/days, keeps only counts + the opaque client_id', () => {
     const out = sanitizeDataPayload('debt_aging_reminder', {
-      name: 'Mamadou', amount: '30 000 GNF', days: 7, client_id: 'client-1',
+      name: 'Mamadou', amount: '30 000 GNF', days: 7, client_id: 'client-1', count_7d: 2, count_30d: 1,
     });
-    expect(out).toEqual({ client_id: 'client-1' });
+    expect(out).toEqual({ client_id: 'client-1', count_7d: 2, count_30d: 1 });
   });
 
   it('low_stock: {product} is the one named exception, allowed through', () => {
@@ -127,10 +127,38 @@ describe('fixed body/title templates never echo raw payload amounts', () => {
     expect(body).not.toMatch(/999/);
   });
 
+  it('debt_aging_reminder is built (it used to be a silent built:false no-op)', () => {
+    expect(EVENT_REGISTRY.debt_aging_reminder.built).toBe(true);
+    expect(EVENT_REGISTRY.debt_aging_reminder.notBuiltReason).toBeUndefined();
+  });
+
   it('debt_aging_reminder body never states the amount or client name', () => {
-    const body = EVENT_REGISTRY.debt_aging_reminder.body({ name: 'Client X', amount: '1 000 000 GNF' });
+    const body = EVENT_REGISTRY.debt_aging_reminder.body({ name: 'Client X', amount: '1 000 000 GNF', count_7d: 1 });
     expect(body).not.toMatch(/Client X/);
     expect(body).not.toMatch(/1 000 000/);
+  });
+
+  it('debt_aging_reminder copy matches the spec for every count shape', () => {
+    const body = (count_7d: number, count_30d: number) => EVENT_REGISTRY.debt_aging_reminder.body({ count_7d, count_30d });
+    expect(body(1, 0)).toBe('Un crédit a une semaine.');
+    expect(body(3, 0)).toBe('3 crédits ont une semaine.');
+    expect(body(0, 1)).toBe('Un crédit a un mois.');
+    expect(body(0, 4)).toBe('4 crédits ont un mois.');
+    expect(body(3, 2)).toBe('3 crédits ont une semaine, 2 crédits ont un mois.');
+    expect(body(1, 2)).toBe('Un crédit a une semaine, 2 crédits ont un mois.');
+    expect(body(3, 1)).toBe('3 crédits ont une semaine, un crédit a un mois.');
+  });
+
+  it('debt_aging_reminder is ordinary-category: capped and silenced in quiet hours like other nudges', () => {
+    expect(EVENT_REGISTRY.debt_aging_reminder.category).toBe('ordinary');
+    expect(bypassesCap('ordinary')).toBe(false);
+    expect(bypassesQuietHours('ordinary')).toBe(false);
+  });
+
+  it('debt_aging_reminder routes one client to its carnet, otherwise to the "doivent" list', () => {
+    const route = EVENT_REGISTRY.debt_aging_reminder.route;
+    expect(route({ client_id: 'c-1' })).toBe('/(app)/clients/c-1');
+    expect(route({})).toBe('/(app)/clients?filter=doivent');
   });
 
   it('revenue_milestone body never states the crossed amount', () => {
@@ -229,15 +257,15 @@ describe('quiet hours — per-device timezone parameter (migration_v154.sql)', (
   });
 });
 
-describe('hard rule: no scheduler/server event can debtor-notify without a current vendor tap', () => {
-  it('debt_aging_reminder is not built — no cron/scheduler path can currently emit it', () => {
-    // The only way this event could ever be capable of firing today is if
-    // some caller flips EVENT_REGISTRY.debt_aging_reminder.built to true —
-    // and there is no cron/scheduler code anywhere in this repo that does,
-    // or could, target a specific debtor. Any future engine wiring this up
-    // must do so from a real vendor-initiated action, never a bare cron scan
-    // that reaches into a client's ledger unprompted.
-    expect(EVENT_REGISTRY.debt_aging_reminder.built).toBe(false);
+describe('hard rule: a scheduled debt reminder can never identify a debtor or state an amount', () => {
+  // This block used to pin debt_aging_reminder to built:false ("no cron path
+  // may reach into a client's ledger unprompted"). The reminder is now built
+  // on explicit product direction, so the invariant it protected is enforced
+  // where it actually matters instead: the push is a counts-only digest, it is
+  // opt-in/opt-out server-side (profiles.debt_reminders_enabled, migration_v237),
+  // and nothing debtor-identifying can survive into title/body/data.
+  it('only counts and an opaque client id can ever reach the device', () => {
+    expect(EVENT_REGISTRY.debt_aging_reminder.allowedDataKeys.sort()).toEqual(['client_id', 'count_30d', 'count_7d']);
   });
 
   it('no CRON_EVENTS-style bypass exists for debt_aging_reminder in the registry', () => {
@@ -264,9 +292,9 @@ describe('deep-link route resolution — every push type lands on its exact scre
     expect(EVENT_REGISTRY.low_stock.route({})).toBe('/(app)/catalogue');
   });
 
-  it('debt_aging_reminder routes to that client, falls back to clients root if missing', () => {
+  it('debt_aging_reminder routes to that client, falls back to the "doivent" list if several', () => {
     expect(EVENT_REGISTRY.debt_aging_reminder.route({ client_id: 'c1' })).toBe('/(app)/clients/c1');
-    expect(EVENT_REGISTRY.debt_aging_reminder.route({})).toBe('/(app)/clients');
+    expect(EVENT_REGISTRY.debt_aging_reminder.route({})).toBe('/(app)/clients?filter=doivent');
   });
 
   it('daily_digest and revenue_milestone route to chiffres/rapports', () => {
