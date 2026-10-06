@@ -25,15 +25,3 @@ export function debtAgeTier(days: number): DebtAgeTier {
   if (days >= 7) return 'attention';
   return 'normal';
 }
-
-// Takes an already-formatted amount string, not a raw number — each call
-// site already has its own `fmt()` helper and this avoids introducing a
-// second, possibly-diverging formatting path just for this message.
-export function buildDebtReminderMessage(name: string, totalOwedFormatted: string): string {
-  return [
-    `Bonjour ${name},`,
-    `Un petit point sur le carnet : il vous reste un solde de *${totalOwedFormatted}*.`,
-    `Vous pouvez passer au commerce ou effectuer un dépôt directement.`,
-    `Bonne journée à vous !`,
-  ].join('\n');
-}

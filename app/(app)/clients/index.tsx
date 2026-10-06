@@ -1,5 +1,5 @@
 import { useCallback, useEffect, useMemo, useState } from 'react';
-import { FlatList, Linking, Pressable, RefreshControl, StyleSheet, View } from 'react-native';
+import { FlatList, Pressable, RefreshControl, StyleSheet, View } from 'react-native';
 import { Screen } from '@/src/components/ui/Screen';
 import { router, useFocusEffect, useLocalSearchParams } from 'expo-router';
 import { Ionicons } from '@expo/vector-icons';
@@ -15,7 +15,7 @@ import { useVentesStore } from '@/stores/ventes';
 import { supabase } from '@/lib/supabase';
 import { OfflineNotice } from '@/src/components/ui/OfflineNotice';
 import { SkeletonList } from '@/src/components/ui/SkeletonPlaceholder';
-import { buildDebtReminderMessage, formatDebtAge, debtAgeTier } from '@/src/utils/clientReminder';
+import { formatDebtAge, debtAgeTier } from '@/src/utils/clientReminder';
 import { formatAmount } from '@/src/utils/format';
 
 function fmt(n: number, cur: string) { return formatAmount(n, cur); }
@@ -131,9 +131,11 @@ export default function ClientsScreen() {
     setRefreshing(false);
   }, [businessId, isVendeur, userId]);
 
+  // The reminder is a receipt image built from the client's full ledger (open
+  // credit lines, last payment), which only the detail screen loads — so the
+  // list hands off there and the preview sheet opens on arrival.
   const sendWhatsAppReminder = (client: Client) => {
-    const msg = buildDebtReminderMessage(client.name, fmt(client.totalCredit, currency));
-    Linking.openURL(`https://wa.me/?text=${encodeURIComponent(msg)}`).catch(() => { });
+    router.push(`/clients/${encodeURIComponent(client.clientId ?? client.name)}?remind=1`);
   };
 
   const allClients = useMemo<Client[]>(() => {
