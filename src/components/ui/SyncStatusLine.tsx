@@ -6,6 +6,7 @@ import { useTheme, spacing } from '@/src/theme';
 import { useSyncStore } from '@/stores/sync';
 import { getQueueSnapshot } from '@/lib/db';
 import { computeSyncStatusLabel } from '@/src/components/ui/syncStatusLabel';
+import { setSyncLineVisible } from '@/src/components/ui/syncLineVisibility';
 
 // §8 of the offline-first rewrite: the ONE sync-status surface in the
 // whole app, replacing the old amber SyncBanner ("N opérations à
@@ -86,6 +87,14 @@ export function SyncStatusLine() {
       useNativeDriver: false,
     }).start();
   }, [visible, barHeight, height]);
+
+  // Publish the line's REAL state (debounced label present AND measured with
+  // height) for Screen — the only thing that may decide whether Screen keeps its
+  // own top inset. Cleared on unmount so a stale `true` can never outlive the line.
+  useEffect(() => {
+    setSyncLineVisible(visible && barHeight > 0);
+  }, [visible, barHeight]);
+  useEffect(() => () => setSyncLineVisible(false), []);
 
   return (
     <Animated.View style={{ height, overflow: 'hidden', backgroundColor: palette.background }}>

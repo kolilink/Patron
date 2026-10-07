@@ -3,7 +3,7 @@ import type { ReactNode } from 'react';
 import type { ViewStyle } from 'react-native';
 import { SafeAreaView, type Edge } from 'react-native-safe-area-context';
 import { useTheme } from '@/src/theme';
-import { useSyncStore } from '@/stores/sync';
+import { useSyncLineVisible } from '@/src/components/ui/syncLineVisibility';
 
 interface ScreenProps {
   children: ReactNode;
@@ -35,7 +35,8 @@ interface ScreenProps {
  */
 export function Screen({ children, tab = false, style, edges }: ScreenProps) {
   const { palette } = useTheme();
-  const syncLineVisible = useSyncStore(s => s.pendingCount > 0);
+  // Read the line's own published state, never a guess from sync counts.
+  const syncLineVisible = useSyncLineVisible();
 
   // SyncStatusLine (mounted above <Stack/> in (app)/_layout.tsx, outside any
   // Screen) already consumes insets.top for itself when visible — don't add it again here or every screen
@@ -43,9 +44,10 @@ export function Screen({ children, tab = false, style, edges }: ScreenProps) {
   // applies to the default edge logic; an explicit `edges` prop always takes
   // full precedence.
   //
-  // The sync line is silent when online (returns null — zero height), so the
-  // top inset is dropped only while it is actually rendering above the Stack
-  // (pending sync items). When it is not visible, the screen keeps insets.top so its own first content
+  // The sync line renders nothing (zero height) in most states — online, and
+  // offline with items waiting (OfflineNotice owns that) — so the top inset is
+  // dropped only while the line is actually rendering with height (syncing, or
+  // the 7-day escalation), as published by SyncStatusLine itself. When it is not visible, the screen keeps insets.top so its own first content
   // clears the status bar / Dynamic Island — no dead space, no overlap. `tab`
   // adds no extra bottom padding beyond the real OS safe area (content is
   // meant to sit underneath the floating pill and reveal itself on scroll —
