@@ -224,8 +224,9 @@ export default function ClientsScreen() {
               {/* Plain, calm foreground — never red. These are her own
                   receivables, not a loss; color here is reserved for AGE
                   (how overdue), not for the existence of a debt itself. */}
-              <Text style={{ color: palette.textPrimary, fontFamily: fontFamily.bold, fontSize: 20, lineHeight: 25, textAlign: 'center' }} numberOfLines={1} adjustsFontSizeToFit minimumFontScale={0.5}>
-                On vous doit {fmt(totalOwedAmount, currency)} au total
+<Text variant="caption" color="secondary" style={{ textAlign: 'center' }}>On vous doit au total</Text>
+              <Text style={{ color: palette.textPrimary, fontFamily: fontFamily.bold, fontSize: 40, lineHeight: 48, textAlign: 'center', alignSelf: 'stretch' }} numberOfLines={1} adjustsFontSizeToFit minimumFontScale={0.4}>
+                {fmt(totalOwedAmount, currency)}
               </Text>
             </>
           ) : (
