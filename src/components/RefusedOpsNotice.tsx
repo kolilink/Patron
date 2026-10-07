@@ -1,6 +1,6 @@
 import { appAlert } from '@/src/utils/appAlert';
 import React, { useCallback, useEffect, useMemo, useState } from 'react';
-import { StyleSheet, View } from 'react-native';
+import { Pressable, StyleSheet, View } from 'react-native';
 import { useFocusEffect } from 'expo-router';
 import { useTheme, spacing, radius } from '@/src/theme';
 import type { Palette } from '@/src/theme';
@@ -12,35 +12,46 @@ import { useAuthStore } from '@/stores/auth';
 import { useSyncStore } from '@/stores/sync';
 import { useInFlight } from '@/src/hooks/useInFlight';
 
-// "Vente non enregistrée — <raison du serveur>". A refused operation (the
-// server answered with a real rejection, not a network problem) is never
-// counted in the reports — a refused sale is not revenue — but it must not
-// vanish either: the ventes list still shows it, and this notice says why it
-// was refused and lets her try again or let it go.
-
-const NOUN: Record<string, string> = {
-  Vente: 'Vente non enregistrée', Crédit: 'Crédit non enregistré',
-  Paiement: 'Paiement non enregistré', Livraison: 'Livraison non enregistrée', Annulation: 'Annulation non enregistrée', Opération: 'Opération non enregistrée',
-};
+// The failure surface for the outbox. A record that could not be saved on the
+// server — a real refusal (failed_permanent), or a row that can no longer be read
+// on this phone (failed_corrupt) — is NEVER counted in the numbers (a refused sale
+// is not revenue), but it must never vanish either. It says what it was, why it
+// failed (the server's own French sentence), and what she can do: Réessayer
+// (same payload, same idempotency key — a clean second try, or a dedup if the first
+// somehow landed) or Abandonner (an explicit, confirmed let-go). Covers EVERY kind
+// of queued record (sales, credits, payments, expenses, products, stock, supplier
+// money), not just sales. Mounted on Accueil, Ventes and Rapports.
+const COLLAPSED_VISIBLE = 2;
 
 export function RefusedOpsNotice() {
   const { palette } = useTheme();
   const styles = useMemo(() => makeStyles(palette), [palette]);
   const businessId = useAuthStore(s => s.session?.activeBusiness?.id ?? null);
   const lastResult = useSyncStore(s => s.lastResult);
+  const failedCount = useSyncStore(s => s.failedCount);
   const [ops, setOps] = useState<RefusedOp[]>([]);
+  const [expanded, setExpanded] = useState(false);
 
   const reload = useCallback(async () => {
     try { setOps(await loadRefusedOps(businessId)); } catch { /* the notice is best-effort */ }
+    void useSyncStore.getState().refreshCount().catch(() => { /* counter only */ });
   }, [businessId]);
 
   useFocusEffect(useCallback(() => { void reload(); }, [reload]));
-  useEffect(() => { void reload(); }, [reload, lastResult]);
+  useEffect(() => { void reload(); }, [reload, lastResult, failedCount]);
 
   if (ops.length === 0) return null;
+  const shown = expanded ? ops : ops.slice(0, COLLAPSED_VISIBLE);
   return (
     <View style={styles.wrap}>
-      {ops.map(op => <RefusedRow key={op.id} op={op} onChanged={reload} palette={palette} styles={styles} />)}
+      {shown.map(op => <RefusedRow key={op.id} op={op} onChanged={reload} palette={palette} styles={styles} />)}
+      {ops.length > COLLAPSED_VISIBLE && (
+        <Pressable onPress={() => setExpanded(e => !e)} hitSlop={8} accessibilityRole="button">
+          <Text variant="caption" style={{ color: palette.textSecondary, textAlign: 'center' }}>
+            {expanded ? 'Voir moins' : `Voir les ${ops.length} enregistrements non envoyés`}
+          </Text>
+        </Pressable>
+      )}
     </View>
   );
 }
@@ -58,8 +69,8 @@ function RefusedRow({ op, onChanged, palette, styles }: {
     onChanged();
   });
   const dismiss = () => appAlert(
-    `Abandonner cette ${op.label.toLowerCase()} ?`,
-    'Elle ne sera pas enregistrée et disparaîtra de la liste.',
+    `Abandonner ${op.thisOne} ?`,
+    'Rien ne sera enregistré et cela disparaîtra de la liste.',
     [
       { text: 'Annuler', style: 'cancel' },
       { text: 'Abandonner', style: 'destructive', onPress: () => { void run(async () => { await deleteQueueItem(op.id); onChanged(); }); } },
@@ -68,10 +79,10 @@ function RefusedRow({ op, onChanged, palette, styles }: {
   return (
     <View style={styles.row}>
       <Text variant="label" style={{ color: palette.textPrimary }}>
-        {NOUN[op.label] ?? NOUN.Opération} — {op.reason}
+        {op.unrecorded} — {op.reason}
       </Text>
       <View style={styles.actions}>
-        <Button label="Réessayer" loadingLabel="Envoi" loading={busy} onPress={retry} size="sm" variant="outline" />
+        {op.retryable && <Button label="Réessayer" loadingLabel="Envoi" loading={busy} onPress={retry} size="sm" variant="outline" />}
         <Button label="Abandonner" onPress={dismiss} disabled={busy} size="sm" variant="ghost" />
       </View>
     </View>

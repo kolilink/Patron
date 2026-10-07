@@ -46,14 +46,32 @@ export function isNetInfoOffline(state: { isConnected?: boolean | null } | null 
   return state?.isConnected === false;
 }
 
+// The link must stay up this long before the app treats it as "back": rapid
+// airplane-mode flapping (or a flaky tower) then coalesces into one reconnect
+// instead of a thrash of drains, refetches and indicator flickers.
+export const RECONNECT_SETTLE_MS = 700;
+let reconnectTimer: ReturnType<typeof setTimeout> | null = null;
+
 export function applyNetInfoState(state: { isConnected?: boolean | null } | null | undefined) {
   const online = !isNetInfoOffline(state);
   const prev = useConnectivityStore.getState();
-  useConnectivityStore.setState({
-    online,
-    known: true,
-    reconnectTick: prev.known && !prev.online && online ? prev.reconnectTick + 1 : prev.reconnectTick,
-  });
+  // `online` itself flips immediately both ways — a request must never be sent into
+  // a dead link, nor held back after it is alive. Only the SIDE EFFECTS of coming
+  // back (reconnectTick: drain, refetch, warm-up) wait for the link to settle.
+  useConnectivityStore.setState({ online, known: true });
+  if (!online) {
+    if (reconnectTimer) { clearTimeout(reconnectTimer); reconnectTimer = null; }
+    return;
+  }
+  if (prev.known && !prev.online) {
+    if (reconnectTimer) clearTimeout(reconnectTimer);
+    reconnectTimer = setTimeout(() => {
+      reconnectTimer = null;
+      if (useConnectivityStore.getState().online) {
+        useConnectivityStore.setState(s => ({ reconnectTick: s.reconnectTick + 1 }));
+      }
+    }, RECONNECT_SETTLE_MS);
+  }
 }
 
 let initPromise: Promise<void> | null = null;

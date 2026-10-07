@@ -1,4 +1,4 @@
-import { useEffect, useMemo, useRef } from 'react';
+import { useEffect, useMemo, useRef, useState } from 'react';
 import { Animated, Platform, StyleSheet, View } from 'react-native';
 import { Ionicons } from '@expo/vector-icons';
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
@@ -20,7 +20,14 @@ export function OfflineIndicator() {
   const styles = useMemo(() => makeStyles(palette), [palette]);
   const insets = useSafeAreaInsets();
   const reduceMotion = useReduceMotion();
-  const offline = useConnectivityStore(s => !s.online || s.offlineViews > 0);
+  const rawOffline = useConnectivityStore(s => !s.online || s.offlineViews > 0);
+  // Hysteresis: appear only once offline has held for a moment, vanish only once
+  // online has held — rapid flapping never makes the pill flicker.
+  const [offline, setOffline] = useState(rawOffline);
+  useEffect(() => {
+    const t = setTimeout(() => setOffline(rawOffline), rawOffline ? 500 : 900);
+    return () => clearTimeout(t);
+  }, [rawOffline]);
   const opacity = useRef(new Animated.Value(offline ? 1 : 0)).current;
 
   useEffect(() => {

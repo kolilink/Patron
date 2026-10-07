@@ -2,7 +2,7 @@
 // reports NO network interface — never the third-party reachability probe.
 import fs from 'fs';
 import path from 'path';
-import { applyNetInfoState, isKnownOffline, isNetInfoOffline, useConnectivityStore } from '@/lib/connectivity';
+import { applyNetInfoState, isKnownOffline, isNetInfoOffline, useConnectivityStore, RECONNECT_SETTLE_MS } from '@/lib/connectivity';
 
 const read = (p: string) => fs.readFileSync(path.resolve(__dirname, '..', p), 'utf8');
 const reset = () => useConnectivityStore.setState({ online: true, known: false, offlineViews: 0, reconnectTick: 0 });
@@ -32,14 +32,48 @@ describe('connectivity store', () => {
     expect(isKnownOffline()).toBe(true);
   });
 
-  it('offline → online bumps reconnectTick exactly once; the first reading never does', () => {
-    applyNetInfoState({ isConnected: true });
-    expect(useConnectivityStore.getState().reconnectTick).toBe(0);
-    applyNetInfoState({ isConnected: false });
-    applyNetInfoState({ isConnected: true });
-    expect(useConnectivityStore.getState().reconnectTick).toBe(1);
-    applyNetInfoState({ isConnected: true });
-    expect(useConnectivityStore.getState().reconnectTick).toBe(1);
+  describe('reconnect settles before it counts (flapping coalesces)', () => {
+    beforeEach(() => { jest.useFakeTimers(); });
+    afterEach(() => { jest.useRealTimers(); });
+
+    it('offline → online bumps reconnectTick once, only after the settle window; the first reading never does', () => {
+      applyNetInfoState({ isConnected: true });
+      jest.advanceTimersByTime(RECONNECT_SETTLE_MS * 2);
+      expect(useConnectivityStore.getState().reconnectTick).toBe(0);
+      applyNetInfoState({ isConnected: false });
+      applyNetInfoState({ isConnected: true });
+      expect(useConnectivityStore.getState().online).toBe(true);           // requests flow at once…
+      expect(useConnectivityStore.getState().reconnectTick).toBe(0);       // …side effects wait for it to settle
+      jest.advanceTimersByTime(RECONNECT_SETTLE_MS + 1);
+      expect(useConnectivityStore.getState().reconnectTick).toBe(1);
+      applyNetInfoState({ isConnected: true });
+      jest.advanceTimersByTime(RECONNECT_SETTLE_MS * 2);
+      expect(useConnectivityStore.getState().reconnectTick).toBe(1);
+    });
+
+    it('rapid on/off/on/off/on flapping produces exactly ONE reconnect — no thrash of drains or refetches', () => {
+      applyNetInfoState({ isConnected: true });
+      for (let i = 0; i < 5; i++) {
+        applyNetInfoState({ isConnected: false });
+        jest.advanceTimersByTime(100);
+        applyNetInfoState({ isConnected: true });
+        jest.advanceTimersByTime(100);
+      }
+      expect(useConnectivityStore.getState().reconnectTick).toBe(0);
+      jest.advanceTimersByTime(RECONNECT_SETTLE_MS + 1);
+      expect(useConnectivityStore.getState().reconnectTick).toBe(1);
+    });
+
+    it('dropping again inside the window cancels the pending reconnect', () => {
+      applyNetInfoState({ isConnected: true });
+      applyNetInfoState({ isConnected: false });
+      applyNetInfoState({ isConnected: true });
+      jest.advanceTimersByTime(RECONNECT_SETTLE_MS - 100);
+      applyNetInfoState({ isConnected: false });
+      jest.advanceTimersByTime(RECONNECT_SETTLE_MS * 2);
+      expect(useConnectivityStore.getState().reconnectTick).toBe(0);
+      expect(useConnectivityStore.getState().online).toBe(false);
+    });
   });
 });
 

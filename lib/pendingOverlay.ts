@@ -654,31 +654,74 @@ export interface RefusedOp {
   id: number;
   operation: string;
   label: string;        // what she recorded, in her words
+  unrecorded: string;   // headline: "Vente non enregistrée"
+  thisOne: string;      // "cette vente" — for the confirm-abandon sentence
   reason: string;       // the server's own (French) refusal message
   queuedAt: string;
-  payload: string;      // kept so Réessayer can re-enqueue it unchanged
+  payload: string;      // kept so Réessayer can re-enqueue it unchanged ('' when unreadable)
   idempotencyKey: string | null;
+  retryable: boolean;   // false for an unreadable (corrupt) row: only "Abandonner" makes sense
 }
 
-const OP_LABELS: Record<string, string> = {
-  submit_sale: 'Vente', submit_quick_sale: 'Vente', submit_carnet_debt: 'Crédit',
-  record_client_payment: 'Paiement', record_payment: 'Paiement', cancel_sale: 'Annulation', confirm_reception: 'Livraison',
+interface OpWording { label: string; unrecorded: string; thisOne: string }
+const W = (label: string, unrecorded: string, thisOne: string): OpWording => ({ label, unrecorded, thisOne });
+// EVERY operation that can sit in the outbox, in her words. A refused or unreadable
+// record of ANY kind must be visible — silent loss is unacceptable.
+const OP_WORDING: Record<string, OpWording> = {
+  submit_sale: W('Vente', 'Vente non enregistrée', 'cette vente'),
+  submit_quick_sale: W('Vente', 'Vente non enregistrée', 'cette vente'),
+  submit_carnet_debt: W('Crédit', 'Crédit non enregistré', 'ce crédit'),
+  record_client_payment: W('Paiement', 'Paiement non enregistré', 'ce paiement'),
+  record_payment: W('Paiement', 'Paiement non enregistré', 'ce paiement'),
+  cancel_sale: W('Annulation', 'Annulation non enregistrée', 'cette annulation'),
+  confirm_reception: W('Livraison', 'Livraison non enregistrée', 'cette livraison'),
+  create_expense: W('Dépense', 'Dépense non enregistrée', 'cette dépense'),
+  update_expense: W('Dépense', 'Modification de dépense non enregistrée', 'cette modification'),
+  delete_expense: W('Dépense', 'Suppression de dépense non enregistrée', 'cette suppression'),
+  restore_expense: W('Dépense', 'Rétablissement de dépense non enregistré', 'ce rétablissement'),
+  approve_expense: W('Dépense', 'Approbation de dépense non enregistrée', 'cette approbation'),
+  reject_expense: W('Dépense', 'Refus de dépense non enregistré', 'ce refus'),
+  create_product: W('Produit', 'Produit non enregistré', 'ce produit'),
+  update_product: W('Produit', 'Modification de produit non enregistrée', 'cette modification'),
+  adjust_stock_move: W('Stock', 'Ajustement de stock non enregistré', 'cet ajustement'),
+  adjust_stock: W('Stock', 'Ajustement de stock non enregistré', 'cet ajustement'),
+  pay_supplier_debt: W('Paiement fournisseur', 'Paiement fournisseur non enregistré', 'ce paiement'),
+  create_supplier_debt: W('Dette fournisseur', 'Dette fournisseur non enregistrée', 'cette dette'),
 };
+const FALLBACK_WORDING = W('Opération', 'Opération non enregistrée', 'cette opération');
+
+/** The business an op belongs to, from whichever field its payload carries it in (null = unknown). */
+export function opBusinessId(payload: Record<string, unknown>): string | null {
+  const direct = payload.p_business_id ?? payload.business_id;
+  if (direct != null) return String(direct);
+  const nested = (payload.product as { business_id?: unknown } | undefined)?.business_id;
+  return nested != null ? String(nested) : null;
+}
 
 export async function loadRefusedOps(currentBusinessId: string | null): Promise<RefusedOp[]> {
-  const { ok } = await getAllQueueItemsForOverlay();
+  const { ok, corrupt } = await getAllQueueItemsForOverlay();
   const out: RefusedOp[] = [];
   for (const item of ok) {
     if (item.status !== 'failed_permanent') continue;
     try {
       const payload = JSON.parse(item.payload) as Record<string, unknown>;
-      const biz = payload.p_business_id != null ? String(payload.p_business_id) : null;
+      const biz = opBusinessId(payload);
       if (currentBusinessId && biz && biz !== currentBusinessId) continue;
     } catch { continue; }
+    const w = OP_WORDING[item.operation] ?? FALLBACK_WORDING;
     out.push({
-      id: item.id, operation: item.operation, label: OP_LABELS[item.operation] ?? 'Opération',
+      id: item.id, operation: item.operation, label: w.label, unrecorded: w.unrecorded, thisOne: w.thisOne,
       reason: item.last_error ?? 'Refusée par le serveur', queuedAt: item.queued_at ?? '',
-      payload: item.payload, idempotencyKey: item.idempotency_key ?? null,
+      payload: item.payload, idempotencyKey: item.idempotency_key ?? null, retryable: true,
+    });
+  }
+  // A row that can no longer be decrypted/parsed can never sync — never invisible either.
+  for (const c of corrupt) {
+    const w = OP_WORDING[c.operation] ?? FALLBACK_WORDING;
+    out.push({
+      id: c.id, operation: c.operation, label: w.label, unrecorded: w.unrecorded, thisOne: w.thisOne,
+      reason: 'Données illisibles sur ce téléphone', queuedAt: c.queued_at ?? '',
+      payload: '', idempotencyKey: c.idempotency_key ?? null, retryable: false,
     });
   }
   return out;

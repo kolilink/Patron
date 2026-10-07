@@ -1,4 +1,5 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
+import { RefusedOpsNotice } from '@/src/components/RefusedOpsNotice';
 import { useReduceMotion } from '@/src/hooks/useReduceMotion';
 import { InputAccessoryView, KeyboardAvoidingView, Modal, Platform, Pressable, ScrollView, Share, StyleSheet, TextInput, View } from 'react-native';
 import { Gesture, GestureDetector } from 'react-native-gesture-handler';
@@ -786,6 +787,12 @@ export default function AccueilScreen() {
                 )}
               </Pressable>
             </View>
+          </View>
+
+          {/* Records that could not be saved on the server (or can no longer be read) —
+              never silent: what it was, why, and Réessayer / Abandonner. */}
+          <View style={{ marginHorizontal: -spacing[5] }}>
+            <RefusedOpsNotice />
           </View>
 
           {loading ? (

@@ -205,6 +205,24 @@ function toOverlaySale(v: Vente): import('@/lib/pendingOverlay').OverlaySale {
   };
 }
 
+// Status-filtered views ("Payés" / "À payer" / "Annulés") show the same truth as
+// "Tout": the filtered list (server list or its cache — authoritative for rows of
+// THAT status) + whatever the outbox adds. A pending new sale appears if it matches
+// the tab; a queued payment that settles a credit moves it into "Payés" (so rows
+// of OTHER statuses from the unfiltered snapshot are the working set the patches
+// act on). Stale unfiltered rows that claim the tab's status but are absent from
+// the fresh filtered list are dropped — the server says they left it.
+// No silent absence: a pending record is never missing from a tab it belongs to.
+async function overlayForStatus(businessId: string, sellerId: string | undefined, status: string, list: Vente[]): Promise<Vente[]> {
+  const unfiltered = ((await getVentesCache(`${businessId}:${sellerId ?? 'all'}`)) as Vente[] | null) ?? [];
+  const inList = new Set(list.map(s => s.id));
+  const working = [...list, ...unfiltered.filter(s => !inList.has(s.id) && s.status !== status)];
+  const { sales } = await rebuildPendingOverlay(working.map(toOverlaySale), currentOverlayContext());
+  return (sales as Vente[])
+    .filter(s => s.status === status)
+    .sort((a, b) => b.created_at.localeCompare(a.created_at));
+}
+
 // A payment retried after a failure carries the same idempotency key. Locally
 // that must never put a second copy in the outbox (the server would dedup the
 // pair, but the overlay would show it twice until then), and two taps in the
@@ -287,15 +305,13 @@ export const useVentesStore = create<VentesStore>((set, get) => ({
     // starts, every time, per the approved hydration order (cache ->
     // overlay -> render -> background refresh).
     //
-    // The overlay merge only applies to the plain, unfiltered, role-scoped
-    // view (no status filter, sellerId matching what refreshPendingOverlay
-    // itself would resolve from the session) — a status-filtered tab
-    // ("Payés"/"À payer"/"Annulés") or an explicit cross-seller admin
-    // query falls back to a cache-only seed, same as before. Phase 1's
-    // approved scope is the default carnet/dashboard/ventes-list view;
-    // extending the overlay to every filtered permutation is real,
-    // separate scope, not silently attempted here.
-    const isDefaultScope = !status && (sellerId === undefined || sellerId === useAuthStore.getState().session?.user.id);
+    // The default view merges the outbox via refreshPendingOverlay. A
+    // status-filtered tab ("Payés"/"À payer"/"Annulés") merges it too, through
+    // overlayForStatus — a pending record is never silently absent from a tab it
+    // belongs to. Only an explicit cross-seller admin query (a seller other than
+    // the session's) stays a plain cache read.
+    const sellerIsSession = sellerId === undefined || sellerId === useAuthStore.getState().session?.user.id;
+    const isDefaultScope = !status && sellerIsSession;
     if (isDefaultScope) {
       await get().refreshPendingOverlay();
       if (isStaleBusiness(businessId)) return;
@@ -304,7 +320,12 @@ export const useVentesStore = create<VentesStore>((set, get) => ({
       const cached = await getVentesCache(cacheKey) as Vente[] | null;
       if (isStaleBusiness(businessId)) return;
       if (cached) {
-        set({ sales: cached, loading: false, error: null });
+        set({ sales: status ? await overlayForStatus(businessId, sellerId, status, cached) : cached, loading: false, error: null });
+      } else if (status && sellerIsSession) {
+        // No filtered snapshot yet, but the outbox + the unfiltered snapshot can already answer.
+        const view = await overlayForStatus(businessId, sellerId, status, []);
+        if (isStaleBusiness(businessId)) return;
+        set(view.length > 0 ? { sales: view, loading: false, error: null } : { loading: true, error: null });
       } else {
         set({ loading: true, error: null });
       }
@@ -341,15 +362,16 @@ export const useVentesStore = create<VentesStore>((set, get) => ({
           set({ loading: false, offline: true, offlineSince: ts, error: null, salesFetchedFor: businessId });
           return;
         }
-        // Non-default scope (status-filtered fetches): keep the raw-cache
-        // behavior — the overlay is scope-specific and must not leak into
-        // filtered views.
+        // Non-default scope (a status-filtered tab, or another seller): the
+        // status tabs re-apply the outbox (overlayForStatus below).
         const cached = await getVentesCache(cacheKey) as Vente[] | null;
         if (isStaleBusiness(businessId)) return;
         if (cached) {
           const ts = await getCacheTimestamp('ventes_cache', cacheKey);
           if (isStaleBusiness(businessId)) return;
-          set({ sales: cached, loading: false, offline: true, offlineSince: ts, error: null, salesFetchedFor: businessId });
+          const shown = status ? await overlayForStatus(businessId, sellerId, status, cached) : cached;
+          if (isStaleBusiness(businessId)) return;
+          set({ sales: shown, loading: false, offline: true, offlineSince: ts, error: null, salesFetchedFor: businessId });
           return;
         }
         set({
@@ -478,7 +500,9 @@ export const useVentesStore = create<VentesStore>((set, get) => ({
       set({ loading: false, offline: false, offlineSince: null, salesFetchedFor: businessId });
       await get().refreshPendingOverlay();
     } else {
-      set({ sales, loading: false, offline: false, offlineSince: null, salesFetchedFor: businessId });
+      const shown = status && sellerIsSession ? await overlayForStatus(businessId, sellerId, status, sales as Vente[]) : sales;
+      if (isStaleBusiness(businessId)) return;
+      set({ sales: shown, loading: false, offline: false, offlineSince: null, salesFetchedFor: businessId });
     }
   },
 

@@ -1,4 +1,5 @@
 import '@/lib/startupTiming';
+import { useSyncStore } from '@/stores/sync';
 import { setCacheFailureReporter } from '@/lib/cacheHealth';
 import { initConnectivity } from '@/lib/connectivity';
 import * as Sentry from '@sentry/react-native';
@@ -160,7 +161,9 @@ function RootLayout() {
     Promise.all([
       withStartupTiming('connectivity', initConnectivity()),
       withStartupTiming('auth_check', initialize()),
-      withStartupTiming('db_open', openDb()),
+      // The outbox count is read INSIDE the db-open step, so it is known before the splash
+      // lifts: nothing may paint a pendingCount of 0 and then flash to N after a kill/reopen.
+      withStartupTiming('db_open', openDb().then(() => useSyncStore.getState().refreshCount())),
     ]).then(() => {
       // Best-effort: capture a deferred invite token (install referrer /
       // clipboard) now that the KV store is open. Never blocks startup —

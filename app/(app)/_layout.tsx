@@ -6,8 +6,6 @@ import { OfflineIndicator } from '@/src/components/ui/OfflineIndicator';
 import { appAlert } from '@/src/utils/appAlert';
 import { ThemedStack } from '@/src/components/ui/ThemedStack';
 import { AppState, InteractionManager, Pressable, View } from 'react-native';
-import NetInfo from '@react-native-community/netinfo';
-import { shouldKickOnConnectivityChange } from '@/lib/netInfoKick';
 import { trackEvent } from '@/lib/analytics';
 import { flushFunnelOutbox } from '@/lib/funnel';
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
@@ -409,31 +407,21 @@ export default function AppLayout() {
     return () => clearTimeout(timer);
   }, [session?.activeBusiness?.id, session?.user.id, reconnectTick]);
 
-  // Kick the drainer the instant real connectivity returns, instead of
-  // waiting on the exponential backoff cadence (up to 30min once it's
-  // settled, per lib/sync.ts's rescheduleOp) or the next foreground/write
-  // event. NetInfo's isConnected can flap/false-positive on some Android
-  // devices (a captive portal reads as "connected" at the OS level), so
-  // this is a fast-path nudge on top of the existing retry loop, not a
-  // replacement for it — kick() is safe to call redundantly either way.
+  // Kick the drainer once real connectivity has RETURNED AND SETTLED, instead of
+  // waiting on the backoff cadence (up to 30min) or the next foreground/write.
+  // reconnectTick (lib/connectivity.ts) only bumps after the link has stayed up
+  // for a settle window, so rapid airplane-mode flapping coalesces into ONE reset
+  // + drain instead of a thrash of them; the drainer is idempotent end to end
+  // (every queued op carries a key the server dedups), so a redundant kick is
+  // harmless either way.
   useEffect(() => {
-    if (!session?.user.id) return;
-    let wasConnected: boolean | null = null;
-    const sub = NetInfo.addEventListener(state => {
-      const isConnected = state.isConnected === true;
-      if (shouldKickOnConnectivityChange(wasConnected, isConnected)) {
-        // Ops that backed off while offline are due now — then drain.
-        void resetOutboxBackoff().catch(() => { }).then(() => useSyncStore.getState().kick());
-        // A reconnect is also the moment to flush any support messages the
-        // merchant wrote while offline — drainSupportQueue otherwise only
-        // runs from load() on screen focus, so a queued message would sit
-        // undelivered until the next refocus.
-        void useSupportChatStore.getState().drainSupportQueue();
-      }
-      wasConnected = isConnected;
-    });
-    return () => sub();
-  }, [session?.user.id]);
+    if (!session?.user.id || reconnectTick === 0) return;
+    // Ops that backed off while offline are due now — then drain.
+    void resetOutboxBackoff().catch(() => { }).then(() => useSyncStore.getState().kick());
+    // Flush support messages written offline (drainSupportQueue otherwise only
+    // runs from load() on screen focus).
+    void useSupportChatStore.getState().drainSupportQueue();
+  }, [reconnectTick, session?.user.id]);
 
   // The first-run hero is built BEFORE the loading gate, and rendered in the
   // loading branch too: a global `loading` flip (any auth action) must never
