@@ -291,6 +291,8 @@ interface AuthStore {
   // Accueil watches it, opens the sheet in that mode, then clears it back
   // to null.
   requestQuickCapture: 'credit' | 'vente' | null;
+  /** Optional prefilled client for a 'credit' request (Clients' "+ Nouveau client « x »"). */
+  requestQuickCaptureClientName: string | null;
 
   // Bumped exactly twice: once on a real cold start (app/_layout.tsx, right
   // after initialize() resolves) and once when the app returns to the
@@ -398,6 +400,7 @@ export const useAuthStore = create<AuthStore>((set, get) => ({
   homeRefreshToken: 0,
   heroDraft: null,
   requestQuickCapture: null,
+  requestQuickCaptureClientName: null,
   freshSessionToken: 0,
 
   initialize: async () => {

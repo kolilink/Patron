@@ -291,10 +291,10 @@ export default function ClientsScreen() {
           <NoResultsState
             query={search}
             createLabel={isInvestisseur ? undefined : `+ Nouveau client « ${search.trim()} »`}
-            onCreate={isInvestisseur ? undefined : () => router.push({
-              pathname: '/(app)/(tabs)/vendre',
-              params: { mode: 'credit', newClientName: search.trim() },
-            })}
+            onCreate={isInvestisseur ? undefined : () => {
+              useAuthStore.setState({ requestQuickCapture: 'credit', requestQuickCaptureClientName: search.trim() });
+              router.push('/(app)/(tabs)/');
+            }}
           />
         ) : filter === 'doivent' ? (
           // Neutral here, deliberately — the header above already carries
@@ -314,7 +314,10 @@ export default function ClientsScreen() {
             title="Aucun client pour le moment."
             subtitle={isVendeur ? 'Faites votre première vente.' : 'Chaque vente crée un client.'}
             actionLabel={isInvestisseur ? undefined : '+ Ajouter un client'}
-            onAction={isInvestisseur ? undefined : () => router.push({ pathname: '/(app)/(tabs)/vendre', params: { mode: 'credit' } })}
+            onAction={isInvestisseur ? undefined : () => {
+              useAuthStore.setState({ requestQuickCapture: 'credit', requestQuickCaptureClientName: null });
+              router.push('/(app)/(tabs)/');
+            }}
           />
         )
       ) : (
@@ -383,7 +386,10 @@ export default function ClientsScreen() {
       {allClients.length > 0 && !isInvestisseur && (
         <View style={styles.fabContainer}>
           <Pressable
-            onPress={() => router.push({ pathname: '/(app)/(tabs)/vendre', params: { mode: 'credit' } })}
+            onPress={() => {
+              useAuthStore.setState({ requestQuickCapture: 'credit', requestQuickCaptureClientName: null });
+              router.push('/(app)/(tabs)/');
+            }}
             style={({ pressed }) => [styles.fabExtended, pressed && { opacity: 0.82 }]}
             accessibilityLabel="Nouveau client"
             accessibilityRole="button"
@@ -441,7 +447,7 @@ function makeStyles(p: Palette) {
       flexDirection: 'row', alignItems: 'center', gap: spacing[2],
       height: 56, paddingHorizontal: spacing[5], borderRadius: radius.full,
       backgroundColor: p.primary,
-      shadowColor: p.textPrimary, shadowOffset: { width: 0, height: 4 }, shadowOpacity: 0.18, shadowRadius: 8, elevation: 8,
+      shadowColor: p.shadow, shadowOffset: { width: 0, height: 4 }, shadowOpacity: 0.18, shadowRadius: 8, elevation: 8,
     },
     fabExtendedLabel: { fontFamily: fontFamily.semibold, fontSize: 15, color: p.textInverse },
   });

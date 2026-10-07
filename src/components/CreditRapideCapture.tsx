@@ -5,7 +5,7 @@ import { Ionicons } from '@expo/vector-icons';
 import { Button } from '@/src/components/ui/Button';
 import { Text } from '@/src/components/ui/Text';
 import { KeyboardDoneBar } from '@/src/components/ui/KeyboardDoneBar';
-import { useTheme, spacing, radius, fontFamily, CLIENT_AVATAR_PALETTE } from '@/src/theme';
+import { useTheme, spacing, radius, fontFamily, CLIENT_AVATAR_PALETTE, CLIENT_AVATAR_TEXT } from '@/src/theme';
 import type { Palette } from '@/src/theme';
 import { formatAmountInput, parseAmountInput, formatAmount } from '@/src/utils/format';
 import { useQuickClients, type QuickClient } from '@/src/hooks/useQuickClients';
@@ -307,7 +307,7 @@ export function CreditRapideCapture({ businessId, userId, currency, onViewClient
                   style={({ pressed }) => [styles.personCell, pressed && { opacity: 0.6 }]}
                 >
                   <View style={[styles.personAvatar, { backgroundColor: bg }]}>
-                    <Text allowFontScaling={false} style={{ fontFamily: fontFamily.bold, fontSize: 18, lineHeight: 22, color: palette.textPrimary }}>
+                    <Text allowFontScaling={false} style={{ fontFamily: fontFamily.bold, fontSize: 18, lineHeight: 22, color: CLIENT_AVATAR_TEXT }}>
                       {initial}
                     </Text>
                   </View>

@@ -574,7 +574,8 @@ export default function AppLayout() {
               }}
               onSelectDebt={() => {
                 beginForkNavigation();
-                router.push({ pathname: '/(app)/(tabs)/vendre', params: { mode: 'credit' } });
+                useAuthStore.setState({ requestQuickCapture: 'credit', requestQuickCaptureClientName: null });
+                router.push('/(app)/(tabs)/');
               }}
             />
           )}

@@ -250,6 +250,7 @@ export default function AccueilScreen() {
   const [onboardingDismissed, setOnboardingDismissed] = useState<boolean | null>(null);
   const [showCarnetSheet, setShowCarnetSheet] = useState(false);
   const [showQuickCapture, setShowQuickCapture] = useState(false);
+  const [quickCaptureClientName, setQuickCaptureClientName] = useState<string | undefined>(undefined);
   const [quickCaptureMode, setQuickCaptureMode] = useState<'credit' | 'vente'>('credit');
   const [isPrivate, setIsPrivate] = useState(false);
   // Debt card's zero-debts CTA opens the exact same single-purpose form the
@@ -461,8 +462,9 @@ export default function AccueilScreen() {
   useEffect(() => {
     if (!requestQuickCapture) return;
     setQuickCaptureMode(requestQuickCapture);
+    setQuickCaptureClientName(useAuthStore.getState().requestQuickCaptureClientName ?? undefined);
     setShowQuickCapture(true);
-    useAuthStore.setState({ requestQuickCapture: null });
+    useAuthStore.setState({ requestQuickCapture: null, requestQuickCaptureClientName: null });
   }, [requestQuickCapture]);
 
   // Local-first (§6 of the offline-first rewrite): computes KPIs purely
@@ -1166,12 +1168,14 @@ export default function AccueilScreen() {
             // is cheap and idempotent — a no-op close (nothing was ever
             // recorded this session) just refetches the same numbers.
             setShowQuickCapture(false);
+            setQuickCaptureClientName(undefined);
             loadAll();
           }}
           businessId={businessId}
           userId={userId}
           currency={currency}
           initialMode={quickCaptureMode}
+          initialClientName={quickCaptureClientName}
         />
 
         {businessId && userId && (

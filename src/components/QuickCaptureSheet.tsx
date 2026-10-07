@@ -22,6 +22,8 @@ interface QuickCaptureSheetProps {
    * stores/auth.ts); the "+" FAB's own normal open omits this and gets the
    * default. */
   initialMode?: 'credit' | 'vente';
+  /** Prefilled client for Crédit mode (skips the pick grid, lands on the amount step) and closes the sheet after one save. */
+  initialClientName?: string;
 }
 
 const PULSE_SCALE = 1.18;
@@ -82,7 +84,7 @@ function SessionTicker({ text, reduceMotion }: { text: string; reduceMotion: boo
 // hand-off to a separate screen anymore. This sheet only owns the Vente/
 // Crédit segment itself and the session ticker below it; the actual capture
 // logic for each mode lives in its own component, not duplicated here.
-export function QuickCaptureSheet({ visible, onClose, businessId, userId, currency, initialMode = 'credit' }: QuickCaptureSheetProps) {
+export function QuickCaptureSheet({ visible, onClose, businessId, userId, currency, initialMode = 'credit', initialClientName }: QuickCaptureSheetProps) {
   const { palette } = useTheme();
   const [mode, setMode] = useState<'credit' | 'vente'>(initialMode);
 
@@ -198,7 +200,9 @@ export function QuickCaptureSheet({ visible, onClose, businessId, userId, curren
           keeps children mounted while hidden, it doesn't unmount them. */}
       {mode === 'credit' ? (
         <CreditRapideCapture
-          key={String(visible)}
+          key={`${visible}:${initialClientName ?? ''}`}
+          initialClient={initialClientName ? { name: initialClientName } : undefined}
+          onDone={initialClientName ? onClose : undefined}
           businessId={businessId}
           userId={userId}
           currency={currency}

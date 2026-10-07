@@ -2076,7 +2076,7 @@ function makeStyles(p: Palette) {
       flexDirection: 'row', alignItems: 'center', gap: spacing[2],
       height: 56, paddingHorizontal: spacing[5], borderRadius: radius.full,
       backgroundColor: p.primary,
-      shadowColor: p.textPrimary, shadowOffset: { width: 0, height: 4 },
+      shadowColor: p.shadow, shadowOffset: { width: 0, height: 4 },
       shadowOpacity: 0.18, shadowRadius: 8, elevation: 8,
     },
     fabExtendedLabel: { fontFamily: FF.semibold, fontSize: 15, color: p.textInverse },

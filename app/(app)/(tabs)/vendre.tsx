@@ -1,5 +1,5 @@
 import React, { useCallback, useEffect, useMemo, useRef, useState } from 'react';
-import { router, useFocusEffect, useLocalSearchParams } from 'expo-router';
+import { router, useFocusEffect } from 'expo-router';
 import {
   Alert,
   Animated,
@@ -32,10 +32,9 @@ import { Input } from '@/src/components/ui/Input';
 import { Text } from '@/src/components/ui/Text';
 import { PhoneInput } from '@/src/components/ui/PhoneInput';
 import { SaleReceiptView, type ReceiptData, type ReceiptItem } from '@/src/components/ui/SaleReceiptView';
-import { useTheme, radius, spacing, shadow, fontFamily, FLOATING_TAB_BAR_CLEARANCE, CLIENT_AVATAR_PALETTE, SEARCH_VISIBILITY_THRESHOLD } from '@/src/theme';
+import { useTheme, radius, spacing, shadow, fontFamily, FLOATING_TAB_BAR_CLEARANCE, CLIENT_AVATAR_PALETTE, CLIENT_AVATAR_TEXT, SEARCH_VISIBILITY_THRESHOLD } from '@/src/theme';
 import { useAnimateLayoutChange } from '@/src/hooks/useAnimateLayoutChange';
 import { useQuickClients } from '@/src/hooks/useQuickClients';
-import { CreditRapideCapture } from '@/src/components/CreditRapideCapture';
 import { QuickCaptureSheet } from '@/src/components/QuickCaptureSheet';
 import type { Palette } from '@/src/theme';
 import { stepQuantity } from '@/src/utils/quantity';
@@ -1454,64 +1453,6 @@ export default function VendreScreen() {
   const { cart, submitting, error: saleError, addToCart, addToCartVariant, removeFromCart, setQty, toggleBulk, clearCart, submitSale, submitCarnetDebt, clearError } =
     useSalesStore();
 
-  // ActivationForkOverlay's "Une dette" button links here with ?mode=credit
-  // so a brand-new merchant lands straight in the credit tab instead of the
-  // product grid — same direct-open pattern catalogue.tsx's ?openForm=1 uses.
-  // Vendre is a tab screen and stays mounted after the first visit, so a
-  // useState initializer only ever applies the very first time — every
-  // later "Une dette" tap re-delivers the same param to an already-mounted
-  // screen and got silently ignored, leaving mode stuck on whatever it was
-  // last (usually 'vente'). This effect re-applies it on every fresh
-  // arrival, not just mount, then clears the param the same way
-  // catalogue.tsx clears openForm.
-  const { mode: initialMode, newClientName } = useLocalSearchParams<{ mode?: string; newClientName?: string }>();
-  const [mode, setMode] = useState<'vente' | 'credit'>(initialMode === 'credit' ? 'credit' : 'vente');
-  // Set only by Clients' "no search match" create-shortcut — lands straight
-  // on the amount step for this name instead of the pick-a-face grid (same
-  // initialClient contract the client ledger's own "+ Nouveau crédit" uses).
-  const [creditInitialClientName, setCreditInitialClientName] = useState<string | undefined>(
-    initialMode === 'credit' ? newClientName : undefined,
-  );
-  // Vendre is a tab root — normally there's nothing to "go back" to, you
-  // just tap a different tab. Arriving here via a push from the fork breaks
-  // that assumption (no swipe-back, no visible way out) without an explicit
-  // back affordance, so show one for the rest of this screen's lifetime
-  // once we know that's how we got here — not just while mode === 'credit',
-  // since switching back to Vente shouldn't strand them either.
-  const [cameFromFork, setCameFromFork] = useState(false);
-  useEffect(() => {
-    if (initialMode === 'credit') {
-      setMode('credit');
-      setCameFromFork(true);
-      setCreditInitialClientName(newClientName);
-      router.setParams({ mode: undefined, newClientName: undefined });
-    }
-  }, [initialMode, newClientName]);
-
-  // The activation fork (app/(app)/_layout.tsx) only knows to stay away for
-  // a fixed ~1.2s after the "Une dette" tap that can land here — enough to
-  // bridge the navigation, not enough to actually fill in a name, phone,
-  // and amount. Suppress it for as long as credit mode is genuinely active
-  // instead (same fix as catalogue.tsx's add-product form and
-  // QuickCaptureSheet), and deliberately ONLY credit mode — switching to
-  // Vente without finishing the debt should still bring the wall back,
-  // since at that point nothing is actively in progress.
-  //
-  // useFocusEffect, not a plain useEffect — Vendre is a TAB, and tabs don't
-  // unmount when you switch away to a different one, they just go inactive.
-  // A plain useEffect's cleanup only re-runs when `mode` itself changes, so
-  // leaving via the tab bar (Catalogue, Accueil, ...) while still in credit
-  // mode never triggered it at all — suppressActivationFork stayed stuck
-  // true forever, on every other screen, until mode happened to change
-  // again. useFocusEffect's cleanup additionally fires on losing focus,
-  // which switching tabs genuinely is.
-  useFocusEffect(
-    useCallback(() => {
-      useAuthStore.setState({ suppressActivationFork: mode === 'credit' });
-      return () => { useAuthStore.setState({ suppressActivationFork: false }); };
-    }, [mode]),
-  );
-
   const [search, setSearch] = useState('');
   const [showPayment, setShowPayment] = useState(false);
   const [payStep, setPayStep] = useState<PayStep>('pay');
@@ -1586,7 +1527,7 @@ export default function VendreScreen() {
 
   // Search is shown once the catalog is big enough to need it (see the render
   // below) — only relevant in Vente mode, since Crédit has no product grid.
-  const searchVisible = mode === 'vente' && products.length >= SEARCH_VISIBILITY_THRESHOLD;
+  const searchVisible = products.length >= SEARCH_VISIBILITY_THRESHOLD;
   useAnimateLayoutChange(searchVisible);
   // Clear any typed query when the box disappears, so a stale filter can't
   // keep silently narrowing the grid with no visible input left to clear it.
@@ -1930,7 +1871,7 @@ export default function VendreScreen() {
   // products at all, so blocking it behind a product-shaped skeleton was
   // showing unrelated content before the real destination, not a genuine
   // loading state for what was actually about to render.
-  if (mode !== 'credit' && loading && products.length === 0) {
+  if (loading && products.length === 0) {
     return (
       <Screen tab>
         <SkeletonList count={9} />
@@ -1955,19 +1896,9 @@ export default function VendreScreen() {
         </Pressable>
       ) : null}
 
-      {/* Header + mode toggle */}
-      {cameFromFork && (
-        // router.replace (not back()) deliberately — arriving here is a
-        // push into a tab route from a Modal, which may not always leave a
-        // real "back" entry in history to pop; replacing straight to
-        // Accueil is unambiguous regardless of how that navigation landed.
-        <Pressable onPress={() => router.replace('/(app)/(tabs)/')} hitSlop={12} style={{ paddingHorizontal: spacing[5], paddingTop: spacing[2] }}>
-          <Text variant="body" color="brand">← Retour</Text>
-        </Pressable>
-      )}
       <View style={styles.header}>
         <Text variant="h3">Vendre</Text>
-        {mode === 'vente' && cart.length > 0 && (
+        {cart.length > 0 && (
           <Pressable onPress={() => Alert.alert('Vider le panier ?', undefined, [
             { text: 'Annuler', style: 'cancel' },
             { text: 'Vider', style: 'destructive', onPress: clearCart },
@@ -1977,61 +1908,11 @@ export default function VendreScreen() {
         )}
       </View>
 
-      {/* Vente / Crédit segment */}
-      <View style={[styles.modeToggle, { backgroundColor: palette.background, borderColor: palette.border }]}>
-        <Pressable
-          style={[styles.modeBtn, mode === 'vente' && { backgroundColor: palette.surface }]}
-          onPress={() => setMode('vente')}
-        >
-          <Text
-            variant="label"
-            style={{ color: mode === 'vente' ? palette.primary : palette.textSecondary, fontFamily: mode === 'vente' ? fontFamily.bold : fontFamily.semibold }}
-          >
-            Vente
-          </Text>
-        </Pressable>
-        <Pressable
-          style={[styles.modeBtn, mode === 'credit' && { backgroundColor: palette.surface }]}
-          onPress={() => setMode('credit')}
-        >
-          <Text
-            variant="label"
-            style={{ color: mode === 'credit' ? palette.primary : palette.textSecondary, fontFamily: mode === 'credit' ? fontFamily.bold : fontFamily.semibold }}
-          >
-            Crédit
-          </Text>
-        </Pressable>
-      </View>
-
-      {/* Crédit rapide — shared with Accueil's "+" (QuickCaptureSheet); see
-          CreditRapideCapture for why these used to be two separately-drifting
-          implementations and now are one. Conditional rendering here (not a
-          Modal's `visible` prop) naturally unmounts/remounts on every
-          Vente↔Crédit toggle, which is what gives this a fresh state per
-          visit for free. */}
-      {mode === 'credit' && (
-        <View style={styles.creditTabContent}>
-          <CreditRapideCapture
-            // initialClient is mount-only inside CreditRapideCapture (see its
-            // own comment) — keying on the name forces a real remount when
-            // onDone clears it, so a save lands back on the pick grid instead
-            // of getting stuck on a stale "amount" phase for a now-cleared prop.
-            key={creditInitialClientName ?? 'grid'}
-            businessId={businessId}
-            userId={userId}
-            currency={currency}
-            onViewClients={() => router.push({ pathname: '/(app)/clients', params: { filter: 'doivent' } })}
-            initialClient={creditInitialClientName ? { name: creditInitialClientName } : undefined}
-            onDone={creditInitialClientName ? () => setCreditInitialClientName(undefined) : undefined}
-          />
-        </View>
-      )}
-
       {/* Empty state — Vente mode, no products yet, offline or vendeur. The
           admin/manager-online case (the real dead end this used to be — see
           the block right below) has its own real content now instead of
           silently relying on this branch's opposite condition. */}
-      {mode === 'vente' && products.length === 0 && (offline || isVendeur) && (
+      {products.length === 0 && (offline || isVendeur) && (
         <EmptyState
           icon={offline ? 'cloud-offline-outline' : 'receipt-outline'}
           title={offline ? 'Catalogue non disponible hors ligne' : 'Point de vente'}
@@ -2049,7 +1930,7 @@ export default function VendreScreen() {
           creating a catalog product first, so this offers the actual quick
           sale directly, with catalog creation as the explicit second choice,
           not the only one. */}
-      {mode === 'vente' && products.length === 0 && !offline && !isVendeur && (
+      {products.length === 0 && !offline && !isVendeur && (
         <EmptyState
           icon="storefront-outline"
           title="Aucun produit pour le moment."
@@ -2075,14 +1956,14 @@ export default function VendreScreen() {
 
       {/* Currency declared once here instead of repeated on every tile's
           price (see formatPriceValue in ProductTile). */}
-      {mode === 'vente' && products.length > 0 && (
+      {products.length > 0 && (
         <View style={styles.priceHeaderRow}>
           <Text variant="caption" color="secondary">Prix en {currency}</Text>
         </View>
       )}
 
       {/* Bulk hint — only in Vente mode with products */}
-      {mode === 'vente' && products.length > 0 && products.some(p => p.bulk_price) && (
+      {products.length > 0 && products.some(p => p.bulk_price) && (
         <View style={styles.hintBanner}>
           <Ionicons name="information-circle-outline" size={14} color={palette.warning} />
           <Text variant="caption" style={{ color: palette.warning, flex: 1 }}>
@@ -2092,7 +1973,7 @@ export default function VendreScreen() {
       )}
 
       {/* Product grid — only in Vente mode with products */}
-      {mode === 'vente' && products.length > 0 && <FlatList
+      {products.length > 0 && <FlatList
         data={inStockFiltered}
         keyExtractor={p => p.id}
         numColumns={2}
@@ -2166,7 +2047,7 @@ export default function VendreScreen() {
           vente") lives entirely in the confirm sheet further down — this
           panel just unmounts on success like it always did, once the cart
           clears. */}
-      {mode === 'vente' && cart.length > 0 && (() => {
+      {cart.length > 0 && (() => {
         const lastLine = cart[cart.length - 1];
         const otherLinesCount = cart.length - 1;
         return (
@@ -2245,7 +2126,7 @@ export default function VendreScreen() {
           showing both would just duplicate the same action twice on one
           screen. Offline still needs it — that branch's own empty state has
           no button of its own. */}
-      {mode === 'vente' && products.length === 0 && !isVendeur && offline && (
+      {products.length === 0 && !isVendeur && offline && (
         <AnimatedFAB onPress={() => router.push({ pathname: '/(app)/(tabs)/catalogue', params: { openForm: '1' } })} />
       )}
 
@@ -2554,7 +2435,7 @@ function makeStyles(p: Palette) {
       flexDirection: 'row', alignItems: 'center', gap: spacing[2],
       height: 56, paddingHorizontal: spacing[5], borderRadius: radius.full,
       backgroundColor: p.primary,
-      shadowColor: p.textPrimary, shadowOffset: { width: 0, height: 4 },
+      shadowColor: p.shadow, shadowOffset: { width: 0, height: 4 },
       shadowOpacity: 0.18, shadowRadius: 8, elevation: 8,
     },
     fabExtendedLabel: { fontFamily: fontFamily.semibold, fontSize: 15, color: p.textInverse },
@@ -2631,7 +2512,7 @@ function makeStyles(p: Palette) {
       borderBottomWidth: 1, borderBottomColor: p.border,
     },
     clientAvatar: { width: 40, height: 40, borderRadius: 20, justifyContent: 'center', alignItems: 'center' },
-    clientAvatarText: { fontFamily: fontFamily.bold, fontSize: 16, color: p.textPrimary },
+    clientAvatarText: { fontFamily: fontFamily.bold, fontSize: 16, color: CLIENT_AVATAR_TEXT },
 
     methodSection: { paddingHorizontal: spacing[5], paddingTop: spacing[3], paddingBottom: spacing[4], gap: spacing[2] },
     sectionLabel: { marginBottom: spacing[2] },

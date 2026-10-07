@@ -337,6 +337,10 @@ export const CLIENT_AVATAR_PALETTE = [
   colors.warning[100],    // amber tint
 ] as const;
 
+// Initial-letter colour on CLIENT_AVATAR_PALETTE's pastel circles — fixed dark in both
+// modes (p.textPrimary is white in dark mode, unreadable on a pastel fill).
+export const CLIENT_AVATAR_TEXT = colors.emerald[900];
+
 // Product category badge palette — bg/text pairs for deterministic badge coloring
 export const PRODUCT_BADGE_PALETTE = {
   bg: ['#D1FAE5', '#EDE9FE', '#DBEAFE', colors.warning[100], colors.danger[100], '#CCFBF1'],
