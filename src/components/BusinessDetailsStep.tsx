@@ -1,12 +1,11 @@
 import { useState } from 'react';
-import { Pressable, StyleSheet, View } from 'react-native';
-import { Ionicons } from '@expo/vector-icons';
+import { StyleSheet, View } from 'react-native';
 import { Button } from '@/src/components/ui/Button';
 import { Input } from '@/src/components/ui/Input';
 import { Text } from '@/src/components/ui/Text';
 import { useTheme, radius, spacing } from '@/src/theme';
 import type { Palette } from '@/src/theme';
-import { CURRENCY_LIST } from '@/src/constants/currency';
+import { CurrencyPicker } from '@/src/components/ui/CurrencyPicker';
 import { haptics } from '@/lib/haptics';
 
 interface BusinessDetailsStepProps {
@@ -41,10 +40,7 @@ export function BusinessDetailsStep({
   const [name, setName] = useState('');
   const [nameError, setNameError] = useState<string | null>(null);
   const [currency, setCurrency] = useState(initialCurrency);
-  const [pickerOpen, setPickerOpen] = useState(false);
   const [referralCode, setReferralCode] = useState('');
-
-  const selectedC = CURRENCY_LIST.find(c => c.code === currency) ?? CURRENCY_LIST[0];
 
   const handleSubmit = () => {
     const trimmed = name.trim();
@@ -82,42 +78,7 @@ export function BusinessDetailsStep({
       <View style={styles.section}>
         <Text variant="label">Monnaie</Text>
 
-        <Pressable style={styles.currencyTrigger} onPress={() => { haptics.toggle(!pickerOpen); setPickerOpen(v => !v); }}>
-          <Text style={styles.currencyFlag}>{selectedC.flag}</Text>
-          <View style={{ flex: 1 }}>
-            <Text variant="label" style={{ color: palette.primary }}>{selectedC.name}</Text>
-            <Text variant="caption" color="secondary">{selectedC.sub}</Text>
-          </View>
-          <Ionicons name={pickerOpen ? 'chevron-up' : 'chevron-down'} size={18} color={palette.primary} />
-        </Pressable>
-
-        {pickerOpen && (
-          <View style={styles.currencyList}>
-            {CURRENCY_LIST.map((c, i) => {
-              const selected = currency === c.code;
-              const isLast = i === CURRENCY_LIST.length - 1;
-              return (
-                <Pressable
-                  key={c.code}
-                  onPress={() => { haptics.select(); setCurrency(c.code); setPickerOpen(false); }}
-                  style={[
-                    styles.currencyRow,
-                    selected && styles.currencyRowSelected,
-                    !isLast && styles.currencyRowBorder,
-                  ]}>
-                  <Text style={styles.currencyFlag}>{c.flag}</Text>
-                  <View style={{ flex: 1 }}>
-                    <Text variant="label" style={selected ? { color: palette.primary } : undefined}>
-                      {c.name}
-                    </Text>
-                    <Text variant="caption" color="secondary">{c.sub}</Text>
-                  </View>
-                  {selected && <Ionicons name="checkmark" size={18} color={palette.primary} />}
-                </Pressable>
-              );
-            })}
-          </View>
-        )}
+        <CurrencyPicker value={currency} onChange={setCurrency} />
       </View>
 
       {showReferralCode && (
@@ -147,18 +108,6 @@ function makeStyles(p: Palette) {
     section: { gap: spacing[3] },
     errorBox: { backgroundColor: p.dangerLight, borderRadius: radius.md, padding: spacing[3] },
 
-    currencyTrigger: {
-      flexDirection: 'row', alignItems: 'center', gap: spacing[3],
-      paddingHorizontal: spacing[4], paddingVertical: spacing[3],
-      backgroundColor: p.primaryLight,
-      borderRadius: radius.md,
-      borderWidth: 1, borderColor: p.primary + '50',
-    },
-    currencyList: { borderRadius: radius.md, borderWidth: 1, borderColor: p.border, overflow: 'hidden' },
-    currencyRow: { flexDirection: 'row', alignItems: 'center', gap: spacing[3], paddingHorizontal: spacing[4], paddingVertical: spacing[3], backgroundColor: p.surface },
-    currencyRowSelected: { backgroundColor: p.primaryLight },
-    currencyRowBorder: { borderBottomWidth: StyleSheet.hairlineWidth, borderBottomColor: p.border },
-    currencyFlag: { fontSize: 22, width: 30, textAlign: 'center' as const },
 
     currencyNote: { textAlign: 'center' },
   });

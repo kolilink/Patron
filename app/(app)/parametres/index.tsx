@@ -3,6 +3,7 @@ import { Alert, Animated, KeyboardAvoidingView, Linking, Platform, Pressable, Sc
 import * as Clipboard from 'expo-clipboard';
 import * as Application from 'expo-application';
 import * as Updates from 'expo-updates';
+import { CurrencyPicker } from '@/src/components/ui/CurrencyPicker';
 import { Screen } from '@/src/components/ui/Screen';
 import { router, useFocusEffect } from 'expo-router';
 import { Ionicons } from '@expo/vector-icons';
@@ -32,7 +33,6 @@ import { SuccessionSheet } from '@/src/components/SuccessionSheet';
 import { planLeave, successionBlockers } from '@/src/utils/succession';
 
 // Must match the list in creer.tsx — all currencies we support
-const CURRENCIES = ['GNF', 'XOF', 'XAF', 'NGN', 'GHS', 'MAD', 'DZD', 'TND', 'EGP', 'KES', 'ZAR', 'ETB', 'AED', 'SAR', 'USD', 'EUR', 'GBP', 'CNY', 'CAD', 'CHF', 'INR'];
 
 const CURRENCY_NAMES: Record<string, string> = {
   GNF: 'Franc Guinéen',
@@ -701,19 +701,7 @@ export default function ParametresScreen() {
               <View style={{ gap: spacing[2] }}>
                 <Text variant="label">Monnaie</Text>
                 {hasSales === false ? (
-                  <View style={styles.chipRow}>
-                    {CURRENCIES.map(c => (
-                      <Pressable
-                        key={c}
-                        onPress={() => setCurrency(c)}
-                        style={[styles.chip, currency === c ? styles.chipActive : styles.chipGhost]}
-                      >
-                        <Text variant="label" style={{ color: currency === c ? palette.textInverse : palette.textDisabled }}>
-                          {c}
-                        </Text>
-                      </Pressable>
-                    ))}
-                  </View>
+                  <CurrencyPicker value={currency} onChange={setCurrency} />
                 ) : (
                   <View style={styles.currencyLocked}>
                     <View style={{ flex: 1 }}>

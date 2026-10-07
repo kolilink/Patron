@@ -225,6 +225,20 @@ export function CreditRapideCapture({ businessId, userId, currency, onViewClient
     focusLater(nameRef);
   };
 
+  // Zero confirmed clients → the pick-a-face grid would show only "Nouveau", so
+  // go straight to the name + amount form. Only once gridReady (never while the
+  // first load is still in flight), only once per mount (clients arriving later
+  // must never yank her back to the grid mid-typing), and never when the host
+  // already named the client.
+  const skippedEmptyGridRef = useRef(false);
+  useEffect(() => {
+    if (skippedEmptyGridRef.current || initialClient || phase !== 'pick') return;
+    if (gridReady && clients.length === 0) {
+      skippedEmptyGridRef.current = true;
+      pickNew();
+    }
+  }, [gridReady, clients.length, phase]);
+
   const backToPick = () => {
     cancelFocus(); // a pending focus must not fire against the grid
     setPhase('pick');
