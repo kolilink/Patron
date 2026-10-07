@@ -1898,14 +1898,21 @@ export default function VendreScreen() {
 
       <View style={styles.header}>
         <Text variant="h3">Vendre</Text>
-        {cart.length > 0 && (
-          <Pressable onPress={() => Alert.alert('Vider le panier ?', undefined, [
-            { text: 'Annuler', style: 'cancel' },
-            { text: 'Vider', style: 'destructive', onPress: clearCart },
-          ])}>
-            <Text variant="bodySmall" color="danger">Vider</Text>
-          </Pressable>
-        )}
+        {/* Currency declared once here instead of repeated on every tile's
+            price (see formatPriceValue in ProductTile) — mirrors Catalogue. */}
+        <View style={styles.headerRight}>
+          {cart.length > 0 && (
+            <Pressable onPress={() => Alert.alert('Vider le panier ?', undefined, [
+              { text: 'Annuler', style: 'cancel' },
+              { text: 'Vider', style: 'destructive', onPress: clearCart },
+            ])}>
+              <Text variant="bodySmall" color="danger">Vider</Text>
+            </Pressable>
+          )}
+          {products.length > 0 && (
+            <Text variant="caption" color="secondary">Prix en {currency}</Text>
+          )}
+        </View>
       </View>
 
       {/* Empty state — Vente mode, no products yet, offline or vendeur. The
@@ -1954,13 +1961,6 @@ export default function VendreScreen() {
         </View>
       )}
 
-      {/* Currency declared once here instead of repeated on every tile's
-          price (see formatPriceValue in ProductTile). */}
-      {products.length > 0 && (
-        <View style={styles.priceHeaderRow}>
-          <Text variant="caption" color="secondary">Prix en {currency}</Text>
-        </View>
-      )}
 
       {/* Bulk hint — only in Vente mode with products */}
       {products.length > 0 && products.some(p => p.bulk_price) && (
@@ -2308,7 +2308,7 @@ function makeStyles(p: Palette) {
     // Neutral and tabular — an ordinary price is not an accent moment (see
     // the Vendre visual-refinement brief's color-hierarchy rule).
     tilePrice: { color: p.textPrimary, fontVariant: ['tabular-nums'] as ['tabular-nums'] },
-    priceHeaderRow: { paddingHorizontal: spacing[5], alignItems: 'flex-end', paddingBottom: spacing[1] },
+    headerRight: { flexDirection: 'row', alignItems: 'center', gap: spacing[4] },
     tileBadge: {
       position: 'absolute', top: 8, right: 8, backgroundColor: p.primary,
       borderRadius: radius.full, width: 22, height: 22, alignItems: 'center', justifyContent: 'center', zIndex: 10,
