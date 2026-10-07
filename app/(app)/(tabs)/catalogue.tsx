@@ -1647,7 +1647,9 @@ export default function CatalogueScreen() {
       <View style={styles.header}>
         <View>
           <Text variant="h3">Produits</Text>
-          {!showActivationEmptyState && (
+          {/* Count only when the current tab's list is non-empty — never "0 produits"
+              / "0 non actif", and nothing while the first fetch is still in flight. */}
+          {!showActivationEmptyState && (tab === 'actifs' ? products.length > 0 : archivedProducts.length > 0) && (
             <Text variant="caption" color="secondary">
               {tab === 'actifs'
                 ? `${products.length} produit${products.length !== 1 ? 's' : ''}`
@@ -1658,7 +1660,7 @@ export default function CatalogueScreen() {
         {/* Currency declared once here instead of repeated on every row's
             price (see formatPriceValue in ProductRow) — archived rows don't
             show a price at all, so this only applies to Actifs. */}
-        {!showActivationEmptyState && tab === 'actifs' && (
+        {!showActivationEmptyState && tab === 'actifs' && products.length > 0 && (
           <Text variant="caption" color="secondary">Prix ({currency})</Text>
         )}
       </View>
