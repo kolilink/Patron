@@ -31,7 +31,6 @@ import { ThemedStack, ThemedRootView } from '@/src/components/ui/ThemedStack';
 import { posthog } from '@/lib/posthog';
 import { identifyUser, resetAnalytics, trackEvent, analyticsIsTest, loadDeviceTestFlag } from '@/lib/analytics';
 import { recordInstallIfFirstOpen, recordFunnelStep, flushFunnelOutbox } from '@/lib/funnel';
-import { PrivacyShield } from '@/src/components/PrivacyShield';
 import { configurePurchases } from '@/lib/purchases';
 import { withStartupTiming, reportFirstScreenRender, reportFirstInteraction } from '@/lib/startupTiming';
 import { scheduleSplashCeiling, startupReady } from '@/src/utils/startupGate';
@@ -192,7 +191,6 @@ function RootLayout() {
           {/* No transition between top-level groups: a fade/slide here races the hero
               Modal's native presentation after "Ouvrir mon commerce" (blank frame). */}
           <ThemedStack screenOptions={{ headerShown: false, animation: 'none' }} />
-          <PrivacyShield />
           <ConfirmSheetHost root />
         </PostHogProvider>
       </ThemedRootView>
