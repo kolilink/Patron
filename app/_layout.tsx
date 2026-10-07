@@ -1,4 +1,5 @@
 import '@/lib/startupTiming';
+import { setCacheFailureReporter } from '@/lib/cacheHealth';
 import { initConnectivity } from '@/lib/connectivity';
 import * as Sentry from '@sentry/react-native';
 import { useEffect, useRef, useState } from 'react';
@@ -44,6 +45,14 @@ if (process.env.EXPO_PUBLIC_SENTRY_DSN) {
     tracesSampleRate: 0.2,
   });
 }
+
+// Cache-write failures were swallowed with zero trace ("I was online but the
+// cache is empty"). lib/db records them (lib/cacheHealth.ts); this reports them.
+setCacheFailureReporter((table, err) => {
+  if (process.env.EXPO_PUBLIC_SENTRY_DSN) {
+    Sentry.captureException(err instanceof Error ? err : new Error(String(err)), { tags: { area: 'cache_write', table } });
+  }
+});
 
 // Only active once EXPO_PUBLIC_REVENUECAT_API_KEY_IOS/_ANDROID are set — see
 // lib/purchases.ts. No-op in the meantime so the app runs fine before the

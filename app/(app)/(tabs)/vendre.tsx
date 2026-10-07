@@ -1380,45 +1380,6 @@ function VariantPickerSheet({ visible, product, variants, cartQtyByVariant, curr
 
 // ─── Animated FAB ─────────────────────────────────────────────────────────────
 
-function AnimatedFAB({ onPress }: { onPress: () => void }) {
-  const { palette } = useTheme();
-  const styles = useMemo(() => makeStyles(palette), [palette]);
-  const scale = useRef(new Animated.Value(1)).current;
-  const opacity = useRef(new Animated.Value(1)).current;
-
-  useEffect(() => {
-    const easing = Easing.inOut(Easing.sin);
-    const loop = Animated.loop(
-      Animated.sequence([
-        Animated.parallel([
-          Animated.timing(scale, { toValue: 1.06, duration: 2000, easing, useNativeDriver: true }),
-          Animated.timing(opacity, { toValue: 0.85, duration: 2000, easing, useNativeDriver: true }),
-        ]),
-        Animated.parallel([
-          Animated.timing(scale, { toValue: 1, duration: 2000, easing, useNativeDriver: true }),
-          Animated.timing(opacity, { toValue: 1, duration: 2000, easing, useNativeDriver: true }),
-        ]),
-      ])
-    );
-    loop.start();
-    return () => loop.stop();
-  }, []);
-
-  return (
-    <Animated.View style={[styles.fabContainer, { transform: [{ scale }], opacity }]}>
-      <Pressable
-        onPress={onPress}
-        style={({ pressed }) => [styles.fabExtended, pressed && { opacity: 0.82 }]}
-        accessibilityLabel="Ajouter un produit"
-        accessibilityRole="button"
-      >
-        <Ionicons name="add" size={20} color={palette.textInverse} />
-        <Text style={styles.fabExtendedLabel}>Produit</Text>
-      </Pressable>
-    </Animated.View>
-  );
-}
-
 // ─── Main Screen ──────────────────────────────────────────────────────────────
 
 export default function VendreScreen() {
@@ -1923,6 +1884,11 @@ export default function VendreScreen() {
           // blocked — the quick sale needs no catalog at all.
           actionLabel={offline ? 'Vente rapide' : undefined}
           onAction={offline ? () => setShowQuickCapture(true) : undefined}
+          // The screen's FAB used to ALSO render here, on top of this centered state
+          // (a collision on small phones). An empty state's own actions are the one
+          // primary action — never a FAB beside them (see EmptyState's doc).
+          linkLabel={offline && !isVendeur ? 'Ajouter un produit' : undefined}
+          onLink={offline && !isVendeur ? () => router.push({ pathname: '/(app)/(tabs)/catalogue', params: { openForm: '1' } }) : undefined}
         />
       )}
 
@@ -2118,16 +2084,6 @@ export default function VendreScreen() {
           );
         })}
       </FormSheet>
-
-      {/* FAB to add first product — Vente mode, no products, not vendeur.
-          Scoped to offline now: the online case has its own explicit
-          "Ajouter un produit" button in the empty-state block above, and
-          showing both would just duplicate the same action twice on one
-          screen. Offline still needs it — that branch's own empty state has
-          no button of its own. */}
-      {products.length === 0 && !isVendeur && offline && (
-        <AnimatedFAB onPress={() => router.push({ pathname: '/(app)/(tabs)/catalogue', params: { openForm: '1' } })} />
-      )}
 
       {/* Vente rapide — reached from the empty-catalog "Vente rapide"
           button above. Reuses the same rapid capture sheet Accueil's "+"
@@ -2425,20 +2381,6 @@ function makeStyles(p: Palette) {
     },
     payMethodChipActive: { backgroundColor: p.primary, borderColor: p.primary },
 
-    // 194 was tuned against the old flush tab bar's flex space; the floating
-    // pill no longer reserves that space, so the same clearance is added
-    // here too to keep this FAB sitting exactly where it did before.
-    fabContainer: { position: 'absolute', bottom: 194 + FLOATING_TAB_BAR_CLEARANCE, right: spacing[4], zIndex: 10 },
-    // Extended (icon + label), never a bare "+" — an icon-only action button
-    // can't be recognized by name, only by shape.
-    fabExtended: {
-      flexDirection: 'row', alignItems: 'center', gap: spacing[2],
-      height: 56, paddingHorizontal: spacing[5], borderRadius: radius.full,
-      backgroundColor: p.primary,
-      shadowColor: p.shadow, shadowOffset: { width: 0, height: 4 },
-      shadowOpacity: 0.18, shadowRadius: 8, elevation: 8,
-    },
-    fabExtendedLabel: { fontFamily: fontFamily.semibold, fontSize: 15, color: p.textInverse },
     outOfStockHeader: { flexDirection: 'row', alignItems: 'center', paddingTop: spacing[4], paddingBottom: spacing[3] },
     outOfStockLine: { flex: 1, height: StyleSheet.hairlineWidth, backgroundColor: p.border },
 

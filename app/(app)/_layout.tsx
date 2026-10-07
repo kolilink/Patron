@@ -1,9 +1,11 @@
 import { useEffect, useRef, useState } from 'react';
+import { warmCaches } from '@/src/utils/cacheWarmup';
+import { useConnectivityStore } from '@/lib/connectivity';
 import { resetOutboxBackoff } from '@/lib/db';
 import { OfflineIndicator } from '@/src/components/ui/OfflineIndicator';
 import { appAlert } from '@/src/utils/appAlert';
 import { ThemedStack } from '@/src/components/ui/ThemedStack';
-import { AppState, Pressable, View } from 'react-native';
+import { AppState, InteractionManager, Pressable, View } from 'react-native';
 import NetInfo from '@react-native-community/netinfo';
 import { shouldKickOnConnectivityChange } from '@/lib/netInfoKick';
 import { trackEvent } from '@/lib/analytics';
@@ -394,6 +396,18 @@ export default function AppLayout() {
 
     return () => { clearInterval(chatInterval); sub.remove(); debounced.cancel(); };
   }, [session?.user.id]);
+
+  // Warm every offline read cache in the background while online (products,
+  // sales, suppliers, orders, expenses) — see src/utils/cacheWarmup.ts. Runs
+  // once the first screen has settled, and again when connectivity returns.
+  const reconnectTick = useConnectivityStore(s => s.reconnectTick);
+  useEffect(() => {
+    if (!session?.activeBusiness?.id || !session?.user.id) return;
+    const timer = setTimeout(() => {
+      InteractionManager.runAfterInteractions(() => { void warmCaches(); });
+    }, 2500);
+    return () => clearTimeout(timer);
+  }, [session?.activeBusiness?.id, session?.user.id, reconnectTick]);
 
   // Kick the drainer the instant real connectivity returns, instead of
   // waiting on the exponential backoff cadence (up to 30min once it's

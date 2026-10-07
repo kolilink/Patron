@@ -1,4 +1,5 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
+import { useCacheHealthStore, failingCacheTables } from '@/lib/cacheHealth';
 import { appAlert } from '@/src/utils/appAlert';
 import { Animated, KeyboardAvoidingView, Linking, Platform, Pressable, ScrollView, Share, StyleSheet, Switch, TextInput, View } from 'react-native';
 import * as Clipboard from 'expo-clipboard';
@@ -87,6 +88,9 @@ function rpcErrorMessage(error: { code?: string; message?: string } | null, fall
 const OTA_BUILD_NUMBER = 1;
 
 export default function ParametresScreen() {
+  // Diagnostic: tables whose local (offline) cache is failing to write RIGHT NOW.
+  const cacheFailures = useCacheHealthStore(s => s.failures);
+  const failingTables = failingCacheTables(cacheFailures);
   const { palette, colorScheme, setColorScheme } = useTheme();
   const styles = useMemo(() => makeStyles(palette), [palette]);
   const { session, sendEmailOtp, linkRecoveryEmail, emailOtpLoading, error: authError, clearError, revokeOtherSessions } = useAuthStore();
@@ -964,6 +968,15 @@ export default function ParametresScreen() {
                 })()}
               </Text>
             </View>
+            {failingTables.length > 0 && (
+              // Shown ONLY while a local cache write is failing — otherwise invisible.
+              <View style={styles.linkRow}>
+                <Text variant="body">Diagnostic</Text>
+                <Text variant="caption" color="secondary" selectable style={{ flexShrink: 1, textAlign: 'right' }}>
+                  Sauvegarde hors ligne en échec : {failingTables.join(', ')}
+                </Text>
+              </View>
+            )}
           </Card>
 
           {/* Apparence */}

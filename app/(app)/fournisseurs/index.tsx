@@ -604,6 +604,10 @@ export default function FournisseursScreen() {
           subtitle="Ajoutez ceux qui vous livrent pour suivre vos achats."
           actionLabel="+ Ajouter un fournisseur"
           onAction={() => { setEditF(null); setShowForm(true); }}
+          // The "Livraison" FAB is hidden while this empty state shows (never a FAB beside
+          // an empty state's own actions), so a delivery stays reachable from here.
+          linkLabel="Nouvelle livraison"
+          onLink={() => router.push('/(app)/fournisseurs/reception')}
         />
       ) : (
         <FlatList
@@ -722,7 +726,7 @@ export default function FournisseursScreen() {
         }}
       />
 
-      {(
+      {fournisseurs.length > 0 && (
         <View style={styles.fabContainer}>
           <Pressable
             onPress={() => router.push('/(app)/fournisseurs/reception')}

@@ -1,4 +1,5 @@
 import * as SQLite from 'expo-sqlite';
+import { recordCacheWriteFailure, recordCacheWriteSuccess } from '@/lib/cacheHealth';
 import type { Product } from '@/src/types';
 import { encrypt, decrypt } from '@/lib/encryption';
 
@@ -901,18 +902,27 @@ async function writeCache(opts: {
   hashKey: string;
 }): Promise<void> {
   const { table, keyCol, keyValue, json, hashKey } = opts;
-  const h = cheapHash(json);
-  const db = await openDb();
-  if (_lastCacheHash.get(hashKey) === h) {
-    await db.runAsync(`UPDATE ${table} SET cached_at = ? WHERE ${keyCol} = ?`, [Date.now(), keyValue]);
-    return;
+  try {
+    const h = cheapHash(json);
+    const db = await openDb();
+    if (_lastCacheHash.get(hashKey) === h) {
+      await db.runAsync(`UPDATE ${table} SET cached_at = ? WHERE ${keyCol} = ?`, [Date.now(), keyValue]);
+      recordCacheWriteSuccess(table);
+      return;
+    }
+    const encrypted = await encrypt(json);
+    await db.runAsync(
+      `INSERT OR REPLACE INTO ${table} (${keyCol}, data, cached_at) VALUES (?, ?, ?)`,
+      [keyValue, encrypted, Date.now()],
+    );
+    _lastCacheHash.set(hashKey, h);
+    recordCacheWriteSuccess(table);
+  } catch (err) {
+    // Callers swallow this (a cache write must never break its screen) — so THIS is
+    // the one place that makes the failure loud: logged, counted, reported, flagged.
+    recordCacheWriteFailure(table, err);
+    throw err;
   }
-  const encrypted = await encrypt(json);
-  await db.runAsync(
-    `INSERT OR REPLACE INTO ${table} (${keyCol}, data, cached_at) VALUES (?, ?, ?)`,
-    [keyValue, encrypted, Date.now()],
-  );
-  _lastCacheHash.set(hashKey, h);
 }
 
 // ─── Dashboard KPI cache ──────────────────────────────────────────────────────

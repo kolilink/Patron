@@ -1557,7 +1557,7 @@ export default function VentesScreen() {
         loading={filterLoading}
       />
 
-      {canSell && !selected && (
+      {canSell && !selected && sales.length > 0 && (
         <Animated.View style={[styles.fabContainer, { transform: [{ scale: fabScale }], opacity: fabOpacity }]}>
           <Pressable
             onPress={() => router.push('/(app)/(tabs)/vendre')}
