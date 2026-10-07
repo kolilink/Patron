@@ -10,6 +10,25 @@ import { drainQueue, type SyncResult } from '@/lib/sync';
 // about PostHog the moment they imported lib/sync.ts).
 import { trackEvent } from '@/lib/analytics';
 
+// After a drain that actually synced something, re-read what the phone-first
+// writes touched (products, supplier debts/payments, expenses) so the screens
+// swap from "base + queued overlay" to the real server state. Lazy requires:
+// those stores import this one, so a static import here would be a cycle.
+function refreshAfterSync(): void {
+  try {
+    const s = require('@/stores/auth').useAuthStore.getState().session;
+    const businessId: string | undefined = s?.activeBusiness?.id;
+    if (!businessId) return;
+    const userId: string = s.user.id;
+    const isVendeur = s.activeMembership?.role === 'vendeur';
+    void require('@/stores/products').useProductStore.getState().fetchProducts(businessId, userId, s.activeMembership?.id, s.activeMembership?.role);
+    if (!isVendeur) {
+      void require('@/stores/fournisseurs').useFournisseursStore.getState().fetchDebts(businessId);
+      void require('@/stores/expenses').useExpensesStore.getState().fetchExpenses(businessId);
+    }
+  } catch { /* a refresh failure must never affect the sync result */ }
+}
+
 interface SyncStore {
   pendingCount: number;
   // Distinct from pendingCount by construction: rows parked as
@@ -68,6 +87,7 @@ export const useSyncStore = create<SyncStore>((set, get) => ({
     for (const event of result.syncHealthEvents) {
       trackEvent(event.name, event.businessId, null, event.metadata);
     }
+    if (result.synced > 0) refreshAfterSync();
     const [count, failedCount] = await Promise.all([getQueueCount(), getFailedQueueCount()]);
     set({
       syncing: false,

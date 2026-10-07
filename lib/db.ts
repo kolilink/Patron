@@ -585,7 +585,11 @@ function deriveEntityType(operation: string): string {
     case 'create_product':
     case 'update_product':
     case 'adjust_stock':
+    case 'adjust_stock_move':
       return 'produit';
+    case 'pay_supplier_debt':
+    case 'create_supplier_debt':
+      return 'fournisseur';
     default:
       return operation;
   }
@@ -601,6 +605,8 @@ function deriveEntityType(operation: string): string {
 function extractIdempotencyKey(operation: string, payload: object): string | null {
   const p = payload as Record<string, unknown>;
   if (typeof p.p_idempotency_key === 'string') return p.p_idempotency_key;
+  // A queued supplier debt is keyed by its own (client-generated) row id.
+  if (operation === 'create_supplier_debt' && typeof p.id === 'string') return p.id;
   // Expense ops are keyed by the expense id: that is what lets an Annuler find
   // (and cancel) the still-queued create/edit/delete for that very row.
   if (EXPENSE_OPS.has(operation)) {

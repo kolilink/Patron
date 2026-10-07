@@ -188,6 +188,28 @@ function describeQueuedCart(
 
 // po_received after a queued réception reaches the server — the supplier name is
 // looked up best-effort (a failure here must never affect the sync result).
+// approve/reject: tell the expense's creator once the decision is on the server.
+// Best-effort — a lookup failure must never affect the sync result.
+async function notifyQueuedExpenseDecision(operation: string, expenseId: string, decidedBy?: string): Promise<void> {
+  try {
+    const { data } = await supabase
+      .from('expenses')
+      .select('business_id, created_by, amount, description')
+      .eq('id', expenseId)
+      .maybeSingle();
+    const e = data as { business_id: string; created_by: string; amount: number; description: string | null } | null;
+    if (!e || !e.created_by || e.created_by === decidedBy) return;
+    const { data: biz } = await supabase.from('businesses').select('currency').eq('id', e.business_id).maybeSingle();
+    const currency = (biz as { currency?: string } | null)?.currency ?? 'GNF';
+    notifyEvent({
+      businessId: e.business_id,
+      eventType: operation === 'approve_expense' ? 'expense_approved' : 'expense_rejected',
+      payload: { amount: formatAmount(e.amount / 100, currency), description: e.description ?? '' },
+      targetUserIds: [e.created_by],
+    });
+  } catch { /* best-effort */ }
+}
+
 async function notifyReceptionSynced(payload: Record<string, unknown>): Promise<void> {
   try {
     const businessId = payload.p_business_id as string;
@@ -338,6 +360,9 @@ async function executeOp(operation: string, payload: Record<string, unknown>): P
       const { id, ...patch } = payload;
       const { error } = await supabase.from('expenses').update(patch).eq('id', id as string);
       if (error) throw error;
+      // The creator is told once the decision actually reaches the server
+      // (the decision itself is recorded phone-first now).
+      void notifyQueuedExpenseDecision(operation, id as string, patch.approved_by as string | undefined);
       break;
     }
     case 'record_payment': {
@@ -404,7 +429,28 @@ async function executeOp(operation: string, payload: Record<string, unknown>): P
       if (error) throw error;
       break;
     }
+    case 'adjust_stock_move': {
+      // Atomic, relative and idempotent on p_move_id (migration_v243).
+      const { error } = await supabase.rpc('adjust_stock_move', payload);
+      if (error) throw error;
+      break;
+    }
+    case 'pay_supplier_debt': {
+      // Idempotent on p_idempotency_key (migration_v243). A `remaining_cents`
+      // > 0 in the reply means the debts shrank meanwhile: the allocated part is
+      // recorded, the rest was never applied — not an error.
+      const { error } = await supabase.rpc('pay_supplier_debt', payload);
+      if (error) throw error;
+      break;
+    }
+    case 'create_supplier_debt': {
+      const { error } = await supabase.from('supplier_debts').insert(payload);
+      // 23505 = this debt id already landed (response lost): success.
+      if (error && (error as { code?: string }).code !== '23505') throw error;
+      break;
+    }
     case 'adjust_stock': {
+      // LEGACY shape, queued by app versions before adjust_stock_move existed.
       const { stockMove, productUpdate } = payload as {
         stockMove: object;
         productUpdate: { id: string; stock_qty: number };

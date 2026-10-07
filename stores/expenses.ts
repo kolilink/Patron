@@ -120,6 +120,32 @@ export const useExpensesStore = create<ExpensesStore>((set, get) => {
     useSyncStore.getState().kick();
   };
 
+  const decideExpense = async (
+  operation: 'approve_expense' | 'reject_expense',
+  status: ExpenseStatus,
+  id: string,
+  userId: string,
+): Promise<boolean> => {
+  set({ saving: true, error: null });
+  const expense = get().expenses.find(e => e.id === id);
+  const businessId = expense?.business_id ?? useAuthStore.getState().session?.activeBusiness?.id;
+  const patch = { status, approved_by: userId, approved_at: new Date().toISOString() };
+  try {
+    await enqueue(operation, { id, ...patch });
+    if (businessId) await rebuild(businessId);
+    set({ saving: false });
+    void afterEnqueue();
+    return true;
+  } catch (err) {
+    // failure: speaks — the local write itself failed (storage), nothing was queued
+    set({
+      saving: false,
+      error: translateError(err, operation === 'approve_expense' ? "Impossible d'approuver la dépense" : 'Impossible de rejeter la dépense'),
+    });
+    return false;
+  }
+}
+
   return ({
   baseline: [],
   expenses: [],
@@ -311,85 +337,12 @@ export const useExpensesStore = create<ExpensesStore>((set, get) => {
     }
   },
 
-  approveExpense: async (id, userId) => {
-    set({ saving: true });
-    const _expense = get().expenses.find(e => e.id === id);
-    const now = new Date().toISOString();
-    const patch = { status: 'approuve' as ExpenseStatus, approved_by: userId, approved_at: now };
-    try {
-      const { error } = await supabase.from('expenses').update(patch).eq('id', id);
-      if (error) throw error;
-      set(state => ({
-        expenses: state.expenses.map(e => e.id === id ? { ...e, ...patch } : e),
-        baseline: state.baseline.map(e => e.id === id ? { ...e, ...patch } : e),
-        saving: false,
-      }));
-      if (_expense?.created_by && _expense.created_by !== userId) {
-        const currency = useAuthStore.getState().session?.activeBusiness?.currency ?? 'GNF';
-        notifyEvent({
-          businessId: _expense.business_id,
-          eventType: 'expense_approved',
-          payload: { amount: formatAmount(_expense.amount, currency), description: _expense.description ?? '' },
-          targetUserIds: [_expense.created_by],
-        });
-      }
-      return true;
-    } catch (err) {
-      if (isNetworkError(err)) {
-        await enqueue('approve_expense', { id, ...patch });
-        const count = await getQueueCount();
-        useSyncStore.setState({ pendingCount: count });
-        set(state => ({
-          expenses: state.expenses.map(e => e.id === id ? { ...e, ...patch } : e),
-        baseline: state.baseline.map(e => e.id === id ? { ...e, ...patch } : e),
-          saving: false,
-        }));
-        return true;
-      }
-      set({ saving: false, error: translateError(err, "Impossible d'approuver la dépense") });
-      return false;
-    }
-  },
+  // approve / reject — phone-first like every other expense write: the decision
+  // is recorded in the outbox instantly (the overlay shows it at once, any
+  // network), replayed later; the creator is notified when it reaches the server.
+  approveExpense: async (id, userId) => decideExpense('approve_expense', 'approuve', id, userId),
 
-  rejectExpense: async (id, userId) => {
-    set({ saving: true, error: null });
-    const _expense = get().expenses.find(e => e.id === id);
-    const now = new Date().toISOString();
-    const patch = { status: 'rejete' as ExpenseStatus, approved_by: userId, approved_at: now };
-    try {
-      const { error } = await supabase.from('expenses').update(patch).eq('id', id);
-      if (error) throw error;
-      set(state => ({
-        expenses: state.expenses.map(e => e.id === id ? { ...e, ...patch } : e),
-        baseline: state.baseline.map(e => e.id === id ? { ...e, ...patch } : e),
-        saving: false,
-      }));
-      if (_expense?.created_by && _expense.created_by !== userId) {
-        const currency = useAuthStore.getState().session?.activeBusiness?.currency ?? 'GNF';
-        notifyEvent({
-          businessId: _expense.business_id,
-          eventType: 'expense_rejected',
-          payload: { amount: formatAmount(_expense.amount, currency), description: _expense.description ?? '' },
-          targetUserIds: [_expense.created_by],
-        });
-      }
-      return true;
-    } catch (err) {
-      if (isNetworkError(err)) {
-        await enqueue('reject_expense', { id, ...patch });
-        const count = await getQueueCount();
-        useSyncStore.setState({ pendingCount: count });
-        set(state => ({
-          expenses: state.expenses.map(e => e.id === id ? { ...e, ...patch } : e),
-        baseline: state.baseline.map(e => e.id === id ? { ...e, ...patch } : e),
-          saving: false,
-        }));
-        return true;
-      }
-      set({ saving: false, error: translateError(err, 'Impossible de rejeter la dépense') });
-      return false;
-    }
-  },
+  rejectExpense: async (id, userId) => decideExpense('reject_expense', 'rejete', id, userId),
 
   clearError: () => set({ error: null }),
   reset: () => { snapshots.clear(); cancelledCreates.clear(); set({ baseline: [], expenses: [], loading: false, saving: false, error: null, offline: false, offlineSince: null }); },

@@ -2,7 +2,9 @@ import { create } from 'zustand';
 import { supabase } from '@/lib/supabase';
 import { translateError } from '@/lib/errors';
 import { generateId, generateFallbackName } from '@/lib/id';
-import { saveProductCache, getProductCache, enqueue, getQueueCount, getCacheTimestamp, saveVariantsCache, getVariantsCache } from '@/lib/db';
+import { saveProductCache, getProductCache, enqueue, getQueueCount, getCacheTimestamp, saveVariantsCache, getVariantsCache, getAllQueueItemsForOverlay } from '@/lib/db';
+import { applyPendingProductOps, type QueuedProductOp } from '@/lib/pendingProducts';
+import { isKnownOffline } from '@/lib/connectivity';
 import { isNetworkError, withNetworkRetry, reportOfflineFallback } from '@/lib/sync';
 import { useSyncStore } from '@/stores/sync';
 import { useAuthStore } from '@/stores/auth';
@@ -113,6 +115,44 @@ interface ProductStore {
 }
 
 
+// ── Phone-first writes: base + overlay ────────────────────────────────────────
+// create / edit product and stock adjustments are written to the durable outbox
+// FIRST (instant on any network) and replayed later. `products` is therefore
+// always (server list or its cache = the BASE) + (still-queued product ops),
+// recomputed — never patched in place — so a refetch can't lose a pending
+// change and nothing is applied twice. The cache only ever stores the BASE.
+let _baseProducts: { businessId: string; list: Product[] } | null = null;
+
+async function readProductOps(): Promise<QueuedProductOp[]> {
+  const { ok } = await getAllQueueItemsForOverlay();
+  const ops: QueuedProductOp[] = [];
+  for (const i of ok) {
+    if (i.entity_type !== 'produit' || i.status !== 'pending') continue;
+    try { ops.push({ operation: i.operation, payload: JSON.parse(i.payload) as Record<string, unknown> }); } catch { /* skip unreadable */ }
+  }
+  return ops;
+}
+
+async function overlayOnBase(businessId: string, base: Product[]): Promise<Product[]> {
+  _baseProducts = { businessId, list: base };
+  try { return applyPendingProductOps(base, await readProductOps()); } catch { return base; }
+}
+
+/** Re-derive `products` from the base + the outbox after a local write. */
+async function rebuildProducts(businessId: string): Promise<void> {
+  let base = _baseProducts && _baseProducts.businessId === businessId ? _baseProducts.list : null;
+  if (!base) base = (await getProductCache(businessId)) ?? [];
+  const shown = await overlayOnBase(businessId, base);
+  if (useProductStore.getState().products.length > 0 || shown.length > 0) {
+    useProductStore.setState({ products: shown, productsFetchedFor: businessId });
+  }
+}
+
+async function afterProductEnqueue(): Promise<void> {
+  try { useSyncStore.setState({ pendingCount: await getQueueCount() }); } catch { /* count is cosmetic */ }
+  useSyncStore.getState().kick();
+}
+
 export const useProductStore = create<ProductStore>((set, get) => ({
   products: [],
   archivingIds: [],
@@ -132,7 +172,7 @@ export const useProductStore = create<ProductStore>((set, get) => ({
       set({ loading: true, error: null });
       const cached = await getProductCache(businessId);
       if (cached && !isStaleBusiness(businessId)) {
-        set({ products: cached, loading: false });
+        set({ products: await overlayOnBase(businessId, cached), loading: false });
       }
     } else {
       set({ error: null });
@@ -158,14 +198,16 @@ export const useProductStore = create<ProductStore>((set, get) => ({
 
       if (error) throw error;
       if (isStaleBusiness(businessId)) return; // switched away while this was in flight
-      const products = (data as Product[]).map(p => ({
+      const baseProducts = (data as Product[]).map(p => ({
         ...p,
         cost_price: p.cost_price / 100,
         sale_price: p.sale_price / 100,
         bulk_price: p.bulk_price != null ? p.bulk_price / 100 : null,
       }));
+      const products = await overlayOnBase(businessId, baseProducts);
+      if (isStaleBusiness(businessId)) return;
       set({ products, loading: false, offline: false, offlineSince: null, productsFetchedFor: businessId });
-      void saveProductCache(businessId, products);
+      void saveProductCache(businessId, baseProducts);
 
       // Low-stock detection: notify admins/managers for each product crossing its threshold.
       // Server-side 24h cooldown in dispatch-notification prevents notification floods on restart.
@@ -243,7 +285,9 @@ export const useProductStore = create<ProductStore>((set, get) => ({
         if (cached) {
           const ts = await getCacheTimestamp('product_cache', businessId);
           if (isStaleBusiness(businessId)) return;
-          set({ products: cached, loading: false, offline: true, offlineSince: ts, productsFetchedFor: businessId });
+          const shown = await overlayOnBase(businessId, cached);
+          if (isStaleBusiness(businessId)) return;
+          set({ products: shown, loading: false, offline: true, offlineSince: ts, productsFetchedFor: businessId });
           return;
         }
         set({
@@ -318,44 +362,25 @@ export const useProductStore = create<ProductStore>((set, get) => ({
       created_by: userId,
     } : null;
 
+    // Phone-first: the durable outbox write is the only thing awaited — the
+    // product is on screen immediately and syncs later (create_product_with_stock
+    // is idempotent on the client-generated id, migration_v243).
     try {
-      const { error: prodErr } = await supabase.rpc('create_product_with_stock', {
-        p_product: productRow,
-        p_stock_move: stockMoveRow,
-      });
-      if (prodErr) throw prodErr;
-      await get().fetchProducts(businessId, userId);
-      trackEvent('product_added', businessId, userId, {
-        has_bulk_price: !!(data.bulk_price),
-        initial_stock: data.initial_stock,
-        has_category: !!(data.category),
-      });
-      set({ saving: false });
-      return true;
+      await enqueue('create_product', { product: productRow, stockMove: stockMoveRow });
     } catch (err) {
-      if (isNetworkError(err)) {
-        await enqueue('create_product', { product: productRow, stockMove: stockMoveRow });
-        const count = await getQueueCount();
-        useSyncStore.setState({ pendingCount: count });
-
-        // Optimistically show the new product in-memory and in the cache.
-        const optimistic: Product = {
-          ...productRow,
-          cost_price: data.cost_price,
-          sale_price: data.sale_price,
-          bulk_price: data.bulk_price ?? null,
-          has_variants: false,
-          created_at: new Date().toISOString(),
-          updated_at: new Date().toISOString(),
-        };
-        const updated = [...get().products, optimistic].sort((a, b) => a.name.localeCompare(b.name, 'fr'));
-        set({ products: updated, saving: false });
-        void saveProductCache(businessId, updated);
-        return true;
-      }
-      set({ error: translateError(err, 'Erreur de création'), saving: false });
+      console.error('[createProduct] local write failed', err);
+      set({ error: "Impossible d'enregistrer sur cet appareil. Réessayez.", saving: false });
       return false;
     }
+    try { await rebuildProducts(businessId); } catch (err) { console.error('[createProduct] rebuild failed (write already succeeded)', err); }
+    void afterProductEnqueue();
+    trackEvent('product_added', businessId, userId, {
+      has_bulk_price: !!(data.bulk_price),
+      initial_stock: data.initial_stock,
+      has_category: !!(data.category),
+    });
+    set({ saving: false });
+    return true;
   },
 
   updateProduct: async (businessId, userId, id, data) => {
@@ -374,61 +399,43 @@ export const useProductStore = create<ProductStore>((set, get) => ({
     if (data.bulk_price !== undefined) patch.bulk_price = data.bulk_price ? Math.round(data.bulk_price * 100) : null;
     if (data.bulk_min_qty !== undefined) patch.bulk_min_qty = data.bulk_min_qty || null;
 
+    // Phone-first, like createProduct: outbox first, replay later.
     try {
-      const { error } = await supabase.from('products').update(patch).eq('id', id);
-      if (error) throw error;
-      await get().fetchProducts(businessId, userId);
-      set({ saving: false });
-
-      // Catalogue price edits are admin/manager-only, but a manager quietly
-      // lowering a price (or a genuine typo) has had no visibility to anyone
-      // else until now — notify the rest of admin/manager the same way a sale
-      // correction already does (stores/ventes.ts's sale_edited), so this
-      // isn't a silent edit anymore. Only the live-success path notifies —
-      // an offline-queued edit has no reliable "later" moment to fire from.
-      if (
-        patch.sale_price !== undefined &&
-        oldProduct &&
-        Math.round(oldProduct.sale_price * 100) !== patch.sale_price
-      ) {
-        const currency = useAuthStore.getState().session?.activeBusiness?.currency ?? 'GNF';
-        const editorName = useAuthStore.getState().session?.user?.name || generateFallbackName(userId);
-        notifyEvent({
-          businessId,
-          eventType: 'price_changed',
-          payload: {
-            editor: editorName,
-            product: oldProduct.name,
-            old_price: formatAmount(oldProduct.sale_price, currency),
-            new_price: formatAmount((patch.sale_price as number) / 100, currency),
-          },
-          targetRoles: ['administrateur', 'manager'],
-          excludeUserId: userId,
-        });
-      }
-
-      return true;
+      await enqueue('update_product', { id, ...patch });
     } catch (err) {
-      if (isNetworkError(err)) {
-        await enqueue('update_product', { id, ...patch });
-        const count = await getQueueCount();
-        useSyncStore.setState({ pendingCount: count });
-
-        // Optimistic in-memory patch. Prices are stored as cents in the DB but as
-        // whole units in the store, so convert back before patching the store.
-        const displayPatch: Partial<Product> = { ...patch } as Partial<Product>;
-        if (patch.cost_price !== undefined) displayPatch.cost_price = (patch.cost_price as number) / 100;
-        if (patch.sale_price !== undefined) displayPatch.sale_price = (patch.sale_price as number) / 100;
-        if (patch.bulk_price !== undefined) displayPatch.bulk_price = patch.bulk_price != null ? (patch.bulk_price as number) / 100 : null;
-
-        const updated = get().products.map(p => p.id === id ? { ...p, ...displayPatch } : p);
-        set({ products: updated, saving: false });
-        void saveProductCache(businessId, updated);
-        return true;
-      }
-      set({ error: translateError(err, 'Erreur de mise à jour'), saving: false });
+      console.error('[updateProduct] local write failed', err);
+      set({ error: "Impossible d'enregistrer sur cet appareil. Réessayez.", saving: false });
       return false;
     }
+    try { await rebuildProducts(businessId); } catch (err) { console.error('[updateProduct] rebuild failed (write already succeeded)', err); }
+    void afterProductEnqueue();
+    set({ saving: false });
+
+    // A manager quietly lowering a price (or a genuine typo) must not be a silent
+    // edit to the other admins/managers. Sent only when the device is online (an
+    // offline edit has no reliable later moment to notify from).
+    if (
+      !isKnownOffline() &&
+      patch.sale_price !== undefined &&
+      oldProduct &&
+      Math.round(oldProduct.sale_price * 100) !== patch.sale_price
+    ) {
+      const currency = useAuthStore.getState().session?.activeBusiness?.currency ?? 'GNF';
+      const editorName = useAuthStore.getState().session?.user?.name || generateFallbackName(userId);
+      notifyEvent({
+        businessId,
+        eventType: 'price_changed',
+        payload: {
+          editor: editorName,
+          product: oldProduct.name,
+          old_price: formatAmount(oldProduct.sale_price, currency),
+          new_price: formatAmount((patch.sale_price as number) / 100, currency),
+        },
+        targetRoles: ['administrateur', 'manager'],
+        excludeUserId: userId,
+      });
+    }
+    return true;
   },
 
   archiveProduct: (id, businessId) =>
@@ -460,53 +467,27 @@ export const useProductStore = create<ProductStore>((set, get) => ({
 
   adjustStock: async (productId, businessId, userId, qty, type, note) => {
     set({ saving: true, error: null });
-    const product = get().products.find(p => p.id === productId);
-    const delta = type === 'entree' ? Math.abs(qty) : -Math.abs(qty);
-    const newQty = product ? Math.max(0, product.stock_qty + delta) : Math.abs(qty);
-
-    const stockMoveRow = {
-      id: generateId(),
-      business_id: businessId,
-      product_id: productId,
-      type,
-      qty: Math.abs(qty),
-      ref_id: null,
-      ref_type: 'manuel',
-      note: note || null,
-      created_by: userId,
-    };
-
+    // Phone-first and RELATIVE: the move id is the idempotency key, and the
+    // server applies +/- qty atomically (adjust_stock_move, migration_v243) —
+    // it no longer overwrites stock with a possibly stale absolute number.
     try {
-      const { error: moveErr } = await supabase.from('stock_moves').insert(stockMoveRow);
-      if (moveErr) throw moveErr;
-      await supabase.from('products').update({ stock_qty: newQty }).eq('id', productId);
-      set(state => ({
-        products: state.products.map(p => (p.id === productId ? { ...p, stock_qty: newQty } : p)),
-        saving: false,
-      }));
-      const updated = get().products;
-      void saveProductCache(businessId, updated);
-      return true;
+      await enqueue('adjust_stock_move', {
+        p_business_id: businessId,
+        p_product_id: productId,
+        p_type: type,
+        p_qty: Math.abs(qty),
+        p_note: note || null,
+        p_move_id: generateId(),
+      });
     } catch (err) {
-      if (isNetworkError(err)) {
-        await enqueue('adjust_stock', {
-          stockMove: stockMoveRow,
-          productUpdate: { id: productId, stock_qty: newQty },
-        });
-        const count = await getQueueCount();
-        useSyncStore.setState({ pendingCount: count });
-
-        // Optimistic in-memory and cache update.
-        const optimisticProducts = get().products.map(p =>
-          p.id === productId ? { ...p, stock_qty: newQty } : p,
-        );
-        set({ products: optimisticProducts, saving: false });
-        void saveProductCache(businessId, optimisticProducts);
-        return true;
-      }
-      set({ error: translateError(err, "Erreur d'ajustement"), saving: false });
+      console.error('[adjustStock] local write failed', err);
+      set({ error: "Impossible d'enregistrer sur cet appareil. Réessayez.", saving: false });
       return false;
     }
+    try { await rebuildProducts(businessId); } catch (err) { console.error('[adjustStock] rebuild failed (write already succeeded)', err); }
+    void afterProductEnqueue();
+    set({ saving: false });
+    return true;
   },
 
   fetchVariants: async (productId, businessId) => {
@@ -636,6 +617,7 @@ export const useProductStore = create<ProductStore>((set, get) => ({
   clearError: () => set({ error: null }),
   reset: () => {
     notifiedLowStockIds.clear();
+    _baseProducts = null;
     set({ products: [], archivingIds: [], archivedProducts: [], variantsByProduct: {}, vendeurProductScope: [], vendeurScopeAll: true, productsFetchedFor: null, loading: false, error: null, offline: false, offlineSince: null });
   },
 }));

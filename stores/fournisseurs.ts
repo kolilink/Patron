@@ -12,6 +12,8 @@ import { enqueueOnce } from '@/lib/outbox';
 import { failureReason } from '@/src/utils/failure';
 import { useSyncStore } from '@/stores/sync';
 import { getProductCache, saveProductCache, getQueueCount, getVariantsCache, saveVariantsCache } from '@/lib/db';
+import { enqueue, getAllQueueItemsForOverlay, getClientLedgerCache, saveClientLedgerCache } from '@/lib/db';
+import { applyPendingSupplierOps, type QueuedSupplierOp } from '@/lib/pendingSupplier';
 
 // A réception books money (stock, cost, transport expense): never twice from a double-tap.
 const receptionGuard = createInflightGuard();
@@ -195,6 +197,64 @@ interface FournisseursStore {
   reset: () => void;
 }
 
+// ── Phone-first supplier money (debt payments + debt creation) ─────────────────
+// Recorded in the outbox instantly, replayed later (pay_supplier_debt is
+// idempotent on its key, create_supplier_debt on the row id — migration_v243).
+// The lists shown are always BASE (server list or its cache) + still-queued ops,
+// recomputed — see lib/pendingSupplier.ts.
+let _baseDebts: { businessId: string; list: SupplierDebt[] } | null = null;
+let _basePayments: { businessId: string; supplierId: string; list: SupplierPayment[] } | null = null;
+
+const debtsCacheKey = (businessId: string) => `supplier_debts:${businessId}`;
+const paymentsCacheKey = (businessId: string, supplierId: string) => `supplier_payments:${businessId}:${supplierId}`;
+
+async function readSupplierOps(): Promise<QueuedSupplierOp[]> {
+  const { ok } = await getAllQueueItemsForOverlay();
+  const ops: QueuedSupplierOp[] = [];
+  for (const i of ok) {
+    if (i.entity_type !== 'fournisseur' || i.status !== 'pending') continue;
+    try { ops.push({ operation: i.operation, payload: JSON.parse(i.payload) as Record<string, unknown>, queuedAt: i.queued_at ?? new Date().toISOString() }); } catch { /* skip unreadable */ }
+  }
+  return ops;
+}
+
+/** base + queued ops → the lists to show (payments only for the supplier in view). */
+async function supplierView(businessId: string): Promise<{ debts: SupplierDebt[]; payments: SupplierPayment[] | null }> {
+  let ops: QueuedSupplierOp[] = [];
+  try { ops = await readSupplierOps(); } catch { /* base only */ }
+  const baseDebts = _baseDebts && _baseDebts.businessId === businessId ? _baseDebts.list : [];
+  const bp = _basePayments && _basePayments.businessId === businessId ? _basePayments : null;
+  const userId = useAuthStore.getState().session?.user?.id ?? '';
+  const res = applyPendingSupplierOps(baseDebts, bp?.list ?? [], ops, { userId });
+  return { debts: res.debts, payments: bp ? res.payments.filter(x => x.supplier_id === bp.supplierId) : null };
+}
+
+async function refreshSupplierView(businessId: string): Promise<void> {
+  const v = await supplierView(businessId);
+  useFournisseursStore.setState(v.payments ? { debts: v.debts, payments: v.payments } : { debts: v.debts });
+}
+
+function mapDebts(rows: Record<string, unknown>[]): SupplierDebt[] {
+  return rows.map(d => ({
+    id: d.id as string,
+    business_id: d.business_id as string,
+    supplier_id: d.supplier_id as string,
+    amount: (d.amount as number) / 100,
+    amount_paid: (d.amount_paid as number) / 100,
+    description: (d.description as string | null) ?? null,
+    date: d.date as string,
+    created_at: d.created_at as string,
+  }));
+}
+
+async function loadDebtsFromCache(businessId: string): Promise<void> {
+  try {
+    const cached = await getClientLedgerCache(debtsCacheKey(businessId));
+    if (Array.isArray(cached)) _baseDebts = { businessId, list: cached as SupplierDebt[] };
+  } catch { /* no cache */ }
+  await refreshSupplierView(businessId);
+}
+
 export const useFournisseursStore = create<FournisseursStore>((set, get) => ({
   fournisseurs: [],
   commandes: [],
@@ -225,6 +285,7 @@ export const useFournisseursStore = create<FournisseursStore>((set, get) => ({
           const ts = await getCacheTimestamp('fournisseur_cache', businessId);
           if (isStaleBusiness(businessId)) return;
           set({ fournisseurs: cached, loading: false, offline: true, offlineSince: ts, error: null });
+          await loadDebtsFromCache(businessId);
           return;
         }
         set({ loading: false, offline: true, offlineSince: null, error: null });
@@ -235,17 +296,18 @@ export const useFournisseursStore = create<FournisseursStore>((set, get) => ({
     }
     const fournisseurs = (suppliersRes.data ?? []) as Fournisseur[];
     void saveFournisseurCache(businessId, fournisseurs as unknown[]);
-    const debts: SupplierDebt[] = (debtsRes.data ?? []).map((d: Record<string, unknown>) => ({
-      id: d.id as string,
-      business_id: d.business_id as string,
-      supplier_id: d.supplier_id as string,
-      amount: (d.amount as number) / 100,
-      amount_paid: (d.amount_paid as number) / 100,
-      description: (d.description as string | null) ?? null,
-      date: d.date as string,
-      created_at: d.created_at as string,
-    }));
-    set({ fournisseurs, debts, loading: false, offline: false, offlineSince: null });
+    if (debtsRes.error) {
+      // Suppliers loaded but debts didn't: keep what we know (cache) rather than blank them.
+      set({ fournisseurs, loading: false, offline: false, offlineSince: null });
+      await loadDebtsFromCache(businessId);
+      return;
+    }
+    const baseDebts = mapDebts((debtsRes.data ?? []) as Record<string, unknown>[]);
+    _baseDebts = { businessId, list: baseDebts };
+    void saveClientLedgerCache(debtsCacheKey(businessId), baseDebts);
+    const v = await supplierView(businessId);
+    if (isStaleBusiness(businessId)) return;
+    set({ fournisseurs, debts: v.debts, loading: false, offline: false, offlineSince: null });
   },
 
   createFournisseur: async (businessId, userId, d) => {
@@ -328,34 +390,41 @@ export const useFournisseursStore = create<FournisseursStore>((set, get) => ({
   }).then(r => (r.ran ? r.value : { ok: false, message: null })),
 
   payDebt: async (businessId, supplierId, paymentAmount) => {
+    if (get().saving) return false; // a second tap while the first is being recorded
     set({ saving: true, error: null });
-    try {
-      const { data, error } = await supabase.rpc('pay_supplier_debt', {
-        p_business_id: businessId,
-        p_supplier_id: supplierId,
-        p_amount_cents: Math.round(paymentAmount * 100),
+    // Never record more than is owed: the same rule the online path enforced
+    // from the server's reply, checked here against the (base + queued) debts.
+    const owedCents = get().debts
+      .filter(x => x.supplier_id === supplierId)
+      .reduce((sum, x) => sum + Math.max(0, Math.round(x.amount * 100) - Math.round(x.amount_paid * 100)), 0);
+    const amountCents = Math.round(paymentAmount * 100);
+    if (amountCents > owedCents) {
+      set({
+        saving: false,
+        error: `Paiement partiellement alloué — ${(amountCents - owedCents) / 100} excèdent les dettes enregistrées. Créez une dette si nécessaire.`,
       });
-      if (error) {
-        set({ saving: false, error: translateError(error, 'Erreur lors du paiement') });
-        return false;
-      }
-      const remaining = (data as { remaining_cents?: number } | null)?.remaining_cents ?? 0;
-      if (remaining > 0) {
-        // The supplier has no more outstanding debts — the excess was not applied anywhere.
-        set({
-          saving: false,
-          error: `Paiement partiellement alloué — ${remaining / 100} excèdent les dettes enregistrées. Créez une dette si nécessaire.`,
-        });
-        await get().fetchDebts(businessId);
-        return false;
-      }
-      await Promise.all([get().fetchDebts(businessId), get().fetchPayments(businessId, supplierId)]);
-      set({ saving: false });
-      return true;
-    } catch (err) {
-      set({ saving: false, error: isNetworkError(err) ? 'Vérifiez votre connexion' : translateError(err, 'Erreur lors du paiement') });
       return false;
     }
+    // Phone-first: recorded in the outbox now; the key makes the replay idempotent
+    // server-side (pay_supplier_debt, migration_v243) — a cash payment is never lost
+    // and never counted twice.
+    try {
+      await enqueue('pay_supplier_debt', {
+        p_business_id: businessId,
+        p_supplier_id: supplierId,
+        p_amount_cents: amountCents,
+        p_idempotency_key: generateId(),
+      });
+    } catch (err) {
+      console.error('[payDebt] local write failed', err);
+      set({ saving: false, error: "Impossible d'enregistrer sur cet appareil. Réessayez." });
+      return false;
+    }
+    try { await refreshSupplierView(businessId); } catch (err) { console.error('[payDebt] refresh failed (write already succeeded)', err); }
+    try { useSyncStore.setState({ pendingCount: await getQueueCount() }); } catch { /* cosmetic */ }
+    useSyncStore.getState().kick();
+    set({ saving: false });
+    return true;
   },
 
   fetchCommandes: async (businessId) => {
@@ -559,68 +628,91 @@ export const useFournisseursStore = create<FournisseursStore>((set, get) => ({
   },
 
   fetchDebts: async (businessId) => {
-    const { data, error } = await supabase
-      .from('supplier_debts')
-      .select('*')
-      .eq('business_id', businessId)
-      .order('date', { ascending: false });
-    if (error) return;
-    if (isStaleBusiness(businessId)) return;
-    const debts: SupplierDebt[] = (data ?? []).map((d: Record<string, unknown>) => ({
-      id: d.id as string,
-      business_id: d.business_id as string,
-      supplier_id: d.supplier_id as string,
-      amount: (d.amount as number) / 100,
-      amount_paid: (d.amount_paid as number) / 100,
-      description: (d.description as string | null) ?? null,
-      date: d.date as string,
-      created_at: d.created_at as string,
-    }));
-    set({ debts });
+    try {
+      const { data, error } = await withTimeout(
+        supabase
+          .from('supplier_debts')
+          .select('*')
+          .eq('business_id', businessId)
+          .order('date', { ascending: false }),
+      );
+      if (error) throw error;
+      if (isStaleBusiness(businessId)) return;
+      const base = mapDebts((data ?? []) as Record<string, unknown>[]);
+      _baseDebts = { businessId, list: base };
+      void saveClientLedgerCache(debtsCacheKey(businessId), base);
+      await refreshSupplierView(businessId);
+      // The payments list in view is part of the same picture: re-read it too, so a
+      // just-synced payment is swapped from its overlay row to the server row.
+      if (_basePayments && _basePayments.businessId === businessId) void get().fetchPayments(businessId, _basePayments.supplierId);
+    } catch {
+      // Offline / failed: show the cached base + whatever is still queued.
+      if (isStaleBusiness(businessId)) return;
+      await loadDebtsFromCache(businessId);
+    }
   },
 
   createDebt: async (businessId, userId, d) => {
     set({ saving: true, error: null });
+    // Phone-first: recorded in the outbox now, replayed later. The client-generated
+    // row id makes the replay idempotent (a duplicate id is treated as success).
+    const row = {
+      id: generateId(),
+      business_id: businessId,
+      supplier_id: d.supplierId,
+      amount: Math.round(d.amount * 100),
+      description: d.description?.trim() || null,
+      date: d.date,
+      amount_paid: 0,
+      created_by: userId,
+    };
     try {
-      const { error } = await supabase.from('supplier_debts').insert({
-        business_id: businessId,
-        supplier_id: d.supplierId,
-        amount: Math.round(d.amount * 100),
-        description: d.description?.trim() || null,
-        date: d.date,
-        amount_paid: 0,
-        created_by: userId,
-      });
-      if (error) { set({ saving: false, error: translateError(error, 'Impossible d\'enregistrer la dette') }); return false; }
-      await get().fetchDebts(businessId);
-      set({ saving: false });
-      return true;
+      await enqueue('create_supplier_debt', row);
     } catch (err) {
-      set({ saving: false, error: isNetworkError(err) ? 'Vérifiez votre connexion' : translateError(err, 'Impossible d\'enregistrer la dette') });
+      console.error('[createDebt] local write failed', err);
+      set({ saving: false, error: "Impossible d'enregistrer sur cet appareil. Réessayez." });
       return false;
     }
+    try { await refreshSupplierView(businessId); } catch (err) { console.error('[createDebt] refresh failed (write already succeeded)', err); }
+    try { useSyncStore.setState({ pendingCount: await getQueueCount() }); } catch { /* cosmetic */ }
+    useSyncStore.getState().kick();
+    set({ saving: false });
+    return true;
   },
 
   fetchPayments: async (businessId, supplierId) => {
-    const { data, error } = await supabase
-      .from('supplier_payments')
-      .select('id, supplier_id, amount_cents, paid_by, paid_at, note')
-      .eq('business_id', businessId)
-      .eq('supplier_id', supplierId)
-      .order('paid_at', { ascending: false })
-      .limit(50);
-    if (error) return;
-    const payments: SupplierPayment[] = (data ?? []).map((p: Record<string, unknown>) => ({
-      id: p.id as string,
-      supplier_id: p.supplier_id as string,
-      amount: (p.amount_cents as number) / 100,
-      paid_by: p.paid_by as string,
-      paid_at: p.paid_at as string,
-      note: (p.note as string | null) ?? null,
-    }));
-    set({ payments });
+    let base: SupplierPayment[] | null = null;
+    try {
+      const { data, error } = await withTimeout(
+        supabase
+          .from('supplier_payments')
+          .select('id, supplier_id, amount_cents, paid_by, paid_at, note')
+          .eq('business_id', businessId)
+          .eq('supplier_id', supplierId)
+          .order('paid_at', { ascending: false })
+          .limit(50),
+      );
+      if (error) throw error;
+      base = (data ?? []).map((p: Record<string, unknown>) => ({
+        id: p.id as string,
+        supplier_id: p.supplier_id as string,
+        amount: (p.amount_cents as number) / 100,
+        paid_by: p.paid_by as string,
+        paid_at: p.paid_at as string,
+        note: (p.note as string | null) ?? null,
+      }));
+      void saveClientLedgerCache(paymentsCacheKey(businessId, supplierId), base);
+    } catch {
+      try {
+        const cached = await getClientLedgerCache(paymentsCacheKey(businessId, supplierId));
+        if (Array.isArray(cached)) base = cached as SupplierPayment[];
+      } catch { /* no cache */ }
+    }
+    if (isStaleBusiness(businessId)) return;
+    _basePayments = { businessId, supplierId, list: base ?? [] };
+    await refreshSupplierView(businessId);
   },
 
   clearError: () => set({ error: null }),
-  reset: () => set({ fournisseurs: [], commandes: [], debts: [], payments: [], loading: false, saving: false, error: null, offline: false, offlineSince: null }),
+  reset: () => { _baseDebts = null; _basePayments = null; set({ fournisseurs: [], commandes: [], debts: [], payments: [], loading: false, saving: false, error: null, offline: false, offlineSince: null }); },
 }));
