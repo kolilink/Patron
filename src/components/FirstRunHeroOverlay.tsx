@@ -189,7 +189,7 @@ export function FirstRunHeroOverlay({ businessId, userId, currency, onDone }: Pr
 
   return (
     <Modal
-      animationType="fade"
+      animationType="none"
       transparent={false}
       visible
       statusBarTranslucent

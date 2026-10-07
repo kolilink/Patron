@@ -26,6 +26,7 @@ import { getKV, openDb } from '@/lib/db';
 import { capturePendingInviterId } from '@/lib/inviteLink';
 import { setEnabled, HAPTICS_KV_KEY } from '@/lib/haptics';
 import { ThemeProvider } from '@/src/theme';
+import { ThemedStack, ThemedRootView } from '@/src/components/ui/ThemedStack';
 import { posthog } from '@/lib/posthog';
 import { identifyUser, resetAnalytics, trackEvent, analyticsIsTest, loadDeviceTestFlag } from '@/lib/analytics';
 import { recordInstallIfFirstOpen, recordFunnelStep, flushFunnelOutbox } from '@/lib/funnel';
@@ -179,20 +180,19 @@ function RootLayout() {
       {/* Observes the first touch anywhere in the app (capture phase, returns
           false) purely to time it — never claims the responder, so it can't
           change what actually handles the tap. See reportFirstInteraction. */}
-      <View
-        style={{ flex: 1 }}
+      <ThemeProvider>
+      <ThemedRootView
         onStartShouldSetResponderCapture={() => {
           reportFirstInteraction();
           return false;
         }}
       >
         <PostHogProvider client={posthog} autocapture>
-          <ThemeProvider>
-            <Stack screenOptions={{ headerShown: false, animation: 'fade' }} />
-            <PrivacyShield />
-          </ThemeProvider>
+          <ThemedStack screenOptions={{ headerShown: false, animation: 'fade' }} />
+          <PrivacyShield />
         </PostHogProvider>
-      </View>
+      </ThemedRootView>
+      </ThemeProvider>
     </GestureHandlerRootView>
   );
 }

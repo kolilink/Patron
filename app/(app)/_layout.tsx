@@ -1,4 +1,5 @@
 import { useEffect, useRef, useState } from 'react';
+import { ThemedStack } from '@/src/components/ui/ThemedStack';
 import { Alert, AppState, Pressable, View } from 'react-native';
 import NetInfo from '@react-native-community/netinfo';
 import { shouldKickOnConnectivityChange } from '@/lib/netInfoKick';
@@ -512,7 +513,7 @@ export default function AppLayout() {
     <>
       <NotificationSetup />
       <SyncStatusLine />
-      <Stack screenOptions={{ headerShown: false, animation: 'slide_from_right' }} />
+      <ThemedStack screenOptions={{ headerShown: false, animation: 'slide_from_right' }} />
 
       <BusinessDrawer />
       {showFirstRunHero && activeBusiness ? (
