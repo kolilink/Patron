@@ -314,7 +314,23 @@ async function executeOp(operation: string, payload: Record<string, unknown>): P
       // No notification hookup needed — the online path (stores/sales.ts)
       // never fires one for a carnet debt either, so there's no parity gap
       // to close here (unlike submit_sale's notifyQueuedSaleSynced above).
-      const { error } = await supabase.rpc('submit_carnet_debt', payload);
+      // A debt recorded OFFLINE for a new name has no clients row yet (the screen's
+      // client upsert is skipped offline). Make it now, best-effort, so the debt links
+      // to a real client and the picker/ledger agree — the upsert is by (business, name),
+      // so a name that already exists is reused: never a duplicate client.
+      let debtPayload = payload;
+      const debtName = typeof payload.p_customer_name === 'string' ? payload.p_customer_name.trim() : '';
+      if (!payload.p_client_id && debtName && payload.p_business_id) {
+        try {
+          const { data: clientRow } = await supabase
+            .from('clients')
+            .upsert({ business_id: payload.p_business_id as string, name: debtName }, { onConflict: 'business_id,name' })
+            .select('id')
+            .single();
+          if (clientRow?.id) debtPayload = { ...payload, p_client_id: clientRow.id };
+        } catch { /* link is best-effort: the debt itself must still sync */ }
+      }
+      const { error } = await supabase.rpc('submit_carnet_debt', debtPayload);
       if (error) throw error;
       break;
     }
