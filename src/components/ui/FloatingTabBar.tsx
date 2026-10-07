@@ -1,17 +1,15 @@
 import { useCallback, useEffect, useState } from 'react';
-import { Keyboard, Platform, Pressable, View } from 'react-native';
+import { Keyboard, Platform, Pressable, Text, View } from 'react-native';
 import { BlurView } from 'expo-blur';
 import { Ionicons } from '@expo/vector-icons';
 import Animated, {
     Easing,
     Extrapolation,
     interpolate,
-    interpolateColor,
     useAnimatedStyle,
     useSharedValue,
     withSpring,
     withTiming,
-    type SharedValue,
 } from 'react-native-reanimated';
 import { useReduceMotion } from '@/src/hooks/useReduceMotion';
 import { useTheme, FLOATING_TAB_BAR_HEIGHT, FLOATING_TAB_BAR_GAP } from '@/src/theme';
@@ -78,7 +76,7 @@ const INDICATOR_H_INSET = 6; // horizontal inset of the pill inside its slot
 const PRESS_SCALE = 0.97; // spec: scale 0.97
 const PRESS_DURATION_MS = 120; // spec: ≤120–150ms
 const PRESS_SPRING = { stiffness: 300, damping: 14, mass: 0.6 }; // spec: 300 / 12–15
-const SLIDE_DURATION_MS = 250; // spec: 250ms
+const SLIDE_DURATION_MS = 120; // pill glide only; icons/labels are instant. A new tap reassigns the shared value, which cancels the in-flight glide (interrupt, never queue).
 const SLIDE_EASING = Easing.bezier(0.77, 0, 0.175, 1); // spec: bezier(0.77,0,0.175,1)
 const ICON_SIZE = 24;
 const LABEL_FONT_SIZE = 11;
@@ -91,74 +89,59 @@ function isAndroidBelow13(): boolean {
     return Number.isFinite(v) && v < 13;
 }
 
-/** Icon crossfade: two glyphs stacked, the filled one fading in as the active
- *  index approaches this tab. Progress is 1 exactly at the active index and 0
- *  once one slot away — the same eased value that drives the pill glide. */
+/** Icon: filled when this tab is the active one, outline otherwise. Driven by the
+ *  synchronous `focused` prop (not the animated glide value), so the icon tells
+ *  the truth on the first frame — no crossfade lag behind the screen. */
 function TabGlyph({
-    activeIndex,
-    itemIndex,
+    focused,
     outline,
     filled,
     inactiveColor,
     activeColor,
     size,
 }: {
-    activeIndex: SharedValue<number>;
-    itemIndex: number;
+    focused: boolean;
     outline: IoniconName;
     filled: IoniconName;
     inactiveColor: string;
     activeColor: string;
     size: number;
 }) {
-    const filledStyle = useAnimatedStyle(() => {
-        const p = 1 - Math.min(1, Math.abs(activeIndex.value - itemIndex));
-        return { opacity: p };
-    });
-    const outlineStyle = useAnimatedStyle(() => ({
-        opacity: Math.min(1, Math.abs(activeIndex.value - itemIndex)),
-    }));
-
     return (
         <View style={{ width: size, height: size, alignItems: 'center', justifyContent: 'center' }}>
-            <Animated.View style={[{ position: 'absolute' }, outlineStyle]}>
-                <Ionicons name={outline} size={size} color={inactiveColor} />
-            </Animated.View>
-            <Animated.View style={[{ position: 'absolute' }, filledStyle]}>
-                <Ionicons name={filled} size={size} color={activeColor} />
-            </Animated.View>
+            <Ionicons
+                name={focused ? filled : outline}
+                size={size}
+                color={focused ? activeColor : inactiveColor}
+            />
         </View>
     );
 }
 
-/** Short label, color crossfaded in sync with the same activeIndex glide. */
+/** Short label; color follows the synchronous `focused` prop, same as the icon. */
 function TabLabel({
-    activeIndex,
-    itemIndex,
+    focused,
     label,
     inactiveColor,
     activeColor,
 }: {
-    activeIndex: SharedValue<number>;
-    itemIndex: number;
+    focused: boolean;
     label: string;
     inactiveColor: string;
     activeColor: string;
 }) {
-    const style = useAnimatedStyle(() => {
-        const p = 1 - Math.min(1, Math.abs(activeIndex.value - itemIndex));
-        return {
-            color: interpolateColor(p, [0, 1], [inactiveColor, activeColor]),
-            fontSize: LABEL_FONT_SIZE,
-            lineHeight: LABEL_LINE_HEIGHT,
-            marginTop: 2,
-        };
-    });
-
     return (
-        <Animated.Text style={style} numberOfLines={1}>
+        <Text
+            style={{
+                color: focused ? activeColor : inactiveColor,
+                fontSize: LABEL_FONT_SIZE,
+                lineHeight: LABEL_LINE_HEIGHT,
+                marginTop: 2,
+            }}
+            numberOfLines={1}
+        >
             {label}
-        </Animated.Text>
+        </Text>
     );
 }
 
@@ -365,8 +348,7 @@ export function FloatingTabBar({
                             >
                                 <Animated.View style={pressStyle}>
                                     <TabGlyph
-                                        activeIndex={activeIndex}
-                                        itemIndex={i}
+                                        focused={focused}
                                         outline={item.outline}
                                         filled={item.filled}
                                         inactiveColor={palette.tabBarInactive}
@@ -375,8 +357,7 @@ export function FloatingTabBar({
                                     />
                                     {showLabels && (
                                         <TabLabel
-                                            activeIndex={activeIndex}
-                                            itemIndex={i}
+                                            focused={focused}
                                             label={item.label}
                                             inactiveColor={palette.tabBarInactive}
                                             activeColor={palette.textPrimary}
