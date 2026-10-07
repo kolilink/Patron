@@ -93,6 +93,11 @@ export default function VerrouilleScreen() {
           <Text variant="body" style={[styles.centerText, styles.onPurpleMuted]}>
             Déverrouillez Patron pour continuer.
           </Text>
+          {/* Always-visible affordance: if the OS prompt didn't appear (or was
+              cancelled), tapping anywhere on this block re-invokes it. */}
+          <Text variant="caption" style={[styles.centerText, styles.onPurpleMuted]}>
+            Touchez l'écran pour déverrouiller
+          </Text>
         </Pressable>
       </Animated.View>
     </Screen>

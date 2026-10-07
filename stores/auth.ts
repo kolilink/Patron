@@ -981,7 +981,12 @@ export const useAuthStore = create<AuthStore>((set, get) => ({
 
   lock: async () => {
     await setLocked(true);
-    set({ session: null, locked: true });
+    // The business drawer is its own native Modal window. If it is still open
+    // in the store when the lock redirect unmounts the (app) tree, iOS can be
+    // left with a half-dismissed modal presentation that swallows every touch
+    // after unlock — and the stale `true` would re-present it on remount while
+    // the lock screen is still fading out. Close it as part of locking.
+    set({ session: null, locked: true, businessDrawerOpen: false });
   },
 
   unlockWithBiometric: async (): Promise<'unlocked' | 'retryable'> => {

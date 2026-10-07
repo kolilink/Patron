@@ -355,6 +355,9 @@ export default function AppLayout() {
     const debounced = debounceAppStateHandler((nextState) => {
       if (nextState === 'background' || nextState === 'inactive') {
         backgroundAt.current = Date.now();
+        // Dismiss the drawer's native Modal while the app is still live, not
+        // later during the lock redirect's unmount (see lock() in stores/auth.ts).
+        if (nextState === 'background') useAuthStore.getState().closeBusinessDrawer();
         return;
       }
       if (nextState === 'active') {

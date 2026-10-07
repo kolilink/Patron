@@ -702,7 +702,7 @@ export default function AccueilScreen() {
   const comparison = homeComparison({ hasEverSold, isFirstSaleToday, isEvening, delta, monthRevenue, lastMonthRevenue });
   const showDeltaPill = comparison.kind === 'pill';
   const comparisonText =
-    comparison.kind === 'welcome' ? 'Bienvenue'
+    comparison.kind === 'welcome' ? 'Bienvenue sur Patron'
     : comparison.kind === 'first_sale' ? 'Première vente enregistrée ✓'
     : comparison.kind === 'month' ? `Ce mois : ${amtOrMask(monthRevenue)}`
     : '';
