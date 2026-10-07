@@ -1,4 +1,5 @@
 import { create } from 'zustand';
+import { localDateISO } from '@/src/utils/dates';
 import { supabase } from '@/lib/supabase';
 import { saveRapportsCache, getRapportsCache, getCacheTimestamp } from '@/lib/db';
 import { isNetworkError, withTimeout, withNetworkRetry, reportOfflineFallback } from '@/lib/sync';
@@ -584,7 +585,7 @@ export const useRapportsStore = create<RapportsState>((set) => ({
     // served from each other's slot on a shared device (the overlay is scoped by
     // the same role/user, so both layers agree).
     const cacheKey = `${businessId}:${role}:${userId}:${periodDays}`;
-    const todayIso = today ?? new Date().toISOString().split('T')[0];
+    const todayIso = today ?? localDateISO();
     const { result, pairing } = await fetchPaired(
       () => withNetworkRetry(() =>
         supabase.rpc('get_reports_snapshot', {
@@ -656,7 +657,7 @@ export const useRapportsStore = create<RapportsState>((set) => ({
     const isCurrentYear = year === today.getFullYear();
     const periodStart = `${year}-01-01`;
     const periodEnd = isCurrentYear
-      ? today.toISOString().split('T')[0]
+      ? localDateISO(today)
       : `${year}-12-31`;
     return loadPeriodReport(businessId, periodStart, periodEnd, role, userId, set, 'year');
   },

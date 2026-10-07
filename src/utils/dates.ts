@@ -1,6 +1,11 @@
-export function todayIso(): string {
-  const d = new Date();
+// YYYY-MM-DD from LOCAL components. Never toISOString(): that is UTC, so after
+// 8 PM in a negative-offset zone it already reads as tomorrow.
+export function localDateISO(d: Date = new Date()): string {
   return `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, '0')}-${String(d.getDate()).padStart(2, '0')}`;
+}
+
+export function todayIso(): string {
+  return localDateISO();
 }
 
 export function formatSaleDate(iso: string): string {

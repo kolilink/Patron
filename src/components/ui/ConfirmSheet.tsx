@@ -1,6 +1,7 @@
 import { useEffect, useId, useMemo } from 'react';
 import { BackHandler, Pressable, StyleSheet, View } from 'react-native';
 import { Text } from '@/src/components/ui/Text';
+import { useSafeAreaInsets } from 'react-native-safe-area-context';
 import { useTheme, spacing, radius } from '@/src/theme';
 import type { Palette } from '@/src/theme';
 import { useAlertStore } from '@/src/utils/appAlert';
@@ -16,6 +17,7 @@ import { useAlertStore } from '@/src/utils/appAlert';
  */
 export function ConfirmSheetHost({ active = true, root = false }: { active?: boolean; root?: boolean }) {
   const { palette } = useTheme();
+  const insets = useSafeAreaInsets();
   const styles = useMemo(() => makeStyles(palette), [palette]);
   const reactId = useId();
   const id = root ? 'root' : reactId;
@@ -52,7 +54,7 @@ export function ConfirmSheetHost({ active = true, root = false }: { active?: boo
   return (
     <View style={styles.overlay} pointerEvents="box-none">
       <Pressable style={styles.backdrop} onPress={dismiss} accessibilityLabel="Fermer" />
-      <View style={styles.card} accessibilityViewIsModal>
+      <View style={[styles.card, { paddingBottom: spacing[8] + insets.bottom }]} accessibilityViewIsModal>
         <Text variant="h4" style={styles.center}>{title}</Text>
         {body ? <Text variant="body" color="secondary" style={styles.center}>{body}</Text> : null}
         <View style={styles.buttons}>

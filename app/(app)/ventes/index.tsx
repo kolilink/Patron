@@ -30,7 +30,7 @@ import { EmptyState } from '@/src/components/ui/EmptyState';
 import { failAlert } from '@/src/components/ui/FailureView';
 import { saleCancelledConfirmation } from '@/src/utils/saveConfirmationCopy';
 import { toast } from '@/stores/toast';
-import { formatDate } from '@/src/utils/dates';
+import { formatDate, localDateISO } from '@/src/utils/dates';
 
 // iOS-only: suppresses the OS's auto-injected floating "Done" pill above
 // the numeric keyboard — PaymentSheet already has a persistent, always-
@@ -122,7 +122,7 @@ function fmtDate(iso: string) {
   return formatDate(d, 'short');
 }
 
-function todayISO() { return new Date().toISOString().split('T')[0]; }
+function todayISO() { return localDateISO(); }
 
 const PAY_METHODS = [
   { key: 'especes', label: 'Espèces' },

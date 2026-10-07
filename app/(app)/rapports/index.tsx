@@ -19,7 +19,7 @@ import { useAuthStore } from '@/stores/auth';
 import { useRapportsStore, type PeriodReport } from '@/stores/rapports';
 import { useExpensesStore } from '@/stores/expenses';
 import { formatAmount, formatCount } from '@/src/utils/format';
-import { formatDate } from '@/src/utils/dates';
+import { formatDate, localDateISO } from '@/src/utils/dates';
 
 function fmt(n: number, cur: string) {
   return formatAmount(n, cur);
@@ -30,7 +30,7 @@ function fmt(n: number, cur: string) {
 // just the widest possible [period_start, period_end], no special-cased path.
 
 function todayIso(): string {
-  return new Date().toISOString().split('T')[0];
+  return localDateISO();
 }
 
 function isoOf(d: Date): string {

@@ -23,6 +23,12 @@ const LOCK_WAIT_CEILING_MS = 1500;
 export function PrivacyShield() {
   const [visible, setVisible] = useState(false);
   const leftAt = useRef<number | null>(null);
+  const coverRef = useRef<View>(null);
+  // Hide on the native side immediately (setState commits after the first frame).
+  const hideNow = () => {
+    coverRef.current?.setNativeProps({ style: { opacity: 0 } });
+    setVisible(false);
+  };
 
   useEffect(() => {
     let waitTimer: ReturnType<typeof setTimeout> | null = null;
@@ -40,13 +46,13 @@ export function PrivacyShield() {
         leftAt.current = null;
         clearWait();
         if (away < LOCK_AFTER_MS || useAuthStore.getState().locked) {
-          setVisible(false);
+          hideNow();
           return;
         }
         unsub = useAuthStore.subscribe((state) => {
-          if (state.locked) { clearWait(); setVisible(false); }
+          if (state.locked) { clearWait(); hideNow(); }
         });
-        waitTimer = setTimeout(() => { clearWait(); setVisible(false); }, LOCK_WAIT_CEILING_MS);
+        waitTimer = setTimeout(() => { clearWait(); hideNow(); }, LOCK_WAIT_CEILING_MS);
         return;
       }
       // 'inactive' is what Control Center / Notification Center peeks (and an
@@ -56,6 +62,7 @@ export function PrivacyShield() {
       if (next !== 'background') return;
       if (leftAt.current === null) leftAt.current = Date.now();
       clearWait();
+      coverRef.current?.setNativeProps({ style: { opacity: 1 } });
       setVisible(true);
     });
     return () => { clearWait(); sub.remove(); };
@@ -63,7 +70,7 @@ export function PrivacyShield() {
 
   if (!visible) return null;
   return (
-    <View style={styles.cover} pointerEvents="auto">
+    <View ref={coverRef} style={styles.cover} pointerEvents="auto">
       <Image source={require('@/assets/mark-white.png')} style={styles.mark} resizeMode="contain" />
     </View>
   );

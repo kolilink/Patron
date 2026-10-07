@@ -1,4 +1,5 @@
 import { create } from 'zustand';
+import { localDateISO } from '@/src/utils/dates';
 import { enqueue, getQueueCount, saveProductCache, getProductCache, getKV, setKV, saveVariantsCache, getVariantsCache } from '@/lib/db';
 import { generateId } from '@/lib/id';
 import { useSyncStore } from '@/stores/sync';
@@ -364,7 +365,7 @@ export const useSalesStore = create<SalesStore>((set, get) => ({
     const discount = discountAmount ?? 0;
     const isPartialCredit = !isFullCredit && payment!.amount < (totalAmount - discount) - 0.01;
     const isCredit = isFullCredit || isPartialCredit;
-    const today = new Date().toISOString().split('T')[0];
+    const today = localDateISO();
 
     // When the merchant sold above catalog price, distribute the override
     // proportionally across lines so unit_price always holds the real price
