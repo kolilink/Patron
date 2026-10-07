@@ -60,6 +60,9 @@ function buildList(search: string): ListItem[] {
   return [...PINNED, { divider: true }, ...REST];
 }
 
+// Longer than the ~350ms slide_from_right push, so the keyboard never rises mid-transition.
+const TRANSITION_SETTLE_MS = 400;
+
 export function PhoneInput({ onChange, label, autoFocus, resetKey, strict = true, initialValue, autofillOwnNumber }: PhoneInputProps) {
   const { palette } = useTheme();
   const styles = useMemo(() => makeStyles(palette), [palette]);
@@ -125,8 +128,18 @@ export function PhoneInput({ onChange, label, autoFocus, resetKey, strict = true
     // finishes, so the keyboard visibly lagged behind the screen settling
     // instead of feeling like one motion. InteractionManager ties the focus
     // call to the actual end of the transition instead of a guessed delay.
-    const task = InteractionManager.runAfterInteractions(() => inputRef.current?.focus());
-    return () => task.cancel();
+    //
+    // InteractionManager alone isn't enough on weak Androids: the native-stack
+    // slide isn't registered as an interaction handle, so it can resolve while
+    // the push is still animating and the keyboard rise then fights it (frozen
+    // frames, a tap that feels dead). Wait out the slide first, THEN let any
+    // remaining interactions finish, then focus. Manual tap-to-focus is
+    // unaffected and instant.
+    let task: { cancel: () => void } | null = null;
+    const timer = setTimeout(() => {
+      task = InteractionManager.runAfterInteractions(() => inputRef.current?.focus());
+    }, TRANSITION_SETTLE_MS);
+    return () => { clearTimeout(timer); task?.cancel(); };
   }, [autoFocus]);
 
   const handleChangeText = (t: string) => {

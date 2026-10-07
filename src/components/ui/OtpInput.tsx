@@ -1,5 +1,5 @@
 import React, { useEffect, useMemo, useRef, useState } from 'react';
-import { Platform, Pressable, StyleSheet, TextInput, View } from 'react-native';
+import { InteractionManager, Platform, Pressable, StyleSheet, TextInput, View } from 'react-native';
 import { Text } from './Text';
 import { useTheme } from '@/src/theme';
 import type { Palette } from '@/src/theme';
@@ -69,6 +69,18 @@ export function OtpInput({ length = 6, onComplete, disabled = false, autoFocus =
     };
   }, [whatsappAutofill, disabled, length]);
 
+  // Deferred focus instead of the native autoFocus prop, which opens the
+  // keyboard during mount — on a weak GPU that fights the screen/step
+  // transition. Short wait + after-interactions, then focus.
+  useEffect(() => {
+    if (!autoFocus || disabled) return;
+    let task: { cancel: () => void } | null = null;
+    const timer = setTimeout(() => {
+      task = InteractionManager.runAfterInteractions(() => inputRef.current?.focus());
+    }, 150);
+    return () => { clearTimeout(timer); task?.cancel(); };
+  }, [autoFocus]);
+
   // On some Android OEM keyboards (OPPO, Xiaomi) calling focus() on an already-focused
   // input doesn't re-show the keyboard. Blur first then re-focus reliably re-opens it.
   function handlePress() {
@@ -112,7 +124,6 @@ export function OtpInput({ length = 6, onComplete, disabled = false, autoFocus =
         maxLength={length}
         editable={!disabled && !verifying}
         caretHidden
-        autoFocus={autoFocus}
         style={styles.hiddenInput}
       />
     </Pressable>
