@@ -1,0 +1,42 @@
+-- One-time, MANUAL correction for sales recorded before migration_v241 by the
+-- two quick paths (submit_carnet_debt / submit_quick_sale), whose sale_date was
+-- the server's UTC date instead of the merchant's local date.
+--
+-- NOT run automatically: the database stores no timezone per business, so the
+-- right offset has to be chosen by a human for each affected business. Guinea
+-- (UTC+0) businesses are unaffected — skip them.
+--
+-- Method: for the chosen business, recompute sale_date from created_at in the
+-- business's real IANA timezone, ONLY for rows whose sale_date still equals the
+-- UTC date of created_at (i.e. the buggy stamp — a deliberately backdated sale
+-- keeps its date), and only for the two quick-path products' placeholder lines.
+--
+-- 1) PREVIEW (always first):
+--   SELECT so.id, so.sale_date AS old_date,
+--          (so.created_at AT TIME ZONE :tz)::date AS new_date, so.created_at
+--   FROM sale_orders so
+--   WHERE so.business_id = :business_id
+--     AND so.sale_date = (so.created_at AT TIME ZONE 'UTC')::date
+--     AND so.sale_date <> (so.created_at AT TIME ZONE :tz)::date
+--     AND EXISTS (SELECT 1 FROM so_lines l JOIN products p ON p.id = l.product_id
+--                 WHERE l.order_id = so.id AND p.is_system);
+--
+-- 2) APPLY (inside a transaction; check the row count equals the preview):
+--   BEGIN;
+--   UPDATE sale_orders so
+--      SET sale_date = (so.created_at AT TIME ZONE :tz)::date
+--    WHERE so.business_id = :business_id
+--      AND so.sale_date = (so.created_at AT TIME ZONE 'UTC')::date
+--      AND so.sale_date <> (so.created_at AT TIME ZONE :tz)::date
+--      AND EXISTS (SELECT 1 FROM so_lines l JOIN products p ON p.id = l.product_id
+--                  WHERE l.order_id = so.id AND p.is_system);
+--   -- quick-sale payments carry the same date:
+--   UPDATE payments pm SET date = so.sale_date
+--     FROM sale_orders so
+--    WHERE pm.order_id = so.id AND so.business_id = :business_id
+--      AND pm.date = (pm.created_at AT TIME ZONE 'UTC')::date
+--      AND pm.date <> so.sale_date;
+--   COMMIT;   -- or ROLLBACK
+--
+-- Alternative: delete the affected test rows by hand — no code change fixes
+-- existing rows either way.

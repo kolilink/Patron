@@ -21,6 +21,7 @@
 // right after any of those left nothing to rebuild from on reopen. This
 // module is the one, tested, durable implementation all five Phase-1
 // operations route through (see stores/sales.ts / stores/ventes.ts).
+import { localDateISO } from '@/src/utils/dates';
 import { getAllQueueItemsForOverlay } from '@/lib/db';
 
 // Mirrors stores/ventes.ts's Vente/VenteLigne/VentePayment shapes exactly
@@ -141,7 +142,7 @@ export function projectNewSale(
       seller_id: sellerId, seller_name: sellerName,
       status: 'credit', is_credit: true,
       total_amount: amount, discount_amount: 0, amount_paid: 0,
-      paid_at: null, sale_date: now.slice(0, 10), due_date: null,
+      paid_at: null, sale_date: (payload.p_sale_date as string | null) ?? localDateISO(), due_date: null,
       created_at: now, cancelled_at: null, cancellation_reason: null,
       cancelled_by_id: null, cancelled_by_name: null,
       edit_count: 0, last_edited_at: null, profit: null,
@@ -165,7 +166,7 @@ export function projectNewSale(
       seller_id: sellerId, seller_name: sellerName,
       status: 'paye', is_credit: false,
       total_amount: total, discount_amount: 0, amount_paid: total,
-      paid_at: now, sale_date: now.slice(0, 10), due_date: null,
+      paid_at: now, sale_date: (payload.p_sale_date as string | null) ?? localDateISO(), due_date: null,
       created_at: now, cancelled_at: null, cancellation_reason: null,
       cancelled_by_id: null, cancelled_by_name: null,
       edit_count: 0, last_edited_at: null, profit: null,
@@ -194,7 +195,7 @@ export function projectNewSale(
       status: isCredit ? 'credit' : 'paye', is_credit: isCredit,
       total_amount: totalAmount, discount_amount: discountAmount, amount_paid: payAmount,
       paid_at: isCredit ? null : now,
-      sale_date: (payload.p_sale_date as string | null) ?? now.slice(0, 10),
+      sale_date: (payload.p_sale_date as string | null) ?? localDateISO(),
       due_date: (payload.p_due_date as string | null) ?? null,
       created_at: now, cancelled_at: null, cancellation_reason: null,
       cancelled_by_id: null, cancelled_by_name: null,

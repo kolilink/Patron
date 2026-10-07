@@ -263,6 +263,9 @@ export const useSalesStore = create<SalesStore>((set, get) => ({
       p_amount:           amountCents,
       p_client_id:        clientId,
       p_idempotency_key:  idempotencyKey,
+      // The merchant's LOCAL date, captured now (an offline replay keeps it) —
+      // never the server's UTC date. migration_v241.
+      p_sale_date:        localDateISO(),
     };
     try {
       await enqueue('submit_carnet_debt', payload);
@@ -310,6 +313,7 @@ export const useSalesStore = create<SalesStore>((set, get) => ({
       p_qty:              qty,
       p_label:            label?.trim() || null,
       p_idempotency_key:  idempotencyKey,
+      p_sale_date:        localDateISO(), // merchant's local date — migration_v241
     };
     try {
       await enqueue('submit_quick_sale', payload);
