@@ -1,20 +1,17 @@
 import { forwardRef } from 'react';
-import { Platform, StyleSheet, Text, View } from 'react-native';
+import { Text, View } from 'react-native';
 import { colors, fontFamily } from '@/src/theme';
-import { fitScale, GREETING_FIT_CHARS, REMAINING_FIT_CHARS, type DebtReceiptContent } from '@/src/utils/debtReceipt';
+import type { DebtReceiptContent } from '@/src/utils/debtReceipt';
 
-// Portrait 4:5 (1080×1350 when captured). Everything is laid out in design
-// units on a 360×450 sheet and multiplied by width/360, so the on-screen
-// preview and the captured PNG are the same drawing at different sizes.
-// Always light, like paper: it reads the fixed `colors.paper` tokens, never
-// the app theme — a receipt has no dark mode.
+// Portrait 4:5 (1080×1350 when captured). Laid out in design units on a
+// 360×450 sheet and multiplied by width/360, so the preview and the captured
+// PNG are the same drawing at different sizes. Always light, like paper: fixed
+// `colors.paper` tokens, never the app theme. Black ink only, left-aligned, no
+// marks or decoration.
 export const RECEIPT_ASPECT = 4 / 5;
 export const RECEIPT_EXPORT_WIDTH = 1080;
 export const RECEIPT_EXPORT_HEIGHT = 1350;
 const DESIGN_W = 360;
-const RULE_COUNT = 26;
-
-const SERIF = Platform.select({ ios: 'Georgia', default: 'serif' });
 const paper = colors.paper;
 
 interface Props {
@@ -25,96 +22,64 @@ interface Props {
 export const DebtReminderReceipt = forwardRef<View, Props>(function DebtReminderReceipt({ content, width }, ref) {
   const u = width / DESIGN_W;
   const height = width / RECEIPT_ASPECT;
-  const t = (size: number, extra: object = {}) => ({
-    fontSize: size * u,
-    lineHeight: size * 1.4 * u,
-    ...extra,
-  });
-  // allowFontScaling=false everywhere: the user's OS font size must never
-  // change what she sends.
+  // allowFontScaling=false: the user's OS font size must never change what she sends.
   const T = { allowFontScaling: false } as const;
+  const size = (n: number, lh = 1.35) => ({ fontSize: n * u, lineHeight: n * lh * u });
 
   return (
     <View
       ref={ref}
       collapsable={false}
-      style={{ width, height, backgroundColor: paper.sheet, overflow: 'hidden' }}
+      style={{ width, height, backgroundColor: paper.sheet, overflow: 'hidden', paddingHorizontal: 36 * u }}
     >
-      {/* Faint ruled-paper lines */}
-      {Array.from({ length: RULE_COUNT }, (_, i) => (
-        <View
-          key={i}
-          style={{
-            position: 'absolute', left: 0, right: 0,
-            top: (i + 1) * (height / (RULE_COUNT + 1)),
-            height: StyleSheet.hairlineWidth, backgroundColor: paper.rule,
-          }}
-        />
-      ))}
-
       <Text
         {...T}
         numberOfLines={1}
         adjustsFontSizeToFit
-        minimumFontScale={0.4}
-        style={[styles.header, t(16), { color: paper.accent, marginTop: 34 * u, marginHorizontal: 40 * u }]}
+        minimumFontScale={0.5}
+        style={[{ fontFamily: fontFamily.regular, color: paper.quiet, marginTop: 34 * u }, size(14)]}
       >
-        {`·  ${content.businessName}  ·`}
+        {content.businessName}
       </Text>
 
-      <View style={{ flex: 1, paddingHorizontal: 35 * u, justifyContent: 'center', paddingBottom: 16 * u }}>
+      <View style={{ flex: 1, justifyContent: 'center' }}>
         <Text
           {...T}
           numberOfLines={2}
           adjustsFontSizeToFit
-          minimumFontScale={0.35}
-          style={[{ fontFamily: SERIF, color: paper.ink }, t(36 * fitScale(content.greeting, GREETING_FIT_CHARS, true), { lineHeight: 44 * u })]}
+          minimumFontScale={0.5}
+          style={[{ fontFamily: fontFamily.regular, color: paper.soft }, size(36, 1.2)]}
         >
           {content.greeting}
         </Text>
-        {/* Hairline spanning the full content width, as in the approved mockup. */}
-        <View style={{ height: 0.75 * u, backgroundColor: paper.accent, marginVertical: 14 * u }} />
 
-        <Text {...T} style={[styles.sans, t(13.5), { color: paper.soft }]}>{content.context}</Text>
-
-        <View style={{ marginTop: 14 * u }}>
-          {content.articleLines.map((line, i) => (
-            <Text key={i} {...T} numberOfLines={2} style={[styles.sans, t(14), { color: paper.ink }]}>{line}</Text>
+        <View style={{ marginTop: 18 * u }}>
+          {content.context.map((line, i) => (
+            <Text key={i} {...T} style={[{ fontFamily: fontFamily.regular, color: paper.quiet }, size(18)]}>{line}</Text>
           ))}
-          {content.lastPaymentLine ? (
-            <Text {...T} style={[styles.sans, t(14), { color: paper.ink }]}>{content.lastPaymentLine}</Text>
-          ) : null}
         </View>
 
-        {/* The anchor: exact full amount, calm neutral ink, shrinks but never truncates. */}
-        <View style={{ flexDirection: 'row', alignItems: 'center', marginTop: 16 * u, marginBottom: 14 * u }}>
-          <View style={{ width: 3 * u, alignSelf: 'stretch', backgroundColor: paper.accent, marginRight: 8 * u }} />
-          <Text
-            {...T}
-            numberOfLines={1}
-            adjustsFontSizeToFit
-            minimumFontScale={0.2}
-            style={[{ flex: 1, fontFamily: SERIF, color: paper.ink }, t(36 * fitScale(content.remainingLine, REMAINING_FIT_CHARS), { lineHeight: 46 * u })]}
-          >
-            {content.remainingLine}
-          </Text>
-        </View>
+        {/* The anchor: the finished string from fmt(), shrinks but never truncates. */}
+        <Text
+          {...T}
+          numberOfLines={1}
+          adjustsFontSizeToFit
+          minimumFontScale={0.5}
+          style={[{ fontFamily: fontFamily.bold, color: paper.ink, marginTop: 22 * u, marginBottom: 24 * u }, size(32, 1.25)]}
+        >
+          {content.remainingLine}
+        </Text>
 
-        {content.demande.map((line, i) => (
-          <Text key={i} {...T} style={[styles.sans, t(14), { color: paper.ink }]}>{line}</Text>
-        ))}
-        <Text {...T} style={[styles.sans, t(14), { color: paper.ink }]}>{content.trust}</Text>
-        <Text {...T} style={[styles.sans, t(14), { color: paper.ink }]}>{content.close}</Text>
+        <Text {...T} style={[{ fontFamily: fontFamily.regular, color: paper.soft }, size(17)]}>{content.demande}</Text>
+        <Text {...T} style={[{ fontFamily: fontFamily.regular, color: paper.soft }, size(17)]}>{content.close}</Text>
       </View>
 
-      <Text {...T} style={[styles.sans, t(11), { color: paper.quiet, textAlign: 'center', marginBottom: 22 * u }]}>
+      <Text
+        {...T}
+        style={[{ fontFamily: fontFamily.regular, color: paper.quiet, textAlign: 'right', marginBottom: 26 * u }, size(11)]}
+      >
         {content.footer}
       </Text>
     </View>
   );
-});
-
-const styles = StyleSheet.create({
-  header: { fontFamily: SERIF, textAlign: 'center' },
-  sans: { fontFamily: fontFamily.regular },
 });

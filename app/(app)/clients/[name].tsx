@@ -32,7 +32,7 @@ import { generateId } from '@/lib/id';
 import { selectClientSales, clientBalance } from '@/src/utils/salesTotals';
 import { formatDebtAge, debtAgeTier } from '@/src/utils/clientReminder';
 import { DebtReminderSheet } from '@/src/components/DebtReminderSheet';
-import { lastPaymentFor, type DebtReceiptInput } from '@/src/utils/debtReceipt';
+import type { DebtReceiptInput } from '@/src/utils/debtReceipt';
 import { formatDate } from '@/src/utils/dates';
 
 // iOS-only: suppresses the OS's auto-injected floating "Done" pill above
@@ -643,23 +643,13 @@ export default function ClientLedgerScreen() {
   // ledger above: open credit lines (newest first), the most recent payment
   // against them, and the exact remaining total. Nothing is invented.
   const reminderInput = useMemo<DebtReceiptInput>(() => {
-    const openCredits = clientSales
-      .filter(s => s.status === 'credit')
-      .sort((a, b) => new Date(b.created_at).getTime() - new Date(a.created_at).getTime());
-    // Only payments against THIS debt's open credit lines (reversals netted out).
-    const lastPay = lastPaymentFor(allPayments, new Set(openCredits.map(s => s.id)));
     return {
       businessName: session?.activeBusiness?.name ?? '',
       clientName: displayName,
       currency,
       totalOwed,
-      debts: openCredits.map(s => ({
-        label: ledgerLines[s.id] || null,
-        date: s.sale_date ?? s.created_at.split('T')[0],
-      })),
-      lastPayment: lastPay ?? null,
     };
-  }, [clientSales, allPayments, ledgerLines, session?.activeBusiness?.name, displayName, currency, totalOwed]);
+  }, [session?.activeBusiness?.name, displayName, currency, totalOwed]);
 
   // Arrived from the list's "Rappeler": open the preview once the ledger has
   // loaded, so the receipt never shows a half-loaded balance.
@@ -943,7 +933,6 @@ export default function ClientLedgerScreen() {
         visible={showReminder}
         onClose={() => setShowReminder(false)}
         input={reminderInput}
-        daysOldestDebt={debtAge}
       />
 
       <FormSheet
