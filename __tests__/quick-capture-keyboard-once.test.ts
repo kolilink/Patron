@@ -39,8 +39,9 @@ describe('Vente exposes focusPrice() and the sheet calls it from onShow', () => 
     expect(sheet).toMatch(/if \(presentedRef\.current && mode === 'vente'\) venteRef\.current\?\.focusPrice\(\);/);
     expect(sheet).toMatch(/useEffect\(\(\) => \{ if \(!visible\) presentedRef\.current = false; \}, \[visible\]\);/);
   });
-  it('the "Terminé" accessory wiring is untouched', () => {
-    expect(vente).toMatch(/inputAccessoryViewID=\{Platform\.OS === 'ios' \? PRICE_ACCESSORY_ID : undefined\}/);
-    expect(vente).toMatch(/<KeyboardDoneBar nativeID=\{PRICE_ACCESSORY_ID\} \/>/);
+  it('no "Terminé" keyboard accessory anywhere in the quick-capture flow', () => {
+    for (const src of [vente, sheet]) {
+      expect(src).not.toMatch(/KeyboardDoneBar|InputAccessoryView|inputAccessoryViewID|ACCESSORY/);
+    }
   });
 });

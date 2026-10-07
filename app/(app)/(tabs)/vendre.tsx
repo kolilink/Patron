@@ -1,4 +1,5 @@
 import React, { useCallback, useEffect, useMemo, useRef, useState } from 'react';
+import { TopFade } from '@/src/components/ui/TopFade';
 import { router, useFocusEffect } from 'expo-router';
 import {
   Alert,
@@ -1977,7 +1978,7 @@ export default function VendreScreen() {
       )}
 
       {/* Product grid — only in Vente mode with products */}
-      {products.length > 0 && <FlatList
+      {products.length > 0 && <View style={{ flex: 1 }}><FlatList
         data={inStockFiltered}
         keyExtractor={p => p.id}
         numColumns={2}
@@ -2033,7 +2034,7 @@ export default function VendreScreen() {
             />
           ) : null
         }
-      />}
+      /><TopFade /></View>}
 
       {/* Cart panel (floating) — only in Vente mode. A "Dock", not a growing
           list: a fixed-height summary (the last item added, plus how many

@@ -1,4 +1,5 @@
 import React, { useCallback, useEffect, useMemo, useRef, useState } from 'react';
+import { TopFade } from '@/src/components/ui/TopFade';
 import { AnimatedRowCell, AnimatedRow } from '@/src/components/ui/AnimatedRow';
 import { markRowRemoved } from '@/src/utils/rowMotion';
 import { router, useFocusEffect, useLocalSearchParams } from 'expo-router';
@@ -1823,6 +1824,7 @@ export default function CatalogueScreen() {
               ) : null
             }
           />
+          <TopFade color={palette.surface} />
         </View>
       )}
 

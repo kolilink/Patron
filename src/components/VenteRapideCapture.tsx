@@ -1,9 +1,8 @@
 import { forwardRef, useEffect, useImperativeHandle, useMemo, useRef, useState } from 'react';
-import { Platform, Pressable, StyleSheet, TextInput, View } from 'react-native';
+import { Pressable, StyleSheet, TextInput, View } from 'react-native';
 import { Ionicons } from '@expo/vector-icons';
 import { Button } from '@/src/components/ui/Button';
 import { Text } from '@/src/components/ui/Text';
-import { KeyboardDoneBar } from '@/src/components/ui/KeyboardDoneBar';
 import { useTheme, spacing, radius, fontFamily } from '@/src/theme';
 import type { Palette } from '@/src/theme';
 import { formatAmount, formatAmountInput, parseAmountInput } from '@/src/utils/format';
@@ -11,7 +10,6 @@ import { useSalesStore } from '@/stores/sales';
 import { haptics } from '@/lib/haptics';
 import { trackEvent } from '@/lib/analytics';
 
-const PRICE_ACCESSORY_ID = 'venteRapidePriceAccessory';
 const CONFIRM_MS = 900;
 
 interface VenteRapideCaptureProps {
@@ -167,7 +165,6 @@ export const VenteRapideCapture = forwardRef<VenteRapideCaptureHandle, VenteRapi
             keyboardType="numeric"
             returnKeyType="done"
             onSubmitEditing={handleAdd}
-            inputAccessoryViewID={Platform.OS === 'ios' ? PRICE_ACCESSORY_ID : undefined}
           />
           <Text style={[styles.amountCurrency, { color: palette.textSecondary }]}>{currency}</Text>
         </View>
@@ -188,8 +185,6 @@ export const VenteRapideCapture = forwardRef<VenteRapideCaptureHandle, VenteRapi
       {error ? (
         <Text variant="caption" style={{ color: palette.warning, textAlign: 'center' }}>{error}</Text>
       ) : null}
-
-      <KeyboardDoneBar nativeID={PRICE_ACCESSORY_ID} />
     </View>
   );
 });

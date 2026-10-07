@@ -1,4 +1,5 @@
 import { useCallback, useEffect, useMemo, useState } from 'react';
+import { TopFade } from '@/src/components/ui/TopFade';
 import { FlatList, Pressable, RefreshControl, StyleSheet, View } from 'react-native';
 import { Screen } from '@/src/components/ui/Screen';
 import { router, useFocusEffect, useLocalSearchParams } from 'expo-router';
@@ -320,6 +321,7 @@ export default function ClientsScreen() {
           />
         )
       ) : (
+        <View style={{ flex: 1 }}>
         <FlatList
           data={displayedClients}
           keyExtractor={c => c.clientId ?? c.name}
@@ -374,6 +376,8 @@ export default function ClientsScreen() {
           )}
           ItemSeparatorComponent={() => <View style={{ height: 1, backgroundColor: palette.border }} />}
         />
+        <TopFade />
+        </View>
       )}
 
       {/* A real client isn't created here directly (see the empty state's own

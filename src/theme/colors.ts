@@ -292,8 +292,9 @@ export const paletteDark = {
   tabBarOverlay: 'rgba(26,29,39,0.40)',
   tabBarHairline: 'rgba(255,255,255,0.10)',
 
-  // Soft violet pastille — see the light-mode comment above.
-  tabBarIndicator: 'rgba(167,139,250,0.30)',
+  // Violet pastille — raised from 0.30 (read as a rendering smudge) so the
+  // active pill is a deliberate container against the dark glass bar.
+  tabBarIndicator: 'rgba(129,140,248,0.55)',
 } as const;
 
 // Brand moments (splash, app-lock screen, privacy shield) are MODE-INDEPENDENT:

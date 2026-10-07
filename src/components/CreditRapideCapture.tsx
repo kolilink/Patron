@@ -1,10 +1,9 @@
 import { useEffect, useMemo, useRef, useState } from 'react';
 import { TRUST_LINE } from '@/src/utils/trustLine';
-import { Animated, Platform, Pressable, ScrollView, StyleSheet, TextInput, View } from 'react-native';
+import { Animated, Pressable, ScrollView, StyleSheet, TextInput, View } from 'react-native';
 import { Ionicons } from '@expo/vector-icons';
 import { Button } from '@/src/components/ui/Button';
 import { Text } from '@/src/components/ui/Text';
-import { KeyboardDoneBar } from '@/src/components/ui/KeyboardDoneBar';
 import { useTheme, spacing, radius, fontFamily, CLIENT_AVATAR_PALETTE } from '@/src/theme';
 import type { Palette } from '@/src/theme';
 import { formatAmountInput, parseAmountInput, formatAmount } from '@/src/utils/format';
@@ -38,7 +37,6 @@ import { trackEvent } from '@/lib/analytics';
 // order id — a shared, hardened function — for what's a nice-to-have here,
 // not core to the entry redesign).
 
-const AMOUNT_ACCESSORY_ID = 'creditRapideAmountAccessory';
 const MAX_GRID_CLIENTS = 8; // "5-8 recent/frequent, visible on open" — the research's own number
 // Height of one chip row (56 avatar + 4 gap + caption line) — reserved while
 // the first client load is in flight so nothing below the grid jumps when the
@@ -381,7 +379,6 @@ export function CreditRapideCapture({ businessId, userId, currency, onViewClient
                 keyboardType="numeric"
                 returnKeyType="done"
                 onSubmitEditing={handleAdd}
-                inputAccessoryViewID={Platform.OS === 'ios' ? AMOUNT_ACCESSORY_ID : undefined}
               />
               <Text style={[styles.amountCurrency, { color: palette.textSecondary }]}>{currency}</Text>
             </Animated.View>
@@ -422,8 +419,6 @@ export function CreditRapideCapture({ businessId, userId, currency, onViewClient
           <Text variant="caption" style={{ color: palette.primary }}>· Voir →</Text>
         </Pressable>
       ) : null}
-
-      <KeyboardDoneBar nativeID={AMOUNT_ACCESSORY_ID} />
     </View>
   );
 }
