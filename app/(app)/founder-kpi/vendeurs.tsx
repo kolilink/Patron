@@ -1,5 +1,6 @@
 import { useCallback, useEffect, useMemo, useState } from 'react';
-import { Alert, FlatList, Linking, Pressable, StyleSheet, View } from 'react-native';
+import { appAlert } from '@/src/utils/appAlert';
+import { FlatList, Linking, Pressable, StyleSheet, View } from 'react-native';
 import { router, useFocusEffect, useLocalSearchParams } from 'expo-router';
 import { Screen } from '@/src/components/ui/Screen';
 import { Text } from '@/src/components/ui/Text';
@@ -69,7 +70,7 @@ export default function FounderVendorDirectoryScreen() {
   const visible = rows ? filterRows(rows, filter) : [];
 
   const markTest = (row: DirectoryRow) => {
-    Alert.alert(
+    appAlert(
       'Marquer comme test ?',
       `« ${row.business_name ?? 'Ce commerce'} » sera exclu de tous les chiffres.`,
       [

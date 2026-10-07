@@ -1,5 +1,6 @@
 import { useCallback, useEffect, useMemo, useState } from 'react';
-import { Alert, FlatList, Pressable, ScrollView, StyleSheet, View } from 'react-native';
+import { appAlert } from '@/src/utils/appAlert';
+import { FlatList, Pressable, ScrollView, StyleSheet, View } from 'react-native';
 import { Ionicons } from '@expo/vector-icons';
 import { Screen } from '@/src/components/ui/Screen';
 import { FormSheet } from '@/src/components/ui/FormSheet';
@@ -69,7 +70,7 @@ export default function ModerationScreen() {
 
     const handleDelete = () => {
         if (!active?.post_id) return;
-        Alert.alert(
+        appAlert(
             'Supprimer ce post ?',
             'Cette action est définitive et ne peut pas être annulée.',
             [
@@ -92,7 +93,7 @@ export default function ModerationScreen() {
         if (!active?.post_author_id) return;
         const authorId = active.post_author_id;
         const authorName = active.post_author_name || 'cet auteur';
-        Alert.alert(
+        appAlert(
             `Bloquer ${authorName} ?`,
             'Vous ne verrez plus ses publications.',
             [

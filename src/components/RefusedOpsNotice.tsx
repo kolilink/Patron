@@ -1,5 +1,6 @@
+import { appAlert } from '@/src/utils/appAlert';
 import React, { useCallback, useEffect, useMemo, useState } from 'react';
-import { Alert, StyleSheet, View } from 'react-native';
+import { StyleSheet, View } from 'react-native';
 import { useFocusEffect } from 'expo-router';
 import { useTheme, spacing, radius } from '@/src/theme';
 import type { Palette } from '@/src/theme';
@@ -56,7 +57,7 @@ function RefusedRow({ op, onChanged, palette, styles }: {
     useSyncStore.getState().kick();
     onChanged();
   });
-  const dismiss = () => Alert.alert(
+  const dismiss = () => appAlert(
     `Abandonner cette ${op.label.toLowerCase()} ?`,
     'Elle ne sera pas enregistrée et disparaîtra de la liste.',
     [

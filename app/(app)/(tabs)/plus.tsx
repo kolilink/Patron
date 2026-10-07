@@ -1,4 +1,5 @@
-import { Alert, Pressable, ScrollView, StyleSheet, View } from 'react-native';
+import { Pressable, ScrollView, StyleSheet, View } from 'react-native';
+import { appAlert } from '@/src/utils/appAlert';
 import { Children, cloneElement, isValidElement, useEffect, useMemo, useState } from 'react';
 import type { ReactElement, ReactNode } from 'react';
 import { router } from 'expo-router';
@@ -98,7 +99,7 @@ export default function PlusScreen() {
   // Paramètres → "Verrouiller" — this button is for a real sign-out, which now
   // that PIN is gone always requires a fresh WhatsApp OTP to come back.
   const handleLogout = () => {
-    Alert.alert(
+    appAlert(
       'Se déconnecter ?',
       'Vous devrez recevoir un nouveau code WhatsApp pour vous reconnecter.',
       [
@@ -203,7 +204,7 @@ export default function PlusScreen() {
                 <Pressable
                   key={b.id}
                   onPress={() => {
-                    Alert.alert(
+                    appAlert(
                       b.name,
                       "Vous n'êtes plus membre de ce commerce.\n\nSi vous pensez que c'est une erreur, contactez le gérant.",
                       [

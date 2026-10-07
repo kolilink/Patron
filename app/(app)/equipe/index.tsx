@@ -1,8 +1,10 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
+import { ConfirmSheetHost } from '@/src/components/ui/ConfirmSheet';
+import { appAlert } from '@/src/utils/appAlert';
 import { AnimatedRowCell, AnimatedRow } from '@/src/components/ui/AnimatedRow';
 import { useInFlight } from '@/src/hooks/useInFlight';
 import { LoadingStatus } from '@/src/components/ui/LoadingStatus';
-import { Alert, Animated, Easing, FlatList, InputAccessoryView, Linking, Modal, Platform, Pressable, ScrollView, Share, StyleSheet, TextInput, View } from 'react-native';
+import { Animated, Easing, FlatList, InputAccessoryView, Linking, Modal, Platform, Pressable, ScrollView, Share, StyleSheet, TextInput, View } from 'react-native';
 import { Ionicons } from '@expo/vector-icons';
 import { SafeAreaView } from 'react-native-safe-area-context';
 import { Screen } from '@/src/components/ui/Screen';
@@ -328,7 +330,7 @@ function MemberDetailSheet({
   };
 
   const handleRemoveProduct = (productId: string, productName: string) => {
-    Alert.alert(`Retirer "${productName}" ?`, 'Ce membre n\'aura plus accès aux données de ce produit.', [
+    appAlert(`Retirer "${productName}" ?`, 'Ce membre n\'aura plus accès aux données de ce produit.', [
       { text: 'Annuler', style: 'cancel' },
       {
         text: 'Retirer',
@@ -355,7 +357,7 @@ function MemberDetailSheet({
 
   const handleChangeRole = () => {
     const otherRoles = ROLES.filter(r => r !== membre.role);
-    Alert.alert('Nouveau rôle', undefined, [
+    appAlert('Nouveau rôle', undefined, [
       ...otherRoles.map(r => ({
         text: ROLE_LABELS[r],
         onPress: () => {
@@ -375,7 +377,7 @@ function MemberDetailSheet({
   };
 
   const handleRemove = () => {
-    Alert.alert('Retirer ' + (membre.user_name || generateFallbackName(membre.user_id)) + ' ?', 'Ses ventes restent enregistrées dans le commerce.', [
+    appAlert('Retirer ' + (membre.user_name || generateFallbackName(membre.user_id)) + ' ?', 'Ses ventes restent enregistrées dans le commerce.', [
       { text: 'Annuler', style: 'cancel' },
       {
         text: 'Retirer',
@@ -739,7 +741,8 @@ function MemberDetailSheet({
             <View style={{ height: 0 }} />
           </InputAccessoryView>
         )}
-      </Modal>
+      <ConfirmSheetHost active={!!(showPayoutSheet)} />
+</Modal>
     </>
   );
 }
@@ -952,7 +955,8 @@ function NewCodeModal({ visible, onClose, onGenerate, saving, hasManager, produc
           </View>
         )}
       </SafeAreaView>
-    </Modal>
+    <ConfirmSheetHost active={!!(visible)} />
+</Modal>
   );
 }
 
@@ -1011,7 +1015,8 @@ function CodeRevealModal({ visible, code, role, businessName, onClose }: CodeRev
           </View>
         </View>
       </SafeAreaView>
-    </Modal>
+    <ConfirmSheetHost active={!!(visible)} />
+</Modal>
   );
 }
 
@@ -1092,7 +1097,7 @@ export default function EquipeScreen() {
       return;
     }
     const code = await createCode(businessId, userId, role, 24, scopeAll, scopeProductIds);
-    if (!code) { haptics.error(); Alert.alert('Le code n\'est pas passé. On réessaie :)'); return; }
+    if (!code) { haptics.error(); appAlert('Le code n\'est pas passé. On réessaie :)'); return; }
     haptics.success();
     setShowNewCode(false);
     setTab('codes');   // the tab reappears now that an active code exists — land on it
@@ -1261,7 +1266,7 @@ export default function EquipeScreen() {
                         : `Valide · Expire dans ${item.expires_at ? Math.max(1, Math.ceil((new Date(item.expires_at).getTime() - Date.now()) / 3600000)) : '—'} h`}
                     </Text>
                   </View>
-                  <Pressable onPress={() => Alert.alert('Révoquer ce code ?', undefined, [{ text: 'Non', style: 'cancel' }, { text: 'Oui, révoquer', style: 'destructive', onPress: () => { revokeCode(item.id).then(ok => { if (ok) { haptics.destructive(); toast.success(inviteCodeRevokedConfirmation()); } else { haptics.error(); failAlert('codeNotRevoked', { err: useEquipeStore.getState().error, label: 'Réessayer', onPress: () => { void revokeCode(item.id).then(ok2 => { if (ok2) toast.success(inviteCodeRevokedConfirmation()); }); } }); } }); } }])}>
+                  <Pressable onPress={() => appAlert('Révoquer ce code ?', undefined, [{ text: 'Non', style: 'cancel' }, { text: 'Oui, révoquer', style: 'destructive', onPress: () => { revokeCode(item.id).then(ok => { if (ok) { haptics.destructive(); toast.success(inviteCodeRevokedConfirmation()); } else { haptics.error(); failAlert('codeNotRevoked', { err: useEquipeStore.getState().error, label: 'Réessayer', onPress: () => { void revokeCode(item.id).then(ok2 => { if (ok2) toast.success(inviteCodeRevokedConfirmation()); }); } }); } }); } }])}>
                     <Text variant="caption" color="danger">Révoquer</Text>
                   </Pressable>
                 </View>

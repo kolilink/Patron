@@ -15,6 +15,7 @@ const {
   findFunctionExposureViolations,
   findResurrectedForkViolations,
   findHeroModalFadeViolations,
+  findSystemAlertViolations,
 } = require('./lib/consistency-checks');
 
 const hexViolations = findHexViolations();
@@ -25,6 +26,7 @@ const functionExposureViolations = findFunctionExposureViolations();
 
 const resurrectedForkViolations = findResurrectedForkViolations();
 const heroModalFadeViolations = findHeroModalFadeViolations();
+const systemAlertViolations = findSystemAlertViolations();
 
 let failed = false;
 
@@ -68,6 +70,12 @@ if (heroModalFadeViolations.length) {
   failed = true;
   console.error(`\n✗ hero-modal-no-fade — the first-run hero Modal must be animationType="none" or a blank/skeleton frame shows between "Ouvrir mon commerce" and the hero:\n`);
   heroModalFadeViolations.forEach(l => console.error(`  ${l}`));
+}
+
+if (systemAlertViolations.length) {
+  failed = true;
+  console.error(`\n✗ no-system-alert (${systemAlertViolations.length}) — Alert.alert is the OS dialog (white Material dialog on Android). Use appAlert() from src/utils/appAlert.ts (same arguments) so the app's own ConfirmSheet shows on both platforms:\n`);
+  systemAlertViolations.forEach(l => console.error(`  ${l}`));
 }
 
 if (failed) {

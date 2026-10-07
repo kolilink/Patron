@@ -26,6 +26,7 @@ import { getKV, openDb } from '@/lib/db';
 import { capturePendingInviterId } from '@/lib/inviteLink';
 import { setEnabled, HAPTICS_KV_KEY } from '@/lib/haptics';
 import { ThemeProvider } from '@/src/theme';
+import { ConfirmSheetHost } from '@/src/components/ui/ConfirmSheet';
 import { ThemedStack, ThemedRootView } from '@/src/components/ui/ThemedStack';
 import { posthog } from '@/lib/posthog';
 import { identifyUser, resetAnalytics, trackEvent, analyticsIsTest, loadDeviceTestFlag } from '@/lib/analytics';
@@ -192,6 +193,7 @@ function RootLayout() {
               Modal's native presentation after "Ouvrir mon commerce" (blank frame). */}
           <ThemedStack screenOptions={{ headerShown: false, animation: 'none' }} />
           <PrivacyShield />
+          <ConfirmSheetHost root />
         </PostHogProvider>
       </ThemedRootView>
       </ThemeProvider>

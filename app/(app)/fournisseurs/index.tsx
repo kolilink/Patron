@@ -1,8 +1,9 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
+import { appAlert } from '@/src/utils/appAlert';
 import { AnimatedRowCell, AnimatedRow } from '@/src/components/ui/AnimatedRow';
 import { useReduceMotion } from '@/src/hooks/useReduceMotion';
 import { configureLayoutNext } from '@/src/hooks/useAnimateLayoutChange';
-import { Alert, Animated, Easing, FlatList, InputAccessoryView, LayoutAnimation, Platform, Pressable, ScrollView, StyleSheet, TextInput, UIManager, View } from 'react-native';
+import { Animated, Easing, FlatList, InputAccessoryView, LayoutAnimation, Platform, Pressable, ScrollView, StyleSheet, TextInput, UIManager, View } from 'react-native';
 import { Ionicons } from '@expo/vector-icons';
 import { Screen } from '@/src/components/ui/Screen';
 import { FormSheet } from '@/src/components/ui/FormSheet';
@@ -152,7 +153,7 @@ function FournisseurForm({ visible, editing, products, onClose, onSave, saving }
             label="Enregistrer" loadingLabel="Enregistrement"
             loading={saving} fullWidth size="lg"
             onPress={() => {
-              if (!name.trim()) { Alert.alert('Ajoutez un nom :)'); return; }
+              if (!name.trim()) { appAlert('Ajoutez un nom :)'); return; }
 
               // Auto-commit any product name typed but not yet confirmed with the checkmark
               let finalLocalProducts = localProducts;
@@ -331,7 +332,7 @@ function DebtModal({ visible, fournisseur, currency, saving, onClose, onSave }: 
             loading={saving} fullWidth size="lg"
             onPress={() => {
               const amt = parseAmountInput(amount, currency);
-              if (isNaN(amt) || amt <= 0) { Alert.alert('Vérifiez le montant :)'); return; }
+              if (isNaN(amt) || amt <= 0) { appAlert('Vérifiez le montant :)'); return; }
               onSave(amt, description.trim(), date);
             }}
           />
@@ -618,12 +619,12 @@ export default function FournisseursScreen() {
             const lastLivraison = lastLivraisonMap[item.id];
             return (
               <Pressable
-                onLongPress={() => Alert.alert(item.name, undefined, [
+                onLongPress={() => appAlert(item.name, undefined, [
                   { text: 'Modifier', onPress: () => { setEditF(item); setShowForm(true); } },
                   { text: 'Enregistrer une dette', onPress: () => openDebt(item) },
                   {
                     text: 'Supprimer', style: 'destructive', onPress: () =>
-                      Alert.alert('Supprimer ?', 'Les produits liés seront dissociés. Cette action est irréversible.', [
+                      appAlert('Supprimer ?', 'Les produits liés seront dissociés. Cette action est irréversible.', [
                         { text: 'Annuler', style: 'cancel' },
                         {
                           text: 'Supprimer', style: 'destructive', onPress: async () => {

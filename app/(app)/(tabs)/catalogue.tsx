@@ -1,23 +1,10 @@
 import React, { useCallback, useEffect, useMemo, useRef, useState } from 'react';
+import { ConfirmSheetHost } from '@/src/components/ui/ConfirmSheet';
+import { appAlert } from '@/src/utils/appAlert';
 import { AnimatedRowCell, AnimatedRow } from '@/src/components/ui/AnimatedRow';
 import { markRowRemoved } from '@/src/utils/rowMotion';
 import { router, useFocusEffect, useLocalSearchParams } from 'expo-router';
-import {
-  Alert,
-  Animated,
-  FlatList,
-  InputAccessoryView,
-  Keyboard,
-  Modal,
-  Platform,
-  Pressable,
-  RefreshControl,
-  ScrollView,
-  StyleSheet,
-  Switch,
-  TextInput,
-  View,
-} from 'react-native';
+import { Animated, FlatList, InputAccessoryView, Keyboard, Modal, Platform, Pressable, RefreshControl, ScrollView, StyleSheet, Switch, TextInput, View } from 'react-native';
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
 import { Screen } from '@/src/components/ui/Screen';
 import { FormSheet } from '@/src/components/ui/FormSheet';
@@ -158,7 +145,7 @@ function SupplierPicker({ fournisseurs, selectedId, onSelect, businessId, userId
   const [newPhone, setNewPhone] = useState('');
 
   const handleCreate = async () => {
-    if (!newName.trim()) { Alert.alert('Ajoutez un nom'); return; }
+    if (!newName.trim()) { appAlert('Ajoutez un nom'); return; }
     const ok = await createFournisseur(businessId, userId, { name: newName, phone: newPhone });
     if (ok) {
       haptics.success();
@@ -820,7 +807,7 @@ function StockAdjustModal({ visible, product, onClose, onConfirm, saving, curren
             label="Confirmer" loadingLabel="Enregistrement"
             onPress={async () => {
               const n = parseInt(qty);
-              if (isNaN(n) || n <= 0) { Alert.alert('Entrez une quantité'); return; }
+              if (isNaN(n) || n <= 0) { appAlert('Entrez une quantité'); return; }
               await onConfirm(n, type, note);
             }}
             loading={saving} fullWidth size="lg"
@@ -1205,7 +1192,8 @@ function RestoreActionSheet({
           <Text style={[styles.actionRowLabel, { color: palette.primary }]}>Réactiver ce produit</Text>
         </Pressable>
       </View>
-    </Modal>
+    <ConfirmSheetHost active={!!(visible)} />
+</Modal>
   );
 }
 
@@ -1298,7 +1286,8 @@ function ProductActionSheet({
           </>
         )}
       </View>
-    </Modal>
+    <ConfirmSheetHost active={!!(visible)} />
+</Modal>
   );
 }
 
@@ -1516,7 +1505,7 @@ export default function CatalogueScreen() {
     if (!product) return;
     setShowActionSheet(false);
     setTimeout(() => {
-      Alert.alert(
+      appAlert(
         'Désactiver ce produit ?',
         `"${product.name}" sera retiré du catalogue actif. Vous pourrez le réactiver depuis l'onglet Non actifs.`,
         [
@@ -1856,7 +1845,8 @@ export default function CatalogueScreen() {
             showsVerticalScrollIndicator={false}
           />
         </View>
-      </Modal>
+      <ConfirmSheetHost active={!!(showOutOfStockModal)} />
+</Modal>
 
       {/* Restore Action Sheet (archived products) */}
       <RestoreActionSheet

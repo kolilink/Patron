@@ -1,4 +1,5 @@
 import { useEffect, useMemo, useRef } from 'react';
+import { ConfirmSheetHost } from './ConfirmSheet';
 import { Animated, Modal, Pressable, StyleSheet, View } from 'react-native';
 import { Ionicons } from '@expo/vector-icons';
 import { Button } from './Button';
@@ -80,6 +81,7 @@ export function AppSheet({ visible, onClose, icon, title, body, action, secondar
           )}
         </Animated.View>
       </View>
+      <ConfirmSheetHost active={visible} />
     </Modal>
   );
 }

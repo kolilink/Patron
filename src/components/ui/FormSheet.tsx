@@ -1,4 +1,5 @@
 import React, { forwardRef, useMemo, type ReactNode } from 'react';
+import { ConfirmSheetHost } from '@/src/components/ui/ConfirmSheet';
 import {
   KeyboardAvoidingView,
   Modal,
@@ -153,6 +154,7 @@ export const FormSheet = forwardRef<ScrollView, FormSheetProps>(function FormShe
 
         {footer}
         {accessory}
+        <ConfirmSheetHost active={visible} />
       </KeyboardAvoidingView>
     </Modal>
   );

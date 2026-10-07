@@ -1,5 +1,6 @@
+import { appAlert } from '@/src/utils/appAlert';
 import { useMemo, useState, type ComponentProps } from 'react';
-import { Alert, Pressable, StyleSheet, TextInput, View } from 'react-native';
+import { Pressable, StyleSheet, TextInput, View } from 'react-native';
 import { Ionicons } from '@expo/vector-icons';
 import { FormSheet } from './FormSheet';
 import { Text } from './Text';
@@ -52,7 +53,7 @@ export function PostActionsMenu({ post, isOwnPost }: { post: MarketPost; isOwnPo
 
     const handleDelete = async () => {
         setShowActions(false);
-        Alert.alert(
+        appAlert(
             'Supprimer ce post ?',
             'Cette action est définitive et ne peut pas être annulée.',
             [
@@ -73,7 +74,7 @@ export function PostActionsMenu({ post, isOwnPost }: { post: MarketPost; isOwnPo
 
     const handleBlock = async () => {
         setShowActions(false);
-        Alert.alert(
+        appAlert(
             `Bloquer ${authorName} ?`,
             "Vous ne verrez plus ses publications et il ne pourra plus interagir avec vous.",
             [

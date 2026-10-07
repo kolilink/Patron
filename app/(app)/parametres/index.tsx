@@ -1,5 +1,6 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
-import { Alert, Animated, KeyboardAvoidingView, Linking, Platform, Pressable, ScrollView, Share, StyleSheet, Switch, TextInput, View } from 'react-native';
+import { appAlert } from '@/src/utils/appAlert';
+import { Animated, KeyboardAvoidingView, Linking, Platform, Pressable, ScrollView, Share, StyleSheet, Switch, TextInput, View } from 'react-native';
 import * as Clipboard from 'expo-clipboard';
 import * as Application from 'expo-application';
 import * as Updates from 'expo-updates';
@@ -357,7 +358,7 @@ export default function ParametresScreen() {
   };
 
   const handleLeave = () => {
-    Alert.alert(
+    appAlert(
       `Quitter ${business?.name ?? 'ce commerce'} ?`,
       "Vous perdrez l'accès à ce commerce. Un gérant peut vous réinviter.",
       [
@@ -425,7 +426,7 @@ export default function ParametresScreen() {
   // either there's nobody to protect (open the real delete confirmation),
   // or there's a real reason to stop (say it immediately, no typing needed).
   const handleRevokeOtherSessions = () => {
-    Alert.alert(
+    appAlert(
       'Déconnecter tous les autres appareils',
       "Tous les autres appareils connectés à votre compte seront déconnectés. Cet appareil-ci restera connecté.",
       [
@@ -587,7 +588,7 @@ export default function ParametresScreen() {
         // failure: silent — logout already cleared the session; the on-device caches are encrypted with a key that
         // logout leaves in place only until the next sign-in, and a failed wipe must never block the exit
       }
-      Alert.alert(
+      appAlert(
         'Compte programmé pour suppression',
         'Votre compte sera définitivement supprimé dans 30 jours.\n\nReconnectez-vous à tout moment avant cette date pour annuler.',
       );
@@ -627,7 +628,7 @@ export default function ParametresScreen() {
     if (error) {
       setDeleting(false);
       resetDeleteFlow();
-      Alert.alert('Suppression impossible', rpcErrorMessage(error, "Ça n'a pas fonctionné. Écrivez-nous si ça continue :)"));
+      appAlert('Suppression impossible', rpcErrorMessage(error, "Ça n'a pas fonctionné. Écrivez-nous si ça continue :)"));
       return;
     }
 

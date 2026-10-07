@@ -1,6 +1,7 @@
 import { useEffect, useRef, useState } from 'react';
+import { appAlert } from '@/src/utils/appAlert';
 import { ThemedStack } from '@/src/components/ui/ThemedStack';
-import { Alert, AppState, Pressable, View } from 'react-native';
+import { AppState, Pressable, View } from 'react-native';
 import NetInfo from '@react-native-community/netinfo';
 import { shouldKickOnConnectivityChange } from '@/lib/netInfoKick';
 import { trackEvent } from '@/lib/analytics';
@@ -150,7 +151,7 @@ export default function AppLayout() {
 
   useEffect(() => {
     if (!dismissedFromBusiness) return;
-    Alert.alert(
+    appAlert(
       'Commerce retiré',
       `Vous n'êtes plus membre de « ${dismissedFromBusiness.name} ».`,
       [{ text: 'OK', onPress: clearDismissedFromBusiness }],
@@ -192,7 +193,7 @@ export default function AppLayout() {
             const updated = payload.new as { business_id: string; role: Role };
             if (updated.business_id === businessId && updated.role !== currentRole) {
               handleRoleChanged(updated.role);
-              Alert.alert(
+              appAlert(
                 'Rôle modifié',
                 'Votre rôle a été modifié par le gérant. Vos accès ont été mis à jour.',
                 [{ text: 'OK' }],
@@ -320,7 +321,7 @@ export default function AppLayout() {
           }
         }
 
-        // §8: the old "Données non synchronisées" Alert.alert (fired once an
+        // §8: the old "Données non synchronisées" system alert (fired once an
         // item hit MAX_SYNC_ATTEMPTS and was archived to dead_ops) is
         // deleted, not just quieted — it was the exact "looks lost" failure
         // the approved spec forbids, and under §3's new classification

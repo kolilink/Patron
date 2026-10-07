@@ -1,6 +1,8 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
+import { ConfirmSheetHost } from '@/src/components/ui/ConfirmSheet';
+import { appAlert } from '@/src/utils/appAlert';
 import { AnimatedRowCell, AnimatedRow } from '@/src/components/ui/AnimatedRow';
-import { ActivityIndicator, Alert, Animated, Easing, FlatList, InputAccessoryView, Modal, Platform, Pressable, RefreshControl, ScrollView, StyleSheet, TextInput, View } from 'react-native';
+import { ActivityIndicator, Animated, Easing, FlatList, InputAccessoryView, Modal, Platform, Pressable, RefreshControl, ScrollView, StyleSheet, TextInput, View } from 'react-native';
 import { captureRef } from 'react-native-view-shot';
 import * as Sharing from 'expo-sharing';
 import { SafeAreaView } from 'react-native-safe-area-context';
@@ -261,9 +263,9 @@ function PaymentSheet({ visible, sale, currency, onClose, onConfirm, saving }: P
 
   const handleConfirm = () => {
     const amt = parseAmountInput(amountStr, currency);
-    if (!amt || amt <= 0) { Alert.alert('Vérifiez le montant :)'); return; }
+    if (!amt || amt <= 0) { appAlert('Vérifiez le montant :)'); return; }
     if (amt > remaining + 0.01) {
-      Alert.alert('Le montant dépasse le total :)');
+      appAlert('Le montant dépasse le total :)');
       return;
     }
     onConfirm(amt, method, date);
@@ -506,10 +508,10 @@ function DetailModal({ sale, currency, businessName, singleVendor, role, onClose
 
   const handleCancel = () => {
     if (!cancelReason.trim()) {
-      Alert.alert('Précisez la raison :)');
+      appAlert('Précisez la raison :)');
       return;
     }
-    Alert.alert(
+    appAlert(
       'Annuler cette vente ?',
       'Le stock sera restauré. Cette action est irréversible.',
       [
@@ -599,12 +601,12 @@ function DetailModal({ sale, currency, businessName, singleVendor, role, onClose
       showToast('Vente modifiée ✓');
     } else {
       haptics.error();
-      Alert.alert(result.error ?? 'Modification impossible');
+      appAlert(result.error ?? 'Modification impossible');
     }
   };
 
   const showOfflineEditHint = () => {
-    Alert.alert(
+    appAlert(
       'Connexion requise',
       'La modification d\'une vente nécessite une connexion. Reconnectez-vous et réessayez.',
       [{ text: 'Compris' }],
@@ -633,7 +635,7 @@ function DetailModal({ sale, currency, businessName, singleVendor, role, onClose
       options.push({ text: 'Annuler cette vente', onPress: () => setShowCancelForm(true), style: 'destructive' });
     }
     options.push({ text: 'Fermer', style: 'cancel' });
-    Alert.alert(sale.customer_name ?? 'Cette vente', undefined, options);
+    appAlert(sale.customer_name ?? 'Cette vente', undefined, options);
   };
 
   const realPayments = sale.payments?.filter(p => p.method !== 'credit') ?? [];
@@ -1122,7 +1124,8 @@ function FilterSheet({ visible, availableProducts, loadingProducts, selectedProd
           />
         </View>
       </SafeAreaView>
-    </Modal>
+    <ConfirmSheetHost active={!!(visible)} />
+</Modal>
   );
 }
 

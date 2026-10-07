@@ -273,7 +273,27 @@ function findHeroModalFadeViolations() {
   return src.includes('animationType="none"') ? [] : [`${f}: the hero <Modal> must have animationType="none"`];
 }
 
+// no-system-alert: user-facing confirmations/errors go through appAlert()
+// (src/utils/appAlert.ts → ConfirmSheet), never the OS Alert — on Android it is
+// the white Material dialog with ALL-CAPS buttons and no brand/theme control.
+// If this failed your build: replace `Alert.alert(` with `appAlert(` (same args).
+function findSystemAlertViolations() {
+  const out = [];
+  const files = execSync(`find app src stores lib -name "*.ts" -o -name "*.tsx"`, { cwd: ROOT, encoding: 'utf-8' })
+    .trim().split('\n').filter(Boolean);
+  for (const f of files) {
+    const lines = fs.readFileSync(path.join(ROOT, f), 'utf-8').split('\n');
+    lines.forEach((l, i) => {
+      const t = l.trim();
+      if (t.startsWith('//') || t.startsWith('*') || t.startsWith('/*')) return;
+      if (/\bAlert\.alert\s*\(/.test(l)) out.push(`${f}:${i + 1}: ${t}`);
+    });
+  }
+  return out;
+}
+
 module.exports = {
+  findSystemAlertViolations,
   findResurrectedForkViolations,
   findHeroModalFadeViolations,
   findFunctionExposureViolations,

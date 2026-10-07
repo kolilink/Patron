@@ -1,5 +1,6 @@
 import { useEffect, useMemo, useRef, useState } from 'react';
-import { Alert, FlatList, KeyboardAvoidingView, Platform, Pressable, StyleSheet, TextInput, View } from 'react-native';
+import { appAlert } from '@/src/utils/appAlert';
+import { FlatList, KeyboardAvoidingView, Platform, Pressable, StyleSheet, TextInput, View } from 'react-native';
 import * as ImagePicker from 'expo-image-picker';
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
 import { failAlert } from '@/src/components/ui/FailureView';
@@ -127,7 +128,7 @@ export default function SupportInboxDetailScreen() {
   };
 
   const handleClose = () => {
-    Alert.alert('Marquer comme résolu ?', undefined, [
+    appAlert('Marquer comme résolu ?', undefined, [
       { text: 'Annuler', style: 'cancel' },
       { text: 'Marquer résolu', onPress: async () => { await closeConversation(id); router.back(); } },
     ]);

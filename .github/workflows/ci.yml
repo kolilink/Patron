@@ -36,6 +36,9 @@ jobs:
         # The activation fork overlay was deleted on purpose (killed 2026-09-27, regressed
         # 2026-10-06). FirstRunHeroOverlay is the only first-run surface. Do not re-add it.
         run: "! grep -rn 'ActivationForkOverlay' src app"
+      - name: no-system-alert
+        # Alert.alert is the OS dialog (white Material dialog on Android). Use appAlert() -> ConfirmSheet.
+        run: "! grep -rnE '^[^/*]*Alert\\.alert\\(' app src stores lib"
       - name: hero-modal-no-fade
         # A fading hero Modal exposes a blank/skeleton frame after "Ouvrir mon commerce".
         run: grep -q 'animationType="none"' src/components/FirstRunHeroOverlay.tsx

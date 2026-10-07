@@ -1,25 +1,10 @@
 import React, { useCallback, useEffect, useMemo, useRef, useState } from 'react';
+import { ConfirmSheetHost } from '@/src/components/ui/ConfirmSheet';
+import { appAlert } from '@/src/utils/appAlert';
 import { TopFade } from '@/src/components/ui/TopFade';
 import { useSharedValue } from 'react-native-reanimated';
 import { router, useFocusEffect } from 'expo-router';
-import {
-  Alert,
-  Animated,
-  Easing,
-  FlatList,
-  InputAccessoryView,
-  Keyboard,
-  KeyboardAvoidingView,
-  Modal,
-  Platform,
-  Pressable,
-  ScrollView,
-  StyleProp,
-  StyleSheet,
-  TextInput,
-  View,
-  ViewStyle,
-} from 'react-native';
+import { Animated, Easing, FlatList, InputAccessoryView, Keyboard, KeyboardAvoidingView, Modal, Platform, Pressable, ScrollView, StyleProp, StyleSheet, TextInput, View, ViewStyle } from 'react-native';
 import { captureRef } from 'react-native-view-shot';
 import * as Sharing from 'expo-sharing';
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
@@ -1388,7 +1373,8 @@ function VariantPickerSheet({ visible, product, variants, cartQtyByVariant, curr
           <View style={{ height: 0 }} />
         </InputAccessoryView>
       )}
-    </Modal>
+    <ConfirmSheetHost active={!!(visible)} />
+</Modal>
   );
 }
 
@@ -1786,7 +1772,7 @@ export default function VendreScreen() {
             if (l.qty > max) setQty(l.product.id, max, l.is_bulk, l.variant_id);
           });
         }
-        Alert.alert('Vente non enregistrée', errMsg, [{ text: 'OK', onPress: clearError }]);
+        appAlert('Vente non enregistrée', errMsg, [{ text: 'OK', onPress: clearError }]);
       }
     },
     [businessId, userId, cartTotal, currency, submitSale, fetchProducts],
@@ -1909,7 +1895,7 @@ export default function VendreScreen() {
             price (see formatPriceValue in ProductTile) — mirrors Catalogue. */}
         <View style={styles.headerRight}>
           {cart.length > 0 && (
-            <Pressable onPress={() => Alert.alert('Vider le panier ?', undefined, [
+            <Pressable onPress={() => appAlert('Vider le panier ?', undefined, [
               { text: 'Annuler', style: 'cancel' },
               { text: 'Vider', style: 'destructive', onPress: clearCart },
             ])}>
@@ -2006,7 +1992,7 @@ export default function VendreScreen() {
             variants={variantsByProduct[item.id]}
             onAdd={() => {
               if (item.sale_price <= 0) {
-                Alert.alert('Prix manquant', 'Ajoutez un prix de vente pour ce produit.');
+                appAlert('Prix manquant', 'Ajoutez un prix de vente pour ce produit.');
                 return;
               }
               if (item.has_variants) {
@@ -2092,7 +2078,7 @@ export default function VendreScreen() {
         keyboardShouldPersistTaps="handled"
         headerRight={
           <Pressable
-            onPress={() => Alert.alert('Vider le panier ?', undefined, [
+            onPress={() => appAlert('Vider le panier ?', undefined, [
               { text: 'Annuler', style: 'cancel' },
               { text: 'Vider', style: 'destructive', onPress: clearCart },
             ])}
@@ -2258,7 +2244,8 @@ export default function VendreScreen() {
             </View>
           </Animated.View>
         </View>
-      </Modal>
+      <ConfirmSheetHost active={!!(showConfirmSheet)} />
+</Modal>
       {Platform.OS === 'ios' && (
         <InputAccessoryView nativeID={VENDRE_SILENT_ACCESSORY_ID}>
           <View style={{ height: 0 }} />

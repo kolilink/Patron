@@ -1,6 +1,7 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
+import { appAlert } from '@/src/utils/appAlert';
 import { TRUST_LINE } from '@/src/utils/trustLine';
-import { Alert, Animated, InputAccessoryView, Linking, Platform, Pressable, ScrollView, StyleSheet, Text as RNText, TextInput, View } from 'react-native';
+import { Animated, InputAccessoryView, Linking, Platform, Pressable, ScrollView, StyleSheet, Text as RNText, TextInput, View } from 'react-native';
 import { Ionicons } from '@expo/vector-icons';
 import { haptics } from '@/lib/haptics';
 import { Screen } from '@/src/components/ui/Screen';
@@ -121,14 +122,14 @@ function EditModal({
         .update({ phone: phone.trim() || null, notes: notes.trim() || null, updated_at: new Date().toISOString() })
         .eq('id', record.id);
       if (!error) onSaved({ ...record, phone: phone.trim() || null, notes: notes.trim() || null });
-      else Alert.alert('Pas enregistré. On reprend :)');
+      else appAlert('Pas enregistré. On reprend :)');
     } else {
       const { data, error } = await supabase
         .from('clients')
         .insert({ business_id: businessId, name: displayName, phone: phone.trim() || null, notes: notes.trim() || null, created_by: userId })
         .select().single();
       if (!error && data) onSaved(data as ClientRecord);
-      else Alert.alert('Pas enregistré. On reprend :)');
+      else appAlert('Pas enregistré. On reprend :)');
     }
     setSaving(false);
   };
@@ -192,9 +193,9 @@ function PayModal({
   const remaining = totalOwed - amount;
 
   const handleRecord = () => {
-    if (amount <= 0) { Alert.alert('Vérifiez le montant :)'); return; }
+    if (amount <= 0) { appAlert('Vérifiez le montant :)'); return; }
     if (amount > totalOwed + 0.01) {
-      Alert.alert('Le montant dépasse le total :)');
+      appAlert('Le montant dépasse le total :)');
       return;
     }
     onRecord(amount, method, date);
@@ -744,7 +745,7 @@ export default function ClientLedgerScreen() {
 
   const openMenu = useCallback(() => {
     if (!canEdit) return;
-    Alert.alert(displayName, undefined, [
+    appAlert(displayName, undefined, [
       { text: 'Modifier le client', onPress: () => setShowEditModal(true) },
       { text: 'Annuler', style: 'cancel' },
     ]);

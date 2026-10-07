@@ -1,11 +1,10 @@
 import { useEffect, useMemo, useState } from 'react';
+import { ConfirmSheetHost } from '@/src/components/ui/ConfirmSheet';
+import { appAlert } from '@/src/utils/appAlert';
 import { haptics } from '@/lib/haptics';
 import { useInFlight } from '@/src/hooks/useInFlight';
 import { LoadingStatus } from '@/src/components/ui/LoadingStatus';
-import {
-  Alert, InputAccessoryView, Linking, Modal,
-  Platform, Pressable, ScrollView, StyleSheet, View,
-} from 'react-native';
+import { InputAccessoryView, Linking, Modal, Platform, Pressable, ScrollView, StyleSheet, View } from 'react-native';
 import { Ionicons } from '@expo/vector-icons';
 import { SafeAreaView } from 'react-native-safe-area-context';
 import { Screen } from '@/src/components/ui/Screen';
@@ -108,7 +107,8 @@ function LivraisonDetail({ livraison, fournisseurName, currency, businessId, can
           </View>
         </ScrollView>
       </SafeAreaView>
-    </Modal>
+    <ConfirmSheetHost active={!!(true)} />
+</Modal>
   );
 }
 
@@ -222,14 +222,14 @@ export default function FournisseurProfile() {
     // exists, but no UI here can remove or reassign that history. Telling the
     // truth up front beats a delete button that always fails.
     if (hasHistory) {
-      Alert.alert(
+      appAlert(
         'Suppression impossible',
         `${fournisseur?.name ?? 'Ce fournisseur'} a un historique de commandes qui bloque la suppression.`,
         [{ text: 'Compris' }],
       );
       return;
     }
-    Alert.alert(
+    appAlert(
       `Supprimer ${fournisseur?.name ?? ''} ?`,
       hasFullyPaidDebt
         ? 'Les produits liés seront dissociés et son historique de paiements sera effacé. Cette action est irréversible.'
@@ -261,16 +261,16 @@ export default function FournisseurProfile() {
 
   const handlePay = async () => {
     const amount = parseAmountInput(payAmount, currency);
-    if (isNaN(amount) || amount <= 0) { Alert.alert('Vérifiez le montant :)'); return; }
+    if (isNaN(amount) || amount <= 0) { appAlert('Vérifiez le montant :)'); return; }
     if (amount > totalOwed + 0.01) {
-      Alert.alert('Montant trop élevé', `Vous ne devez que ${fmt(totalOwed, currency)}.`);
+      appAlert('Montant trop élevé', `Vous ne devez que ${fmt(totalOwed, currency)}.`);
       return;
     }
     setPaying(true);
     const ok = await payDebt(businessId, id, amount);
     setPaying(false);
     if (ok) { setShowPay(false); setPayAmount(''); }
-    else Alert.alert(useFournisseursStore.getState().error ?? 'Le paiement n\'est pas passé');
+    else appAlert(useFournisseursStore.getState().error ?? 'Le paiement n\'est pas passé');
   };
 
   const openLivraisonDetail = async (livraison: CommandeAchat) => {
@@ -309,7 +309,7 @@ export default function FournisseurProfile() {
         </Pressable>
         <Pressable
           disabled={deleting}
-          onPress={() => Alert.alert(fournisseur?.name ?? 'Fournisseur', undefined, [
+          onPress={() => appAlert(fournisseur?.name ?? 'Fournisseur', undefined, [
             { text: 'Supprimer', style: 'destructive', onPress: handleDelete },
             { text: 'Annuler', style: 'cancel' },
           ])}

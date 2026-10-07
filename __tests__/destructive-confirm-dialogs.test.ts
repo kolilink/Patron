@@ -19,15 +19,15 @@ function readSource(rel: string): string {
 }
 
 describe('Phase 2 — destructive confirm dialogs (PostActionsMenu + Modération)', () => {
-    it('PostActionsMenu delete/block go through Alert.alert with a destructive confirm', () => {
+    it('PostActionsMenu delete/block go through appAlert (ConfirmSheet) with a destructive confirm', () => {
         const src = readSource('src/components/ui/PostActionsMenu.tsx');
 
         // Both destructive handlers must call Alert.alert (the confirm gate).
-        expect(src).toMatch(/import\s*\{[^}]*\bAlert\b[^}]*\}\s*from\s*'react-native'/);
+        expect(src).toMatch(/import\s*\{\s*appAlert\s*\}\s*from\s*'@\/src\/utils\/appAlert'/);
 
         // Two confirm dialogs (delete + block), each with a destructive
         // confirm action and a cancel.
-        const alerts = src.match(/Alert\.alert\(/g) ?? [];
+        const alerts = src.match(/\bappAlert\(/g) ?? [];
         expect(alerts.length).toBe(2);
         expect(src).toMatch(/text:\s*'Supprimer',\s*style:\s*'destructive'/);
         expect(src).toMatch(/text:\s*'Bloquer',\s*style:\s*'destructive'/);
@@ -40,13 +40,13 @@ describe('Phase 2 — destructive confirm dialogs (PostActionsMenu + Modération
         expect(src).toMatch(/onPress:\s*async\s*\(\)\s*=>\s*\{[\s\S]*?blockUser\(post\.author_id\)/);
     });
 
-    it('Modération screen delete/block go through Alert.alert with a destructive confirm + toast', () => {
+    it('Modération screen delete/block go through appAlert (ConfirmSheet) with a destructive confirm + toast', () => {
         const src = readSource('app/(app)/moderation/index.tsx');
 
-        expect(src).toMatch(/import\s*\{[^}]*\bAlert\b[^}]*\}\s*from\s*'react-native'/);
+        expect(src).toMatch(/import\s*\{\s*appAlert\s*\}\s*from\s*'@\/src\/utils\/appAlert'/);
 
         // Two confirm dialogs (delete post + block author).
-        const alerts = src.match(/Alert\.alert\(/g) ?? [];
+        const alerts = src.match(/\bappAlert\(/g) ?? [];
         expect(alerts.length).toBe(2);
         expect(src).toMatch(/text:\s*'Supprimer',\s*style:\s*'destructive'/);
         expect(src).toMatch(/text:\s*'Bloquer',\s*style:\s*'destructive'/);

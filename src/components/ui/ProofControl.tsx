@@ -1,6 +1,8 @@
+import { appAlert } from '@/src/utils/appAlert';
+import { ConfirmSheetHost } from '@/src/components/ui/ConfirmSheet';
 import { useState } from 'react';
 import { failureLine } from '@/src/utils/failure';
-import { ActivityIndicator, Alert, Modal, Platform, Pressable, StyleSheet, View } from 'react-native';
+import { ActivityIndicator, Modal, Platform, Pressable, StyleSheet, View } from 'react-native';
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
 import { Image } from 'expo-image';
 import * as ImagePicker from 'expo-image-picker';
@@ -67,7 +69,7 @@ export function ProofControl({
     && !!attachedAt && (Date.now() - new Date(attachedAt).getTime()) < DELETE_WINDOW_MS;
 
   const handleDelete = () => {
-    Alert.alert(
+    appAlert(
       'Supprimer cette image ?',
       'Cette action est définitive.',
       [
@@ -150,7 +152,8 @@ export function ProofControl({
           </Pressable>
         )}
       </Pressable>
-    </Modal>
+    <ConfirmSheetHost active={!!(viewerOpen)} />
+</Modal>
   ) : null;
 
   // ── Inline (icon only) ──────────────────────────────────────────────────────

@@ -1,5 +1,6 @@
+import { appAlert } from '@/src/utils/appAlert';
 import React, { useMemo } from 'react';
-import { Alert, StyleSheet, View } from 'react-native';
+import { StyleSheet, View } from 'react-native';
 import { useTheme, spacing, radius } from '@/src/theme';
 import type { Palette } from '@/src/theme';
 import { Text } from './Text';
@@ -41,7 +42,7 @@ export function FailureView({ failure, busy }: { failure: FailureShape; busy?: b
  * single button = the one action.
  */
 export function showFailureAlert(failure: FailureShape): void {
-  Alert.alert(failure.what, failure.why, [{ text: failure.action.label, onPress: failure.action.onPress }]);
+  appAlert(failure.what, failure.why, [{ text: failure.action.label, onPress: failure.action.onPress }]);
 }
 
 /**

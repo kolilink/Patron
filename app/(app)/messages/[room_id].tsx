@@ -1,17 +1,6 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
-import {
-  Alert,
-  Animated as RNAnimated,
-  FlatList,
-  KeyboardAvoidingView,
-  Platform,
-  Pressable,
-  ScrollView,
-  StyleSheet,
-  Switch,
-  TextInput,
-  View,
-} from 'react-native';
+import { appAlert } from '@/src/utils/appAlert';
+import { Animated as RNAnimated, FlatList, KeyboardAvoidingView, Platform, Pressable, ScrollView, StyleSheet, Switch, TextInput, View } from 'react-native';
 import type { Audio } from 'expo-av';
 import * as FileSystem from 'expo-file-system/legacy';
 import * as ImagePicker from 'expo-image-picker';
@@ -453,7 +442,7 @@ export default function DmChatScreen() {
   const confirmRemovePartner = useCallback(() => {
     setShowSettings(false);
     setTimeout(() => {
-      Alert.alert(
+      appAlert(
         `Retirer ${partnerName} ?`,
         'La conversation et le partage de stock seront supprimés des deux côtés.',
         [

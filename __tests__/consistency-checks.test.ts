@@ -12,6 +12,7 @@ const {
   findFunctionExposureViolations,
   findResurrectedForkViolations,
   findHeroModalFadeViolations,
+  findSystemAlertViolations,
 } = require('../scripts/lib/consistency-checks');
 
 describe('consistency checks', () => {
@@ -51,6 +52,10 @@ describe('consistency checks', () => {
 
   it('no-resurrected-fork: ActivationForkOverlay appears nowhere under app/ or src/', () => {
     expect(findResurrectedForkViolations()).toEqual([]);
+  });
+
+  it('no-system-alert: no Alert.alert( anywhere in app/src/stores/lib — use appAlert()', () => {
+    expect(findSystemAlertViolations()).toEqual([]);
   });
 
   it('hero-modal-no-fade: FirstRunHeroOverlay Modal is animationType="none"', () => {
