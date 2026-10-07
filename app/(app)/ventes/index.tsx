@@ -1,5 +1,4 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
-import { TopFade } from '@/src/components/ui/TopFade';
 import { AnimatedRowCell, AnimatedRow } from '@/src/components/ui/AnimatedRow';
 import { ActivityIndicator, Alert, Animated, Easing, FlatList, InputAccessoryView, Modal, Platform, Pressable, RefreshControl, ScrollView, StyleSheet, TextInput, View } from 'react-native';
 import { captureRef } from 'react-native-view-shot';
@@ -1444,7 +1443,6 @@ export default function VentesScreen() {
           </View>
         )
       ) : (
-        <View style={{ flex: 1 }}>
         <FlatList
           data={visibleItems}
           CellRendererComponent={AnimatedRowCell}
@@ -1522,8 +1520,6 @@ export default function VentesScreen() {
           }}
           ItemSeparatorComponent={() => <View style={{ height: 1, backgroundColor: palette.border }} />}
         />
-        <TopFade />
-        </View>
       )}
 
       {selected && (

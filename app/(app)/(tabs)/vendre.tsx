@@ -1,5 +1,6 @@
 import React, { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { TopFade } from '@/src/components/ui/TopFade';
+import { useSharedValue } from 'react-native-reanimated';
 import { router, useFocusEffect } from 'expo-router';
 import {
   Alert,
@@ -1458,6 +1459,7 @@ export default function VendreScreen() {
   const { cart, submitting, error: saleError, addToCart, addToCartVariant, removeFromCart, setQty, toggleBulk, clearCart, submitSale, submitCarnetDebt, clearError } =
     useSalesStore();
 
+  const scrollY = useSharedValue(0);
   const [search, setSearch] = useState('');
   const [showPayment, setShowPayment] = useState(false);
   const [payStep, setPayStep] = useState<PayStep>('pay');
@@ -1980,6 +1982,8 @@ export default function VendreScreen() {
       {/* Product grid — only in Vente mode with products */}
       {products.length > 0 && <View style={{ flex: 1 }}><FlatList
         data={inStockFiltered}
+        onScroll={e => { scrollY.value = e.nativeEvent.contentOffset.y; }}
+        scrollEventThrottle={16}
         keyExtractor={p => p.id}
         numColumns={2}
         columnWrapperStyle={styles.tileRow}
@@ -2034,7 +2038,7 @@ export default function VendreScreen() {
             />
           ) : null
         }
-      /><TopFade /></View>}
+      /><TopFade scrollY={scrollY} /></View>}
 
       {/* Cart panel (floating) — only in Vente mode. A "Dock", not a growing
           list: a fixed-height summary (the last item added, plus how many

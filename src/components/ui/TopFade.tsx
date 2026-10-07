@@ -1,25 +1,28 @@
 import { StyleSheet } from 'react-native';
 import { LinearGradient } from 'expo-linear-gradient';
+import Animated, { interpolate, useAnimatedStyle, type SharedValue } from 'react-native-reanimated';
 import { useTheme } from '@/src/theme';
 
-export const TOP_FADE_HEIGHT = 30;
+export const TOP_FADE_HEIGHT = 28;
+const FADE_IN_DISTANCE = 48;
 
 /**
- * Static fade strip pinned at the top of a scroll container, just under a
- * sticky header: content dissolves into the background instead of clipping.
- * No scroll listeners and no blur (real-time blur over scrolling content is
- * the jank source on low-end Android). Render as a SIBLING AFTER the list, inside
- * a relatively-positioned parent that only contains the list.
+ * Scroll-driven fade pinned under a sticky header: invisible at rest
+ * (scrollY = 0), eases in over the first 48px so content visibly dissolves
+ * because the user moved it. Driven by a shared value — no re-renders, no
+ * blur (real-time blur is the jank source on low-end Android). Render as a
+ * sibling after the list, inside a relatively-positioned parent containing
+ * only the list.
  */
-/** `color` defaults to the page background; pass palette.surface over a surface-coloured container. */
-export function TopFade({ color }: { color?: string }) {
+export function TopFade({ scrollY }: { scrollY: SharedValue<number> }) {
   const { palette } = useTheme();
+  const style = useAnimatedStyle(() => ({
+    opacity: interpolate(scrollY.value, [0, FADE_IN_DISTANCE], [0, 1], 'clamp'),
+  }));
   return (
-    <LinearGradient
-      pointerEvents="none"
-      colors={[color ?? palette.background, 'transparent']}
-      style={styles.fade}
-    />
+    <Animated.View pointerEvents="none" style={[styles.fade, style]}>
+      <LinearGradient colors={[palette.background, 'transparent']} style={StyleSheet.absoluteFill} />
+    </Animated.View>
   );
 }
 
