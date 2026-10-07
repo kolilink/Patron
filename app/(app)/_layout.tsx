@@ -414,7 +414,26 @@ export default function AppLayout() {
     return () => sub();
   }, [session?.user.id]);
 
-  if (loading) return null;
+  // The first-run hero is built BEFORE the loading gate, and rendered in the
+  // loading branch too: a global `loading` flip (any auth action) must never
+  // swallow an already-latched hero Modal along with the rest of the tree —
+  // that delay was a visible blank/skeleton gap between "Ouvrir mon commerce"
+  // and the hero. Eligibility is latched synchronously above (never gated on
+  // network), so the Modal is mounted on the first frame the latch is set.
+  const heroBusiness = session?.activeBusiness;
+  const heroOverlay = session && heroBusiness && heroBusinessId === heroBusiness.id ? (
+    <FirstRunHeroOverlay
+      businessId={heroBusiness.id}
+      userId={session.user.id}
+      currency={heroBusiness.currency}
+      onDone={() => {
+        setHeroBusinessId(null);
+        useAuthStore.setState(s => ({ homeRefreshToken: s.homeRefreshToken + 1 }));
+      }}
+    />
+  ) : null;
+
+  if (loading) return <>{heroOverlay}</>;
   if (locked) return <Redirect href="/(auth)/verrouille" />;
   if (!session) return <Redirect href="/(welcome)/" />;
 
@@ -440,19 +459,11 @@ export default function AppLayout() {
 
       <BusinessDrawer />
       {showFirstRunHero && activeBusiness ? (
-        // Blocks NotificationPrimer/TrialWelcome entirely
-        // while showing — same "two Modals racing" hazard as the
-        // notifPrimerBlocking guards just below, and this one has to win
-        // priority since it's the very first thing a new business sees.
-        <FirstRunHeroOverlay
-          businessId={activeBusiness.id}
-          userId={session.user.id}
-          currency={activeBusiness.currency}
-          onDone={() => {
-            setHeroBusinessId(null);
-            useAuthStore.setState(s => ({ homeRefreshToken: s.homeRefreshToken + 1 }));
-          }}
-        />
+        // Blocks NotificationPrimer/TrialWelcome entirely while showing — same
+        // "two Modals racing" hazard as the notifPrimerBlocking guards below,
+        // and this one has to win priority since it's the very first thing a
+        // new business sees.
+        heroOverlay
       ) : (
         <>
           <NotificationPrimer

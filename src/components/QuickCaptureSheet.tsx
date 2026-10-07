@@ -141,7 +141,7 @@ export function QuickCaptureSheet({ visible, onClose, businessId, userId, curren
       visible={visible}
       onClose={onClose}
       title={mode === 'credit' ? 'Crédit rapide' : 'Vente rapide'}
-      presentationStyle="fullScreen"
+      presentationStyle="formSheet"
       onShow={() => { presentedRef.current = true; if (mode === 'vente') venteRef.current?.focusPrice(); }}
       contentContainerStyle={{ padding: spacing[5], gap: spacing[4] }}
     >

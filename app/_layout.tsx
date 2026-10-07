@@ -188,7 +188,9 @@ function RootLayout() {
         }}
       >
         <PostHogProvider client={posthog} autocapture>
-          <ThemedStack screenOptions={{ headerShown: false, animation: 'fade' }} />
+          {/* No transition between top-level groups: a fade/slide here races the hero
+              Modal's native presentation after "Ouvrir mon commerce" (blank frame). */}
+          <ThemedStack screenOptions={{ headerShown: false, animation: 'none' }} />
           <PrivacyShield />
         </PostHogProvider>
       </ThemedRootView>
