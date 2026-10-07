@@ -53,21 +53,20 @@ export function DebtReminderSheet({ visible, onClose, input }: Props) {
       visible={visible}
       onClose={onClose}
       title="Rappel"
-      footer={
-        <View style={styles.footer}>
-          <Button
-            label="Partager"
-            loading={sharing}
-            loadingLabel="Préparation"
-            fullWidth
-            onPress={handleShare}
-          />
-        </View>
-      }
+      contentContainerStyle={styles.content}
     >
       <View style={[styles.previewWrap, { width: previewWidth, aspectRatio: RECEIPT_ASPECT }]}>
         <DebtReminderReceipt ref={receiptRef} content={content} width={previewWidth} />
       </View>
+      {/* Directly under the card (not pinned to the sheet bottom): immediately
+          reachable, no dead gap between the receipt and its action. */}
+      <Button
+        label="Partager"
+        loading={sharing}
+        loadingLabel="Préparation"
+        fullWidth
+        onPress={handleShare}
+      />
     </FormSheet>
   );
 }
@@ -75,6 +74,6 @@ export function DebtReminderSheet({ visible, onClose, input }: Props) {
 function makeStyles(p: Palette) {
   return StyleSheet.create({
     previewWrap: { alignSelf: 'center', overflow: 'hidden', borderRadius: radius.md },
-    footer: { padding: spacing[4], backgroundColor: p.background },
+    content: { padding: spacing[4], gap: spacing[5] },
   });
 }

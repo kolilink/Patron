@@ -1017,34 +1017,36 @@ function StockStatus({ product, variants }: { product: Product; variants?: Produ
 }
 
 // ─── Archive switch (Actifs / Non actifs) ────────────────────────────────────
-// One sliding-pill control instead of two independent chips sitting side by
-// side — same binary choice, but reads as a single switch with a satisfying
-// slide + settle bounce, not "two buttons that happen to be next to each
-// other". Labels are the real state names (Actifs/Non actifs), never a
-// generic ON/OFF baked into the control itself.
+// One sliding-pill control instead of two independent chips. The thumb slides
+// (spring) ONLY from the press handler — never from an effect watching `value`:
+// an effect also fires on mount, which made the pill wobble every time the
+// Produits tab appeared. If `value` changes from somewhere else (not a tap),
+// the thumb just snaps to it without animating. No squash/bounce.
 function ArchiveSwitch({ value, onChange }: { value: 'actifs' | 'archives'; onChange: (v: 'actifs' | 'archives') => void }) {
   const { palette } = useTheme();
   const styles = useMemo(() => makeStyles(palette), [palette]);
   const [trackWidth, setTrackWidth] = useState(0);
-  const slide = useRef(new Animated.Value(value === 'archives' ? 1 : 0)).current;
-  const bounce = useRef(new Animated.Value(1)).current;
+  const target = value === 'archives' ? 1 : 0;
+  const slide = useRef(new Animated.Value(target)).current;
+  // The position the thumb is already at / heading to; lets the sync effect
+  // tell "a tap already animated this" from "changed from elsewhere".
+  const settledAt = useRef(target);
 
   useEffect(() => {
-    Animated.parallel([
-      Animated.spring(slide, {
-        toValue: value === 'archives' ? 1 : 0,
-        useNativeDriver: true,
-        friction: 8,
-        tension: 60,
-      }),
-      // A tiny squash-and-settle on the thumb itself — the "cool" tactile
-      // feedback on top of the slide, not just a flat linear move.
-      Animated.sequence([
-        Animated.timing(bounce, { toValue: 0.92, duration: 90, useNativeDriver: true }),
-        Animated.spring(bounce, { toValue: 1, useNativeDriver: true, friction: 5, tension: 140 }),
-      ]),
-    ]).start();
-  }, [value, slide, bounce]);
+    if (settledAt.current !== target) {
+      slide.stopAnimation();
+      slide.setValue(target);
+      settledAt.current = target;
+    }
+  }, [target, slide]);
+
+  const handlePress = (t: 'actifs' | 'archives') => {
+    if (t === value) return;
+    const to = t === 'archives' ? 1 : 0;
+    settledAt.current = to;
+    Animated.spring(slide, { toValue: to, useNativeDriver: true, friction: 8, tension: 60 }).start();
+    onChange(t);
+  };
 
   const inset = 3;
   const thumbWidth = Math.max(trackWidth / 2 - inset, 0);
@@ -1056,12 +1058,12 @@ function ArchiveSwitch({ value, onChange }: { value: 'actifs' | 'archives'; onCh
         <Animated.View
           style={[
             styles.switchThumb,
-            { width: thumbWidth, transform: [{ translateX: thumbTranslate }, { scale: bounce }] },
+            { width: thumbWidth, transform: [{ translateX: thumbTranslate }] },
           ]}
         />
       )}
       {(['actifs', 'archives'] as const).map(t => (
-        <Pressable key={t} onPress={() => onChange(t)} style={styles.switchOption} hitSlop={4}>
+        <Pressable key={t} onPress={() => handlePress(t)} style={styles.switchOption} hitSlop={4}>
           <Text
             variant="caption"
             style={{
