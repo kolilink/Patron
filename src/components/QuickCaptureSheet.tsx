@@ -98,6 +98,26 @@ export function QuickCaptureSheet({ visible, onClose, businessId, userId, curren
   const [creditTotalCents, setCreditTotalCents] = useState(0);
   const reduceMotion = useReduceMotion();
 
+  // The capture forms are remounted fresh once per OPENING (key = openId), never
+  // on close. They used to be keyed on `visible` itself, so closing remounted
+  // them to an empty first-load state while the sheet was still sliding down —
+  // a different layout ghosting over Accueil during the dismiss animation.
+  // Adjusted during render (not in an effect) so the very first frame of an
+  // opening already carries the new key.
+  const [openId, setOpenId] = useState(0);
+  // The pre-named client is captured at open for the same reason: the host
+  // clears its prop the moment it closes the sheet, which would otherwise
+  // change this render (name field appearing) mid-dismiss.
+  const [sessionClientName, setSessionClientName] = useState<string | undefined>(initialClientName);
+  const [prevVisible, setPrevVisible] = useState(visible);
+  if (visible !== prevVisible) {
+    setPrevVisible(visible);
+    if (visible) {
+      setOpenId(n => n + 1);
+      setSessionClientName(initialClientName);
+    }
+  }
+
 
   // Reopen on whichever segment the caller asked for (defaults to Crédit),
   // and reset both session tallies fresh — a new opening is a new sitting.
@@ -183,9 +203,9 @@ export function QuickCaptureSheet({ visible, onClose, businessId, userId, curren
           keeps children mounted while hidden, it doesn't unmount them. */}
       {mode === 'credit' ? (
         <CreditRapideCapture
-          key={`${visible}:${initialClientName ?? ''}`}
-          initialClient={initialClientName ? { name: initialClientName } : undefined}
-          onDone={initialClientName ? handleClose : undefined}
+          key={openId}
+          initialClient={sessionClientName ? { name: sessionClientName } : undefined}
+          onDone={sessionClientName ? handleClose : undefined}
           businessId={businessId}
           userId={userId}
           currency={currency}
@@ -198,7 +218,7 @@ export function QuickCaptureSheet({ visible, onClose, businessId, userId, curren
       ) : (
         <VenteRapideCapture
           ref={venteRef}
-          key={String(visible)}
+          key={openId}
           businessId={businessId}
           userId={userId}
           currency={currency}

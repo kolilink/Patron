@@ -1,4 +1,6 @@
 import { useEffect, useRef, useState } from 'react';
+import { resetOutboxBackoff } from '@/lib/db';
+import { OfflineIndicator } from '@/src/components/ui/OfflineIndicator';
 import { appAlert } from '@/src/utils/appAlert';
 import { ThemedStack } from '@/src/components/ui/ThemedStack';
 import { AppState, Pressable, View } from 'react-native';
@@ -406,7 +408,8 @@ export default function AppLayout() {
     const sub = NetInfo.addEventListener(state => {
       const isConnected = state.isConnected === true;
       if (shouldKickOnConnectivityChange(wasConnected, isConnected)) {
-        useSyncStore.getState().kick();
+        // Ops that backed off while offline are due now — then drain.
+        void resetOutboxBackoff().catch(() => { }).then(() => useSyncStore.getState().kick());
         // A reconnect is also the moment to flush any support messages the
         // merchant wrote while offline — drainSupportQueue otherwise only
         // runs from load() on screen focus, so a queued message would sit
@@ -459,6 +462,7 @@ export default function AppLayout() {
     <>
       <NotificationSetup />
       <SyncStatusLine />
+      <OfflineIndicator />
       <ThemedStack screenOptions={{ headerShown: false, animation: 'slide_from_right' }} />
 
       <BusinessDrawer />

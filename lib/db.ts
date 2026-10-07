@@ -741,6 +741,14 @@ export async function getQueueSnapshot(): Promise<QueuedOpMeta[]> {
 // permanent-failure functions below: this is the only one of the three
 // that keeps status at 'pending', since the op should still be picked up
 // by getPendingOpsForDrain once next_attempt_at elapses.
+// Network came back: any pending op that backed off while offline (or on a
+// flaky link) is due NOW. Without this a reconnect could wait out a backoff
+// of up to 30 minutes before the outbox drained.
+export async function resetOutboxBackoff(): Promise<void> {
+  const db = await openDb();
+  await db.runAsync(`UPDATE sync_queue SET next_attempt_at = NULL WHERE status = 'pending'`);
+}
+
 export async function rescheduleOp(id: number, nextAttemptAt: string, error: string): Promise<void> {
   const db = await openDb();
   await db.runAsync(

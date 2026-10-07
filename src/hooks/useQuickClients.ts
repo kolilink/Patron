@@ -1,5 +1,8 @@
 import { useEffect, useState } from 'react';
 import { supabase } from '@/lib/supabase';
+import { isKnownOffline } from '@/lib/connectivity';
+import { getClientLedgerCache, saveClientLedgerCache } from '@/lib/db';
+import { withTimeout } from '@/lib/sync';
 
 export interface QuickClient {
   id?: string;
@@ -34,8 +37,25 @@ export function useQuickClients(businessId: string | undefined, refreshKey?: unk
     setLoading(true);
 
     (async () => {
+      const cacheKey = `quickclients:${businessId}`;
+      // Local first, instantly: the last ranked list seen online (or nothing →
+      // an empty list, which the picker handles as "Nouveau"). This resolves
+      // the first load before any network is involved.
       try {
-        const [{ data: clientRows }, { data: saleRows }] = await Promise.all([
+        const cached = await getClientLedgerCache(cacheKey);
+        if (!cancelled && Array.isArray(cached)) {
+          setClients(cached as QuickClient[]);
+          setLoadedFor(businessId);
+        }
+      } catch { /* no cache is fine */ }
+      if (cancelled) return;
+      // Known offline: never touch the network — what we have IS the answer.
+      if (isKnownOffline()) {
+        setLoading(false); setLoadedFor(businessId);
+        return;
+      }
+      try {
+        const [clientRes, saleRes] = await withTimeout(Promise.all([
           supabase.from('clients').select('id, name, phone').eq('business_id', businessId),
           supabase
             .from('sale_orders')
@@ -44,8 +64,12 @@ export function useQuickClients(businessId: string | undefined, refreshKey?: unk
             .not('client_id', 'is', null)
             .order('created_at', { ascending: false })
             .limit(RECENT_SALES_LIMIT),
-        ]);
+        ]), 6000);
         if (cancelled) return;
+        // A returned error must never replace a good (cached) list with an empty one.
+        if (clientRes.error || saleRes.error) return;
+        const clientRows = clientRes.data;
+        const saleRows = saleRes.data;
 
         const lastActivity = new Map<string, string>();
         for (const row of (saleRows ?? []) as { client_id: string; created_at: string }[]) {
@@ -62,6 +86,7 @@ export function useQuickClients(businessId: string | undefined, refreshKey?: unk
         });
 
         setClients(ranked);
+        void saveClientLedgerCache(cacheKey, ranked);
       } catch {
         // Keep whatever list we already have; the finally below still marks
         // the first load as resolved so the UI never waits forever.

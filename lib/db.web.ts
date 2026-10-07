@@ -8,6 +8,7 @@ export async function getQueueCount(): Promise<number> { return 0; }
 export async function getFailedQueueCount(): Promise<number> { return 0; }
 // Outbox rework additions (lib/db.ts).
 export async function getQueueSnapshot(): Promise<never[]> { return []; }
+export async function resetOutboxBackoff(): Promise<void> { }
 export async function rescheduleOp(_id: number, _nextAttemptAt: string, _error: string): Promise<void> { }
 export async function markOpPermanentlyFailed(_id: number, _error: string): Promise<void> { }
 export async function markOpCorrupt(_id: number, _error: string): Promise<void> { }

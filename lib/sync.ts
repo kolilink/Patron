@@ -1,4 +1,5 @@
 import * as Sentry from '@sentry/react-native';
+import { isKnownOffline } from '@/lib/connectivity';
 import { Platform, type AppStateStatus } from 'react-native';
 import { supabase } from '@/lib/supabase';
 import { getPendingOpsForDrain, deleteQueueItem, rescheduleOp, markOpPermanentlyFailed, markOpCorrupt } from '@/lib/db';
@@ -474,6 +475,10 @@ function logSyncLag(operation: string, queuedAt: string | null, payload: Record<
 }
 
 export async function drainQueue(): Promise<SyncResult> {
+  // Known offline: nothing can sync, and an attempt would only burn each op's
+  // backoff (attempts + next_attempt_at) for no reason. Leave the queue as-is;
+  // the reconnect listener resets backoff and kicks the drain.
+  if (isKnownOffline()) return { synced: 0, failed: 0, rejectedPayments: [], syncHealthEvents: [] };
   if (_running) return { synced: 0, failed: 0, rejectedPayments: [], syncHealthEvents: [] };
   _running = true;
 

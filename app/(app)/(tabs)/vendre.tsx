@@ -1919,6 +1919,10 @@ export default function VendreScreen() {
           subtitle={offline
             ? 'Ouvrez l\'application en ligne une première fois pour activer le mode hors ligne.'
             : 'Le catalogue est vide — votre responsable prépare les produits.'}
+          // Offline with no cached catalog: recording a sale must never be
+          // blocked — the quick sale needs no catalog at all.
+          actionLabel={offline ? 'Vente rapide' : undefined}
+          onAction={offline ? () => setShowQuickCapture(true) : undefined}
         />
       )}
 

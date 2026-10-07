@@ -1,4 +1,5 @@
 import '@/lib/startupTiming';
+import { initConnectivity } from '@/lib/connectivity';
 import * as Sentry from '@sentry/react-native';
 import { useEffect, useRef, useState } from 'react';
 import { View } from 'react-native';
@@ -62,6 +63,10 @@ const ALL_FONTS = {
   Inter_400Regular,
   Inter_700Bold,
 };
+
+// Start reading connectivity at module load, in parallel with fonts, so the
+// answer is ready before the first screen paints (see lib/connectivity.ts).
+void initConnectivity();
 
 function RootLayout() {
   const initialize = useAuthStore(s => s.initialize);
@@ -141,7 +146,10 @@ function RootLayout() {
     // Hard ceiling so a stuck init can never pin the splash forever; the
     // normal path hides it only after the first screen has painted (below).
     const timeout = setTimeout(() => SplashScreen.hideAsync(), 2000);
+    // Connectivity first: awaited (capped at ~1.2s) alongside init so the app
+    // already knows if it is offline before the first screen paints.
     Promise.all([
+      withStartupTiming('connectivity', initConnectivity()),
       withStartupTiming('auth_check', initialize()),
       withStartupTiming('db_open', openDb()),
     ]).then(() => {

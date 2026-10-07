@@ -1,4 +1,5 @@
 import * as SecureStore from 'expo-secure-store';
+import { isKnownOffline } from '@/lib/connectivity';
 import { createClient } from '@supabase/supabase-js';
 
 const SUPABASE_URL = 'https://jnxpujsyvbenqgjbvifh.supabase.co';
@@ -42,6 +43,10 @@ const LargeSecureStore = {
 };
 
 const fetchWithTimeout: typeof fetch = (input, init) => {
+  // Known offline (no network interface, see lib/connectivity.ts): skip the
+  // request outright and fail the way a dead network does, so every caller's
+  // cache/queue fallback runs NOW instead of after a 15s abort.
+  if (isKnownOffline()) return Promise.reject(new TypeError('Network request failed'));
   const controller = new AbortController();
   const timer = setTimeout(() => controller.abort(), 15_000);
   return fetch(input as RequestInfo, { ...init, signal: controller.signal })

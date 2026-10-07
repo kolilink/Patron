@@ -1,4 +1,6 @@
 import { useEffect, useMemo, useRef, useState } from 'react';
+import { isKnownOffline } from '@/lib/connectivity';
+import { withTimeout } from '@/lib/sync';
 import { SilentKeyboardAccessory } from '@/src/components/ui/SilentKeyboardAccessory';
 import { TRUST_LINE } from '@/src/utils/trustLine';
 import { Animated, Platform, Pressable, ScrollView, StyleSheet, TextInput, View } from 'react-native';
@@ -53,6 +55,8 @@ const GRID_GATE_MAX_MS = 1500;
 const AMOUNT_SILENT_ACCESSORY_ID = 'creditRapideAmountSilentAccessory';
 // Longer than the sheet's slide-up, for focus calls that fire at mount.
 const SHEET_SETTLE_MS = 450;
+// Longest the optional client-row upsert may delay recording a debt.
+const CLIENT_LINK_CAP_MS = 2000;
 
 interface CreditRapideCaptureProps {
   businessId: string;
@@ -265,15 +269,20 @@ export function CreditRapideCapture({ businessId, userId, currency, onViewClient
     setError(null);
 
     let resolvedClientId = clientId;
-    if (!resolvedClientId) {
-      // A failure/timeout here must never block the debt submission below —
-      // submitCarnetDebt already accepts a null client id, so this just
-      // degrades to "no linked client this time."
+    if (!resolvedClientId && !isKnownOffline()) {
+      // Best-effort link to a client row, NEVER a gate on recording the debt:
+      // submitCarnetDebt already accepts a null client id. Skipped outright
+      // when the device is known offline, and raced against a short cap
+      // otherwise — an unbounded await here was the "Chargement…" hang on a
+      // weak/dead connection, before the local write ever happened.
       try {
-        const { data } = await supabase.from('clients').upsert(
-          { business_id: businessId, name: trimmedName },
-          { onConflict: 'business_id,name' },
-        ).select('id').single();
+        const { data } = await withTimeout(
+          supabase.from('clients').upsert(
+            { business_id: businessId, name: trimmedName },
+            { onConflict: 'business_id,name' },
+          ).select('id').single(),
+          CLIENT_LINK_CAP_MS,
+        );
         resolvedClientId = data?.id ?? undefined;
       } catch {
         resolvedClientId = undefined;
