@@ -24,7 +24,8 @@ export function setCacheFailureReporter(fn: ((table: string, err: unknown) => vo
 
 export function recordCacheWriteFailure(table: string, err: unknown): void {
   const message = err instanceof Error ? err.message : String(err);
-  console.error(`[cache] write to ${table} FAILED — offline data for this table may be missing:`, message);
+  const isRead = table.endsWith('(lecture)');
+  console.error(`[cache] ${isRead ? 'READ of' : 'write to'} ${table.replace(' (lecture)', '')} FAILED — offline data for this table may be missing:`, message);
   useCacheHealthStore.setState(s => {
     const prev = s.failures[table];
     return { failures: { ...s.failures, [table]: { count: (prev?.count ?? 0) + 1, lastAt: Date.now(), lastError: message } } };
@@ -34,12 +35,23 @@ export function recordCacheWriteFailure(table: string, err: unknown): void {
 
 export function recordCacheWriteSuccess(table: string): void {
   const { failures } = useCacheHealthStore.getState();
-  if (!failures[table]) return;
-  const { [table]: _gone, ...rest } = failures;
+  const readKey = `${table} (lecture)`;
+  if (!failures[table] && !failures[readKey]) return;
+  // A good write also heals a table's read-failure flag (the bad row was replaced).
+  const { [table]: _w, [readKey]: _r, ...rest } = failures;
   useCacheHealthStore.setState({ failures: rest });
 }
 
 /** Tables currently failing, for the diagnostic line. */
 export function failingCacheTables(failures: Record<string, CacheFailure>): string[] {
   return Object.keys(failures).sort();
+}
+
+// A cache ROW exists but could not be read back (openDb failed, decrypt produced
+// garbage, JSON no longer parses). The reader still returns "no cache" — so the
+// screen says "ouvrez en ligne" — but that must be distinguishable from "never
+// fetched": it is logged, reported and flagged like a write failure. The next
+// successful write to the table clears it.
+export function recordCacheReadFailure(table: string, err: unknown): void {
+  recordCacheWriteFailure(`${table} (lecture)`, err);
 }

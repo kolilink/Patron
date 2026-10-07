@@ -964,7 +964,9 @@ export default function ParametresScreen() {
                   const appVersion = parts.length > 1 && parts[0].length >= 2 && parseInt(parts[0]) >= 50
                     ? parts.slice(1).join('.')
                     : fullVersion;
-                  return `${appVersion}${Updates.isEmbeddedLaunch ? '' : ` (${OTA_BUILD_NUMBER})`}`;
+                  // The running update's id (first 8 chars) tells exactly which OTA this phone is on —
+                  // "is the fix on my phone yet?" no longer has to be guessed from a recording.
+                  return `${appVersion}${Updates.isEmbeddedLaunch ? '' : ` (${OTA_BUILD_NUMBER} · ${(Updates.updateId ?? '').slice(0, 8)})`}`;
                 })()}
               </Text>
             </View>

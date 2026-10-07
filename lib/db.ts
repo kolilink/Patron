@@ -1,5 +1,5 @@
 import * as SQLite from 'expo-sqlite';
-import { recordCacheWriteFailure, recordCacheWriteSuccess } from '@/lib/cacheHealth';
+import { recordCacheWriteFailure, recordCacheWriteSuccess, recordCacheReadFailure } from '@/lib/cacheHealth';
 import type { Product } from '@/src/types';
 import { encrypt, decrypt } from '@/lib/encryption';
 
@@ -943,7 +943,8 @@ export async function getDashboardKpiCache(businessId: string): Promise<unknown 
     if (!row) return null;
     const decrypted = await decrypt(row.data);
     return JSON.parse(decrypted);
-  } catch {
+  } catch (err) {
+    recordCacheReadFailure('dashboard_kpi_cache', err);
     return null;
   }
 }
@@ -992,7 +993,8 @@ export async function getRapportsCache(businessId: string): Promise<unknown | nu
     if (!row) return null;
     const decrypted = await decrypt(row.data);
     return JSON.parse(decrypted);
-  } catch {
+  } catch (err) {
+    recordCacheReadFailure('rapports_cache', err);
     return null;
   }
 }
@@ -1015,7 +1017,8 @@ export async function getInvestorCache(cacheKey: string): Promise<unknown | null
     if (!row) return null;
     const decrypted = await decrypt(row.data);
     return JSON.parse(decrypted);
-  } catch {
+  } catch (err) {
+    recordCacheReadFailure('investor_cache', err);
     return null;
   }
 }
@@ -1038,7 +1041,8 @@ export async function getEquipeCache(businessId: string): Promise<unknown | null
     if (!row) return null;
     const decrypted = await decrypt(row.data);
     return JSON.parse(decrypted);
-  } catch {
+  } catch (err) {
+    recordCacheReadFailure('equipe_cache', err);
     return null;
   }
 }
@@ -1061,7 +1065,8 @@ export async function getPartnershipsCache(businessId: string): Promise<unknown 
     if (!row) return null;
     const decrypted = await decrypt(row.data);
     return JSON.parse(decrypted);
-  } catch {
+  } catch (err) {
+    recordCacheReadFailure('partnerships_cache', err);
     return null;
   }
 }
@@ -1084,7 +1089,8 @@ export async function getProductCache(businessId: string): Promise<Product[] | n
     if (!row) return null;
     const decrypted = await decrypt(row.data);
     return JSON.parse(decrypted) as Product[];
-  } catch {
+  } catch (err) {
+    recordCacheReadFailure('product_cache', err);
     return null;
   }
 }
@@ -1108,7 +1114,8 @@ export async function getVentesCache(cacheKey: string): Promise<unknown[] | null
     if (!row) return null;
     const decrypted = await decrypt(row.data);
     return JSON.parse(decrypted) as unknown[];
-  } catch {
+  } catch (err) {
+    recordCacheReadFailure('ventes_cache', err);
     return null;
   }
 }
@@ -1131,7 +1138,8 @@ export async function getFournisseurCache(businessId: string): Promise<unknown[]
     if (!row) return null;
     const decrypted = await decrypt(row.data);
     return JSON.parse(decrypted) as unknown[];
-  } catch {
+  } catch (err) {
+    recordCacheReadFailure('fournisseur_cache', err);
     return null;
   }
 }
@@ -1154,7 +1162,8 @@ export async function getCommandeCache(businessId: string): Promise<unknown[] | 
     if (!row) return null;
     const decrypted = await decrypt(row.data);
     return JSON.parse(decrypted) as unknown[];
-  } catch {
+  } catch (err) {
+    recordCacheReadFailure('commande_cache', err);
     return null;
   }
 }
@@ -1177,7 +1186,8 @@ export async function getExpenseCache(businessId: string): Promise<unknown[] | n
     if (!row) return null;
     const decrypted = await decrypt(row.data);
     return JSON.parse(decrypted) as unknown[];
-  } catch {
+  } catch (err) {
+    recordCacheReadFailure('expense_cache', err);
     return null;
   }
 }
@@ -1200,7 +1210,8 @@ export async function getChatCache(businessId: string): Promise<unknown | null> 
     if (!row) return null;
     const decrypted = await decrypt(row.data);
     return JSON.parse(decrypted);
-  } catch {
+  } catch (err) {
+    recordCacheReadFailure('chat_cache', err);
     return null;
   }
 }
@@ -1220,7 +1231,8 @@ export async function getMarketCache(): Promise<unknown[] | null> {
     if (!row) return null;
     const decrypted = await decrypt(row.data);
     return JSON.parse(decrypted) as unknown[];
-  } catch {
+  } catch (err) {
+    recordCacheReadFailure('market_cache', err);
     return null;
   }
 }
@@ -1243,7 +1255,8 @@ export async function getApportsCache(businessId: string): Promise<unknown[] | n
     if (!row) return null;
     const decrypted = await decrypt(row.data);
     return JSON.parse(decrypted) as unknown[];
-  } catch {
+  } catch (err) {
+    recordCacheReadFailure('apports_cache', err);
     return null;
   }
 }
@@ -1267,7 +1280,8 @@ export async function getClientLedgerCache(cacheKey: string): Promise<unknown | 
     if (!row) return null;
     const decrypted = await decrypt(row.data);
     return JSON.parse(decrypted);
-  } catch {
+  } catch (err) {
+    recordCacheReadFailure('client_ledger_cache', err);
     return null;
   }
 }

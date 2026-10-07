@@ -37,6 +37,13 @@ const KEY_STORE_KEY = 'patron_db_enc_key_v1';
 const IV_BYTES = 16; // AES block size
 
 let _key: CryptoJS.lib.WordArray | null = null;
+// ONE key load/generation shared by every concurrent caller. Without this, on a
+// fresh install several cache writes (and queued-op writes) start at once: each saw
+// "no key yet", each generated its OWN random key, and the last SecureStore write
+// won — leaving rows encrypted under keys that were never persisted. After a
+// force-kill those rows decrypt to garbage → "no cache" → "ouvrez en ligne" (and a
+// queued offline sale becoming "corrupt"). Cold-start survival depends on this.
+let _keyPromise: Promise<CryptoJS.lib.WordArray> | null = null;
 
 function randomBytes(n: number): Uint8Array {
   const buf = new Uint8Array(n);
@@ -73,17 +80,23 @@ function wordArrayToBytes(wa: CryptoJS.lib.WordArray): Uint8Array {
   return out;
 }
 
-async function getKey(): Promise<CryptoJS.lib.WordArray> {
-  if (_key) return _key;
-
-  let rawB64 = await SecureStore.getItemAsync(KEY_STORE_KEY);
-  if (!rawB64) {
-    rawB64 = bytesToBase64(randomBytes(32)); // 256-bit key
-    await SecureStore.setItemAsync(KEY_STORE_KEY, rawB64);
+function getKey(): Promise<CryptoJS.lib.WordArray> {
+  if (_key) return Promise.resolve(_key);
+  if (!_keyPromise) {
+    _keyPromise = (async () => {
+      let rawB64 = await SecureStore.getItemAsync(KEY_STORE_KEY);
+      if (!rawB64) {
+        rawB64 = bytesToBase64(randomBytes(32)); // 256-bit key
+        await SecureStore.setItemAsync(KEY_STORE_KEY, rawB64);
+      }
+      _key = CryptoJS.enc.Base64.parse(rawB64);
+      return _key;
+    })().catch(err => {
+      _keyPromise = null; // a failed load must be retryable, not poison the session
+      throw err;
+    });
   }
-
-  _key = CryptoJS.enc.Base64.parse(rawB64);
-  return _key;
+  return _keyPromise;
 }
 
 // Returns base64(16-byte IV + AES-CBC ciphertext).
