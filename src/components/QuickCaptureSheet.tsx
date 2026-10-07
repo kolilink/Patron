@@ -1,6 +1,6 @@
 import { useEffect, useRef, useState } from 'react';
 import { useReduceMotion } from '@/src/hooks/useReduceMotion';
-import { Animated, Pressable, View } from 'react-native';
+import { Animated, Keyboard, Pressable, View } from 'react-native';
 import { router } from 'expo-router';
 import { FormSheet } from '@/src/components/ui/FormSheet';
 import { Text } from '@/src/components/ui/Text';
@@ -114,7 +114,13 @@ export function QuickCaptureSheet({ visible, onClose, businessId, userId, curren
   // destination mount and settle invisibly underneath the still-open modal,
   // so closing just reveals a screen that's already there — one motion
   // instead of two visibly sequential transitions.
+  // Every close path lowers the keyboard FIRST, synchronously: left to the
+  // Modal unmounting it only dropped after the slide-down finished, so it
+  // lingered over Accueil.
+  const handleClose = () => { Keyboard.dismiss(); onClose(); };
+
   const handleViewClients = () => {
+    Keyboard.dismiss();
     router.push({ pathname: '/(app)/clients', params: { filter: 'doivent' } });
     setTimeout(onClose, 50);
   };
@@ -139,7 +145,7 @@ export function QuickCaptureSheet({ visible, onClose, businessId, userId, curren
   return (
     <FormSheet
       visible={visible}
-      onClose={onClose}
+      onClose={handleClose}
       title={mode === 'credit' ? 'Crédit rapide' : 'Vente rapide'}
       presentationStyle="formSheet"
       onShow={() => { presentedRef.current = true; if (mode === 'vente') venteRef.current?.focusPrice(); }}
@@ -179,7 +185,7 @@ export function QuickCaptureSheet({ visible, onClose, businessId, userId, curren
         <CreditRapideCapture
           key={`${visible}:${initialClientName ?? ''}`}
           initialClient={initialClientName ? { name: initialClientName } : undefined}
-          onDone={initialClientName ? onClose : undefined}
+          onDone={initialClientName ? handleClose : undefined}
           businessId={businessId}
           userId={userId}
           currency={currency}

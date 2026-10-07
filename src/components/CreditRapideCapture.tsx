@@ -49,6 +49,8 @@ const GRID_PLACEHOLDER_HEIGHT = 78;
 // (possibly just "Nouveau") and chips that arrive later pop in; accepted for
 // the slow/offline case only.
 const GRID_GATE_MAX_MS = 1500;
+// Longer than the sheet's slide-up, for focus calls that fire at mount.
+const SHEET_SETTLE_MS = 450;
 
 interface CreditRapideCaptureProps {
   businessId: string;
@@ -129,9 +131,12 @@ export function CreditRapideCapture({ businessId, userId, currency, onViewClient
   const focusTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
   const resetTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
   const cancelFocus = () => { if (focusTimerRef.current) { clearTimeout(focusTimerRef.current); focusTimerRef.current = null; } };
-  const focusLater = (ref: { current: TextInput | null }) => {
+  // `delay` is 80ms for in-sheet taps; the mount-time paths (initialClient,
+  // empty-grid skip) pass SHEET_SETTLE_MS so the keyboard never rises while the
+  // sheet is still sliding up.
+  const focusLater = (ref: { current: TextInput | null }, delay = 80) => {
     cancelFocus();
-    focusTimerRef.current = setTimeout(() => { focusTimerRef.current = null; ref.current?.focus(); }, 80);
+    focusTimerRef.current = setTimeout(() => { focusTimerRef.current = null; ref.current?.focus(); }, delay);
   };
   useEffect(() => () => {
     cancelFocus();
@@ -142,7 +147,7 @@ export function CreditRapideCapture({ businessId, userId, currency, onViewClient
   // on 'amount' phase (set in the useState initializers above), so nothing
   // else would ever focus this field otherwise.
   useEffect(() => {
-    if (initialClient) focusLater(amountRef);
+    if (initialClient) focusLater(amountRef, SHEET_SETTLE_MS);
     // Deliberately mount-only — initialClient is fixed for this component's
     // whole lifetime (the host remounts it fresh per open, same as every
     // other consumer of this component).
@@ -216,13 +221,13 @@ export function CreditRapideCapture({ businessId, userId, currency, onViewClient
     focusLater(amountRef);
   };
 
-  const pickNew = () => {
+  const pickNew = (focusDelay = 80) => {
     setIsNew(true);
     setName('');
     setClientId(undefined);
     setError(null);
     setPhase('amount');
-    focusLater(nameRef);
+    focusLater(nameRef, focusDelay);
   };
 
   // Zero confirmed clients → the pick-a-face grid would show only "Nouveau", so
@@ -235,7 +240,7 @@ export function CreditRapideCapture({ businessId, userId, currency, onViewClient
     if (skippedEmptyGridRef.current || initialClient || phase !== 'pick') return;
     if (gridReady && clients.length === 0) {
       skippedEmptyGridRef.current = true;
-      pickNew();
+      pickNew(SHEET_SETTLE_MS);
     }
   }, [gridReady, clients.length, phase]);
 
@@ -330,7 +335,7 @@ export function CreditRapideCapture({ businessId, userId, currency, onViewClient
                 </Pressable>
               );
             })}
-            <Pressable onPress={pickNew} style={({ pressed }) => [styles.personCell, pressed && { opacity: 0.6 }]}>
+            <Pressable onPress={() => pickNew()} style={({ pressed }) => [styles.personCell, pressed && { opacity: 0.6 }]}>
               <View style={[styles.personAvatar, styles.personAvatarNew, { borderColor: palette.primary }]}>
                 <Ionicons name="person-add-outline" size={20} color={palette.primary} />
               </View>
