@@ -226,30 +226,6 @@ interface AuthStore {
   businessDrawerOpen: boolean;
   openBusinessDrawer: () => void;
   closeBusinessDrawer: () => void;
-  // businessDrawerOpen flips false the instant close is *requested*, but
-  // BusinessDrawer's own slide-out animation (~300ms) means its Modal stays
-  // genuinely visible for a moment after that. Anything that wants to show
-  // its own Modal only once the drawer is truly gone (ActivationForkOverlay)
-  // needs this instead — two RN Modals visible at once is unreliable,
-  // especially on Android, and gating on the raw open/close intent alone
-  // left a real window where the fork's Modal turned visible=true while the
-  // drawer's Modal was still mid-close, silently swallowing touches with
-  // neither one clearly rendering. Starts true (nothing open, nothing to
-  // wait for); set false the instant an open is requested, set back to true
-  // only from BusinessDrawer's own animation-finished callback.
-  businessDrawerFullyClosed: boolean;
-  markBusinessDrawerFullyClosed: () => void;
-  // Set by catalogue.tsx while its add-product FormSheet is open. The
-  // activation fork is evaluated globally (app/(app)/_layout.tsx) so it can
-  // show on top of whatever screen is active, not just Accueil — but the
-  // add-product form is itself a real <Modal> (via FormSheet), and letting
-  // the fork's own Modal try to show at the same time reintroduces the
-  // exact "two Modals visible at once" bug already fixed twice elsewhere.
-  // No dedicated action — a plain field consumers set directly via
-  // .setState(), same lightweight pattern already used for one-off flags
-  // elsewhere in this codebase.
-  suppressActivationFork: boolean;
-
   // Bumped by app/(app)/_layout.tsx when FirstRunHeroOverlay closes, so
   // Accueil's own local KPI state (credit_count/credit_total, driving the
   // "N clients vous doivent" card) refreshes immediately. useFocusEffect
@@ -257,8 +233,7 @@ interface AuthStore {
   // outside the tab navigator, so react-navigation never actually
   // unfocuses/refocuses Accueil while it's open — a real business switch
   // "fixed" the staleness only because that's a much bigger state change,
-  // not because focus itself changed. Same setState-directly pattern as
-  // suppressActivationFork above, not a dedicated action.
+  // not because focus itself changed. Plain field set via .setState(), not a dedicated action.
   homeRefreshToken: number;
 
   // In-progress FirstRunHeroOverlay state (which phase, the typed name/
@@ -282,12 +257,10 @@ interface AuthStore {
     lastEntry: { name: string; amountCents: number } | null;
   } | null;
 
-  // Cross-component open request for Accueil's QuickCaptureSheet, set by
-  // ActivationForkOverlay's "Une vente" button (app/(app)/_layout.tsx) —
-  // the fork itself is evaluated at the root layout, above the tab
-  // navigator, with no direct reference to Accueil's own local sheet-open
-  // state, so this is the same lightweight cross-cutting signal pattern as
-  // suppressActivationFork/homeRefreshToken above, not a dedicated action.
+  // Cross-component open request for Accueil's QuickCaptureSheet — set by the
+  // Clients screens (and anything else outside the tab navigator) that want a
+  // credit/sale capture, then they navigate to Accueil. Plain field set via
+  // .setState(), not a dedicated action.
   // Accueil watches it, opens the sheet in that mode, then clears it back
   // to null.
   requestQuickCapture: 'credit' | 'vente' | null;
@@ -395,8 +368,6 @@ export const useAuthStore = create<AuthStore>((set, get) => ({
   dismissedFromBusiness: null,
   showTrialWelcome: false,
   businessDrawerOpen: false,
-  businessDrawerFullyClosed: true,
-  suppressActivationFork: false,
   homeRefreshToken: 0,
   heroDraft: null,
   requestQuickCapture: null,
@@ -1498,7 +1469,6 @@ export const useAuthStore = create<AuthStore>((set, get) => ({
   clearRemovedBusinessesOnLogin: () => set({ removedBusinessesOnLogin: null }),
   clearDismissedFromBusiness: () => set({ dismissedFromBusiness: null }),
 
-  openBusinessDrawer: () => set({ businessDrawerOpen: true, businessDrawerFullyClosed: false }),
+  openBusinessDrawer: () => set({ businessDrawerOpen: true }),
   closeBusinessDrawer: () => set({ businessDrawerOpen: false }),
-  markBusinessDrawerFullyClosed: () => set({ businessDrawerFullyClosed: true }),
 }));

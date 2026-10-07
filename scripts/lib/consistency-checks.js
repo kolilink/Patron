@@ -248,7 +248,34 @@ function findRawModalWithTextInputViolations() {
 
 const { findFunctionExposureViolations } = require('./function-exposure');
 
+// no-resurrected-fork: the "On enregistre quoi aujourd'hui ?" overlay (the
+// activation fork) was deleted on purpose — it was killed 2026-09-27, came
+// back by accident 2026-10-06, and the hero (FirstRunHeroOverlay) is the ONLY
+// first-run surface. If you are reading this because the build failed:
+// do not re-add it; use the hero instead.
+function findResurrectedForkViolations() {
+  const out = [];
+  const files = execSync(`find app src -name "*.ts" -o -name "*.tsx"`, { cwd: ROOT, encoding: 'utf-8' })
+    .trim().split('\n').filter(Boolean);
+  for (const f of files) {
+    const lines = fs.readFileSync(path.join(ROOT, f), 'utf-8').split('\n');
+    lines.forEach((l, i) => { if (l.includes('ActivationForkOverlay')) out.push(`${f}:${i + 1}: ${l.trim()}`); });
+  }
+  return out;
+}
+
+// hero-modal-no-fade: the first-run hero Modal must pop in opaque on the first
+// frame (animationType="none"). A fade exposes whatever is behind it (skeletons,
+// a blank transition card) between "Ouvrir mon commerce" and the hero.
+function findHeroModalFadeViolations() {
+  const f = 'src/components/FirstRunHeroOverlay.tsx';
+  const src = fs.readFileSync(path.join(ROOT, f), 'utf-8');
+  return src.includes('animationType="none"') ? [] : [`${f}: the hero <Modal> must have animationType="none"`];
+}
+
 module.exports = {
+  findResurrectedForkViolations,
+  findHeroModalFadeViolations,
   findFunctionExposureViolations,
   findHexViolations,
   findScreenViolations,

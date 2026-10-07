@@ -32,6 +32,13 @@ jobs:
 
       - name: Consistency checks (palette colors, <Screen> root, offline-fetch timeouts)
         run: npm run check:consistency
+      - name: no-resurrected-fork
+        # The activation fork overlay was deleted on purpose (killed 2026-09-27, regressed
+        # 2026-10-06). FirstRunHeroOverlay is the only first-run surface. Do not re-add it.
+        run: "! grep -rn 'ActivationForkOverlay' src app"
+      - name: hero-modal-no-fade
+        # A fading hero Modal exposes a blank/skeleton frame after "Ouvrir mon commerce".
+        run: grep -q 'animationType="none"' src/components/FirstRunHeroOverlay.tsx
 
       - name: Lint (react-hooks/rules-of-hooks)
         run: npm run lint

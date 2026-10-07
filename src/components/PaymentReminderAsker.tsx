@@ -52,8 +52,7 @@ interface Props {
   // just at the moment the fresh-session token changes — since one of those
   // can open at any point during the 1.5s settle wait. This is the same
   // "two Modals racing" bug class NotificationPrimer's own notifPrimerBlocking
-  // and ActivationForkOverlay's suppressActivationFork already exist to
-  // avoid elsewhere in this app; this sheet only ever appears on Accueil, so
+  // already exists to avoid elsewhere in this app; this sheet only ever appears on Accueil, so
   // checking Accueil's own two sheet-open flags covers the realistic cases.
   blocked: boolean;
   // Called right after a real OS denial. DebtReminderDeniedCard mounts

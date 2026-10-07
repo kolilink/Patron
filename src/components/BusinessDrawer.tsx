@@ -70,7 +70,6 @@ export function BusinessDrawer() {
   const session = useAuthStore(s => s.session);
   const businessDrawerOpen = useAuthStore(s => s.businessDrawerOpen);
   const closeBusinessDrawer = useAuthStore(s => s.closeBusinessDrawer);
-  const markBusinessDrawerFullyClosed = useAuthStore(s => s.markBusinessDrawerFullyClosed);
   const selectBusiness = useAuthStore(s => s.selectBusiness);
   const insets = useSafeAreaInsets();
   const isFounder = isFounderPhone(session?.user.phone);
@@ -90,19 +89,13 @@ export function BusinessDrawer() {
         ? 0
         : withTiming(0, { duration: DRAWER_OPEN_DURATION, easing: DRAWER_EASE });
     } else {
-      // Signals ActivationForkOverlay (and anything else waiting) that
-      // this Modal is genuinely gone now, not just that close was
-      // requested — see businessDrawerFullyClosed's doc comment in
-      // stores/auth.ts for why the distinction matters.
       if (reduceMotion) {
         translateX.value = -DRAWER_WIDTH;
         setModalVisible(false);
-        markBusinessDrawerFullyClosed();
       } else {
         translateX.value = withTiming(-DRAWER_WIDTH, { duration: DRAWER_CLOSE_DURATION, easing: DRAWER_EASE }, (finished) => {
           if (finished) {
             runOnJS(setModalVisible)(false);
-            runOnJS(markBusinessDrawerFullyClosed)();
           }
         });
       }

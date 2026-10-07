@@ -8,7 +8,6 @@ import { CreditRapideCapture } from '@/src/components/CreditRapideCapture';
 import { VenteRapideCapture, type VenteRapideCaptureHandle } from '@/src/components/VenteRapideCapture';
 import { useTheme, spacing, radius } from '@/src/theme';
 import { formatAmount } from '@/src/utils/format';
-import { useAuthStore } from '@/stores/auth';
 
 interface QuickCaptureSheetProps {
   visible: boolean;
@@ -17,9 +16,8 @@ interface QuickCaptureSheetProps {
   userId: string;
   currency: string;
   /** Which segment to land on when the sheet opens — defaults to Crédit.
-   * ActivationForkOverlay's "Une vente" button opens this sheet from
-   * Accueil in Vente mode specifically (see requestQuickCapture in
-   * stores/auth.ts); the "+" FAB's own normal open omits this and gets the
+   * Accueil opens it in Vente mode for a requestQuickCapture: 'vente'
+   * (stores/auth.ts); the "+" FAB's own normal open omits this and gets the
    * default. */
   initialMode?: 'credit' | 'vente';
   /** Prefilled client for Crédit mode (skips the pick grid, lands on the amount step) and closes the sheet after one save. */
@@ -100,27 +98,6 @@ export function QuickCaptureSheet({ visible, onClose, businessId, userId, curren
   const [creditTotalCents, setCreditTotalCents] = useState(0);
   const reduceMotion = useReduceMotion();
 
-
-  // Suppress ActivationForkOverlay for as long as this sheet is open — same
-  // fix already applied to vendre.tsx's credit mode. Un-suppressing is
-  // deliberately delayed (not immediate on close) — same 1200ms grace
-  // window app/(app)/_layout.tsx's own beginForkNavigation() already uses
-  // for the identical race: a credit/sale just added here doesn't update
-  // useVentesStore.sales synchronously (Accueil's onClose→loadAll() still
-  // needs a real network round trip), but suppressActivationFork used to
-  // reset the instant this sheet closed — so showFork's own !forkStep3Done
-  // condition could briefly still read stale (true) right as suppression
-  // lifted, flashing the fork's 3-button wall in for a moment before the
-  // fresh data arrived and closed it again. Reported live 2026-09-28 as "a
-  // button tries to appear on the dashboard then goes away" right after
-  // adding a credit or sale and closing.
-  useEffect(() => {
-    if (!visible) return;
-    useAuthStore.setState({ suppressActivationFork: true });
-    return () => {
-      setTimeout(() => useAuthStore.setState({ suppressActivationFork: false }), 1200);
-    };
-  }, [visible]);
 
   // Reopen on whichever segment the caller asked for (defaults to Crédit),
   // and reset both session tallies fresh — a new opening is a new sitting.

@@ -1,7 +1,7 @@
-import { Stack } from 'expo-router';
+import { ThemedStack } from '@/src/components/ui/ThemedStack';
 
 export default function WelcomeLayout() {
   return (
-    <Stack screenOptions={{ headerShown: false, animation: 'slide_from_right' }} />
+    <ThemedStack screenOptions={{ headerShown: false, animation: 'slide_from_right' }} />
   );
 }

@@ -10,7 +10,6 @@ import { Redirect, Stack, router } from 'expo-router';
 import { BusinessDrawer } from '@/src/components/BusinessDrawer';
 import { FirstRunHeroOverlay } from '@/src/components/FirstRunHeroOverlay';
 import { TrialWelcomeOverlay } from '@/src/components/TrialWelcomeOverlay';
-import { ActivationForkOverlay } from '@/src/components/ActivationForkOverlay';
 import { NotificationPrimer } from '@/src/components/NotificationPrimer';
 import { AppToastContainer } from '@/src/components/ui/AppToast';
 import { SaveConfirmation } from '@/src/components/ui/SaveConfirmation';
@@ -73,20 +72,9 @@ export default function AppLayout() {
   const handleRoleChanged = useAuthStore(s => s.handleRoleChanged);
   const clearDismissedFromBusiness = useAuthStore(s => s.clearDismissedFromBusiness);
 
-  // Activation fork ("On enregistre quoi aujourd'hui ?") — evaluated here,
-  // not on Accueil, specifically so it can show on top of ANY screen, not
-  // just Home. It used to live entirely inside (tabs)/index.tsx; the gap
-  // that exposed was that backing out of a sub-flow onto Catalogue's or
-  // Vendre's own screen (without navigating back to Home) left nothing
-  // enforcing anything until the user specifically returned there. Derived
-  // fresh every render from live product/sale counts + business age, same
-  // as before — no persisted flag, nothing that can go stale.
-  const suppressActivationFork = useAuthStore(s => s.suppressActivationFork);
-
-  // Starts true (pessimistic) so ActivationForkOverlay can't flash in during
-  // the brief async window before NotificationPrimer has determined whether
-  // it needs to show itself — see NotificationPrimer's own doc comment for
-  // why these two must never be visible at the same time.
+  // Starts true (pessimistic) so nothing can flash in during the brief async
+  // window before NotificationPrimer has determined whether it needs to show
+  // itself — see NotificationPrimer's own doc comment.
   const [notifPrimerBlocking, setNotifPrimerBlocking] = useState(true);
 
   // Which business (if any) should currently show FirstRunHeroOverlay —
@@ -103,6 +91,12 @@ export default function AppLayout() {
   // flag still does its real job — preventing the gate from being eligible
   // again on a future launch/business-switch — it just no longer has any
   // power to close an already-open instance.
+  //
+  // RULE (hero-modal-no-fade, scripts/lib/consistency-checks.js): hero eligibility
+  // for a just-created business is computed SYNCHRONOUSLY from local session
+  // state, never gated on network or a store fetch — and FirstRunHeroOverlay's
+  // Modal must stay animationType="none". Any async gate or fade here shows up as
+  // a blank frame between "Ouvrir mon commerce" and the hero.
   const [heroBusinessId, setHeroBusinessId] = useState<string | null>(null);
   // The business id this latch has actually evaluated eligibility for —
   // NOT the same thing as heroBusinessId itself (that one is null both
@@ -134,77 +128,6 @@ export default function AppLayout() {
       && session?.activeMembership?.role === 'administrateur';
     setHeroBusinessId(eligible ? activeBusinessId : null);
   }
-
-  const forkProducts = useProductStore(s => s.products);
-  const forkSales = useVentesStore(s => s.sales);
-  const forkRole = session?.activeMembership?.role;
-  const forkIsOwner = forkRole !== 'investisseur' && forkRole !== 'vendeur';
-  const forkBusinessId = session?.activeBusiness?.id ?? '';
-  const forkStep2Done = forkProducts.length > 0;
-  const forkStep3Done = forkSales.some(s => s.business_id === forkBusinessId && s.status !== 'annule');
-  const forkAgeMs = session?.activeBusiness?.created_at
-    ? Date.now() - new Date(session.activeBusiness.created_at).getTime()
-    : Infinity;
-  // `products.length === 0` / `sales`-has-no-match can't tell "confirmed
-  // empty" apart from "haven't loaded yet for this business" — on a cold
-  // start (or right after switching business), both stores start out empty
-  // in memory until their fetch resolves, so a business that already has a
-  // product and a sale would still briefly read as "neither done," flashing
-  // the fork before the real data arrived and corrected it. Fail closed
-  // (don't show) until both stores confirm they've actually fetched *this*
-  // business's data — same defensive shape as notifPrimerBlocking below.
-  const productsFetchedFor = useProductStore(s => s.productsFetchedFor);
-  const salesFetchedFor = useVentesStore(s => s.salesFetchedFor);
-  const forkDataReady = productsFetchedFor === forkBusinessId && salesFetchedFor === forkBusinessId;
-  // Superseded by FirstRunHeroOverlay for any business that's already been
-  // through it, skip or save alike — found live 2026-09-27: skipping the
-  // (soft, real-exit) hero gate on an empty business left forkAgeMs < 24h
-  // and neither step done, so this hard, non-dismissible 3-button wall fired
-  // immediately behind it. That's a strictly worse experience than before
-  // the hero gate existed, and directly contradicts its whole "Passer is a
-  // real exit" design. A completed hero save already suppresses this
-  // naturally (forkStep3Done becomes true, since a debt is a credit sale) —
-  // this condition is what covers the skip path, where neither is true yet.
-  const showFork = forkIsOwner && forkDataReady && !forkStep2Done && !forkStep3Done
-    && forkAgeMs < 24 * 60 * 60 * 1000
-    && !session?.activeBusiness?.first_run_hero_completed_at;
-
-  // forkAgeMs is a snapshot taken at render time, not a live clock — if
-  // nothing else re-renders this component, it never re-evaluates on its
-  // own. In practice something almost always does (foreground returns
-  // already trigger refreshActiveBusiness() below, which changes session
-  // and re-renders this), so this is a backstop, not the primary
-  // mechanism: while the fork is actually showing, force a re-render once a
-  // minute so age crossing 24h is caught even in the pathological case of
-  // the app sitting open, foregrounded, untouched, for a full day straight.
-  // Self-limiting — stops scheduling itself the moment showFork goes false,
-  // whether that's from crossing 24h or from the business no longer being
-  // empty.
-  const [, forkAgeTick] = useState(0);
-  useEffect(() => {
-    if (!showFork) return;
-    const interval = setInterval(() => forkAgeTick(t => t + 1), 60_000);
-    return () => clearInterval(interval);
-  }, [showFork]);
-
-  // Hides the fork for a short window right after tapping one of its three
-  // buttons — otherwise it keeps floating on top of wherever that button
-  // just navigated to, since showFork itself only changes once the
-  // underlying data does. Resets on a timeout (there's no single "focus"
-  // event to hook at this global a level) and also immediately on business
-  // switch. catalogue.tsx's add-product form additionally suppresses via
-  // suppressActivationFork for as long as it's genuinely open, since that
-  // form is its own real Modal and a fixed timeout can't safely predict how
-  // long someone takes to fill it in.
-  const [forkNavigating, setForkNavigating] = useState(false);
-  const forkNavTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
-  useEffect(() => { setForkNavigating(false); }, [forkBusinessId]);
-  useEffect(() => () => { if (forkNavTimerRef.current) clearTimeout(forkNavTimerRef.current); }, []);
-  const beginForkNavigation = () => {
-    setForkNavigating(true);
-    if (forkNavTimerRef.current) clearTimeout(forkNavTimerRef.current);
-    forkNavTimerRef.current = setTimeout(() => setForkNavigating(false), 1200);
-  };
 
   useEffect(() => {
     if (removedBusinessName) {
@@ -517,7 +440,7 @@ export default function AppLayout() {
 
       <BusinessDrawer />
       {showFirstRunHero && activeBusiness ? (
-        // Blocks NotificationPrimer/TrialWelcome/ActivationFork entirely
+        // Blocks NotificationPrimer/TrialWelcome entirely
         // while showing — same "two Modals racing" hazard as the
         // notifPrimerBlocking guards just below, and this one has to win
         // priority since it's the very first thing a new business sees.
@@ -542,42 +465,6 @@ export default function AppLayout() {
               businessName={activeBusiness.name}
               trialEndsAt={activeBusiness.trial_ends_at}
               onStart={clearTrialWelcome}
-            />
-          )}
-          {/* !(PAYWALL_ENABLED && showTrialWelcome) — dead weight today since
-              PAYWALL_ENABLED is false (TrialWelcomeOverlay never renders), but
-              both overlays go true at the same instant right after business
-              creation, and letting two Modals race for the screen is the exact
-              bug already fixed twice elsewhere this session. Cheap insurance
-              against re-enabling the paywall silently reintroducing it.
-              !notifPrimerBlocking — same reasoning, for NotificationPrimer:
-              it's the first thing a brand-new business should see, and letting
-              the fork show underneath/alongside it is the same race. */}
-          {showFork && !forkNavigating && !suppressActivationFork && !notifPrimerBlocking && !(PAYWALL_ENABLED && showTrialWelcome) && activeBusiness && (
-            <ActivationForkOverlay
-              userName={session.user.name}
-              onSelectProduct={() => {
-                beginForkNavigation();
-                router.push({ pathname: '/(app)/(tabs)/catalogue', params: { openForm: '1' } });
-              }}
-              onSelectSale={() => {
-                // No longer a dedicated screen (onboarding/vente-rapide.tsx,
-                // deleted) — the amount-only quick sale now lives as
-                // QuickCaptureSheet's own "Vente" mode, owned by Accueil's
-                // local state. Navigate there first (same reasoning as
-                // onSelectProduct/onSelectDebt below: land on the screen
-                // that will actually act on this before asking it to),
-                // then request the sheet open in Vente mode via the
-                // cross-cutting requestQuickCapture signal.
-                beginForkNavigation();
-                useAuthStore.setState({ requestQuickCapture: 'vente' });
-                router.push('/(app)/(tabs)/');
-              }}
-              onSelectDebt={() => {
-                beginForkNavigation();
-                useAuthStore.setState({ requestQuickCapture: 'credit', requestQuickCaptureClientName: null });
-                router.push('/(app)/(tabs)/');
-              }}
             />
           )}
         </>

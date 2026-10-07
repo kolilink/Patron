@@ -13,6 +13,8 @@ const {
   findUnprotectedFetchViolations,
   findRawModalWithTextInputViolations,
   findFunctionExposureViolations,
+  findResurrectedForkViolations,
+  findHeroModalFadeViolations,
 } = require('./lib/consistency-checks');
 
 const hexViolations = findHexViolations();
@@ -20,6 +22,9 @@ const screenViolations = findScreenViolations();
 const unprotectedFetchViolations = findUnprotectedFetchViolations();
 const rawModalWithTextInputViolations = findRawModalWithTextInputViolations();
 const functionExposureViolations = findFunctionExposureViolations();
+
+const resurrectedForkViolations = findResurrectedForkViolations();
+const heroModalFadeViolations = findHeroModalFadeViolations();
 
 let failed = false;
 
@@ -51,6 +56,18 @@ if (functionExposureViolations.length) {
   failed = true;
   console.error(`\n✗ Database functions callable by anon with no auth check (${functionExposureViolations.length}) — every function under db/ must REVOKE EXECUTE from anon (naming anon explicitly: REVOKE ... FROM PUBLIC alone does not remove anon's direct grant) or contain an auth check (auth.uid / is_member / get_role / is_founder). See scripts/lib/function-exposure.js:\n`);
   functionExposureViolations.forEach(l => console.error(`  ${l}`));
+}
+
+if (resurrectedForkViolations.length) {
+  failed = true;
+  console.error(`\n✗ no-resurrected-fork (${resurrectedForkViolations.length}) — ActivationForkOverlay was deleted on purpose (killed 2026-09-27, regressed 2026-10-06). FirstRunHeroOverlay is the only first-run surface; do not bring the fork back:\n`);
+  resurrectedForkViolations.forEach(l => console.error(`  ${l}`));
+}
+
+if (heroModalFadeViolations.length) {
+  failed = true;
+  console.error(`\n✗ hero-modal-no-fade — the first-run hero Modal must be animationType="none" or a blank/skeleton frame shows between "Ouvrir mon commerce" and the hero:\n`);
+  heroModalFadeViolations.forEach(l => console.error(`  ${l}`));
 }
 
 if (failed) {

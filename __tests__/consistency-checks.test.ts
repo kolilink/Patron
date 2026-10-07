@@ -10,6 +10,8 @@ const {
   findUnprotectedFetchViolations,
   findRawModalWithTextInputViolations,
   findFunctionExposureViolations,
+  findResurrectedForkViolations,
+  findHeroModalFadeViolations,
 } = require('../scripts/lib/consistency-checks');
 
 describe('consistency checks', () => {
@@ -45,6 +47,14 @@ describe('consistency checks', () => {
   // raw <Modal> for a form the way "Nouveau produit" originally did.
   it('every <Modal> containing a <TextInput> uses <FormSheet> instead of a raw Modal', () => {
     expect(findRawModalWithTextInputViolations()).toEqual([]);
+  });
+
+  it('no-resurrected-fork: ActivationForkOverlay appears nowhere under app/ or src/', () => {
+    expect(findResurrectedForkViolations()).toEqual([]);
+  });
+
+  it('hero-modal-no-fade: FirstRunHeroOverlay Modal is animationType="none"', () => {
+    expect(findHeroModalFadeViolations()).toEqual([]);
   });
 
   // The batch-v228 bug class: a public function with no auth check and no

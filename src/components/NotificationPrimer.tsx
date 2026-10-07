@@ -15,8 +15,8 @@ interface Props {
   active: boolean;
   // True from the moment this component might still show itself through to
   // the moment it's resolved (shown-and-dismissed, or determined
-  // unnecessary). app/(app)/_layout.tsx uses this to hold ActivationForkOverlay
-  // back so the two sheets never fight for the screen at once — the same
+  // unnecessary). app/(app)/_layout.tsx uses this to hold other first-run
+  // overlays back so the two sheets never fight for the screen at once — the same
   // "two Modals racing" bug class already fixed elsewhere in this app.
   onBlockingChange: (blocking: boolean) => void;
 }

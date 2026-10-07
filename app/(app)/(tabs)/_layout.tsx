@@ -5,7 +5,7 @@ import type { BottomTabBarProps } from '@react-navigation/bottom-tabs';
 import { Ionicons } from '@expo/vector-icons';
 import { useAuthStore } from '@/stores/auth';
 import { useChatStore } from '@/stores/chat';
-import { spacing } from '@/src/theme';
+import { spacing, useTheme } from '@/src/theme';
 import { FloatingTabBar, type FloatingTabItem } from '@/src/components/ui/FloatingTabBar';
 import { trackEvent } from '@/lib/analytics';
 
@@ -107,6 +107,8 @@ export default function TabsLayout() {
     loadChat(bId, uId);
   }, [session?.activeBusiness?.id, session?.user?.id, boutiqueRoom]);
 
+  const { palette } = useTheme();
+
   if (!session?.activeBusiness) return null;
 
   const role = session.activeMembership?.role;
@@ -128,6 +130,7 @@ export default function TabsLayout() {
       tabBar={(props) => <CustomTabBar {...props} />}
       screenOptions={{
         headerShown: false,
+        sceneStyle: { backgroundColor: palette.background },
       }}
     >
       <Tabs.Screen name="index" options={{ title: 'Accueil' }} />

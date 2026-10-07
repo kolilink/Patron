@@ -453,10 +453,9 @@ export default function AccueilScreen() {
     loadAll();
   }, [homeRefreshToken, loadAll]);
 
-  // ActivationForkOverlay's "Une vente" button (app/(app)/_layout.tsx) sets
-  // this cross-cutting signal and navigates here, since the fork itself is
-  // evaluated at the root layout with no direct reference to this screen's
-  // own showQuickCapture state. Open the sheet in that mode, then clear the
+  // Screens outside the tab navigator (Clients, ...) set this cross-cutting
+  // signal and navigate here, since they have no direct reference to this
+  // screen's own showQuickCapture state. Open the sheet in that mode, then clear the
   // signal so it doesn't re-fire on some unrelated future re-render.
   const requestQuickCapture = useAuthStore(s => s.requestQuickCapture);
   useEffect(() => {

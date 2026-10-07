@@ -1683,7 +1683,7 @@ export default function VendreScreen() {
   // reached from the Dock directly) — PaymentModal is its own full-screen
   // Modal, and having two stacked at once is exactly the "two Modals racing"
   // shape this codebase has been bitten by before (see CLAUDE.md's
-  // NotificationPrimer/ActivationForkOverlay note).
+  // NotificationPrimer note).
   const openCredit = () => { setShowCartSheet(false); setPayStep('credit'); setShowPayment(true); };
 
   const handleConfirmPayment = useCallback(

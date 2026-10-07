@@ -1359,20 +1359,6 @@ export default function CatalogueScreen() {
     }
   }, [openForm, prefillName]);
 
-  // The activation fork (app/(app)/_layout.tsx) is evaluated globally so it
-  // can show on top of any screen — but this form is itself a real Modal
-  // (via FormSheet), and the fork trying to show at the same time would be
-  // two Modals visible at once, the same class of bug already fixed twice
-  // elsewhere in this app. Suppress the fork for exactly as long as this
-  // form is genuinely open, not a guessed timeout — someone filling in a
-  // product shouldn't have the wall interrupt mid-form no matter how long
-  // they take, but the moment they close it without saving, it's fair game
-  // again immediately.
-  useEffect(() => {
-    useAuthStore.setState({ suppressActivationFork: showForm });
-    return () => { if (showForm) useAuthStore.setState({ suppressActivationFork: false }); };
-  }, [showForm]);
-
   const [showAdjust, setShowAdjust] = useState(false);
   const [adjustTarget, setAdjustTarget] = useState<Product | null>(null);
   const [tab, setTab] = useState<'actifs' | 'archives'>('actifs');
