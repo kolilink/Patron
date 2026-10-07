@@ -13,7 +13,7 @@ const LOCK_WAIT_CEILING_MS = 1500;
 // iOS takes its app-switcher snapshot as the app backgrounds and shows it on
 // return before JS can draw anything, so a shield that only appears once the
 // 2-minute lock timer fires would leak a frame of real content. This one is
-// shown on 'inactive'/'background' immediately; the 2-minute timer (in
+// shown on a real 'background' transition immediately (never on 'inactive'); the 2-minute timer (in
 // app/(app)/_layout.tsx) still decides separately whether biometric auth is
 // required.
 //
@@ -49,8 +49,11 @@ export function PrivacyShield() {
         waitTimer = setTimeout(() => { clearWait(); setVisible(false); }, LOCK_WAIT_CEILING_MS);
         return;
       }
-      // 'inactive' (iOS) or 'background'. Keep the earliest timestamp so
-      // inactive → background doesn't reset the clock.
+      // 'inactive' is what Control Center / Notification Center peeks (and an
+      // incoming-call banner) produce — the app is left exactly as it was, so
+      // nothing happens: no shield, no clock. Only a real 'background'
+      // transition covers the screen and starts the 2-minute clock.
+      if (next !== 'background') return;
       if (leftAt.current === null) leftAt.current = Date.now();
       clearWait();
       setVisible(true);
