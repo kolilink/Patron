@@ -35,7 +35,10 @@ import { debtAgeTier } from '@/src/utils/clientReminder';
 import { supabase } from '@/lib/supabase';
 import { isNetworkError, withTimeout } from '@/lib/sync';
 import { saveDashboardKpiCache, getDashboardKpiCache, saveBestSellersCache, getBestSellersCache, getKV, setKV } from '@/lib/db';
-import { computeLocalKpis as kpisFromLocalState, applyKpiOverlay } from '@/src/utils/salesTotals';
+import { computeLocalKpis as kpisFromLocalState, applyKpiOverlay, salesKpisFromList } from '@/src/utils/salesTotals';
+import { compareServerToLocal } from '@/src/utils/integrity';
+import { isKnownOffline } from '@/lib/connectivity';
+import * as Sentry from '@sentry/react-native';
 import { buildReportDelta, applyTopSellers, type OverlaySale } from '@/lib/pendingOverlay';
 import { SkeletonKpiGrid } from '@/src/components/ui/SkeletonPlaceholder';
 import { haptics } from '@/lib/haptics';
@@ -401,17 +404,6 @@ export default function AccueilScreen() {
     return () => { alive = false; };
   }, [ventesSales, kpisBase, syncing]);
 
-  // A sync pass that sent something: re-read the server base now, so the numbers
-  // settle on the server's truth without waiting for a refocus.
-  const syncedCount = useSyncStore(s => s.lastResult?.synced ?? 0);
-  const lastResult = useSyncStore(s => s.lastResult);
-  const seenResult = useRef<unknown>(useSyncStore.getState().lastResult);
-  useEffect(() => {
-    if (!lastResult || seenResult.current === lastResult) return;
-    seenResult.current = lastResult;
-    if (syncedCount > 0) loadAll();
-  }, [lastResult, syncedCount, loadAll]);
-
   // Reload every time this tab gains focus (catches sales made in caisse)
   useFocusEffect(
     useCallback(() => {
@@ -430,7 +422,9 @@ export default function AccueilScreen() {
   const homeRefreshMounted = useRef(false);
   useEffect(() => {
     if (!homeRefreshMounted.current) { homeRefreshMounted.current = true; return; }
-    loadAll();
+    // Also what a finished drain bumps (stores/sync.ts refreshAfterSync): re-read,
+    // then assert the numbers on screen match server truth.
+    void loadAll().then(() => verifyIntegrity());
   }, [homeRefreshToken, loadAll]);
 
   // Screens outside the tab navigator (Clients, ...) set this cross-cutting
@@ -467,6 +461,34 @@ export default function AccueilScreen() {
 
   // Server base + whatever the outbox still holds (never a server number shown
   // as current while ops are pending).
+  // The last SERVER read of the KPIs (never the cache, never overlaid) and the
+  // drain epoch it was taken in — the post-drain integrity check below only
+  // trusts a base that is fresher than the last drain.
+  const serverBaseRef = useRef<{ kpis: KPIs; epoch: number } | null>(null);
+  const integrityRetried = useRef(-1);
+
+  // Post-drain integrity check: once everything has synced (outbox empty) and a
+  // fresh server read exists, the sales list's own totals must equal the server's.
+  // A mismatch is loud (log + analytics + Sentry) and self-healing (one forced
+  // re-read per drain) — wrong numbers are never silent.
+  const verifyIntegrity = async () => {
+    const sync = useSyncStore.getState();
+    if (sync.syncing || sync.pendingCount > 0 || isKnownOffline()) return;
+    const base = serverBaseRef.current;
+    if (!base || base.epoch !== sync.drainEpoch) return;
+    const local = salesKpisFromList(useVentesStore.getState().sales as never);
+    const issues = compareServerToLocal(base.kpis, local);
+    if (issues.length === 0) return;
+    console.error('[integrity] displayed numbers diverge from server truth after sync:', issues.join(','));
+    trackEvent('integrity_mismatch', businessId, userId, { fields: issues.join(','), epoch: sync.drainEpoch });
+    if (process.env.EXPO_PUBLIC_SENTRY_DSN) Sentry.captureMessage(`integrity_mismatch: ${issues.join(',')}`, 'error');
+    if (integrityRetried.current !== sync.drainEpoch) {
+      integrityRetried.current = sync.drainEpoch;
+      await useVentesStore.getState().fetchSales(businessId, isVendeur ? userId : undefined);
+      await loadAll();
+    }
+  };
+
   const withOutbox = async (base: KPIs): Promise<KPIs> => {
     const { baseline, overlay } = await useVentesStore.getState().readOverlayPair();
     return applyKpiOverlay(base, overlay, baseline);
@@ -522,6 +544,7 @@ export default function AccueilScreen() {
         first_sale_at: (d.first_sale_at as string | null) ?? null,
       };
       setKpisBase(freshKpis);
+      serverBaseRef.current = { kpis: freshKpis, epoch: useSyncStore.getState().drainEpoch };
       void saveDashboardKpiCache(businessId, freshKpis);   // server truth only — never the overlaid figures
       const shownFresh = await withOutbox(freshKpis);
       setKpis(shownFresh);
@@ -543,12 +566,18 @@ export default function AccueilScreen() {
     if (cachedBase) setBestSellersBase(cachedBase);
 
     try {
-      const { data, error: bsErr } = await withTimeout(
-        supabase.rpc('get_best_sellers', {
-          p_business_id: businessId,
-          p_month_start: monthStart,
-          p_limit: 5,
-        }),
+      // Paired with the outbox like every other base: waits out a running drain and
+      // retries when the queue moved during the read, so the ranking never already
+      // contains an op the overlay (applyTopSellers below) adds again.
+      const { result: { data, error: bsErr } } = await fetchPaired(
+        () => withTimeout(
+          supabase.rpc('get_best_sellers', {
+            p_business_id: businessId,
+            p_month_start: monthStart,
+            p_limit: 5,
+          }),
+        ),
+        r => !!r.error,
       );
       if (bsErr) {
         if (isNetworkError(bsErr)) return;

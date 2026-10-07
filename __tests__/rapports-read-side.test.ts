@@ -211,11 +211,11 @@ describe('drain mid-fetch never double-counts', () => {
     expect(S().snapshot!.revenue).toBe(4500);
   });
 
-  it('a finished drain that synced something refetches every shown report', async () => {
+  it('a finished drain that changed the outbox (drainEpoch bump) refetches every shown report', async () => {
     rpcImpl = async () => ({ data: periodRaw(), error: null });
     await fetchYear();
     const before = rpcLog.length;
-    for (const fn of syncListeners) fn({ lastResult: { synced: 1 } }, { lastResult: null });
+    for (const fn of syncListeners) fn({ drainEpoch: 1 }, { drainEpoch: 0 });
     await new Promise(r => setTimeout(r, 50));
     expect(rpcLog.length).toBeGreaterThan(before);
   });

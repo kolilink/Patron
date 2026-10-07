@@ -10,23 +10,36 @@ import { drainQueue, type SyncResult } from '@/lib/sync';
 // about PostHog the moment they imported lib/sync.ts).
 import { trackEvent } from '@/lib/analytics';
 
-// After a drain that actually synced something, re-read what the phone-first
-// writes touched (products, supplier debts/payments, expenses) so the screens
-// swap from "base + queued overlay" to the real server state. Lazy requires:
-// those stores import this one, so a static import here would be a cycle.
+// After EVERY drain pass that changed the outbox: invalidate and re-read every
+// base a displayed number is built from (the dashboard snapshot, sales /
+// client balances, products / stock, supplier debts, expenses, reports), instead
+// of trusting each screen's next focus to notice. A number on screen must never
+// outlive the sync that changed it. Lazy requires: those stores import this one,
+// so a static import here would be a cycle.
 function refreshAfterSync(): void {
   try {
-    const s = require('@/stores/auth').useAuthStore.getState().session;
+    const { useAuthStore } = require('@/stores/auth');
+    const s = useAuthStore.getState().session;
     const businessId: string | undefined = s?.activeBusiness?.id;
     if (!businessId) return;
     const userId: string = s.user.id;
     const isVendeur = s.activeMembership?.role === 'vendeur';
+    // 1. the displayed-KPI snapshot is stale by definition now
+    require('@/src/utils/kpiSnapshot').clearKpiSnapshot();
+    // 2. sales (carnet balances, ventes list, today's totals), products (stock counts)
+    void require('@/stores/ventes').useVentesStore.getState().fetchSales(businessId, isVendeur ? userId : undefined);
     void require('@/stores/products').useProductStore.getState().fetchProducts(businessId, userId, s.activeMembership?.id, s.activeMembership?.role);
     if (!isVendeur) {
       void require('@/stores/fournisseurs').useFournisseursStore.getState().fetchDebts(businessId);
       void require('@/stores/expenses').useExpensesStore.getState().fetchExpenses(businessId);
     }
-  } catch { /* a refresh failure must never affect the sync result */ }
+    // 3. Accueil re-reads its KPIs / best sellers and then runs the integrity
+    //    check (it is a plain tab, so it listens to this token, not to focus).
+    useAuthStore.setState((st: { homeRefreshToken: number }) => ({ homeRefreshToken: st.homeRefreshToken + 1 }));
+    // 4. Rapports refetches every shown report (see stores/rapports.ts).
+  } catch (err) {
+    console.error('[sync] post-drain refresh failed', err);
+  }
 }
 
 interface SyncStore {
@@ -40,6 +53,11 @@ interface SyncStore {
   failedCount: number;
   syncing: boolean;
   lastResult: SyncResult | null;
+  // Bumped by every drain pass that CHANGED the outbox (something synced, was
+  // refused, or otherwise left the queue). Every screen that shows a number
+  // derived from server truth + the outbox watches this: a number on screen
+  // must never outlive the sync that changed it (see refreshAfterSync).
+  drainEpoch: number;
   // Set whenever a sync pass leaves the queue genuinely empty. No longer
   // drives any UI — the sync line (§8) is silent when online — but kept as
   // the last moment everything was actually confirmed synced (observability).
@@ -70,6 +88,7 @@ export const useSyncStore = create<SyncStore>((set, get) => ({
   failedCount: 0,
   syncing: false,
   lastResult: null,
+  drainEpoch: 0,
   lastSyncedAt: null,
 
   refreshCount: async () => {
@@ -80,6 +99,7 @@ export const useSyncStore = create<SyncStore>((set, get) => ({
 
   sync: async () => {
     set({ syncing: true });
+    const countBefore = get().pendingCount;
     const result = await drainQueue();
     // Best-effort, fire-and-forget — an analytics failure must never
     // affect the sync result itself (same posture trackEvent's own
@@ -87,11 +107,15 @@ export const useSyncStore = create<SyncStore>((set, get) => ({
     for (const event of result.syncHealthEvents) {
       trackEvent(event.name, event.businessId, null, event.metadata);
     }
-    if (result.synced > 0) refreshAfterSync();
     const [count, failedCount] = await Promise.all([getQueueCount(), getFailedQueueCount()]);
+    // The queue changed (synced, or an op left it as refused/corrupt) → every
+    // cached/derived base is now stale. Invalidate + refetch app-wide, loudly,
+    // instead of trusting each screen's next focus to notice.
+    const queueChanged = result.synced > 0 || count !== countBefore;
     set({
       syncing: false,
       lastResult: result,
+      ...(queueChanged ? { drainEpoch: get().drainEpoch + 1 } : {}),
       pendingCount: count,
       failedCount,
       ...(count === 0 ? { lastSyncedAt: new Date().toISOString() } : {}),
@@ -110,5 +134,14 @@ export const useSyncStore = create<SyncStore>((set, get) => ({
     get().sync().catch(err => console.error('[useSyncStore.kick] sync() rejected', err));
   },
 
-  reset: () => set({ pendingCount: 0, failedCount: 0, syncing: false, lastResult: null, lastSyncedAt: null }),
+  reset: () => set({ pendingCount: 0, failedCount: 0, syncing: false, lastResult: null, drainEpoch: 0, lastSyncedAt: null }),
 }));
+
+// One subscription: every drain epoch bump runs the app-wide refresh above.
+try {
+  if (typeof useSyncStore.subscribe === 'function') {
+    useSyncStore.subscribe((state, prev) => {
+      if (state.drainEpoch !== prev.drainEpoch) refreshAfterSync();
+    });
+  }
+} catch { /* a test double without subscribe */ }

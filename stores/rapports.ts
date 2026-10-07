@@ -700,7 +700,7 @@ try {
   }
   if (typeof useSyncStore.subscribe === 'function') {
     useSyncStore.subscribe((state, prev) => {
-      if (state.lastResult !== prev.lastResult && (state.lastResult?.synced ?? 0) > 0) {
+      if (state.drainEpoch !== prev.drainEpoch) {
         for (const refetch of Object.values(refetchers)) void refetch?.().catch(() => {});
       }
     });
