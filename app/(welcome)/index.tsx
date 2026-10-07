@@ -1,6 +1,7 @@
 import { useMemo, useRef } from 'react';
 import { Pressable, StyleSheet, View } from 'react-native';
 import { router } from 'expo-router';
+import { useSafeAreaInsets } from 'react-native-safe-area-context';
 import { Screen } from '@/src/components/ui/Screen';
 import { Ionicons } from '@expo/vector-icons';
 import { Button } from '@/src/components/ui/Button';
@@ -14,6 +15,7 @@ import { createTapGuard } from '@/src/utils/navGuard';
 
 export default function WelcomeScreen() {
   const { palette } = useTheme();
+  const insets = useSafeAreaInsets();
   const styles = useMemo(() => makeStyles(palette), [palette]);
   const session = useAuthStore(s => s.session);
   const error = useAuthStore(s => s.error);
@@ -67,7 +69,7 @@ export default function WelcomeScreen() {
         </View>
       </View>
 
-      <Pressable style={styles.whatsappCorner} onPress={openSupportChat} hitSlop={12}>
+      <Pressable style={[styles.whatsappCorner, { bottom: insets.bottom + spacing[6] }]} onPress={openSupportChat} hitSlop={12}>
         <Ionicons name="logo-whatsapp" size={13} color={palette.textSecondary} />
         <Text variant="caption" color="secondary">WhatsApp</Text>
       </Pressable>
