@@ -1,5 +1,6 @@
 import { forwardRef, useEffect, useImperativeHandle, useMemo, useRef, useState } from 'react';
-import { Pressable, StyleSheet, TextInput, View } from 'react-native';
+import { SilentKeyboardAccessory } from '@/src/components/ui/SilentKeyboardAccessory';
+import { Platform, Pressable, StyleSheet, TextInput, View } from 'react-native';
 import { Ionicons } from '@expo/vector-icons';
 import { Button } from '@/src/components/ui/Button';
 import { Text } from '@/src/components/ui/Text';
@@ -11,6 +12,7 @@ import { haptics } from '@/lib/haptics';
 import { trackEvent } from '@/lib/analytics';
 
 const CONFIRM_MS = 900;
+const PRICE_SILENT_ACCESSORY_ID = 'venteRapidePriceSilentAccessory';
 
 interface VenteRapideCaptureProps {
   businessId: string;
@@ -164,6 +166,7 @@ export const VenteRapideCapture = forwardRef<VenteRapideCaptureHandle, VenteRapi
             onChangeText={v => { setPriceStr(formatAmountInput(v, currency)); setError(null); cancelConfirm(); }}
             keyboardType="numeric"
             returnKeyType="done"
+            inputAccessoryViewID={Platform.OS === 'ios' ? PRICE_SILENT_ACCESSORY_ID : undefined}
             onSubmitEditing={handleAdd}
           />
           <Text style={[styles.amountCurrency, { color: palette.textSecondary }]}>{currency}</Text>
@@ -185,6 +188,8 @@ export const VenteRapideCapture = forwardRef<VenteRapideCaptureHandle, VenteRapi
       {error ? (
         <Text variant="caption" style={{ color: palette.warning, textAlign: 'center' }}>{error}</Text>
       ) : null}
+
+      <SilentKeyboardAccessory nativeID={PRICE_SILENT_ACCESSORY_ID} />
     </View>
   );
 });

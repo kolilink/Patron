@@ -39,9 +39,14 @@ describe('Vente exposes focusPrice() and the sheet calls it from onShow', () => 
     expect(sheet).toMatch(/if \(presentedRef\.current && mode === 'vente'\) venteRef\.current\?\.focusPrice\(\);/);
     expect(sheet).toMatch(/useEffect\(\(\) => \{ if \(!visible\) presentedRef\.current = false; \}, \[visible\]\);/);
   });
-  it('no "Terminé" keyboard accessory anywhere in the quick-capture flow', () => {
-    for (const src of [vente, sheet]) {
-      expect(src).not.toMatch(/KeyboardDoneBar|InputAccessoryView|inputAccessoryViewID|ACCESSORY/);
+  it('no visible "Terminé" accessory in the quick-capture flow; numeric fields claim the slot with a BLANK accessory', () => {
+    for (const src of [vente, credit, sheet]) {
+      expect(src).not.toMatch(/KeyboardDoneBar|Terminé/);
     }
+    // iOS injects its own "Done" pill on a numeric keyboard unless a linked
+    // accessory claims the slot — the blank one keeps the keyboard bare.
+    expect(vente).toMatch(/<SilentKeyboardAccessory nativeID=\{PRICE_SILENT_ACCESSORY_ID\} \/>/);
+    expect(credit).toMatch(/<SilentKeyboardAccessory nativeID=\{AMOUNT_SILENT_ACCESSORY_ID\} \/>/);
+    expect(vente).toMatch(/inputAccessoryViewID=\{Platform\.OS === 'ios' \? PRICE_SILENT_ACCESSORY_ID : undefined\}/);
   });
 });

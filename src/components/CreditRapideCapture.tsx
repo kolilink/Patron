@@ -1,6 +1,7 @@
 import { useEffect, useMemo, useRef, useState } from 'react';
+import { SilentKeyboardAccessory } from '@/src/components/ui/SilentKeyboardAccessory';
 import { TRUST_LINE } from '@/src/utils/trustLine';
-import { Animated, Pressable, ScrollView, StyleSheet, TextInput, View } from 'react-native';
+import { Animated, Platform, Pressable, ScrollView, StyleSheet, TextInput, View } from 'react-native';
 import { Ionicons } from '@expo/vector-icons';
 import { Button } from '@/src/components/ui/Button';
 import { Text } from '@/src/components/ui/Text';
@@ -49,6 +50,7 @@ const GRID_PLACEHOLDER_HEIGHT = 78;
 // (possibly just "Nouveau") and chips that arrive later pop in; accepted for
 // the slow/offline case only.
 const GRID_GATE_MAX_MS = 1500;
+const AMOUNT_SILENT_ACCESSORY_ID = 'creditRapideAmountSilentAccessory';
 // Longer than the sheet's slide-up, for focus calls that fire at mount.
 const SHEET_SETTLE_MS = 450;
 
@@ -397,6 +399,7 @@ export function CreditRapideCapture({ businessId, userId, currency, onViewClient
                 onChangeText={v => { setAmount(formatAmountInput(v, currency)); setError(null); }}
                 keyboardType="numeric"
                 returnKeyType="done"
+                inputAccessoryViewID={Platform.OS === 'ios' ? AMOUNT_SILENT_ACCESSORY_ID : undefined}
                 onSubmitEditing={handleAdd}
               />
               <Text style={[styles.amountCurrency, { color: palette.textSecondary }]}>{currency}</Text>
@@ -438,6 +441,8 @@ export function CreditRapideCapture({ businessId, userId, currency, onViewClient
           <Text variant="caption" style={{ color: palette.primary }}>· Voir →</Text>
         </Pressable>
       ) : null}
+
+      <SilentKeyboardAccessory nativeID={AMOUNT_SILENT_ACCESSORY_ID} />
     </View>
   );
 }
