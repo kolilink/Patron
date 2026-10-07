@@ -127,9 +127,9 @@ describe('showProductRow — the optional "Produit (facultatif)" row', () => {
   it('(c) a product already linked + zero (active) products → chip stays visible', () => {
     expect(showProductRow({ activeProductCount: 0, productId: 'p-archived', productsFetchedFor: BIZ, businessId: BIZ })).toBe(true);
   });
-  it('not loaded yet for THIS business (never, or another business) → shown, so it does not flash in later', () => {
-    expect(showProductRow({ activeProductCount: 0, productId: null, productsFetchedFor: null, businessId: BIZ })).toBe(true);
-    expect(showProductRow({ activeProductCount: 0, productId: null, productsFetchedFor: 'other', businessId: BIZ })).toBe(true);
+  it('not loaded yet + no product → hidden (appears once a product exists)', () => {
+    expect(showProductRow({ activeProductCount: 0, productId: null, productsFetchedFor: null, businessId: BIZ })).toBe(false);
+    expect(showProductRow({ activeProductCount: 0, productId: null, productsFetchedFor: 'other', businessId: BIZ })).toBe(false);
   });
   it('the sheet wraps the whole block in it and nothing else changed', () => {
     const src = require('fs').readFileSync(require('path').resolve(__dirname, '../src/components/expenses/ExpenseSheet.tsx'), 'utf8');
