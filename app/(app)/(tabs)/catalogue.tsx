@@ -2162,7 +2162,7 @@ function makeStyles(p: Palette) {
       borderRadius: radius.md, borderWidth: 1.5, borderColor: p.border, backgroundColor: p.surface,
     },
     typeChipEntree: { backgroundColor: p.success, borderColor: p.success },
-    typeChipPerte: { backgroundColor: p.danger, borderColor: p.danger },
+    typeChipPerte: { backgroundColor: p.warning, borderColor: p.warning },
 
     variantBadge: {
       alignSelf: 'flex-start',

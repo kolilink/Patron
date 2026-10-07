@@ -300,7 +300,7 @@ function PaymentSheet({ visible, sale, currency, onClose, onConfirm, saving }: P
       {/* Debt context card */}
       <Card style={[styles.contextCard, { borderLeftColor: palette.warning, borderLeftWidth: 3 }]}>
         <Text variant="caption" color="secondary">{clientName} vous doit</Text>
-        <Text variant="amountLarge" style={{ color: palette.warning }}>{fmt(remaining, currency)}</Text>
+        <Text variant="amountLarge" style={{ color: palette.textPrimary }}>{fmt(remaining, currency)}</Text>
       </Card>
 
       {/* Amount */}
@@ -720,7 +720,7 @@ function DetailModal({ sale, currency, businessName, singleVendor, role, onClose
 
         {displayState === 'annule' && (
           <View style={[styles.banner, styles.bannerRed]}>
-            <Text variant="label" style={{ color: palette.danger }}>
+            <Text variant="label" style={{ color: palette.textPrimary }}>
               {[
                 '✕',
                 sale.cancelled_by_name ? `Annulée par ${sale.cancelled_by_name}` : 'Annulée',
@@ -787,7 +787,7 @@ function DetailModal({ sale, currency, businessName, singleVendor, role, onClose
                       <View style={styles.divider} />
                       <View style={styles.lineRow}>
                         <Text variant="body" style={{ flex: 1, color: palette.warning }}>Rabais accordé</Text>
-                        <Text variant="label" style={{ color: palette.warning }}>− {fmt(discount, currency)}</Text>
+                        <Text variant="label" style={{ color: palette.textPrimary }}>− {fmt(discount, currency)}</Text>
                       </View>
                     </>
                   )}
@@ -839,7 +839,7 @@ function DetailModal({ sale, currency, businessName, singleVendor, role, onClose
                       </View>
                       <View style={[styles.row, { paddingTop: spacing[1], borderTopWidth: 1, borderTopColor: palette.border }]}>
                         <Text variant="label">Bénéfice net</Text>
-                        <Text variant="label" style={{ color: totalProfit >= 0 ? palette.success : palette.warning }}>
+                        <Text variant="label" style={{ color: palette.textPrimary }}>
                           {formatSignedAmount(totalProfit, currency)} ({formatMargin(totalProfit, effectiveRevenue)})
                         </Text>
                       </View>
@@ -967,7 +967,7 @@ function DetailModal({ sale, currency, businessName, singleVendor, role, onClose
 
             {/* Cancel reason form — triggered from the "⋯" menu */}
             {canCancel && showCancelForm && (
-              <Card style={{ gap: spacing[3], borderColor: palette.danger + '40', borderWidth: 1 }}>
+              <Card style={{ gap: spacing[3], borderColor: palette.border, borderWidth: 1 }}>
                 <Text variant="caption" color="secondary">
                   Le stock sera restauré. Entrez un motif.
                 </Text>
@@ -1485,7 +1485,6 @@ export default function VentesScreen() {
 
             const { sale } = item;
             const ds = getSaleDisplayState(sale);
-            const rowColor = ds === 'paye' ? palette.success : ds === 'annule' ? palette.danger : palette.warning;
             const isCredit = ds === 'credit' || ds === 'partiel';
             const remaining = sale.total_amount - (sale.discount_amount ?? 0) - (sale.amount_paid ?? 0);
 
@@ -1496,12 +1495,12 @@ export default function VentesScreen() {
               >
                 <View style={{ flex: 1, gap: 2 }}>
                   <View style={styles.saleTop}>
-                    <Text variant="label" numberOfLines={1} style={{ flex: 1, color: rowColor, opacity: 0.85 }}>
+                    <Text variant="label" numberOfLines={1} style={{ flex: 1, color: palette.textPrimary }}>
                       {sale.customer_name}
                     </Text>
                     <Text
                       variant="label"
-                      style={{ color: rowColor }}
+                      style={{ color: palette.textPrimary }}
                       adjustsFontSizeToFit
                       numberOfLines={1}
                     >
@@ -1510,7 +1509,7 @@ export default function VentesScreen() {
                   </View>
                   {!singleVendor && (
                     <View style={{ flexDirection: 'row', justifyContent: 'flex-end' }}>
-                      <Text variant="caption" style={{ color: rowColor, opacity: 0.85 }} numberOfLines={1}>
+                      <Text variant="caption" style={{ color: palette.textSecondary }} numberOfLines={1}>
                         Vendeur : {sale.seller_id === userId ? 'Vous' : sale.seller_name}
                       </Text>
                     </View>
@@ -1626,7 +1625,7 @@ function makeStyles(p: Palette) {
       flexDirection: 'row', alignItems: 'center', justifyContent: 'space-between',
     },
     bannerGreen: { backgroundColor: p.success + '20', borderWidth: 1, borderColor: p.success + '40' },
-    bannerRed: { backgroundColor: p.danger + '15', borderWidth: 1, borderColor: p.danger + '40' },
+    bannerRed: { backgroundColor: p.surface, borderWidth: 1, borderColor: p.border },
     bannerAmber: { backgroundColor: p.warning + '15', borderWidth: 1, borderColor: p.warning + '40' },
 
     heroCredit: {

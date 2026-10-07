@@ -329,17 +329,15 @@ export const BUSINESS_AVATAR_PALETTE = [
   { bg: colors.cyan[50], text: colors.cyan[700] },      // cyan
 ] as const;
 
-// Client list avatar palette (pastel bg tints)
+// Client avatar palette — calm bg/letter pairs (tint + darker letter of the same
+// hue), same pattern as BUSINESS_AVATAR_PALETTE. The letter is never
+// p.textPrimary (white in dark mode, unreadable on a pastel fill).
 export const CLIENT_AVATAR_PALETTE = [
-  '#DAFCE3',              // mint pastel
-  '#FDF0DA',              // warm amber pastel
-  colors.primary[100],    // indigo tint
-  colors.warning[100],    // amber tint
+  { bg: '#DAFCE3', text: colors.emerald[900] },        // mint
+  { bg: '#FDF0DA', text: colors.warning[700] },        // warm amber
+  { bg: colors.primary[100], text: colors.primary[700] }, // indigo
+  { bg: colors.warning[100], text: colors.warning[700] }, // amber
 ] as const;
-
-// Initial-letter colour on CLIENT_AVATAR_PALETTE's pastel circles — fixed dark in both
-// modes (p.textPrimary is white in dark mode, unreadable on a pastel fill).
-export const CLIENT_AVATAR_TEXT = colors.emerald[900];
 
 // Product category badge palette — bg/text pairs for deterministic badge coloring
 export const PRODUCT_BADGE_PALETTE = {

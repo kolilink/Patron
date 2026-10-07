@@ -427,7 +427,7 @@ export default function FournisseurProfile() {
                     </Text>
                     {p.note ? <Text variant="caption" color="secondary">{p.note}</Text> : null}
                   </View>
-                  <Text variant="label" style={{ color: palette.success }}>{fmt(p.amount, currency)}</Text>
+                  <Text variant="label" style={{ color: palette.textPrimary }}>{fmt(p.amount, currency)}</Text>
                 </View>
               ))}
             </View>
@@ -490,7 +490,7 @@ export default function FournisseurProfile() {
       >
         <Card style={{ padding: spacing[4], gap: spacing[1] }}>
           <Text variant="caption" color="secondary">Solde dû à {fournisseur.name}</Text>
-          <Text style={[styles.debtAmt, { color: palette.danger }]}>{fmt(totalOwed, currency)}</Text>
+          <Text style={[styles.debtAmt, { color: palette.textPrimary }]}>{fmt(totalOwed, currency)}</Text>
         </Card>
         <Input
           label={`Montant payé (${currency})`}
@@ -562,7 +562,7 @@ function makeStyles(p: Palette) {
 
     // Debt
     debtCard: { flexDirection: 'row', alignItems: 'center', justifyContent: 'space-between' },
-    debtAmt: { fontFamily: fontFamily.bold, fontSize: 20, color: p.danger, marginTop: 2 },
+    debtAmt: { fontFamily: fontFamily.bold, fontSize: 20, color: p.textPrimary, marginTop: 2 },
 
     // Livraisons
     orderRow: { flexDirection: 'row', alignItems: 'center', paddingVertical: spacing[3], borderBottomWidth: StyleSheet.hairlineWidth, borderBottomColor: p.border },

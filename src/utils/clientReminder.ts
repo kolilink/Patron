@@ -2,7 +2,7 @@
 // Recouvrement flow's copy and color escalation can't quietly drift between
 // the two screens.
 
-// "Depuis aujourd'hui" / "Depuis N jours" / "Depuis N mois" past 60 days.
+// "Aujourd'hui" / "Depuis N jours" / "Depuis N mois" past 60 days.
 // Never negative — callers are expected to have already clamped `days` to
 // >= 0 (see the getDaysAgo/debtAge fixes this shipped alongside), but this
 // floors defensively too rather than trust that.

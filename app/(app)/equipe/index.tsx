@@ -511,7 +511,7 @@ function MemberDetailSheet({
 
             <View style={[styles.scopeRow, { flexDirection: 'column', alignItems: 'flex-start', gap: spacing[1] }]}>
               <Text variant="caption" color="secondary">Part des bénéfices accumulée</Text>
-              <Text style={{ fontFamily: FF.bold, fontSize: 22, lineHeight: 30, color: palette.success }}>
+              <Text style={{ fontFamily: FF.bold, fontSize: 22, lineHeight: 30, color: palette.textPrimary }}>
                 {formatAmount(balance ?? 0, currency)}
               </Text>
             </View>

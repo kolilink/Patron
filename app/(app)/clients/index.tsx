@@ -62,12 +62,11 @@ interface ClientNames {
   byName: Record<string, string>;
 }
 
-type FilterType = 'tous' | 'doivent' | 'actifs';
+type FilterType = 'tous' | 'doivent';
 
 const FILTERS: { key: FilterType; label: string }[] = [
   { key: 'tous', label: 'Tous' },
   { key: 'doivent', label: 'En dette' },
-  { key: 'actifs', label: 'Récents' },
 ];
 
 function avatarColor(name: string): string {
@@ -90,7 +89,7 @@ export default function ClientsScreen() {
   // "En dette" is the default — this screen's job is collection, not a plain
   // directory. An explicit ?filter= param (including 'tous') is still honored.
   const [filter, setFilter] = useState<FilterType>(
-    filterParam === 'tous' || filterParam === 'doivent' || filterParam === 'actifs' ? filterParam : 'doivent',
+    filterParam === 'tous' || filterParam === 'doivent' ? filterParam : 'doivent',
   );
   const [search, setSearch] = useState('');
   const [refreshing, setRefreshing] = useState(false);
@@ -190,7 +189,6 @@ export default function ClientsScreen() {
       list = list.filter(c => c.totalCredit > 0)
         .sort((a, b) => b.daysOldestDebt - a.daysOldestDebt || b.totalCredit - a.totalCredit);
     }
-    if (filter === 'actifs') list = [...list].sort((a, b) => b.lastSaleDate.localeCompare(a.lastSaleDate));
     const q = search.trim().toLowerCase();
     if (q) list = list.filter(c => c.name.toLowerCase().includes(q));
     return list;
@@ -226,16 +224,16 @@ export default function ClientsScreen() {
               {/* Plain, calm foreground — never red. These are her own
                   receivables, not a loss; color here is reserved for AGE
                   (how overdue), not for the existence of a debt itself. */}
-              <Text style={{ color: palette.textPrimary, fontFamily: fontFamily.bold, fontSize: 20, lineHeight: 25 }}>
+              <Text style={{ color: palette.textPrimary, fontFamily: fontFamily.bold, fontSize: 20, lineHeight: 25, textAlign: 'center' }} numberOfLines={1} adjustsFontSizeToFit minimumFontScale={0.5}>
                 On vous doit {fmt(totalOwedAmount, currency)} au total
               </Text>
             </>
           ) : (
             <>
-              <Text style={{ color: palette.recouvrementPaid, fontFamily: fontFamily.bold, fontSize: 20, lineHeight: 25 }}>
+              <Text style={{ color: palette.recouvrementPaid, fontFamily: fontFamily.bold, fontSize: 20, lineHeight: 25, textAlign: 'center' }} numberOfLines={1} adjustsFontSizeToFit minimumFontScale={0.5}>
                 Tout est réglé ✓
               </Text>
-              <Text variant="caption" color="secondary">
+              <Text variant="caption" color="secondary" style={{ textAlign: 'center' }}>
                 {allClients.length} client{allClients.length > 1 ? 's' : ''}
               </Text>
             </>
@@ -411,7 +409,7 @@ function makeStyles(p: Palette) {
       padding: spacing[5], borderBottomWidth: 1, borderBottomColor: p.border,
     },
     totalBanner: {
-      paddingHorizontal: spacing[5], paddingTop: spacing[4], paddingBottom: spacing[2], gap: 2,
+      paddingHorizontal: spacing[5], paddingTop: spacing[4], paddingBottom: spacing[2], gap: 2, alignItems: 'center',
     },
     filterRow: {
       flexDirection: 'row', justifyContent: 'center', paddingHorizontal: spacing[5], paddingVertical: spacing[3], gap: spacing[2],

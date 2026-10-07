@@ -836,7 +836,7 @@ export default function AccueilScreen() {
               {pendingPayout ? (
                 <Card elevated style={[styles.heroCard, { backgroundColor: palette.warningLight }]}>
                   <Text variant="caption" style={{ color: palette.warning }}>Demande en cours</Text>
-                  <Text variant="amountLarge" style={{ color: palette.warning, fontSize: 44, lineHeight: 56 }}>
+                  <Text variant="amountLarge" style={{ color: palette.textPrimary, fontSize: 44, lineHeight: 56 }}>
                     {formatAmount(pendingPayout.requested_amount, currency)}
                   </Text>
                 </Card>
@@ -847,7 +847,7 @@ export default function AccueilScreen() {
                       <Text variant="caption" color="secondary">Vos gains</Text>
                       <Text
                         variant="amountLarge"
-                        style={{ color: (balance ?? 0) > 0 ? palette.success : palette.textPrimary, fontSize: 44, lineHeight: 56 }}
+                        style={{ color: palette.textPrimary, fontSize: 44, lineHeight: 56 }}
                       >
                         {formatAmount(balance ?? 0, currency)}
                       </Text>
@@ -892,7 +892,7 @@ export default function AccueilScreen() {
                         <View style={{ alignItems: 'flex-end' }}>
                           {bs && bs.total_revenue > 0 ? (
                             <>
-                              <Text variant="label" style={{ color: palette.success }}>
+                              <Text variant="label" style={{ color: palette.textPrimary }}>
                                 {formatAmount(gain, currency)}
                               </Text>
                               <Text variant="caption" color="secondary">
@@ -909,7 +909,7 @@ export default function AccueilScreen() {
                   {investorGain > 0 && (
                     <View style={[styles.bsRow, { borderBottomWidth: 0 }]}>
                       <Text variant="body" color="secondary" style={{ flex: 1 }}>Gain estimé ce mois</Text>
-                      <Text variant="label" style={{ color: palette.success }}>
+                      <Text variant="label" style={{ color: palette.textPrimary }}>
                         {formatAmount(investorGain, currency)}
                       </Text>
                     </View>
@@ -1228,7 +1228,7 @@ function makeStyles(p: Palette, bottomInset: number) {
     chatBadge: {
       position: 'absolute', top: -2, right: -2,
       minWidth: 16, height: 16, borderRadius: radius.full,
-      backgroundColor: p.danger,
+      backgroundColor: p.primary,
       alignItems: 'center', justifyContent: 'center',
       paddingHorizontal: 3,
     },

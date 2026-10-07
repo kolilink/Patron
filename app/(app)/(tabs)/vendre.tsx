@@ -32,7 +32,7 @@ import { Input } from '@/src/components/ui/Input';
 import { Text } from '@/src/components/ui/Text';
 import { PhoneInput } from '@/src/components/ui/PhoneInput';
 import { SaleReceiptView, type ReceiptData, type ReceiptItem } from '@/src/components/ui/SaleReceiptView';
-import { useTheme, radius, spacing, shadow, fontFamily, FLOATING_TAB_BAR_CLEARANCE, CLIENT_AVATAR_PALETTE, CLIENT_AVATAR_TEXT, SEARCH_VISIBILITY_THRESHOLD } from '@/src/theme';
+import { useTheme, radius, spacing, shadow, fontFamily, FLOATING_TAB_BAR_CLEARANCE, CLIENT_AVATAR_PALETTE, SEARCH_VISIBILITY_THRESHOLD } from '@/src/theme';
 import { useAnimateLayoutChange } from '@/src/hooks/useAnimateLayoutChange';
 import { useQuickClients } from '@/src/hooks/useQuickClients';
 import { QuickCaptureSheet } from '@/src/components/QuickCaptureSheet';
@@ -631,7 +631,7 @@ function PaymentModal({
         <View style={styles.totalSection}>
           <Text variant="caption" color="secondary" style={{ textAlign: 'center' }}>Il devra</Text>
           <Text
-            style={[styles.totalBig, { color: palette.warning, textAlign: 'center' }]}
+            style={[styles.totalBig, { color: palette.textPrimary, textAlign: 'center' }]}
             adjustsFontSizeToFit
             numberOfLines={1}
           >
@@ -695,7 +695,8 @@ function PaymentModal({
               </Text>
               {quickClients.map(c => {
                 const sum = c.name ? c.name.split('').reduce((acc, ch) => acc + ch.charCodeAt(0), 0) : 0;
-                const avatarBg = CLIENT_AVATAR_PALETTE[sum % CLIENT_AVATAR_PALETTE.length];
+                const avatar = CLIENT_AVATAR_PALETTE[sum % CLIENT_AVATAR_PALETTE.length];
+ const avatarBg = avatar.bg;
                 const initial = c.name ? c.name.charAt(0).toUpperCase() : '?';
                 const subtitle = creditClientSubtitle(c.id);
                 return (
@@ -705,7 +706,7 @@ function PaymentModal({
                     style={({ pressed }) => [styles.clientResultRow, pressed && { opacity: 0.55 }]}
                   >
                     <View style={[styles.clientAvatar, { backgroundColor: avatarBg }]}>
-                      <Text allowFontScaling={false} style={styles.clientAvatarText}>{initial}</Text>
+                      <Text allowFontScaling={false} style={[styles.clientAvatarText, { color: avatar.text }]}>{initial}</Text>
                     </View>
                     <View style={{ flex: 1 }}>
                       <Text variant="body">{c.name}</Text>
@@ -726,7 +727,8 @@ function PaymentModal({
           ) : filteredQuickClients.length > 0 ? (
             filteredQuickClients.map(c => {
               const sum = c.name ? c.name.split('').reduce((acc, ch) => acc + ch.charCodeAt(0), 0) : 0;
-              const avatarBg = CLIENT_AVATAR_PALETTE[sum % CLIENT_AVATAR_PALETTE.length];
+              const avatar = CLIENT_AVATAR_PALETTE[sum % CLIENT_AVATAR_PALETTE.length];
+ const avatarBg = avatar.bg;
               const initial = c.name ? c.name.charAt(0).toUpperCase() : '?';
               const subtitle = creditClientSubtitle(c.id);
               return (
@@ -736,7 +738,7 @@ function PaymentModal({
                   style={({ pressed }) => [styles.clientResultRow, pressed && { opacity: 0.55 }]}
                 >
                   <View style={[styles.clientAvatar, { backgroundColor: avatarBg }]}>
-                    <Text allowFontScaling={false} style={styles.clientAvatarText}>{initial}</Text>
+                    <Text allowFontScaling={false} style={[styles.clientAvatarText, { color: avatar.text }]}>{initial}</Text>
                   </View>
                   <View style={{ flex: 1 }}>
                     <Text variant="body">{c.name}</Text>
@@ -875,11 +877,12 @@ function PaymentModal({
           <Pressable onPress={() => { setCreditSearch(''); setCreditPhase('client'); }} style={styles.creditTermsClientRow}>
             {(() => {
               const sum = clientName ? clientName.split('').reduce((acc, ch) => acc + ch.charCodeAt(0), 0) : 0;
-              const avatarBg = CLIENT_AVATAR_PALETTE[sum % CLIENT_AVATAR_PALETTE.length];
+              const avatar = CLIENT_AVATAR_PALETTE[sum % CLIENT_AVATAR_PALETTE.length];
+ const avatarBg = avatar.bg;
               const initial = clientName ? clientName.charAt(0).toUpperCase() : '?';
               return (
                 <View style={[styles.clientAvatar, { backgroundColor: avatarBg }]}>
-                  <Text allowFontScaling={false} style={styles.clientAvatarText}>{initial}</Text>
+                  <Text allowFontScaling={false} style={[styles.clientAvatarText, { color: avatar.text }]}>{initial}</Text>
                 </View>
               );
             })()}
@@ -1039,7 +1042,8 @@ function PaymentModal({
                     ) : (
                       filteredClients.map(c => {
                         const sum = c.name ? c.name.split('').reduce((acc, ch) => acc + ch.charCodeAt(0), 0) : 0;
-                        const avatarBg = CLIENT_AVATAR_PALETTE[sum % CLIENT_AVATAR_PALETTE.length];
+                        const avatar = CLIENT_AVATAR_PALETTE[sum % CLIENT_AVATAR_PALETTE.length];
+ const avatarBg = avatar.bg;
                         const initial = c.name ? c.name.charAt(0).toUpperCase() : '?';
                         return (
                           <Pressable
@@ -1048,7 +1052,7 @@ function PaymentModal({
                             style={({ pressed }) => [styles.clientResultRow, pressed && { opacity: 0.55 }]}
                           >
                             <View style={[styles.clientAvatar, { backgroundColor: avatarBg }]}>
-                              <Text allowFontScaling={false} style={styles.clientAvatarText}>{initial}</Text>
+                              <Text allowFontScaling={false} style={[styles.clientAvatarText, { color: avatar.text }]}>{initial}</Text>
                             </View>
                             <View style={{ flex: 1 }}>
                               <Text variant="body">{c.name}</Text>
@@ -1332,7 +1336,7 @@ function VariantPickerSheet({ visible, product, variants, cartQtyByVariant, curr
                     style={[styles.qtyBtn, (outOfStock || qty === 0) && { opacity: 0.3 }]}
                     hitSlop={10}
                   >
-                    <Text variant="label" style={{ color: qty === 0 ? palette.textDisabled : palette.danger }}>−</Text>
+                    <Text variant="label" style={{ color: qty === 0 ? palette.textDisabled : palette.textPrimary }}>−</Text>
                   </Pressable>
                   {isEditing ? (
                     <TextInput
@@ -2512,7 +2516,7 @@ function makeStyles(p: Palette) {
       borderBottomWidth: 1, borderBottomColor: p.border,
     },
     clientAvatar: { width: 40, height: 40, borderRadius: 20, justifyContent: 'center', alignItems: 'center' },
-    clientAvatarText: { fontFamily: fontFamily.bold, fontSize: 16, color: CLIENT_AVATAR_TEXT },
+    clientAvatarText: { fontFamily: fontFamily.bold, fontSize: 16 },
 
     methodSection: { paddingHorizontal: spacing[5], paddingTop: spacing[3], paddingBottom: spacing[4], gap: spacing[2] },
     sectionLabel: { marginBottom: spacing[2] },

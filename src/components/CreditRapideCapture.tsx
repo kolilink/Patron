@@ -5,7 +5,7 @@ import { Ionicons } from '@expo/vector-icons';
 import { Button } from '@/src/components/ui/Button';
 import { Text } from '@/src/components/ui/Text';
 import { KeyboardDoneBar } from '@/src/components/ui/KeyboardDoneBar';
-import { useTheme, spacing, radius, fontFamily, CLIENT_AVATAR_PALETTE, CLIENT_AVATAR_TEXT } from '@/src/theme';
+import { useTheme, spacing, radius, fontFamily, CLIENT_AVATAR_PALETTE } from '@/src/theme';
 import type { Palette } from '@/src/theme';
 import { formatAmountInput, parseAmountInput, formatAmount } from '@/src/utils/format';
 import { useQuickClients, type QuickClient } from '@/src/hooks/useQuickClients';
@@ -81,7 +81,8 @@ interface CreditRapideCaptureProps {
 
 function initialsAvatar(name: string) {
   const sum = name ? name.split('').reduce((acc, ch) => acc + ch.charCodeAt(0), 0) : 0;
-  return { bg: CLIENT_AVATAR_PALETTE[sum % CLIENT_AVATAR_PALETTE.length], initial: name ? name.charAt(0).toUpperCase() : '?' };
+  const pair = CLIENT_AVATAR_PALETTE[sum % CLIENT_AVATAR_PALETTE.length];
+  return { bg: pair.bg, text: pair.text, initial: name ? name.charAt(0).toUpperCase() : '?' };
 }
 
 export function CreditRapideCapture({ businessId, userId, currency, onViewClients, onAdded, initialClient, onDone }: CreditRapideCaptureProps) {
@@ -299,7 +300,7 @@ export function CreditRapideCapture({ businessId, userId, currency, onViewClient
           ) : (
           <View style={styles.grid}>
             {filteredClients.map(c => {
-              const { bg, initial } = initialsAvatar(c.name);
+              const { bg, text: avatarText, initial } = initialsAvatar(c.name);
               return (
                 <Pressable
                   key={c.id ?? c.name}
@@ -307,7 +308,7 @@ export function CreditRapideCapture({ businessId, userId, currency, onViewClient
                   style={({ pressed }) => [styles.personCell, pressed && { opacity: 0.6 }]}
                 >
                   <View style={[styles.personAvatar, { backgroundColor: bg }]}>
-                    <Text allowFontScaling={false} style={{ fontFamily: fontFamily.bold, fontSize: 18, lineHeight: 22, color: CLIENT_AVATAR_TEXT }}>
+                    <Text allowFontScaling={false} style={{ fontFamily: fontFamily.bold, fontSize: 18, lineHeight: 22, color: avatarText }}>
                       {initial}
                     </Text>
                   </View>

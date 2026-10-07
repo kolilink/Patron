@@ -346,7 +346,7 @@ function DebtModal({ visible, fournisseur, currency, saving, onClose, onSave }: 
       }
     >
       {fournisseur && (
-        <View style={[styles.debtCtx, { borderLeftWidth: 3, borderLeftColor: palette.danger }]}>
+        <View style={[styles.debtCtx, { borderLeftWidth: 3, borderLeftColor: palette.textSecondary }]}>
           <Text variant="caption" color="secondary">Vous devez à</Text>
           <Text variant="label">{fournisseur.name}</Text>
         </View>
@@ -762,7 +762,7 @@ function makeStyles(p: Palette) {
     reorderBadge: {
       position: 'absolute', top: -4, right: -4,
       width: 18, height: 18, borderRadius: 9,
-      backgroundColor: p.danger,
+      backgroundColor: p.warning,
       alignItems: 'center', justifyContent: 'center',
       borderWidth: 2, borderColor: p.background,
     },
