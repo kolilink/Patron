@@ -77,7 +77,9 @@ describe('Phase 6 — copy & language', () => {
 
     it('6.8 onboarding carnet, accueil and plus copy fixes', () => {
         expect(readSource('app/(app)/onboarding/carnet.tsx')).toMatch(/L'argent qu'on me doit/);
-        expect(readSource('app/(app)/(tabs)/index.tsx')).toMatch(/Votre commerce est prêt !/);
+        // The post-creation "Votre commerce est prêt !" pop-up was removed on purpose
+        // (the onboarding flow already covers it) — it must never come back.
+        expect(readSource('app/(app)/(tabs)/index.tsx')).not.toMatch(/Votre commerce est prêt/);
         const plus = readSource('app/(app)/(tabs)/plus.tsx');
         expect(plus).toMatch(/'Investisseur'/);
         expect(plus).toMatch(/'Gérant adjoint'/);

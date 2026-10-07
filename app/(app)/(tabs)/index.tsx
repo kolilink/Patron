@@ -248,7 +248,6 @@ export default function AccueilScreen() {
 
   // null = not yet checked, true = dismissed, false = active
   const [onboardingDismissed, setOnboardingDismissed] = useState<boolean | null>(null);
-  const [showCarnetSheet, setShowCarnetSheet] = useState(false);
   const [showQuickCapture, setShowQuickCapture] = useState(false);
   const [quickCaptureClientName, setQuickCaptureClientName] = useState<string | undefined>(undefined);
   const [quickCaptureMode, setQuickCaptureMode] = useState<'credit' | 'vente'>('credit');
@@ -291,25 +290,6 @@ export default function AccueilScreen() {
       }
     }).catch(() => setOnboardingDismissed(true));
   }, [userId, businessId, isOwner, business?.created_at]);
-
-  // Show carnet import sheet once — but only once onboarding is genuinely
-  // dismissed (both steps done, or the 7-day grandfather). Showing this
-  // alongside the activation fork would be exactly the double-nudge
-  // confusion both were designed to avoid; in practice the two never
-  // overlap by construction — the fork requires the business to still be
-  // empty, this requires it not to be.
-  useEffect(() => {
-    if (!userId || !businessId || !isOwner) return;
-    if (onboardingDismissed !== true) return; // wait until fully dismissed
-    const ageMs = business?.created_at ? Date.now() - new Date(business.created_at).getTime() : Infinity;
-    if (ageMs > 7 * 24 * 60 * 60 * 1000) return;
-    const key = `carnet_prompt_seen_${userId}_${businessId}`;
-    getKV(key).then(val => {
-      if (val !== null) return;
-      void setKV(key, '1');
-      setShowCarnetSheet(true);
-    }).catch(() => { });
-  }, [userId, businessId, isOwner, business?.created_at, onboardingDismissed]);
 
   const step2Done = products.length > 0;
   // Any real sale ever (paye OR credit) counts as "done" — using kpis.revenue_month here
@@ -724,43 +704,6 @@ export default function AccueilScreen() {
             fresh per device now, not guessed. */}
           <View style={[styles.edgeSwipeCatcher, { top: insets.top + HEADER_ROW_HEIGHT }]} pointerEvents="box-only" />
         </GestureDetector>
-
-        {/* One-time carnet import sheet shown after business creation */}
-        <Modal
-          visible={showCarnetSheet}
-          transparent
-          animationType={reduceMotion ? 'none' : 'slide'}
-          onRequestClose={() => setShowCarnetSheet(false)}
-          statusBarTranslucent
-          navigationBarTranslucent
-        >
-          <View style={styles.sheetBackdrop}>
-            <Pressable style={StyleSheet.absoluteFill} onPress={() => setShowCarnetSheet(false)} />
-            <View style={[styles.sheetPanel, { backgroundColor: palette.surface }]}>
-              <View style={[styles.sheetHandle, { backgroundColor: palette.border }]} />
-              <Text variant="h3" style={styles.sheetTitle}>Votre commerce est prêt !</Text>
-              <Text variant="body" color="secondary" style={styles.sheetBody}>
-                Des gens vous doivent de l'argent ?
-              </Text>
-              <Button
-                label="Oui, les noter →"
-                size="lg"
-                fullWidth
-                onPress={() => {
-                  setShowCarnetSheet(false);
-                  router.push('/(app)/onboarding/carnet');
-                }}
-                style={{ marginTop: spacing[2] }}
-              />
-              <Button
-                label="Pas maintenant"
-                variant="ghost"
-                fullWidth
-                onPress={() => setShowCarnetSheet(false)}
-              />
-            </View>
-          </View>
-        </Modal>
 
         {isOffline && <OfflineNotice offlineSince={null} onRetry={() => loadAll()} />}
 
