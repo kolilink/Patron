@@ -217,8 +217,8 @@ export default function DepensesScreen() {
             </View>
           )}
 
-          {months.map((m, idx) => {
-            const open = openMonths[m.key] ?? idx === 0;
+          {months.map(m => {
+            const open = openMonths[m.key] ?? false;
             return (
               <View key={m.key} style={styles.monthBlock}>
                 <Pressable
