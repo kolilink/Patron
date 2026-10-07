@@ -4,6 +4,18 @@ export function localDateISO(d: Date = new Date()): string {
   return `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, '0')}-${String(d.getDate()).padStart(2, '0')}`;
 }
 
+/** The device's IANA timezone (e.g. "America/New_York"), or undefined if unknown.
+ *  Sent to get_dashboard_kpis so its paid_at day/month windows use the merchant's
+ *  local boundaries instead of UTC midnight (migration_v242). */
+export function localTimeZone(): string | undefined {
+  try {
+    const tz = Intl.DateTimeFormat().resolvedOptions().timeZone;
+    return tz || undefined;
+  } catch {
+    return undefined;
+  }
+}
+
 export function todayIso(): string {
   return localDateISO();
 }

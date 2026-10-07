@@ -42,7 +42,7 @@ import { haptics } from '@/lib/haptics';
 import { toast } from '@/stores/toast';
 import { buildInviteLink, buildInviteMessage } from '@/stores/inviter';
 import { FAILURE_COPY } from '@/src/utils/failureCopy';
-import { todayIso } from '@/src/utils/dates';
+import { todayIso, localTimeZone } from '@/src/utils/dates';
 import { homeComparison } from '@/src/utils/dashboardNarrative';
 import { getKpiSnapshot, setKpiSnapshot } from '@/src/utils/kpiSnapshot';
 
@@ -520,6 +520,7 @@ export default function AccueilScreen() {
           supabase.rpc('get_dashboard_kpis', {
             p_business_id: businessId,
             p_today: localDate,
+            p_tz: localTimeZone() ?? null,
           }),
         ),
         r => !!r.error,

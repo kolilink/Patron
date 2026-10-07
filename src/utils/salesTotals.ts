@@ -50,7 +50,7 @@ export function computeLocalKpis(args: {
   const { cached, sales, products, variantsByProduct } = args;
   const now = args.now ?? new Date();
   const today = `${now.getFullYear()}-${String(now.getMonth() + 1).padStart(2, '0')}-${String(now.getDate()).padStart(2, '0')}`;
-  const todaySales = sales.filter(s => (s.sale_date ?? s.created_at.split('T')[0]) === today && s.status !== 'annule');
+  const todaySales = sales.filter(s => (s.sale_date ?? localDay(s.created_at)) === today && s.status !== 'annule');
   const creditSales = sales.filter(s => s.status === 'credit');
   return {
     revenue_today: todaySales.filter(s => !s.is_credit).reduce((sum, s) => sum + net(s), 0),
@@ -113,6 +113,9 @@ export interface SalesKpis {
   credit_count: number;
 }
 
+// A timestamp's LOCAL calendar day (mirrors the server's paid_at windows, which
+// use the merchant's timezone since migration_v242); a bare date passes through.
+const localDay = (iso: string) => (iso.includes('T') ? ymd(new Date(iso)) : iso.slice(0, 10));
 const ymd = (d: Date) => `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, '0')}-${String(d.getDate()).padStart(2, '0')}`;
 
 /** get_dashboard_kpis' sales + debts fields, computed over a sales list (display units). */
@@ -127,13 +130,13 @@ export function salesKpisFromList(sales: TotalsSale[], now: Date = new Date()): 
   let anonymousDebts = 0;
 
   for (const s of sales) {
-    const day = (s.sale_date ?? s.created_at.split('T')[0]);
+    const day = (s.sale_date ?? localDay(s.created_at));
     if (s.status !== 'annule' && day === today) {
       sales_today += 1;
       if (!s.is_credit) revenue_today += net(s);
     }
     if (s.status === 'paye') {
-      const paidDay = (s.paid_at ?? s.sale_date ?? s.created_at).slice(0, 10);
+      const paidDay = localDay(s.paid_at ?? s.sale_date ?? s.created_at);
       if (paidDay === yesterday) revenue_yesterday += net(s);
       if (paidDay >= monthStart) revenue_month += net(s);
     }
