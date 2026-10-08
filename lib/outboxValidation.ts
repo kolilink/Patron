@@ -14,10 +14,19 @@
 // pay_supplier_debt, adjust_stock_move qty, reception/cart line qty), which we mirror.
 
 export class OutboxValidationError extends Error {
+  /** French sentence for the vendor: what to DO, not just what failed. */
+  public readonly userMessage: string;
   constructor(public readonly operation: string, public readonly problems: string[]) {
     super(`Outbox payload refused for "${operation}": ${problems.join('; ')}`);
     this.name = 'OutboxValidationError';
+    this.userMessage = userMessageFor(problems);
   }
+}
+
+function userMessageFor(problems: string[]): string {
+  if (problems.some(p => /^p_customer_name\b/.test(p))) return 'Ajoutez le nom du client.';
+  if (problems.some(p => /^(p_amount|p_amount_cents|p_unit_price|p_total_amount|amount)\b/.test(p))) return 'Entrez un montant valide.';
+  return OUTBOX_VALIDATION_USER_MESSAGE;
 }
 
 /** Stores use this to skip their own generic failure message: enqueue() has already toasted the specific one. */
