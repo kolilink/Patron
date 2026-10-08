@@ -10,6 +10,7 @@ import { Text } from '@/src/components/ui/Text';
 import { useTheme, spacing, radius, fontFamily, CLIENT_AVATAR_PALETTE } from '@/src/theme';
 import type { Palette } from '@/src/theme';
 import { formatAmountInput, parseAmountInput, formatAmount } from '@/src/utils/format';
+import { readyDebtEntry, nextWalkInLabel } from '@/src/utils/debtEntry';
 import { useQuickClients, type QuickClient } from '@/src/hooks/useQuickClients';
 import { useSalesStore } from '@/stores/sales';
 import { supabase } from '@/lib/supabase';
@@ -256,22 +257,25 @@ export function CreditRapideCapture({ businessId, userId, currency, onViewClient
     setError(null);
   };
 
+  const canSubmit = readyDebtEntry(name, amount, currency) !== null;
+
   const handleAdd = async () => {
     // success guards against a double-submit while the "✓ Ajouté" confirm
     // is still showing — name/amount aren't cleared until the timeout below
     // fires, so without this a second tap in that window would silently
     // record the same debt twice.
     if (success) return;
-    const trimmedName = name.trim();
-    const parsed = Math.round(parseAmountInput(amount, currency));
-    if (!trimmedName || isNaN(parsed) || parsed <= 0) return;
+    const ready = readyDebtEntry(name, amount, currency);   // same predicate as the button's `disabled`
+    if (!ready) return;
+    const trimmedName = ready.name;
+    const amountCents = ready.amountCents;
     setSaving(true);
     setError(null);
 
     // Critical path = validate -> durable enqueue -> reflect -> return. The client
     // row is NOT part of it: submit goes first with the client id we already have
     // (null for a new name — the drain links the debt to the client by name).
-    const ok = await submitCarnetDebt(businessId, userId, trimmedName, parsed * 100, clientId ?? null);
+    const ok = await submitCarnetDebt(businessId, userId, trimmedName, amountCents, clientId ?? null);
     setSaving(false);
     if (!ok) {
       setError('Impossible d\'enregistrer. Vérifiez votre connexion et réessayez.');
@@ -296,7 +300,7 @@ export function CreditRapideCapture({ businessId, userId, currency, onViewClient
     const wasQueued = useSalesStore.getState().lastCarnetDebtQueued;
     trackEvent('quick_capture_submitted', businessId, userId, { mode: 'credit', queued: wasQueued });
     haptics.success();
-    onAdded?.(parsed * 100);
+    onAdded?.(amountCents);
     setSuccess(true);
     setSessionCount(c => c + 1);
     setRefreshKey(k => k + 1);
@@ -389,6 +393,16 @@ export function CreditRapideCapture({ businessId, userId, currency, onViewClient
           ) : (
             <Text variant="h3">{name}</Text>
           )}
+          {isNew && !name.trim() ? (
+            <Pressable
+              accessibilityRole="button"
+              onPress={() => { setName(nextWalkInLabel(clients.map(c => c.name))); setError(null); setTimeout(() => amountRef.current?.focus(), 30); }}
+              style={[styles.walkInChip, { borderColor: palette.border }]}
+              hitSlop={8}
+            >
+              <Text variant="caption" color="secondary">Je ne connais pas son nom</Text>
+            </Pressable>
+          ) : null}
 
           <View>
             <Text variant="label" color="secondary" style={{ marginBottom: spacing[2] }}>
@@ -426,7 +440,7 @@ export function CreditRapideCapture({ businessId, userId, currency, onViewClient
             label={success ? '✓ Ajouté' : 'Ajouter'}
             onPress={handleAdd}
             loading={saving}
-            disabled={!name.trim() || !(parseAmountInput(amount, currency) > 0)}
+            disabled={saving || !canSubmit}
             fullWidth
             size="lg"
           />
@@ -471,6 +485,9 @@ function makeStyles(p: Palette) {
     nameInput: {
       borderWidth: 1, borderRadius: radius.md, paddingHorizontal: spacing[4], paddingVertical: spacing[3], fontSize: 20,
       lineHeight: 25, fontFamily: fontFamily.semibold,
+    },
+    walkInChip: {
+      alignSelf: 'flex-start', borderWidth: 1, borderRadius: radius.full, paddingHorizontal: spacing[3], paddingVertical: spacing[1],
     },
     amountBox: {
       flexDirection: 'row', alignItems: 'center', justifyContent: 'space-between',

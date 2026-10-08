@@ -1,3 +1,4 @@
+import { readyDebtEntry } from '@/src/utils/debtEntry';
 import { useRef, useState, useMemo } from 'react';
 import {
   FlatList,
@@ -54,11 +55,10 @@ export default function CarnetScreen() {
   const totalCents = entries.reduce((s, e) => s + e.amountCents, 0);
 
   const handleAdd = () => {
-    const trimmedName = name.trim();
-    const amountCents = amountInputToCents(amount, currency);
-    if (!trimmedName || amountCents === null) return;
+    const ready = readyDebtEntry(name, amount, currency);
+    if (!ready) return;
 
-    setEntries(prev => [...prev, { id: generateId(), name: trimmedName, amountCents }]);
+    setEntries(prev => [...prev, { id: generateId(), name: ready.name, amountCents: ready.amountCents }]);
     setName('');
     setAmount('');
     haptics.tap();
@@ -107,7 +107,7 @@ export default function CarnetScreen() {
     router.replace('/(app)/(tabs)/');
   };
 
-  const canAdd = name.trim().length > 0 && parseAmountInput(amount, currency) > 0;
+  const canAdd = readyDebtEntry(name, amount, currency) !== null;
 
   return (
     <Screen>
