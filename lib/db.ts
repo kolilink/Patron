@@ -632,7 +632,7 @@ export async function enqueue(operation: string, payload: object): Promise<void>
     console.error('[outbox] refused invalid payload', err);
     try {
       // Lazy: keeps lib/db free of a store import cycle.
-      require('@/stores/toast').useToastStore.getState().show(OUTBOX_VALIDATION_USER_MESSAGE, 'warning');
+      require('@/stores/toast').useToastStore.getState().show((err as { userMessage?: string }).userMessage ?? OUTBOX_VALIDATION_USER_MESSAGE, 'warning');
     } catch { /* toast is cosmetic; the throw below is the real signal */ }
     throw err;
   }
