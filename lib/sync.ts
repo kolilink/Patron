@@ -436,7 +436,9 @@ async function executeOp(operation: string, payload: Record<string, unknown>): P
         p_product: product,
         p_stock_move: stockMove,
       });
-      if (error) throw error;
+      // 23505 = this exact product id already landed (the first attempt got
+      // through and only its response was lost): success, not a refusal.
+      if (error && (error as { code?: string }).code !== '23505') throw error;
       break;
     }
     case 'update_product': {
