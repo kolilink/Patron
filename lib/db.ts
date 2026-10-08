@@ -685,6 +685,42 @@ export async function cancelPendingQueueItems(operations: string[], key: string)
   return res.changes ?? 0;
 }
 
+/**
+ * Rewrites the payload of a STILL-QUEUED op, located by operation + idempotency
+ * key (the pre-send receipt edit: fix a typo before the sale ever reaches the
+ * server). The new payload goes through the same chokepoint as enqueue() — an
+ * invalid edit throws OutboxValidationError and nothing is written. Returns
+ * false when no pending row matches (it already synced, was refused, or was
+ * cancelled), so the caller can say so honestly instead of pretending.
+ * The idempotency key is never changed, so the server-side dedup is untouched.
+ */
+export async function patchPendingOpPayload(
+  operation: string,
+  key: string,
+  mutate: (payload: Record<string, unknown>) => Record<string, unknown>,
+): Promise<boolean> {
+  const db = await openDb();
+  const row = await db.getFirstAsync<{ id: number; payload: string }>(
+    `SELECT id, payload FROM sync_queue WHERE status = 'pending' AND operation = ? AND idempotency_key = ? ORDER BY id DESC LIMIT 1`,
+    [operation, key],
+  );
+  if (!row) return false;
+  const plain = row.payload.startsWith('PLAIN:') ? row.payload.slice(6) : await decrypt(row.payload);
+  const next = mutate({ ...(JSON.parse(plain) as Record<string, unknown>) });
+  validateOutboxPayload(operation, next);
+  let stored: string;
+  try {
+    stored = await encrypt(JSON.stringify(next));
+  } catch {
+    stored = 'PLAIN:' + JSON.stringify(next);
+  }
+  const res = await db.runAsync(
+    `UPDATE sync_queue SET payload = ? WHERE id = ? AND status = 'pending'`,
+    [stored, row.id],
+  );
+  return (res.changes ?? 0) > 0;
+}
+
 export async function deleteQueueItem(id: number): Promise<void> {
   const db = await openDb();
   await db.runAsync('DELETE FROM sync_queue WHERE id = ?', [id]);

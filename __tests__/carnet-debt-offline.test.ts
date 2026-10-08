@@ -61,7 +61,7 @@ describe('submit_carnet_debt — local-write-first (§5)', () => {
   it('never calls supabase.rpc directly — only enqueue, with a real idempotency key', async () => {
     const result = await useSalesStore.getState().submitCarnetDebt('biz-1', 'user-1', 'Mamadou', 500000, null);
 
-    expect(result).toBe(true);
+    expect(result.ok).toBe(true);
     expect(supabase.rpc).not.toHaveBeenCalled();
     expect(enqueue).toHaveBeenCalledWith('submit_carnet_debt', expect.objectContaining({
       p_business_id:     'biz-1',
@@ -98,7 +98,7 @@ describe('submit_carnet_debt — local-write-first (§5)', () => {
 
     const result = await useSalesStore.getState().submitCarnetDebt('biz-1', 'user-1', 'Client', 100000, null);
 
-    expect(result).toBe(false);
+    expect(result.ok).toBe(false);
     expect(useSalesStore.getState().lastCarnetDebtQueued).toBe(false);
     expect(mockKick).not.toHaveBeenCalled(); // nothing to sync — the write never happened
   });
@@ -110,7 +110,7 @@ describe('submit_carnet_debt — local-write-first (§5)', () => {
     // merchant as "your debt wasn't recorded," which would be a lie.
     mockRefreshPendingOverlay.mockRejectedValueOnce(new Error('cache read failed'));
     const result = await useSalesStore.getState().submitCarnetDebt('biz-1', 'user-1', 'Client', 100000, null);
-    expect(result).toBe(true);
+    expect(result.ok).toBe(true);
     expect(enqueue).toHaveBeenCalled();
   });
 });

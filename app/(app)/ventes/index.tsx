@@ -3,8 +3,6 @@ import { ConfirmSheetHost } from '@/src/components/ui/ConfirmSheet';
 import { appAlert } from '@/src/utils/appAlert';
 import { AnimatedRowCell, AnimatedRow } from '@/src/components/ui/AnimatedRow';
 import { ActivityIndicator, Animated, Easing, FlatList, InputAccessoryView, Modal, Platform, Pressable, RefreshControl, ScrollView, StyleSheet, TextInput, View } from 'react-native';
-import { captureRef } from 'react-native-view-shot';
-import * as Sharing from 'expo-sharing';
 import { SafeAreaView } from 'react-native-safe-area-context';
 import { Screen } from '@/src/components/ui/Screen';
 import { FormSheet } from '@/src/components/ui/FormSheet';
@@ -22,7 +20,8 @@ import { activeSalesTotals } from '@/src/utils/salesTotals';
 import { formatAmount, formatAmountInput, parseAmountInput, formatSignedAmount, formatMargin } from '@/src/utils/format';
 import { useAuthStore } from '@/stores/auth';
 import { useVentesStore, type Vente, type EditSaleParams, type SaleEdit } from '@/stores/ventes';
-import { SaleReceiptView, type ReceiptData, type ReceiptItem } from '@/src/components/ui/SaleReceiptView';
+import { SaleReceiptSheet } from '@/src/components/SaleReceiptSheet';
+import { receiptSourceFromVente } from '@/src/utils/saleReceipt';
 import { haptics } from '@/lib/haptics';
 import { supabase } from '@/lib/supabase';
 import { SkeletonList } from '@/src/components/ui/SkeletonPlaceholder';
@@ -383,7 +382,6 @@ function relativeTime(iso: string): string {
 function DetailModal({ sale, currency, businessName, singleVendor, role, onClose, onRecordPayment, onCancel, onUpdateClient, onEdit, saving }: DetailModalProps) {
   const { palette } = useTheme();
   const styles = useMemo(() => makeStyles(palette), [palette]);
-  const businessPhone = useAuthStore(s => s.session?.activeBusiness?.phone ?? null);
   // §8 of the offline-first rewrite: edit_sale is deliberately NOT part of
   // the local-write-first outbox (see CLAUDE.md's "Sale editing" section —
   // its 48h window is checked against a live server clock, which a queued/
@@ -401,7 +399,6 @@ function DetailModal({ sale, currency, businessName, singleVendor, role, onClose
   const [editedClient, setEditedClient] = useState('');
   const [cancelReason, setCancelReason] = useState('');
   const [toast, setToast] = useState('');
-  const receiptRef = useRef<View>(null);
 
   // Sale-edit inline form + history — draft state is keyed by line/payment id
   // so an arbitrary number of lines/payments each get their own input.
@@ -414,42 +411,9 @@ function DetailModal({ sale, currency, businessName, singleVendor, role, onClose
   const [editSaleClient, setEditSaleClient] = useState('');
   const [editReason, setEditReason] = useState('');
 
-  const handleShareReceipt = async () => {
-    if (!sale || !receiptRef.current) return;
-    try {
-      // Capture while the receipt sheet is still mounted (in compositor bounds),
-      // then close it and let the sheet animation finish before the share dialog
-      // opens — see the SaleReceiptView note in CLAUDE.md.
-      const uri = await captureRef(receiptRef, { format: 'png', quality: 1 });
-      setShowReceipt(false);
-      await new Promise<void>(r => setTimeout(r, 350));
-      await Sharing.shareAsync(uri, { mimeType: 'image/png', UTI: 'public.png', dialogTitle: 'Partager le reçu' });
-    } catch {
-      // failure: speaks — receipt share failed: receiptNotShared
-      failAlert('receiptNotShared');
-    }
-  };
-
-  const receiptData: ReceiptData | null = sale?.lines?.length
-    ? {
-      businessName,
-      businessPhone: businessPhone,
-      currency,
-      items: sale.lines.map((l): ReceiptItem => ({
-        name: l.variant_name ? `${l.product_name} · ${l.variant_name}` : l.product_name,
-        qty: l.qty,
-        unit_price: l.unit_price,
-        is_bulk: false,
-      })),
-      total: sale.total_amount,
-      discountAmount: sale.discount_amount ?? 0,
-      amountPaid: sale.amount_paid,
-      payment: sale.is_credit ? null : (sale.payments?.[0] ? { method: sale.payments[0].method, amount: sale.payments[0].amount } : null),
-      customerName: sale.customer_name ?? undefined,
-      date: new Date(sale.created_at),
-      receiptId: sale.id.slice(0, 8).toUpperCase(),
-    }
-    : null;
+  // Built from local data only (overlay lines → cached detail → amount-only),
+  // so the receipt never needs the network and never silently does nothing.
+  const receiptSource = sale ? receiptSourceFromVente(sale, { businessName, currency }) : null;
 
   useEffect(() => {
     if (sale) {
@@ -1004,7 +968,7 @@ function DetailModal({ sale, currency, businessName, singleVendor, role, onClose
         {/* Receipt lives behind this button — tapping it opens the preview
               sheet the merchant shares from, instead of duplicating the sale
               inline on this scroll. */}
-        {receiptData && (
+        {receiptSource && sale.status !== 'annule' && (
           <View style={styles.receiptSection}>
             <View style={styles.receiptDivider} />
             <View style={{ paddingHorizontal: spacing[5] }}>
@@ -1023,26 +987,16 @@ function DetailModal({ sale, currency, businessName, singleVendor, role, onClose
         saving={saving}
       />
 
-      {/* Receipt preview + share */}
-      <FormSheet
-        visible={showReceipt}
+      {/* Receipt preview, pre-send correction (pending items) and share. */}
+      <SaleReceiptSheet
+        source={showReceipt ? receiptSource : null}
         onClose={() => setShowReceipt(false)}
-        title="Reçu"
-        cancelLabel="Fermer"
-        headerRight={<View style={{ minWidth: 40 }} />}
-        contentContainerStyle={{ paddingVertical: spacing[4] }}
-        footer={
-          <View style={styles.sheetFooter}>
-            <Button label="Partager le reçu" onPress={handleShareReceipt} fullWidth size="lg" />
-          </View>
-        }
-      >
-        {receiptData && (
-          <View ref={receiptRef} collapsable={false}>
-            <SaleReceiptView data={receiptData} />
-          </View>
-        )}
-      </FormSheet>
+        onRequestSyncedEdit={canEditSale ? () => {
+          if (offline) { showOfflineEditHint(); return; }
+          setShowReceipt(false);
+          openEditSale();
+        } : undefined}
+      />
     </>
   );
 }

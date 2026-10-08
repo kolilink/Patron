@@ -10,6 +10,9 @@ import { formatAmount, formatAmountInput, parseAmountInput } from '@/src/utils/f
 import { useSalesStore } from '@/stores/sales';
 import { haptics } from '@/lib/haptics';
 import { trackEvent } from '@/lib/analytics';
+import { useAuthStore } from '@/stores/auth';
+import { ReceiptLink } from '@/src/components/ReceiptLink';
+import { quickReceiptFromSubmit, type QuickReceiptSource } from '@/src/utils/saleReceipt';
 
 const CONFIRM_MS = 900;
 const PRICE_SILENT_ACCESSORY_ID = 'venteRapidePriceSilentAccessory';
@@ -22,6 +25,8 @@ interface VenteRapideCaptureProps {
    * feeds the host's own session ticker (visible under the Crédit/Vente
    * toggle), which lives in the host so it survives a mode switch. */
   onAdded?: (amountCents: number) => void;
+  /** Host opens the receipt for the just-recorded sale. Without it the "Reçu" link is not shown. */
+  onReceipt?: (source: QuickReceiptSource) => void;
 }
 
 // Vente rapide — the quick-sale mode of the rapid capture sheet. Replaces
@@ -50,10 +55,11 @@ export interface VenteRapideCaptureHandle {
 // the iOS keyboard animate in at the same time as the sheet — a ghost keyboard drawn
 // above the real one for a moment. QuickCaptureSheet calls focusPrice() from the
 // Modal's onShow instead: one animation at a time.
-export const VenteRapideCapture = forwardRef<VenteRapideCaptureHandle, VenteRapideCaptureProps>(function VenteRapideCapture({ businessId, userId, currency, onAdded }, ref) {
+export const VenteRapideCapture = forwardRef<VenteRapideCaptureHandle, VenteRapideCaptureProps>(function VenteRapideCapture({ businessId, userId, currency, onAdded, onReceipt }, ref) {
   const { palette } = useTheme();
   const styles = useMemo(() => makeStyles(palette), [palette]);
   const submitQuickSale = useSalesStore(s => s.submitQuickSale);
+  const businessName = useAuthStore(s => s.session?.activeBusiness?.name ?? '');
 
   const [label, setLabel] = useState('');
   const [qty, setQty] = useState(1);
@@ -67,6 +73,9 @@ export const VenteRapideCapture = forwardRef<VenteRapideCaptureHandle, VenteRapi
   // handlers) the moment she actually starts that next entry, so the label
   // never lags behind what's really about to be submitted.
   const [success, setSuccess] = useState(false);
+  // The just-recorded sale, built from the submitted values (zero fetch). Offered
+  // as a quiet "Reçu" link until she starts the next entry — never a modal.
+  const [receipt, setReceipt] = useState<QuickReceiptSource | null>(null);
 
   const nameRef = useRef<TextInput>(null);
   const priceRef = useRef<TextInput>(null);
@@ -86,6 +95,7 @@ export const VenteRapideCapture = forwardRef<VenteRapideCaptureHandle, VenteRapi
   const cancelConfirm = () => {
     if (successTimerRef.current) { clearTimeout(successTimerRef.current); successTimerRef.current = null; }
     if (success) setSuccess(false);
+    if (receipt) setReceipt(null);
   };
 
   const handleAdd = async () => {
@@ -95,9 +105,9 @@ export const VenteRapideCapture = forwardRef<VenteRapideCaptureHandle, VenteRapi
     setSaving(true);
     setError(null);
 
-    const ok = await submitQuickSale(businessId, userId, unitPriceCents, qtyAtSubmit, label);
+    const submitted = await submitQuickSale(businessId, userId, unitPriceCents, qtyAtSubmit, label);
     setSaving(false);
-    if (!ok) {
+    if (!submitted.ok) {
       setError('Impossible d\'enregistrer. Vérifiez votre connexion et réessayez.');
       return;
     }
@@ -108,6 +118,10 @@ export const VenteRapideCapture = forwardRef<VenteRapideCaptureHandle, VenteRapi
     });
     haptics.success();
     onAdded?.(amountCents);
+
+    if (onReceipt) {
+      setReceipt(quickReceiptFromSubmit(submitted, { businessName, currency }));
+    }
 
     // Button morph: "Ajouté" shows for ~900ms then reverts on its own —
     // purely cosmetic, never gates the form below.
@@ -188,6 +202,7 @@ export const VenteRapideCapture = forwardRef<VenteRapideCaptureHandle, VenteRapi
       {error ? (
         <Text variant="caption" style={{ color: palette.warning, textAlign: 'center' }}>{error}</Text>
       ) : null}
+      {receipt && onReceipt ? <ReceiptLink onPress={() => onReceipt(receipt)} /> : null}
 
       <SilentKeyboardAccessory nativeID={PRICE_SILENT_ACCESSORY_ID} />
     </View>

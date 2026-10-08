@@ -16,6 +16,9 @@ import { useSalesStore } from '@/stores/sales';
 import { supabase } from '@/lib/supabase';
 import { haptics } from '@/lib/haptics';
 import { trackEvent } from '@/lib/analytics';
+import { useAuthStore } from '@/stores/auth';
+import { ReceiptLink } from '@/src/components/ReceiptLink';
+import { creditReceiptFromSubmit, type CreditReceiptSource } from '@/src/utils/saleReceipt';
 
 // ── Crédit rapide — the shared entry logic for both places this exists:
 // Accueil's "+" (QuickCaptureSheet) and Vendre's own Crédit tab. Previously
@@ -84,6 +87,8 @@ interface CreditRapideCaptureProps {
    * initialClient — closes the host's sheet instead of resetting back to
    * the pick grid, since there's no grid to return to in this mode. */
   onDone?: () => void;
+  /** Host opens the receipt for the just-recorded credit. Without it the "Reçu" link is not shown. */
+  onReceipt?: (source: CreditReceiptSource) => void;
 }
 
 function initialsAvatar(name: string) {
@@ -92,10 +97,15 @@ function initialsAvatar(name: string) {
   return { bg: pair.bg, text: pair.text, initial: name ? name.charAt(0).toUpperCase() : '?' };
 }
 
-export function CreditRapideCapture({ businessId, userId, currency, onViewClients, onAdded, initialClient, onDone }: CreditRapideCaptureProps) {
+export function CreditRapideCapture({ businessId, userId, currency, onViewClients, onAdded, initialClient, onDone, onReceipt }: CreditRapideCaptureProps) {
   const { palette } = useTheme();
   const styles = useMemo(() => makeStyles(palette), [palette]);
   const submitCarnetDebt = useSalesStore(s => s.submitCarnetDebt);
+  const businessName = useAuthStore(s => s.session?.activeBusiness?.name ?? '');
+  // The just-recorded credit, offered as a quiet "Reçu" link on the pick grid
+  // until she starts the next entry. Not offered when the host closes the sheet
+  // after one save (initialClient) — there is nowhere left to show it.
+  const [receipt, setReceipt] = useState<CreditReceiptSource | null>(null);
 
   // Bumped after every successful add so the recency ranking is live within
   // one rapid multi-entry session, not just on next mount.
@@ -220,6 +230,7 @@ export function CreditRapideCapture({ businessId, userId, currency, onViewClient
   }, [phase, clientId, businessId]);
 
   const pickClient = (c: QuickClient) => {
+    setReceipt(null);
     setIsNew(false);
     setName(c.name);
     setClientId(c.id);
@@ -229,6 +240,7 @@ export function CreditRapideCapture({ businessId, userId, currency, onViewClient
   };
 
   const pickNew = (focusDelay = 80) => {
+    setReceipt(null);
     setIsNew(true);
     setName('');
     setClientId(undefined);
@@ -275,9 +287,9 @@ export function CreditRapideCapture({ businessId, userId, currency, onViewClient
     // Critical path = validate -> durable enqueue -> reflect -> return. The client
     // row is NOT part of it: submit goes first with the client id we already have
     // (null for a new name — the drain links the debt to the client by name).
-    const ok = await submitCarnetDebt(businessId, userId, trimmedName, amountCents, clientId ?? null);
+    const submitted = await submitCarnetDebt(businessId, userId, trimmedName, amountCents, clientId ?? null);
     setSaving(false);
-    if (!ok) {
+    if (!submitted.ok) {
       setError('Impossible d\'enregistrer. Vérifiez votre connexion et réessayez.');
       return;
     }
@@ -301,6 +313,9 @@ export function CreditRapideCapture({ businessId, userId, currency, onViewClient
     trackEvent('quick_capture_submitted', businessId, userId, { mode: 'credit', queued: wasQueued });
     haptics.success();
     onAdded?.(amountCents);
+    if (onReceipt && !initialClient) {
+      setReceipt(creditReceiptFromSubmit(submitted, { businessName, currency }));
+    }
     setSuccess(true);
     setSessionCount(c => c + 1);
     setRefreshKey(k => k + 1);
@@ -321,6 +336,7 @@ export function CreditRapideCapture({ businessId, userId, currency, onViewClient
     <View style={styles.content}>
       {phase === 'pick' ? (
         <>
+          {receipt && onReceipt ? <ReceiptLink label={`Reçu · ${receipt.clientName}`} onPress={() => onReceipt(receipt)} /> : null}
           {/* Chips appear together or not at all: until the first load
               resolves (or GRID_GATE_MAX_MS passes) the row is reserved
               empty space — including "Nouveau", so it doesn't sit alone

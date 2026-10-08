@@ -96,8 +96,8 @@ export default function CarnetScreen() {
         failed++;
         continue;
       }
-      const ok = await submitCarnetDebt(businessId, userId, entry.name, entry.amountCents, clientId);
-      if (!ok) failed++;
+      const submitted = await submitCarnetDebt(businessId, userId, entry.name, entry.amountCents, clientId);
+      if (!submitted.ok) failed++;
     }
     setSaving(false);
     if (failed > 0) {

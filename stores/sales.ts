@@ -29,6 +29,24 @@ export interface SalePayment {
   ref_external?: string | null;
 }
 
+/** What a quick-credit / carnet write hands back so the receipt can be built from the submitted values (zero fetch). */
+export interface CarnetDebtResult {
+  ok: boolean;
+  idempotencyKey: string;
+  customerName: string;
+  amountCents: number;
+  clientId: string | null;
+}
+
+/** Same, for the "Vente rapide" write. */
+export interface QuickSaleResult {
+  ok: boolean;
+  idempotencyKey: string;
+  unitPriceCents: number;
+  qty: number;
+  label: string | null;
+}
+
 interface SalesStore {
   cart: CartLine[];
   submitting: boolean;
@@ -46,6 +64,9 @@ interface SalesStore {
   // Only set when the sale actually synced (a queued/offline sale has no
   // server row yet, so there's nothing a cancel_sale call could target).
   lastSaleId: string | null;
+  // Idempotency key of the last cart sale handed to the outbox — also the id of
+  // its pending Ventes row, which is what the pre-send receipt edit locates it by.
+  lastSaleKey: string | null;
 
   addToCart: (product: Product, bulk?: boolean) => void;
   addToCartVariant: (product: Product, variant: ProductVariant, qty?: number) => void;
@@ -53,8 +74,8 @@ interface SalesStore {
   setQty: (productId: string, qty: number, isBulk?: boolean, variantId?: string) => void;
   toggleBulk: (productId: string, isBulk?: boolean) => void;
   clearCart: () => void;
-  submitCarnetDebt: (businessId: string, userId: string, customerName: string, amountCents: number, clientId: string | null) => Promise<boolean>;
-  submitQuickSale: (businessId: string, userId: string, unitPriceCents: number, qty: number, label?: string) => Promise<boolean>;
+  submitCarnetDebt: (businessId: string, userId: string, customerName: string, amountCents: number, clientId: string | null) => Promise<CarnetDebtResult>;
+  submitQuickSale: (businessId: string, userId: string, unitPriceCents: number, qty: number, label?: string) => Promise<QuickSaleResult>;
   submitSale: (
     businessId: string,
     userId: string,
@@ -126,6 +147,7 @@ export const useSalesStore = create<SalesStore>((set, get) => ({
   lastCarnetDebtQueued: false,
   lastQuickSaleQueued: false,
   lastSaleId: null,
+  lastSaleKey: null,
 
   addToCart: (product, bulk = false) => {
     const { cart } = get();
@@ -257,6 +279,9 @@ export const useSalesStore = create<SalesStore>((set, get) => ({
     // on this key is what makes "exactly one record syncs" true, not
     // anything client-side.
     const idempotencyKey = generateId();
+    const result = (ok: boolean): CarnetDebtResult => ({
+      ok, idempotencyKey, customerName: customerName.trim(), amountCents, clientId,
+    });
     const payload = {
       p_business_id:      businessId,
       p_seller_id:        userId,
@@ -275,7 +300,7 @@ export const useSalesStore = create<SalesStore>((set, get) => ({
       if (!isOutboxValidationError(err)) useToastStore.getState().show("Impossible d'enregistrer sur cet appareil. Réessayez.", 'warning');
       haptics.error();
       set({ lastCarnetDebtQueued: false });
-      return false;
+      return result(false);
     }
     const count = await getQueueCount();
     useSyncStore.setState({ pendingCount: count });
@@ -297,7 +322,7 @@ export const useSalesStore = create<SalesStore>((set, get) => ({
     haptics.success();
     trackEvent('credit_recorded', businessId, userId, { source: 'quick' });
     void maybeTrackFirstValue(businessId, userId, 'credit');
-    return true;
+    return result(true);
   },
 
   submitQuickSale: async (businessId, userId, unitPriceCents, qty, label) => {
@@ -307,6 +332,9 @@ export const useSalesStore = create<SalesStore>((set, get) => ({
     // when blank so the RPC's own COALESCE(..., 'Vente rapide') fallback
     // applies, rather than storing an empty string as the line's name.
     const idempotencyKey = generateId();
+    const result = (ok: boolean): QuickSaleResult => ({
+      ok, idempotencyKey, unitPriceCents, qty, label: label?.trim() || null,
+    });
     const payload = {
       p_business_id:      businessId,
       p_seller_id:        userId,
@@ -323,7 +351,7 @@ export const useSalesStore = create<SalesStore>((set, get) => ({
       if (!isOutboxValidationError(err)) useToastStore.getState().show("Impossible d'enregistrer sur cet appareil. Réessayez.", 'warning');
       haptics.error();
       set({ lastQuickSaleQueued: false });
-      return false;
+      return result(false);
     }
     const count = await getQueueCount();
     useSyncStore.setState({ pendingCount: count });
@@ -337,7 +365,7 @@ export const useSalesStore = create<SalesStore>((set, get) => ({
     haptics.success();
     trackEvent('sale_recorded', businessId, userId, { source: 'quick', qty });
     void maybeTrackFirstValue(businessId, userId, 'sale');
-    return true;
+    return result(true);
   },
 
   // Local-write-first, same shape as submitCarnetDebt/submitQuickSale above.
@@ -426,7 +454,7 @@ export const useSalesStore = create<SalesStore>((set, get) => ({
     // insuffisant can't be caught live anymore" consequence this is part
     // of — both are the same underlying tradeoff (Decision A), not two
     // separate issues.
-    set({ cart: [], submitting: false, lastSubmitQueued: true, lastSaleId: null });
+    set({ cart: [], submitting: false, lastSubmitQueued: true, lastSaleId: null, lastSaleKey: idempotencyKey });
     haptics.success();
     // A cart sold on credit IS a credit entry (spec: sale_recorded vs credit_recorded).
     trackEvent(isCredit ? 'credit_recorded' : 'sale_recorded', businessId, userId, {
@@ -507,5 +535,5 @@ export const useSalesStore = create<SalesStore>((set, get) => ({
   },
 
   clearError: () => set({ error: null }),
-  reset: () => set({ cart: [], submitting: false, error: null, lastSubmitQueued: false, lastSaleId: null }),
+  reset: () => set({ cart: [], submitting: false, error: null, lastSubmitQueued: false, lastSaleId: null, lastSaleKey: null }),
 }));

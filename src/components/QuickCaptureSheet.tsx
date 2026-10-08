@@ -8,6 +8,8 @@ import { CreditRapideCapture } from '@/src/components/CreditRapideCapture';
 import { VenteRapideCapture, type VenteRapideCaptureHandle } from '@/src/components/VenteRapideCapture';
 import { useTheme, spacing, radius } from '@/src/theme';
 import { formatAmount } from '@/src/utils/format';
+import { ReceiptPanel } from '@/src/components/ReceiptPanel';
+import type { ReceiptSource } from '@/src/utils/saleReceipt';
 
 interface QuickCaptureSheetProps {
   visible: boolean;
@@ -97,6 +99,11 @@ export function QuickCaptureSheet({ visible, onClose, businessId, userId, curren
   const [creditCount, setCreditCount] = useState(0);
   const [creditTotalCents, setCreditTotalCents] = useState(0);
   const reduceMotion = useReduceMotion();
+  // The receipt for the entry she just saved. Opened only by her tapping the
+  // quiet "Reçu" link — a save never opens it by itself, so the rush loop is
+  // never interrupted. It swaps in INSIDE this same sheet (no second Modal);
+  // the capture forms stay mounted underneath, hidden, so nothing resets.
+  const [receipt, setReceipt] = useState<ReceiptSource | null>(null);
 
   // The capture forms are remounted fresh once per OPENING (key = openId), never
   // on close. They used to be keyed on `visible` itself, so closing remounted
@@ -124,6 +131,7 @@ export function QuickCaptureSheet({ visible, onClose, businessId, userId, curren
   useEffect(() => {
     if (!visible) return;
     setMode(initialMode);
+    setReceipt(null);
     setVenteCount(0); setVenteTotalCents(0);
     setCreditCount(0); setCreditTotalCents(0);
   }, [visible, initialMode]);
@@ -166,11 +174,21 @@ export function QuickCaptureSheet({ visible, onClose, businessId, userId, curren
     <FormSheet
       visible={visible}
       onClose={handleClose}
-      title={mode === 'credit' ? 'Crédit rapide' : 'Vente rapide'}
+      title={receipt ? 'Reçu' : mode === 'credit' ? 'Crédit rapide' : 'Vente rapide'}
       presentationStyle="formSheet"
       onShow={() => { presentedRef.current = true; if (mode === 'vente') venteRef.current?.focusPrice(); }}
+      keyboardShouldPersistTaps={receipt ? 'handled' : undefined}
       contentContainerStyle={{ padding: spacing[5], gap: spacing[4] }}
     >
+      {receipt ? (
+        <>
+          <Pressable onPress={() => setReceipt(null)} hitSlop={10} style={{ alignSelf: 'flex-start' }} accessibilityRole="button">
+            <Text variant="label" style={{ color: palette.primary }}>‹ Retour</Text>
+          </Pressable>
+          <ReceiptPanel key={`${receipt.kind}:${receipt.key}`} source={receipt} />
+        </>
+      ) : null}
+      <View style={receipt ? { display: 'none' } : { gap: spacing[4] }}>
       {/* Vente / Crédit segment — both modes render in place below. */}
       <View style={{ flexDirection: 'row', borderRadius: radius.full, borderWidth: 1, padding: 3, alignSelf: 'flex-start', backgroundColor: palette.border + '55', borderColor: palette.border }}>
         <Pressable
@@ -210,6 +228,7 @@ export function QuickCaptureSheet({ visible, onClose, businessId, userId, curren
           userId={userId}
           currency={currency}
           onViewClients={handleViewClients}
+          onReceipt={setReceipt}
           onAdded={amountCents => {
             setCreditCount(c => c + 1);
             setCreditTotalCents(t => t + amountCents);
@@ -222,12 +241,14 @@ export function QuickCaptureSheet({ visible, onClose, businessId, userId, curren
           businessId={businessId}
           userId={userId}
           currency={currency}
+          onReceipt={setReceipt}
           onAdded={amountCents => {
             setVenteCount(c => c + 1);
             setVenteTotalCents(t => t + amountCents);
           }}
         />
       )}
+      </View>
     </FormSheet>
   );
 }

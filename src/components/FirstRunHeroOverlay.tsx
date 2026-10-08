@@ -164,9 +164,9 @@ export function FirstRunHeroOverlay({ businessId, userId, currency, onDone }: Pr
       resolvedClientId = undefined;
     }
 
-    const ok = await submitCarnetDebt(businessId, userId, trimmedName, amountCents, resolvedClientId ?? null);
+    const submitted = await submitCarnetDebt(businessId, userId, trimmedName, amountCents, resolvedClientId ?? null);
     setSaving(false);
-    if (!ok) {
+    if (!submitted.ok) {
       setError('Impossible d\'enregistrer. Vérifiez votre connexion et réessayez.');
       return;
     }
