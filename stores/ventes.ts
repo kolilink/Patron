@@ -214,10 +214,12 @@ function toOverlaySale(v: Vente): import('@/lib/pendingOverlay').OverlaySale {
 // act on). Stale unfiltered rows that claim the tab's status but are absent from
 // the fresh filtered list are dropped — the server says they left it.
 // No silent absence: a pending record is never missing from a tab it belongs to.
-async function overlayForStatus(businessId: string, sellerId: string | undefined, status: string, list: Vente[]): Promise<Vente[]> {
+async function overlayForStatus(businessId: string, sellerId: string | undefined, status: string, list: Vente[], listIsSnapshot = true): Promise<Vente[]> {
   const unfiltered = ((await getVentesCache(`${businessId}:${sellerId ?? 'all'}`)) as Vente[] | null) ?? [];
   const inList = new Set(list.map(s => s.id));
-  const working = [...list, ...unfiltered.filter(s => !inList.has(s.id) && s.status !== status)];
+  // With a real filtered snapshot, same-status rows it lacks are stale (the server says they left).
+  // With NO snapshot there is nothing to contradict the unfiltered baseline, so its rows all count.
+  const working = [...list, ...unfiltered.filter(s => !inList.has(s.id) && (!listIsSnapshot || s.status !== status))];
   const { sales } = await rebuildPendingOverlay(working.map(toOverlaySale), currentOverlayContext());
   return (sales as Vente[])
     .filter(s => s.status === status)
@@ -324,7 +326,7 @@ export const useVentesStore = create<VentesStore>((set, get) => ({
         set({ sales: status ? await overlayForStatus(businessId, sellerId, status, cached) : cached, loading: false, error: null });
       } else if (status && sellerIsSession) {
         // No filtered snapshot yet, but the outbox + the unfiltered snapshot can already answer.
-        const view = await overlayForStatus(businessId, sellerId, status, []);
+        const view = await overlayForStatus(businessId, sellerId, status, [], false);
         if (isStaleBusiness(businessId)) return;
         set(view.length > 0 ? { sales: view, loading: false, error: null } : { loading: true, error: null });
       } else {
@@ -668,51 +670,32 @@ export const useVentesStore = create<VentesStore>((set, get) => ({
       });
     };
 
-    let paymentId: string | undefined;
-
+    // Local-write-first: validate -> enqueue -> reflect -> kick -> return. No
+    // network call happens before the durable write, online or not; the only
+    // place record_payment is ever called is lib/sync.ts's executeOp. A server
+    // refusal (e.g. it would overpay) surfaces later through RefusedOpsNotice.
+    // No paymentId exists until it drains, so the post-save Annuler is unavailable.
     try {
-      const { data, error: rpcErr } = await supabase.rpc('record_payment', rpcPayload);
-      if (rpcErr) throw rpcErr;
-      const result = data as { fully_paid: boolean; payment_id: string };
-      paymentId = result.payment_id;
-      try {
-        await get().refreshPendingOverlay();
-      } catch (overlayErr) {
-        console.error('[recordPayment] refreshPendingOverlay failed (write already succeeded)', overlayErr);
-      }
-      set({ saving: false });
-      notifyCreditPaid();
-      trackEvent('repayment_recorded', sale.business_id, null, { fully_settled: result.fully_paid, scope: 'sale' });
-      return { ok: true, fullyPaid: result.fully_paid, paymentId };
-    } catch (err) {
-      if (isNetworkError(err)) {
-        try {
-          await enqueueOnce('record_payment', rpcPayload);
-        } catch (enqErr) {
-          console.error('[recordPayment] local write failed', enqErr);
-          set({ saving: false, error: isOutboxValidationError(enqErr) ? null : "Impossible d'enregistrer sur cet appareil. Réessayez." });
-          return { ok: false, fullyPaid: false, reason: undefined };
-        }
-        // The write is durable from here on: nothing below may turn this into a failure.
-        try {
-          useSyncStore.setState({ pendingCount: await getQueueCount() });
-        } catch { /* the count refreshes on the next sync tick */ }
-        try {
-          await get().refreshPendingOverlay();
-        } catch (overlayErr) {
-          console.error('[recordPayment] refreshPendingOverlay failed (write already succeeded)', overlayErr);
-        }
-        set({ saving: false });
-        useSyncStore.getState().kick();
-        notifyCreditPaid();
-        trackEvent('repayment_recorded', sale.business_id, null, { fully_settled: fullyPaid, scope: 'sale', queued: true });
-        // No server row yet in the offline fallback — paymentId stays
-        // undefined until the queued RPC drains (undo unavailable until sync).
-        return { ok: true, fullyPaid };
-      }
-      set({ saving: false, error: translateError(err, 'Paiement impossible') });
-      return { ok: false, fullyPaid: false, reason: failureReason(err) };
+      await enqueueOnce('record_payment', rpcPayload);
+    } catch (enqErr) {
+      console.error('[recordPayment] local write failed', enqErr);
+      set({ saving: false, error: isOutboxValidationError(enqErr) ? null : "Impossible d'enregistrer sur cet appareil. Réessayez." });
+      return { ok: false, fullyPaid: false, reason: undefined };
     }
+    // The write is durable from here on: nothing below may turn this into a failure.
+    try {
+      useSyncStore.setState({ pendingCount: await getQueueCount() });
+    } catch { /* the count refreshes on the next sync tick */ }
+    try {
+      await get().refreshPendingOverlay();
+    } catch (overlayErr) {
+      console.error('[recordPayment] refreshPendingOverlay failed (write already succeeded)', overlayErr);
+    }
+    set({ saving: false });
+    useSyncStore.getState().kick();
+    notifyCreditPaid();
+    trackEvent('repayment_recorded', sale.business_id, null, { fully_settled: fullyPaid, scope: 'sale', queued: true });
+    return { ok: true, fullyPaid };
   });
     return attempt.ran ? attempt.value : { ok: false, fullyPaid: false };
   },
@@ -784,53 +767,32 @@ export const useVentesStore = create<VentesStore>((set, get) => ({
       });
     };
 
+    // Local-write-first (see recordPayment above): no supabase call precedes the enqueue.
     try {
-      const { data: rpcData, error: rpcErr } = await supabase.rpc('record_client_payment', rpcPayload);
-      if (rpcErr) throw rpcErr;
-      const result = rpcData as { fully_settled: boolean; payment_ids: string[] };
-      fullySettled = result.fully_settled;
-      paymentIds = result.payment_ids;
-      try {
-        await get().refreshPendingOverlay();
-      } catch (overlayErr) {
-        console.error('[recordClientPayment] refreshPendingOverlay failed (write already succeeded)', overlayErr);
-      }
-      set({ saving: false });
-      trackEvent('repayment_recorded', businessId, null, { fully_settled: fullySettled, scope: 'client' });
-      notifyCreditPaid();
-      return { ok: true, fullySettled, paymentIds };
-    } catch (err) {
-      if (isNetworkError(err)) {
-        try {
-          await enqueueOnce('record_client_payment', rpcPayload);
-        } catch (enqErr) {
-          console.error('[recordClientPayment] local write failed', enqErr);
-          set({ saving: false, error: isOutboxValidationError(enqErr) ? null : "Impossible d'enregistrer sur cet appareil. Réessayez." });
-          return { ok: false, fullySettled: false };
-        }
-        // The write is durable from here on: nothing below may turn this into a failure.
-        try {
-          useSyncStore.setState({ pendingCount: await getQueueCount() });
-        } catch { /* the count refreshes on the next sync tick */ }
-        try {
-          await get().refreshPendingOverlay();
-        } catch (overlayErr) {
-          console.error('[recordClientPayment] refreshPendingOverlay failed (write already succeeded)', overlayErr);
-        }
-        set({ saving: false });
-        useSyncStore.getState().kick();
-        // No server row yet in the offline fallback — paymentIds stays
-        // undefined until the queued RPC drains (undo unavailable until sync).
-        fullySettled = get().sales
-          .filter(s => s.customer_name === customerName && s.business_id === businessId && s.status === 'credit')
-          .reduce((sum, s) => sum + (s.total_amount - (s.discount_amount ?? 0) - (s.amount_paid ?? 0)), 0) < 0.01;
-        trackEvent('repayment_recorded', businessId, null, { fully_settled: fullySettled, scope: 'client' });
-        notifyCreditPaid();
-        return { ok: true, fullySettled, paymentIds };
-      }
-      set({ saving: false, error: translateError(err, 'Paiement impossible') });
-      return { ok: false, fullySettled: false, reason: failureReason(err) };
+      await enqueueOnce('record_client_payment', rpcPayload);
+    } catch (enqErr) {
+      console.error('[recordClientPayment] local write failed', enqErr);
+      set({ saving: false, error: isOutboxValidationError(enqErr) ? null : "Impossible d'enregistrer sur cet appareil. Réessayez." });
+      return { ok: false, fullySettled: false };
     }
+    // The write is durable from here on: nothing below may turn this into a failure.
+    try {
+      useSyncStore.setState({ pendingCount: await getQueueCount() });
+    } catch { /* the count refreshes on the next sync tick */ }
+    try {
+      await get().refreshPendingOverlay();
+    } catch (overlayErr) {
+      console.error('[recordClientPayment] refreshPendingOverlay failed (write already succeeded)', overlayErr);
+    }
+    set({ saving: false });
+    useSyncStore.getState().kick();
+    // No server row yet: paymentIds stays undefined until the queued RPC drains.
+    fullySettled = get().sales
+      .filter(s => s.customer_name === customerName && s.business_id === businessId && s.status === 'credit')
+      .reduce((sum, s) => sum + (s.total_amount - (s.discount_amount ?? 0) - (s.amount_paid ?? 0)), 0) < 0.01;
+    trackEvent('repayment_recorded', businessId, null, { fully_settled: fullySettled, scope: 'client' });
+    notifyCreditPaid();
+    return { ok: true, fullySettled, paymentIds };
   });
     return attempt.ran ? attempt.value : { ok: false, fullySettled: false };
   },

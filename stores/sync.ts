@@ -31,6 +31,7 @@ function refreshAfterSync(): void {
     void require('@/stores/products').useProductStore.getState().fetchProducts(businessId, userId, s.activeMembership?.id, s.activeMembership?.role);
     if (!isVendeur) {
       void require('@/stores/fournisseurs').useFournisseursStore.getState().fetchDebts(businessId);
+      void require('@/stores/fournisseurs').useFournisseursStore.getState().fetchCommandes(businessId);
       void require('@/stores/expenses').useExpensesStore.getState().fetchExpenses(businessId);
     }
     // 3. Accueil re-reads its KPIs / best sellers and then runs the integrity

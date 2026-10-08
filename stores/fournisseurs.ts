@@ -14,6 +14,7 @@ import { useSyncStore } from '@/stores/sync';
 import { getProductCache, saveProductCache, getQueueCount, getVariantsCache, saveVariantsCache } from '@/lib/db';
 import { enqueue, getAllQueueItemsForOverlay, getClientLedgerCache, saveClientLedgerCache } from '@/lib/db';
 import { applyPendingSupplierOps, type QueuedSupplierOp } from '@/lib/pendingSupplier';
+import { applyReceptionOps } from '@/lib/receptionOverlay';
 import { isOutboxValidationError } from '@/lib/outboxValidation';
 
 // A réception books money (stock, cost, transport expense): never twice from a double-tap.
@@ -108,6 +109,8 @@ export interface CommandeAchat {
   proof_attached_by?: string | null;
   proof_attached_at?: string | null;
   lines?: CommandeLigne[];
+  /** Projected from a confirm_reception still in the outbox; replaced by the server row after sync. */
+  _pending?: boolean;
 }
 
 // "Réception intelligente" — Stage 1 (manual draft; Stage 2's AI extraction
@@ -203,6 +206,24 @@ interface FournisseursStore {
 // idempotent on its key, create_supplier_debt on the row id — migration_v243).
 // The lists shown are always BASE (server list or its cache) + still-queued ops,
 // recomputed — see lib/pendingSupplier.ts.
+// Server/cache truth for the commandes list; `commandes` = this + still-queued
+// réceptions (lib/receptionOverlay.ts). Never patched in place.
+let _baseCommandes: { businessId: string; list: CommandeAchat[] } | null = null;
+
+async function publishCommandes(businessId: string): Promise<void> {
+  if (isStaleBusiness(businessId)) return;
+  const base = _baseCommandes && _baseCommandes.businessId === businessId
+    ? _baseCommandes.list
+    : useFournisseursStore.getState().commandes.filter(c => !c._pending);
+  let ops: Awaited<ReturnType<typeof getAllQueueItemsForOverlay>>['ok'] = [];
+  try { ops = (await getAllQueueItemsForOverlay()).ok; } catch { /* unreadable outbox: show the base alone */ }
+  if (isStaleBusiness(businessId)) return;
+  const names = new Map(useFournisseursStore.getState().fournisseurs.map(f => [f.id, f.name]));
+  useFournisseursStore.setState({
+    commandes: applyReceptionOps(base, ops, businessId, id => (id ? names.get(id) ?? '—' : 'Marché')),
+  });
+}
+
 let _baseDebts: { businessId: string; list: SupplierDebt[] } | null = null;
 let _basePayments: { businessId: string; supplierId: string; list: SupplierPayment[] } | null = null;
 
@@ -448,7 +469,9 @@ export const useFournisseursStore = create<FournisseursStore>((set, get) => ({
         if (cached) {
           const ts = await getCacheTimestamp('commande_cache', businessId);
           if (isStaleBusiness(businessId)) return;
+          _baseCommandes = { businessId, list: cached };
           set({ commandes: cached, loading: false, offline: true, offlineSince: ts, error: null });
+          await publishCommandes(businessId);
           return;
         }
         set({ loading: false, offline: true, offlineSince: null, error: null });
@@ -464,7 +487,9 @@ export const useFournisseursStore = create<FournisseursStore>((set, get) => ({
     } as CommandeAchat));
     void saveCommandeCache(businessId, commandes as unknown[]);
     if (isStaleBusiness(businessId)) { set({ loading: false }); return; }
+    _baseCommandes = { businessId, list: commandes };
     set({ commandes, loading: false, offline: false, offlineSince: null });
+    await publishCommandes(businessId);
   },
 
   loadCommandeLines: async (commandeId) => {
@@ -539,6 +564,7 @@ export const useFournisseursStore = create<FournisseursStore>((set, get) => ({
     }
     // The write is durable from here on: nothing below may turn this into a failure.
     try { useSyncStore.setState({ pendingCount: await getQueueCount() }); } catch { /* refreshed on the next sync tick */ }
+    try { await publishCommandes(businessId); } catch (err) { console.error('[confirmReception] history projection failed (write already succeeded)', err); }
     try { await applyReceptionStockLocally(businessId, input.lines); } catch (err) {
       console.error('[confirmReception] local stock estimate failed (write already succeeded)', err);
     }
@@ -715,5 +741,5 @@ export const useFournisseursStore = create<FournisseursStore>((set, get) => ({
   },
 
   clearError: () => set({ error: null }),
-  reset: () => { _baseDebts = null; _basePayments = null; set({ fournisseurs: [], commandes: [], debts: [], payments: [], loading: false, saving: false, error: null, offline: false, offlineSince: null }); },
+  reset: () => { _baseCommandes = null; _baseDebts = null; _basePayments = null; set({ fournisseurs: [], commandes: [], debts: [], payments: [], loading: false, saving: false, error: null, offline: false, offlineSince: null }); },
 }));

@@ -99,9 +99,11 @@ describe('wiring (source-level — there is no JSX/native transform in this jest
     expect(src).not.toMatch(/key=\{`\$\{visible\}/);
     expect(src).toMatch(/key=\{openId\}/);
   });
-  it('the optional client upsert in Crédit rapide is skipped offline and capped', () => {
+  it('the optional client upsert in Crédit rapide runs AFTER the durable enqueue, is skipped offline and capped', () => {
     const src = read('src/components/CreditRapideCapture.tsx');
-    expect(src).toMatch(/!resolvedClientId && !isKnownOffline\(\)/);
+    expect(src.indexOf('await submitCarnetDebt(')).toBeGreaterThan(-1);
+    expect(src.indexOf("from('clients').upsert(")).toBeGreaterThan(src.indexOf('await submitCarnetDebt('));
+    expect(src).toMatch(/!clientId && !isKnownOffline\(\)/);
     expect(src).toMatch(/CLIENT_LINK_CAP_MS/);
   });
 });

@@ -268,32 +268,30 @@ export function CreditRapideCapture({ businessId, userId, currency, onViewClient
     setSaving(true);
     setError(null);
 
-    let resolvedClientId = clientId;
-    if (!resolvedClientId && !isKnownOffline()) {
-      // Best-effort link to a client row, NEVER a gate on recording the debt:
-      // submitCarnetDebt already accepts a null client id. Skipped outright
-      // when the device is known offline, and raced against a short cap
-      // otherwise — an unbounded await here was the "Chargement…" hang on a
-      // weak/dead connection, before the local write ever happened.
-      try {
-        const { data } = await withTimeout(
-          supabase.from('clients').upsert(
-            { business_id: businessId, name: trimmedName },
-            { onConflict: 'business_id,name' },
-          ).select('id').single(),
-          CLIENT_LINK_CAP_MS,
-        );
-        resolvedClientId = data?.id ?? undefined;
-      } catch {
-        resolvedClientId = undefined;
-      }
-    }
-
-    const ok = await submitCarnetDebt(businessId, userId, trimmedName, parsed * 100, resolvedClientId ?? null);
+    // Critical path = validate -> durable enqueue -> reflect -> return. The client
+    // row is NOT part of it: submit goes first with the client id we already have
+    // (null for a new name — the drain links the debt to the client by name).
+    const ok = await submitCarnetDebt(businessId, userId, trimmedName, parsed * 100, clientId ?? null);
     setSaving(false);
     if (!ok) {
       setError('Impossible d\'enregistrer. Vérifiez votre connexion et réessayez.');
       return;
+    }
+    if (!clientId && !isKnownOffline()) {
+      // Best-effort, AFTER the debt is safe: gives the new name a clients row so
+      // the picker shows it now. Never awaited by anything the vendor waits on.
+      void (async () => {
+        try {
+          await withTimeout(
+            supabase.from('clients').upsert(
+              { business_id: businessId, name: trimmedName },
+              { onConflict: 'business_id,name' },
+            ).select('id').single(),
+            CLIENT_LINK_CAP_MS,
+          );
+          setRefreshKey(k => k + 1);
+        } catch { /* the drain links the debt to the client by name */ }
+      })();
     }
     const wasQueued = useSalesStore.getState().lastCarnetDebtQueued;
     trackEvent('quick_capture_submitted', businessId, userId, { mode: 'credit', queued: wasQueued });

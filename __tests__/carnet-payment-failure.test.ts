@@ -42,7 +42,6 @@ jest.mock('@/stores/auth', () => ({
 import { useVentesStore, type Vente } from '@/stores/ventes';
 
 const NETWORK_ERROR = { message: 'Failed to fetch', code: '', details: '', hint: '' };
-const REJECTED = { message: 'Le montant dépasse le solde restant dû', code: 'P0001', details: '', hint: '' };
 
 const sale: Vente = {
   id: 'sale-1', business_id: 'biz-1', customer_name: 'Aïssatou', client_id: null, seller_id: 'u1', seller_name: 'V',
@@ -61,40 +60,36 @@ beforeEach(() => {
 const payClient = (key?: string) => useVentesStore.getState().recordClientPayment('Aïssatou', 'biz-1', 5000, 'especes', '2026-10-04', key);
 const paySale = (key?: string) => useVentesStore.getState().recordPayment('sale-1', 5000, 'especes', '2026-10-04', key);
 
+import { enqueue } from '@/lib/db';
+
 describe('a forced payment failure speaks and records nothing', () => {
-  it('a server refusal → ok:false, her reason is the server sentence, nothing queued, nothing stuck', async () => {
-    rpcImpl = async () => ({ data: null, error: REJECTED });
+  it('a local (SQLite) write failure → ok:false, nothing queued, nothing stuck, no network attempted', async () => {
+    (enqueue as jest.Mock).mockRejectedValueOnce(new Error('SQLite disk I/O error'));
     const r = await payClient('key-A');
     expect(r.ok).toBe(false);
-    expect(r.reason).toBe('Le montant dépasse le solde restant dû');
     expect(mockQueue).toHaveLength(0);
     expect(useVentesStore.getState().saving).toBe(false);
+    expect(rpcCalls).toHaveLength(0);
   });
-  it('an unknown technical failure gives NO raw reason (nothing she cannot act on)', async () => {
-    rpcImpl = async () => ({ data: null, error: { message: 'relation "pk_x" exploded at 0x7f3a', code: 'XX000' } });
+  it('a malformed payload is refused by the outbox validator → ok:false, no generic message', async () => {
+    const { OutboxValidationError } = jest.requireActual('@/lib/outboxValidation');
+    (enqueue as jest.Mock).mockRejectedValueOnce(new OutboxValidationError('record_client_payment', ['p_amount must be positive']));
     const r = await payClient('key-B');
     expect(r.ok).toBe(false);
-    expect(r.reason).toBeUndefined();
-  });
-  it('a known technical failure is translated into plain French, never shown raw', async () => {
-    rpcImpl = async () => ({ data: null, error: { message: 'duplicate key value violates unique constraint "pk_x"', code: '23505' } });
-    const r = await payClient('key-B2');
-    expect(r.reason).toBe('Cette entrée existe déjà');
+    expect(useVentesStore.getState().error).toBeNull();   // enqueue() already toasted the specific one
   });
 });
 
 describe('retry after a failure can never double-record', () => {
-  it('fail, then retry with the SAME key: both calls carry one key, exactly one success', async () => {
-    rpcImpl = async () => ({ data: null, error: REJECTED });
+  it('fail, then retry with the SAME key: exactly one outbox row, never a network call', async () => {
+    (enqueue as jest.Mock).mockRejectedValueOnce(new Error('SQLite disk I/O error'));
     expect((await payClient('key-C')).ok).toBe(false);
-    rpcImpl = async () => ({ data: { fully_settled: false, payment_ids: ['p1'] }, error: null });
     expect((await payClient('key-C')).ok).toBe(true);
-    const keys = rpcCalls.filter(c => c.fn === 'record_client_payment').map(c => c.args.p_idempotency_key);
-    expect(keys).toEqual(['key-C', 'key-C']);         // the server claims this key once
-    expect(mockQueue).toHaveLength(0);
+    expect(mockQueue.map(q => q.idempotency_key)).toEqual(['key-C']);   // the server claims this key once
+    expect(rpcCalls).toHaveLength(0);
   });
 
-  it('offline: the write is queued once even if the confirmation step throws afterwards, and a retry adds no second row', async () => {
+  it('the write is queued once even if the confirmation step throws afterwards, and a retry adds no second row', async () => {
     countThrows = true;                                  // a post-write step blows up
     const first = await payClient('key-D');
     expect(first.ok).toBe(true);                         // the write is durable → NOT reported as a failure
@@ -111,15 +106,17 @@ describe('retry after a failure can never double-record', () => {
     expect(mockQueue.filter(q => q.operation === 'record_payment')).toHaveLength(1);
   });
 
-  it('two taps in the same instant collapse into one call', async () => {
+  it('two taps in the same instant collapse into one outbox row', async () => {
     let release!: () => void;
     const gate = new Promise<void>(r => { release = r; });
-    rpcImpl = async () => { await gate; return { data: { fully_settled: false, payment_ids: ['p'] }, error: null }; };
+    (enqueue as jest.Mock).mockImplementationOnce(async (operation: string, payload: any) => {
+      await gate; mockQueue.push({ operation, idempotency_key: payload.p_idempotency_key, payload });
+    });
     const a = payClient('key-F');
     const b = payClient('key-F');
     release();
     const [ra, rb] = await Promise.all([a, b]);
-    expect(rpcCalls.filter(c => c.fn === 'record_client_payment')).toHaveLength(1);
+    expect(mockQueue).toHaveLength(1);
     expect(ra.ok).toBe(true);
     expect(rb.ok).toBe(false);                           // swallowed, not a second payment
   });
