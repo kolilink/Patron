@@ -3,7 +3,8 @@ import { supabase } from '@/lib/supabase';
 import { generateId, generateFallbackName } from '@/lib/id';
 import { translateError } from '@/lib/errors';
 import { trackEvent } from '@/lib/analytics';
-import { saveVentesCache, getVentesCache, getCacheTimestamp, enqueue, getQueueCount } from '@/lib/db';
+import { saveVentesCache, getVentesCache, getCacheTimestamp, enqueue, getQueueCount, saveSaleDetailCache, getSaleDetailCache } from '@/lib/db';
+import { isKnownOffline } from '@/lib/connectivity';
 import { failureReason } from '@/src/utils/failure';
 import { enqueueOnce } from '@/lib/outbox';
 import { createKeyedInflightGuard } from '@/lib/inflight';
@@ -136,6 +137,9 @@ interface VentesStore {
   // session's default scope. Sets no state.
   readOverlayPair: () => Promise<{ baseline: Vente[]; overlay: Vente[] }>;
   loadDetail: (saleId: string) => Promise<void>;
+  // Sale ids whose detail could not be loaded at all (offline, nothing cached): the
+  // detail view shows an offline empty state for these instead of a skeleton.
+  detailUnavailable: Record<string, boolean>;
   // `idempotencyKey` is optional: a caller that may retry after a failure passes the SAME key on every
   // attempt, so a retry can never record the payment twice (locally or at the server).
   // `reason` is the one thing worth telling her about a failure (see src/utils/failure.ts), never a raw message.
@@ -232,6 +236,18 @@ async function overlayForStatus(businessId: string, sellerId: string | undefined
 // same tick must collapse into one call.
 const paymentGuard = createKeyedInflightGuard();
 
+// Write-through for a local mutation: keeps the cached sale detail equal to what
+// the phone knows, so it can never serve a state the phone knows is stale.
+async function patchDetailCache(
+  saleId: string,
+  fn: (d: { payments?: VentePayment[]; amount_paid?: number } & Record<string, unknown>) => unknown,
+): Promise<void> {
+  try {
+    const cached = (await getSaleDetailCache(saleId)) as Record<string, unknown> | null;
+    if (cached) await saveSaleDetailCache(saleId, fn(cached));
+  } catch { /* the cache is an optimisation; the write itself already succeeded */ }
+}
+
 export const useVentesStore = create<VentesStore>((set, get) => ({
   sales: [],
   salesFetchedFor: null,
@@ -240,6 +256,7 @@ export const useVentesStore = create<VentesStore>((set, get) => ({
   error: null,
   offline: false,
   offlineSince: null,
+  detailUnavailable: {},
 
   readOverlayPair: async () => {
     const session = useAuthStore.getState().session;
@@ -511,21 +528,49 @@ export const useVentesStore = create<VentesStore>((set, get) => ({
 
   loadDetail: async (saleId) => {
     const businessId = get().sales.find(s => s.id === saleId)?.business_id;
-    const [linesRes, paysRes, editsRes] = await Promise.all([
-      supabase.from('so_lines').select('*, product:products(name, cost_price), variant:product_variants(cost_price)').eq('order_id', saleId),
-      supabase
-        .from('payments')
-        .select('id, method, amount, date')
-        .eq('order_id', saleId)
-        .order('date', { ascending: true }),
-      supabase
-        .from('sale_order_edits')
-        .select('id, edit_number, edited_by, edited_at, reason, before, after')
-        .eq('order_id', saleId)
-        .order('edit_number', { ascending: false }),
-    ]);
+    type Detail = Pick<Vente, 'lines' | 'payments' | 'amount_paid' | 'edits'>;
+    const apply = (d: Detail) => set(state => ({
+      sales: state.sales.map(s => (s.id === saleId ? { ...s, ...d } : s)),
+      detailUnavailable: state.detailUnavailable[saleId] ? { ...state.detailUnavailable, [saleId]: false } : state.detailUnavailable,
+    }));
 
-    if (linesRes.error || paysRes.error) return;
+    // Cache first: a sale that already shows its lines keeps showing them; one that
+    // does not gets the cached detail at once. The network below only revalidates.
+    let shown = !!get().sales.find(s => s.id === saleId)?.lines;
+    if (!shown) {
+      const cached = (await getSaleDetailCache(saleId)) as Detail | null;
+      if (cached && Array.isArray(cached.lines)) {
+        apply({ lines: cached.lines, payments: cached.payments, amount_paid: cached.amount_paid, edits: cached.edits });
+        shown = true;
+      }
+    }
+    const markUnavailable = () => {
+      if (!shown) set(state => ({ detailUnavailable: { ...state.detailUnavailable, [saleId]: true } }));
+    };
+    // Known offline: the refresh cannot happen — never wait on it.
+    if (isKnownOffline()) { markUnavailable(); return; }
+
+    let linesRes, paysRes, editsRes;
+    try {
+      [linesRes, paysRes, editsRes] = await Promise.all([
+        supabase.from('so_lines').select('*, product:products(name, cost_price), variant:product_variants(cost_price)').eq('order_id', saleId),
+        supabase
+          .from('payments')
+          .select('id, method, amount, date')
+          .eq('order_id', saleId)
+          .order('date', { ascending: true }),
+        supabase
+          .from('sale_order_edits')
+          .select('id, edit_number, edited_by, edited_at, reason, before, after')
+          .eq('order_id', saleId)
+          .order('edit_number', { ascending: false }),
+      ]);
+    } catch {
+      markUnavailable();
+      return;
+    }
+
+    if (linesRes.error || paysRes.error) { markUnavailable(); return; }
 
     type ProductJoin = { name: string; cost_price: number } | null;
     type VariantJoin = { cost_price: number } | null;
@@ -604,11 +649,13 @@ export const useVentesStore = create<VentesStore>((set, get) => ({
       }));
     }
 
-    set(state => ({
-      sales: state.sales.map(s =>
-        s.id === saleId ? { ...s, lines, payments, amount_paid, edits } : s,
-      ),
-    }));
+    const fresh = { lines, payments, amount_paid, edits };
+    // A queued payment/cancel is not on the server yet: swapping in the server's
+    // view now would show (and cache) a stale state. The next load after the
+    // drain brings the real one; until then what the phone knows stays.
+    if (shown && useSyncStore.getState().pendingCount > 0) return;
+    void saveSaleDetailCache(saleId, fresh);
+    apply(fresh);
   },
 
   // Local-write-first (§5, same shape as recordClientPayment/cancelSale
@@ -683,6 +730,11 @@ export const useVentesStore = create<VentesStore>((set, get) => ({
       return { ok: false, fullyPaid: false, reason: undefined };
     }
     // The write is durable from here on: nothing below may turn this into a failure.
+    void patchDetailCache(saleId, d => ({
+      ...d,
+      payments: [...(d.payments ?? []), { id: idempotencyKey, method, amount, date }],
+      amount_paid: (d.amount_paid ?? 0) + amount,
+    }));
     try {
       useSyncStore.setState({ pendingCount: await getQueueCount() });
     } catch { /* the count refreshes on the next sync tick */ }
@@ -841,6 +893,8 @@ export const useVentesStore = create<VentesStore>((set, get) => ({
       return false;
     }
 
+    // cancel_sale deletes the sale's payments server-side: mirror it in the cached detail.
+    void patchDetailCache(saleId, d => ({ ...d, payments: [], amount_paid: 0 }));
     const count = await getQueueCount();
     useSyncStore.setState({ pendingCount: count });
     try {

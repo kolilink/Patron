@@ -3,6 +3,7 @@ import { localDateISO } from '@/src/utils/dates';
 import { supabase } from '@/lib/supabase';
 import { saveRapportsCache, getRapportsCache, getCacheTimestamp } from '@/lib/db';
 import { isNetworkError, withTimeout, withNetworkRetry, reportOfflineFallback } from '@/lib/sync';
+import { isKnownOffline } from '@/lib/connectivity';
 import { useAuthStore } from '@/stores/auth';
 import { useVentesStore } from '@/stores/ventes';
 import { useSyncStore } from '@/stores/sync';
@@ -274,6 +275,7 @@ interface SlotEntry {
   end: string;
   role: string;
   userId: string;
+  key?: string; // cache key this entry was built for (cache-first reuse)
 }
 
 const slots: Partial<Record<SlotName, SlotEntry>> = {};
@@ -471,6 +473,21 @@ function safeParse<T>(raw: unknown, parse: (r: Record<string, unknown>) => T): T
   try { return parse(raw); } catch { return null; }
 }
 
+// Cache-first (stale-while-revalidate): what is already on screen, or in the
+// SQLite cache, is shown at once and the network only revalidates it. A loading
+// state is allowed only when there is truly nothing to show.
+//   'memory'  -> this slot already displays this exact key (left untouched)
+//   {base,ts} -> a usable cached report (caller displays it immediately)
+//   null      -> nothing to show: the one legitimate skeleton
+async function warmStart<T>(
+  slot: SlotName, cacheKey: string, parse: (r: Record<string, unknown>) => T,
+): Promise<'memory' | { base: T; ts: number | null } | null> {
+  if (slots[slot]?.key === cacheKey) return 'memory';
+  const base = safeParse(await readCacheSafe(cacheKey), parse);
+  if (!base) return null;
+  return { base, ts: await getCacheTimestamp('rapports_cache', cacheKey) };
+}
+
 // Shared by fetchYearReport/fetchFilterReport/fetchPreviousYearReport.
 async function loadPeriodReport(
   businessId: string, periodStart: string, periodEnd: string, role: string, userId: string,
@@ -481,9 +498,34 @@ async function loadPeriodReport(
   const dataKey = STATE_KEY[slot];
   const errorKey = slot === 'year' ? 'yearReportError' : slot === 'filter' ? 'filterReportError' : null;
   refetchers[slot] = () => loadPeriodReport(businessId, periodStart, periodEnd, role, userId, set, slot);
-  set({ [loadingKey]: true, ...(errorKey ? { [errorKey]: null } : {}) } as Partial<RapportsState>);
-
   const cacheKey = `${businessId}:${role}:${userId}:${periodStart}:${periodEnd}`;
+  const entryFor = (base: PeriodReport, p: Pairing): SlotEntry => ({ base, pairing: p, start: periodStart, end: periodEnd, role, userId, key: cacheKey });
+
+  const warm = await warmStart(slot, cacheKey, parsePeriodReport);
+  if (isStaleBusiness(businessId)) return;
+  const shown = warm !== null;
+  if (warm && warm !== 'memory') {
+    const entry = entryFor(warm.base, await readPairing());
+    if (isStaleBusiness(businessId)) return;
+    slots[slot] = entry;
+    set({ [dataKey]: displayEntry(slot, entry), [loadingKey]: false, ...(errorKey ? { [errorKey]: null } : {}) } as Partial<RapportsState>);
+  } else if (!shown) {
+    set({ [loadingKey]: true, ...(errorKey ? { [errorKey]: null } : {}) } as Partial<RapportsState>);
+  }
+
+  // Known offline: the refresh cannot happen — show what we have, never wait.
+  if (isKnownOffline()) {
+    if (shown) {
+      const ts = warm && warm !== 'memory' ? warm.ts : await getCacheTimestamp('rapports_cache', cacheKey);
+      if (isStaleBusiness(businessId)) return;
+      set({ [loadingKey]: false, periodOffline: true, periodOfflineSince: ts } as Partial<RapportsState>);
+    } else {
+      delete slots[slot];
+      set({ [dataKey]: null, [loadingKey]: false, periodOffline: true, periodOfflineSince: null, ...(errorKey ? { [errorKey]: null } : {}) } as Partial<RapportsState>);
+    }
+    return;
+  }
+
   const { result, pairing } = await fetchPaired(
     () => withNetworkRetry(() =>
       supabase.rpc('get_period_report', {
@@ -498,11 +540,16 @@ async function loadPeriodReport(
   );
   if (isStaleBusiness(businessId)) return;
   const { data, error } = result;
-  const entryFor = (base: PeriodReport, p: Pairing): SlotEntry => ({ base, pairing: p, start: periodStart, end: periodEnd, role, userId });
-
   if (error || !data) {
     const network = isNetworkError(error);
     if (network) reportOfflineFallback('rapports.loadPeriodReport', error);
+    if (shown && warm === 'memory') {
+      // A failed revalidation never blanks what is displayed.
+      const ts = await getCacheTimestamp('rapports_cache', cacheKey);
+      if (isStaleBusiness(businessId)) return;
+      set({ [loadingKey]: false, ...(network ? { periodOffline: true, periodOfflineSince: ts } : {}) } as Partial<RapportsState>);
+      return;
+    }
     const base = safeParse(await readCacheSafe(cacheKey), parsePeriodReport);
     if (isStaleBusiness(businessId)) return;
     if (base) {
@@ -577,7 +624,6 @@ export const useRapportsStore = create<RapportsState>((set) => ({
 
   fetchReportsSnapshot: async (businessId, periodDays, role, userId, today) => {
     refetchers.snapshot = () => useRapportsStore.getState().fetchReportsSnapshot(businessId, periodDays, role, userId, today);
-    set({ snapshotLoading: true, snapshotError: null });
     // rapports_cache's `business_id` column is a plain TEXT PRIMARY KEY (no FK),
     // so it doubles as a generic cache key here — packing in periodDays/role/userId
     // is a value-only change, no migration needed. Role and user are in the key so
@@ -586,6 +632,33 @@ export const useRapportsStore = create<RapportsState>((set) => ({
     // the same role/user, so both layers agree).
     const cacheKey = `${businessId}:${role}:${userId}:${periodDays}`;
     const todayIso = today ?? localDateISO();
+    const entryFor = (base: ReportsSnapshot, p: Pairing): SlotEntry => ({
+      base, pairing: p, start: base.period_start || dayOf(new Date()), end: dayOf(new Date()), role, userId, key: cacheKey,
+    });
+
+    // Cache-first: see warmStart. Loading exists only with nothing to show.
+    const warm = await warmStart('snapshot', cacheKey, parseSnapshot);
+    if (isStaleBusiness(businessId)) return;
+    const shown = warm !== null;
+    if (warm && warm !== 'memory') {
+      const entry = entryFor(warm.base, await readPairing());
+      if (isStaleBusiness(businessId)) return;
+      slots.snapshot = entry;
+      set({ snapshot: displayEntry('snapshot', entry) as ReportsSnapshot, snapshotLoading: false, snapshotError: null });
+    } else if (!shown) {
+      set({ snapshotLoading: true, snapshotError: null });
+    }
+    if (isKnownOffline()) {
+      if (shown) {
+        const ts = warm && warm !== 'memory' ? warm.ts : await getCacheTimestamp('rapports_cache', cacheKey);
+        if (isStaleBusiness(businessId)) return;
+        set({ snapshotLoading: false, offline: true, offlineSince: ts });
+      } else {
+        delete slots.snapshot;
+        set({ snapshot: null, snapshotLoading: false, offline: true, offlineSince: null });
+      }
+      return;
+    }
     const { result, pairing } = await fetchPaired(
       () => withNetworkRetry(() =>
         supabase.rpc('get_reports_snapshot', {
@@ -600,13 +673,16 @@ export const useRapportsStore = create<RapportsState>((set) => ({
     );
     if (isStaleBusiness(businessId)) return;
     const { data, error } = result;
-    const entryFor = (base: ReportsSnapshot, p: Pairing): SlotEntry => ({
-      base, pairing: p, start: base.period_start || dayOf(new Date()), end: dayOf(new Date()), role, userId,
-    });
-
     if (error || !data) {
       const network = isNetworkError(error);
       if (network) reportOfflineFallback('rapports.fetchReportsSnapshot', error);
+      if (shown && warm === 'memory') {
+        // A failed revalidation never blanks what is displayed.
+        const ts = await getCacheTimestamp('rapports_cache', cacheKey);
+        if (isStaleBusiness(businessId)) return;
+        set({ snapshotLoading: false, ...(network ? { offline: true, offlineSince: ts } : {}) });
+        return;
+      }
       const base = safeParse(await readCacheSafe(cacheKey), parseSnapshot);
       if (isStaleBusiness(businessId)) return;
       if (base) {

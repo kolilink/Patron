@@ -393,6 +393,7 @@ function DetailModal({ sale, currency, businessName, singleVendor, role, onClose
   // path now has — an honest "connexion requise" hint when offline, not an
   // obscure RPC failure after tapping through the whole edit form.
   const offline = useVentesStore(s => s.offline);
+  const detailUnavailable = useVentesStore(s => !!s.detailUnavailable[sale?.id ?? '']);
   const [showPaymentSheet, setShowPaymentSheet] = useState(false);
   const [showReceipt, setShowReceipt] = useState(false);
   const [showCancelForm, setShowCancelForm] = useState(false);
@@ -769,7 +770,11 @@ function DetailModal({ sale, currency, businessName, singleVendor, role, onClose
           </Card>
         )}
 
-        {!sale.lines ? <DetailSkeleton /> : (
+        {!sale.lines && detailUnavailable ? (
+          <Card>
+            <Text variant="body" color="secondary" style={{ textAlign: 'center' }}>Données non disponibles hors ligne</Text>
+          </Card>
+        ) : !sale.lines ? <DetailSkeleton /> : (
           <View style={[{ gap: spacing[2] }, displayState === 'annule' && { opacity: 0.5 }]}>
             {/* Single unified card — articles, info, payments, profit */}
             <Card style={{ gap: 0, overflow: 'hidden', padding: 0 }}>

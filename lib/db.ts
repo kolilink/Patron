@@ -1299,6 +1299,18 @@ export async function getClientLedgerCache(cacheKey: string): Promise<unknown | 
   }
 }
 
+// Sale detail (lines + payments + edits), keyed by sale id. Reuses the generic
+// client_ledger_cache table (cache_key TEXT, no schema change) under a
+// `saledetail:` prefix so ventes/index.tsx can show a sale's lines at once and
+// offline instead of an endless skeleton.
+export async function saveSaleDetailCache(saleId: string, data: unknown): Promise<void> {
+  await saveClientLedgerCache('saledetail:' + saleId, data);
+}
+
+export async function getSaleDetailCache(saleId: string): Promise<unknown | null> {
+  return getClientLedgerCache('saledetail:' + saleId);
+}
+
 // ─── Cache diagnostics ───────────────────────────────────────────────────────
 // Every save*Cache/get*Cache pair above swallows its own errors (`catch {}`)
 // so a write failure has never been observable — this exists to answer, on
