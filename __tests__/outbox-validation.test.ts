@@ -50,6 +50,10 @@ const valid: Record<string, () => Record<string, any>> = {
     p_lines: [{ product_id: PROD, variant_id: null, name: 'Riz', qty: 10, unit_cost_cents: 40000, sale_price_cents: null }],
     p_transport_cost_cents: 0, p_margin_percent: null, p_received_date: null, p_idempotency_key: KEY,
   }),
+  adjust_stock: () => ({
+    stockMove: { id: U(12), business_id: BIZ, product_id: PROD, type: 'perte', qty: 3, ref_type: null, note: null },
+    productUpdate: { id: PROD, stock_qty: 7 },
+  }),
   pay_supplier_debt: () => ({ p_business_id: BIZ, p_supplier_id: SUP, p_amount_cents: 100000, p_idempotency_key: KEY }),
   create_supplier_debt: () => ({ id: U(11), business_id: BIZ, supplier_id: SUP, amount: 100000, description: null, date: '2026-10-07', amount_paid: 0, created_by: USER }),
 };
@@ -180,6 +184,19 @@ const bad: Record<string, Mut[]> = {
     ['missing key', p => { delete p.p_idempotency_key; }],
     ['bad received date', p => { p.p_received_date = '2026-02-31'; }],
   ],
+  adjust_stock: [
+    ['missing stockMove', p => { delete p.stockMove; }],
+    ['bad move id', p => { p.stockMove.id = 'm'; }],
+    ['bad product id', p => { p.stockMove.product_id = null; }],
+    ['bad type', p => { p.stockMove.type = 'ajout'; }],
+    ['zero qty', p => { p.stockMove.qty = 0; }],
+    ['fractional qty', p => { p.stockMove.qty = 1.5; }],
+    ['non-string note', p => { p.stockMove.note = 4; }],
+    ['missing productUpdate', p => { delete p.productUpdate; }],
+    ['bad update id', p => { p.productUpdate.id = 'x'; }],
+    ['negative stock', p => { p.productUpdate.stock_qty = -1; }],
+    ['fractional stock', p => { p.productUpdate.stock_qty = 2.5; }],
+  ],
   pay_supplier_debt: [
     ['zero amount', p => { p.p_amount_cents = 0; }],
     ['null amount', p => { p.p_amount_cents = null; }],
@@ -260,9 +277,8 @@ describe('outbox payload validation', () => {
     expect(runAsync).not.toHaveBeenCalled();
   });
 
-  it('refuses unknown and legacy-only operations (adjust_stock)', async () => {
+  it('refuses unknown operations', async () => {
     await expect(enqueue('drop_database', { a: 1 })).rejects.toBeInstanceOf(OutboxValidationError);
-    await expect(enqueue('adjust_stock', { stockMove: {}, productUpdate: {} })).rejects.toBeInstanceOf(OutboxValidationError);
     await expect(enqueue('toString', {})).rejects.toBeInstanceOf(OutboxValidationError);
     expect(runAsync).not.toHaveBeenCalled();
   });

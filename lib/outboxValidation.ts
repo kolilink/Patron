@@ -281,6 +281,32 @@ const createSupplierDebt: Check = (o, p) => {
   date(p, o, 'date');
 };
 
+// Absolute-stock overwrite. No store queues it any more (adjustStock uses
+// adjust_stock_move) but drain still replays it and RefusedOpsNotice can
+// re-enqueue a refused one, so it keeps a real contract.
+const adjustStockLegacy: Check = (o, p) => {
+  const move = o.stockMove;
+  if (!isObj(move)) p.push('stockMove must be an object');
+  else {
+    const mp: Problems = [];
+    uuid(mp, move, 'id'); uuid(mp, move, 'business_id'); uuid(mp, move, 'product_id');
+    oneOf(mp, move, 'type', STOCK_MOVE_TYPES);
+    const q = move.qty;
+    if (typeof q !== 'number' || !Number.isSafeInteger(q) || q <= 0) mp.push('qty must be a positive integer');
+    freeText(mp, move, 'ref_type'); freeText(mp, move, 'note');
+    prefixed(p, 'stockMove.', mp);
+  }
+  const upd = o.productUpdate;
+  if (!isObj(upd)) p.push('productUpdate must be an object');
+  else {
+    const up: Problems = [];
+    uuid(up, upd, 'id');
+    const sq = upd.stock_qty;
+    if (typeof sq !== 'number' || !Number.isSafeInteger(sq) || sq < 0) up.push('stock_qty must be a non-negative integer');
+    prefixed(p, 'productUpdate.', up);
+  }
+};
+
 export const OUTBOX_CONTRACTS: Record<string, Check> = {
   submit_sale: submitSale,
   submit_quick_sale: submitQuickSale,
@@ -300,8 +326,7 @@ export const OUTBOX_CONTRACTS: Record<string, Check> = {
   confirm_reception: confirmReception,
   pay_supplier_debt: payDebt,
   create_supplier_debt: createSupplierDebt,
-  // `adjust_stock` (absolute-stock overwrite) is a LEGACY shape drain still
-  // understands for rows queued by old builds; nothing may enqueue it anymore.
+  adjust_stock: adjustStockLegacy,
 };
 
 /**
