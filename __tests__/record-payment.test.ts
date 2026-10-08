@@ -1,9 +1,6 @@
-// record_payment — online-first (live RPC) with an offline enqueue fallback,
-// restored from the pre-rewrite shape so recordPayment() returns the real
-// server-side payment_id for the SaveConfirmation "Annuler" undo
-// (migration_v205's jsonb contract, PR #41). Only lib/sync.ts's executeOp
-// calls record_payment at drain time when the original live call failed with
-// a network error and the payment was enqueued instead.
+// record_payment — local-write-first: validate -> enqueue -> reflect -> kick ->
+// return. No supabase call precedes the durable write (network-kill proof);
+// the only caller of the RPC is lib/sync.ts's executeOp at drain time.
 
 jest.mock('@/lib/supabase', () => ({
   supabase: {
@@ -81,19 +78,17 @@ beforeEach(() => {
   useVentesStore.setState({ sales: [creditSale], saving: false, error: null, refreshPendingOverlay: mockRefreshPendingOverlay as never });
   mockPendingCount = 0;
   jest.clearAllMocks();
-  // Default: the live RPC succeeds and returns the jsonb contract.
-  (supabase.rpc as jest.Mock).mockResolvedValue({
-    data: { fully_paid: true, payment_id: 'pay-server-1' },
-    error: null,
-  });
 });
 
-describe('record_payment — online-first with offline fallback (§5)', () => {
-  it('calls supabase.rpc directly and returns the real server-side payment_id', async () => {
+describe('record_payment — local-write-first', () => {
+  it('enqueues and returns with NO supabase call at all (network-kill)', async () => {
+    (supabase.rpc as jest.Mock).mockRejectedValue(new Error('Network request failed'));
     const result = await useVentesStore.getState().recordPayment('sale-1', 16500, 'especes', '2026-06-30');
 
-    expect(result).toEqual({ ok: true, fullyPaid: true, paymentId: 'pay-server-1' });
-    expect(supabase.rpc).toHaveBeenCalledWith('record_payment', {
+    expect(result).toEqual({ ok: true, fullyPaid: true });   // optimistic on-device balance, no paymentId yet
+    expect(supabase.rpc).not.toHaveBeenCalled();
+    expect(supabase.from).not.toHaveBeenCalled();
+    expect(enqueue).toHaveBeenCalledWith('record_payment', {
       p_sale_id: 'sale-1',
       p_business_id: 'biz-1',
       p_amount: 1650000,
@@ -101,73 +96,48 @@ describe('record_payment — online-first with offline fallback (§5)', () => {
       p_date: '2026-06-30',
       p_idempotency_key: expect.any(String),
     });
-    expect(enqueue).not.toHaveBeenCalled();
+    expect(mockKick).toHaveBeenCalled();
+  });
+
+  it('reflects locally right away (overlay rebuilt after the durable write)', async () => {
+    await useVentesStore.getState().recordPayment('sale-1', 5000, 'especes', '2026-06-30');
+    expect(mockRefreshPendingOverlay).toHaveBeenCalled();
+    expect(useVentesStore.getState().saving).toBe(false);
   });
 
   it('generates a real, non-empty idempotency key on every call', async () => {
     await useVentesStore.getState().recordPayment('sale-1', 16500, 'especes', '2026-06-30');
-    const key = (supabase.rpc as jest.Mock).mock.calls[0][1].p_idempotency_key;
+    const key = (enqueue as jest.Mock).mock.calls[0][1].p_idempotency_key;
     expect(typeof key).toBe('string');
     expect(key.length).toBeGreaterThan(10);
   });
 
-  it('reports fullyPaid from the RPC response (the server-side truth)', async () => {
-    (supabase.rpc as jest.Mock).mockResolvedValueOnce({
-      data: { fully_paid: false, payment_id: 'pay-server-1' },
-      error: null,
-    });
+  it('reports a partial payment as not fully paid from the on-device balance', async () => {
     const result = await useVentesStore.getState().recordPayment('sale-1', 5000, 'especes', '2026-06-30');
-    expect(result.fullyPaid).toBe(false); // server says it still owes
-    expect(result.paymentId).toBe('pay-server-1');
+    expect(result.fullyPaid).toBe(false);
+    expect(result.paymentId).toBeUndefined();
   });
 
-  it('falls back to enqueue + kick on a network error, with no paymentId until the queue drains', async () => {
-    (supabase.rpc as jest.Mock).mockRejectedValueOnce(new Error('fetch failed'));
-
-    const result = await useVentesStore.getState().recordPayment('sale-1', 16500, 'especes', '2026-06-30');
-
-    expect(result.ok).toBe(true);
-    expect(result.fullyPaid).toBe(true); // optimistic on-device balance
-    expect(result.paymentId).toBeUndefined(); // no server row yet
-    expect(enqueue).toHaveBeenCalledWith('record_payment', expect.objectContaining({ p_sale_id: 'sale-1' }));
-    expect(mockKick).toHaveBeenCalled();
-  });
-
-  it('updates pendingCount from the real queue count after an offline-fallback enqueue', async () => {
-    (supabase.rpc as jest.Mock).mockRejectedValueOnce(new Error('fetch failed'));
-
+  it('updates pendingCount from the real queue count after the enqueue', async () => {
     await useVentesStore.getState().recordPayment('sale-1', 16500, 'especes', '2026-06-30');
-
     expect(useSyncStore.getState().pendingCount).toBe(1); // getQueueCount mocked to resolve 1
   });
 
-  it('a genuine local (SQLite) write failure in the offline fallback is reported honestly, not silently swallowed', async () => {
-    (supabase.rpc as jest.Mock).mockRejectedValueOnce(new Error('fetch failed'));
+  it('a genuine local (SQLite) write failure is reported honestly, nothing kicked', async () => {
     (enqueue as jest.Mock).mockRejectedValueOnce(new Error('SQLite disk I/O error'));
-
     const result = await useVentesStore.getState().recordPayment('sale-1', 16500, 'especes', '2026-06-30');
-
-    expect(result).toEqual({ ok: false, fullyPaid: false });
-    expect(mockKick).not.toHaveBeenCalled(); // nothing to sync — the write never happened
-  });
-
-  it('a non-network RPC error surfaces as ok:false without enqueueing', async () => {
-    (supabase.rpc as jest.Mock).mockRejectedValueOnce(new Error('Le montant dépasse le solde restant dû'));
-
-    const result = await useVentesStore.getState().recordPayment('sale-1', 99999, 'especes', '2026-06-30');
-
-    expect(result).toEqual({ ok: false, fullyPaid: false });
-    expect(enqueue).not.toHaveBeenCalled();
+    expect(result.ok).toBe(false);
+    expect(mockKick).not.toHaveBeenCalled();
+    expect(supabase.rpc).not.toHaveBeenCalled();
   });
 
   it('a failure in refreshPendingOverlay (after the write already succeeded) never flips the reported result to false', async () => {
     mockRefreshPendingOverlay.mockRejectedValueOnce(new Error('cache read failed'));
     const result = await useVentesStore.getState().recordPayment('sale-1', 16500, 'especes', '2026-06-30');
     expect(result.ok).toBe(true);
-    expect(result.paymentId).toBe('pay-server-1');
   });
 
-  it('returns ok:false without calling rpc or enqueue when the sale is not found locally', async () => {
+  it('returns ok:false without enqueueing when the sale is not found locally', async () => {
     const result = await useVentesStore.getState().recordPayment('missing-sale', 16500, 'especes', '2026-06-30');
     expect(result).toEqual({ ok: false, fullyPaid: false });
     expect(supabase.rpc).not.toHaveBeenCalled();
