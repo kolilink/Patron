@@ -374,7 +374,12 @@ async function executeOp(operation: string, payload: Record<string, unknown>): P
     case 'approve_expense':
     case 'reject_expense': {
       const { id, ...patch } = payload;
-      const { error } = await supabase.from('expenses').update(patch).eq('id', id as string);
+      // Guarded RPC (migration_v244): refuses (P0001, names the decider) when
+      // the expense was deleted or already decided differently meanwhile.
+      const { error } = await supabase.rpc('decide_expense', {
+        p_expense_id: id as string,
+        p_status: operation === 'approve_expense' ? 'approuve' : 'rejete',
+      });
       if (error) throw error;
       // The creator is told once the decision actually reaches the server
       // (the decision itself is recorded phone-first now).

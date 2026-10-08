@@ -31,6 +31,7 @@ import { FAILURE_COPY } from '@/src/utils/failureCopy';
 import { generateId } from '@/lib/id';
 import { selectClientSales, clientBalance } from '@/src/utils/salesTotals';
 import { formatDebtAge, debtAgeTier } from '@/src/utils/clientReminder';
+import { repaymentRhythm, rhythmLabel } from '@/src/utils/repaymentRhythm';
 import { DebtReminderSheet } from '@/src/components/DebtReminderSheet';
 import type { DebtReceiptInput } from '@/src/utils/debtReceipt';
 import { formatDate } from '@/src/utils/dates';
@@ -577,6 +578,13 @@ export default function ClientLedgerScreen() {
   const allPayments = useMemo<LedgerPayment[]>(() => [...ledgerPayments, ...pendingLedger], [ledgerPayments, pendingLedger]);
   const { totalSold, totalPaid, totalOwed } = clientBalance(clientSales, allPayments);
 
+  // Repayment rhythm: a quiet fact from the debts she has fully settled —
+  // null (renders nothing, no empty slot) until at least one exists.
+  const rhythm = useMemo(() => {
+    const r = repaymentRhythm(clientSales, allPayments);
+    return r ? rhythmLabel(r) : null;
+  }, [clientSales, allPayments]);
+
   // The carnet page — one row per real entry, newest first. Cash ('paye')
   // sales are deliberately excluded entirely, not just hidden: a cash sale
   // always creates its own atomic payment for the exact same amount at
@@ -779,6 +787,12 @@ export default function ClientLedgerScreen() {
       )}
 
       <ScrollView contentContainerStyle={styles.content} showsVerticalScrollIndicator={false}>
+
+        {rhythm && (
+          <RNText style={styles.rhythmLine}>
+            {rhythm.main} <RNText style={styles.rhythmSub}>{rhythm.sub}</RNText>
+          </RNText>
+        )}
 
         {/* Status banner */}
         {totalOwed > 0 ? (
@@ -1039,6 +1053,8 @@ function makeStyles(p: Palette) {
     },
     bannerBtnText: { fontSize: 16, fontWeight: '600', color: p.textInverse },
     bannerAge: { fontSize: 12, color: p.textSecondary, textAlign: 'center', marginTop: 4, marginBottom: 8 },
+    rhythmLine: { fontSize: 13, color: p.textSecondary, textAlign: 'center', marginBottom: spacing[3] },
+    rhythmSub: { fontSize: 11, color: p.textSecondary, opacity: 0.7 },
     repaidLine: { fontSize: 13, color: p.textSecondary, textAlign: 'center', marginBottom: 4 },
     // Zero-balance header's "Réglé ✓" sub-line — same slot bannerAge fills
     // for the non-zero case, just an icon+label row instead of plain text.

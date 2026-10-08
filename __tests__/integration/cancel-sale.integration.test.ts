@@ -1,6 +1,7 @@
 // Exercises the real cancel_sale() Postgres function — stock restoration,
 // payment cleanup, idempotent re-cancellation, and own-sale-only enforcement
 // for vendeurs.
+import { q } from './pg';
 import {
   createTestUser, createTestBusiness, addMember, createTestProduct, createTestVariant, getProductStock,
 } from './helpers';
@@ -51,6 +52,12 @@ describe('cancel_sale (real RPC)', () => {
     expect(second.error).toBeNull();
     expect(second.data).toBe(true);
     expect(await getProductStock(productId)).toBe(10); // not 13
+
+    // Exactly one restock entree for the sale, however many times cancel replays.
+    const entrees = await q(
+      "SELECT count(*)::int AS n FROM stock_moves WHERE ref_id = $1 AND ref_type = 'annulation' AND type = 'entree'",
+      [orderId]);
+    expect(entrees[0].n).toBe(1);
   });
 
   it('rejects a vendeur cancelling another vendeur\'s sale', async () => {

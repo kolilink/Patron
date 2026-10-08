@@ -41,7 +41,7 @@ describe('expenses visibility guard — the repo', () => {
   });
 
   it('the allowlist is exactly the two tombstone RPCs', () => {
-    expect(Object.keys(EXPENSE_READ_ALLOWLIST).sort()).toEqual(['restore_expense', 'soft_delete_expense']);
+    expect(Object.keys(EXPENSE_READ_ALLOWLIST).sort()).toEqual(['decide_expense', 'restore_expense', 'soft_delete_expense']);
   });
 });
 

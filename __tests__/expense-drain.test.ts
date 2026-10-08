@@ -4,6 +4,7 @@
 const mockQueue: any[] = [];
 const calls: { fn: string; args: any }[] = [];
 let insertError: any = null;
+let rpcError: any = null;
 
 jest.mock('@/lib/db', () => ({
   ...jest.requireActual('@/lib/db'),
@@ -19,7 +20,7 @@ jest.mock('@/lib/supabase', () => ({
       insert: async (payload: any) => { calls.push({ fn: `insert:${t}`, args: payload }); return { error: insertError }; },
       select: () => ({ eq: () => ({ maybeSingle: async () => ({ data: { currency: 'GNF' } }) }) }),
     }),
-    rpc: async (fn: string, args: any) => { calls.push({ fn, args }); return { error: null }; },
+    rpc: async (fn: string, args: any) => { calls.push({ fn, args }); return { error: rpcError }; },
     auth: { onAuthStateChange: jest.fn(() => ({ data: { subscription: { unsubscribe: jest.fn() } } })) },
   },
 }));
@@ -32,7 +33,7 @@ import { drainQueue } from '@/lib/sync';
 const push = (operation: string, payload: any) =>
   mockQueue.push({ id: mockQueue.length + 1, operation, payload: JSON.stringify(payload), status: 'pending', attempts: 0 });
 
-beforeEach(() => { mockQueue.length = 0; calls.length = 0; insertError = null; });
+beforeEach(() => { mockQueue.length = 0; calls.length = 0; insertError = null; rpcError = null; });
 
 describe('expense ops drain', () => {
   it('delete/restore replay through the soft-delete RPCs', async () => {
@@ -58,5 +59,25 @@ describe('expense ops drain', () => {
     const r = await drainQueue();
     expect(r.synced).toBe(0);
     expect(mockQueue).toHaveLength(1);
+  });
+  it('approve/reject replay through decide_expense, never a blind UPDATE', async () => {
+    const d = { id: 'e1', approved_by: 'u1', approved_at: new Date().toISOString() };
+    push('approve_expense', { ...d, status: 'approuve' });
+    push('reject_expense', { ...d, status: 'rejete' });
+    const r = await drainQueue();
+    expect(r.synced).toBe(2);
+    expect(calls.filter(c => c.fn === 'decide_expense').map(c => c.args)).toEqual([
+      { p_expense_id: 'e1', p_status: 'approuve' },
+      { p_expense_id: 'e1', p_status: 'rejete' },
+    ]);
+  });
+
+  it('a refused decision (P0001) is a permanent refusal that stays visible, not a silent overwrite', async () => {
+    rpcError = { code: 'P0001', message: 'Cette dépense a déjà été approuvée par Awa.' };
+    push('reject_expense', { id: 'e1', status: 'rejete', approved_by: 'u1', approved_at: new Date().toISOString() });
+    const r = await drainQueue();
+    expect(r.synced).toBe(0);
+    expect(r.failed).toBe(1);
+    expect(mockQueue[0].status).toBe('failed_permanent');
   });
 });

@@ -24,6 +24,7 @@ const DEFAULT_DB_DIR = path.resolve(__dirname, '..', '..', 'db');
 const EXPENSE_READ_ALLOWLIST = {
   soft_delete_expense: 'reads the row it is about to tombstone, including an already-deleted one (idempotent)',
   restore_expense: 'must read the soft-deleted row it brings back',
+  decide_expense: 'must see a soft-deleted row in order to refuse deciding it',
 };
 
 const EXPENSE_READ = /(?<!\bDELETE\s)\b(?:FROM|JOIN)\s+(?:public\.)?"?expenses"?(?![\w])|,\s*(?:public\.)?"?expenses"?(?![\w])/i;
