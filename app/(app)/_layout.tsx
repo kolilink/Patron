@@ -65,6 +65,7 @@ const FRESH_SESSION_BACKGROUND_MS = 10 * 60_000;
 export default function AppLayout() {
   const session = useAuthStore(s => s.session);
   const loading = useAuthStore(s => s.loading);
+  const { palette: themePalette } = useTheme();
   const locked = useAuthStore(s => s.locked);
   const showTrialWelcome = useAuthStore(s => s.showTrialWelcome);
   const clearTrialWelcome = useAuthStore(s => s.clearTrialWelcome);
@@ -442,7 +443,9 @@ export default function AppLayout() {
     />
   ) : null;
 
-  if (loading) return <>{heroOverlay}</>;
+  // A plain theme-coloured view, never null: on a slow phone the splash may
+  // already be gone (the 8s ceiling), and null would show a blank/white screen.
+  if (loading) return <><View style={{ flex: 1, backgroundColor: themePalette.background }} />{heroOverlay}</>;
   if (locked) return <Redirect href="/(auth)/verrouille" />;
   if (!session) return <Redirect href="/(welcome)/" />;
 

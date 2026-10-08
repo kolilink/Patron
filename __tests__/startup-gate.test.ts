@@ -39,7 +39,7 @@ describe('scheduleSplashCeiling — the splash always dismisses', () => {
     expect(hide).toHaveBeenCalledTimes(1);
     expect(onElapsed).toHaveBeenCalledTimes(1);
   });
-  it('the ceiling is 5 seconds', () => expect(SPLASH_CEILING_MS).toBe(5000));
+  it('the ceiling is 8 seconds', () => expect(SPLASH_CEILING_MS).toBe(8000));
   it('cleanup cancels it', () => {
     const { hide, cancel } = arm();
     cancel();
@@ -65,8 +65,8 @@ describe('app/_layout.tsx wiring', () => {
     expect(layout).toMatch(/\}, \[ready\]\);/);
     expect(code).not.toMatch(/if \(!fontsLoaded\) return;/);
   });
-  it('the existing 2s fast path and the first-paint hide are kept', () => {
-    expect(layout).toMatch(/setTimeout\(\(\) => SplashScreen\.hideAsync\(\), 2000\)/);
-    expect(layout).toMatch(/requestAnimationFrame\(\(\) => requestAnimationFrame\(\(\) => SplashScreen\.hideAsync\(\)\)\)/);
+  it('the fixed 2s timeout is gone (it hid the splash before init on slow phones); the first-paint hide is kept', () => {
+    expect(layout).not.toMatch(/SplashScreen\.hideAsync\(\), 2000\)/);
+    expect(layout).toMatch(/requestAnimationFrame\(\(\) => requestAnimationFrame\(\(\) => hideSplashOnce\(\)\)\)/);
   });
 });

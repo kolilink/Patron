@@ -1,9 +1,8 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { appAlert } from '@/src/utils/appAlert';
 import { AnimatedRowCell, AnimatedRow } from '@/src/components/ui/AnimatedRow';
-import { useReduceMotion } from '@/src/hooks/useReduceMotion';
 import { configureLayoutNext } from '@/src/hooks/useAnimateLayoutChange';
-import { Animated, Easing, FlatList, InputAccessoryView, LayoutAnimation, Platform, Pressable, ScrollView, StyleSheet, TextInput, UIManager, View } from 'react-native';
+import { FlatList, InputAccessoryView, LayoutAnimation, Platform, Pressable, ScrollView, StyleSheet, TextInput, UIManager, View } from 'react-native';
 import { Ionicons } from '@expo/vector-icons';
 import { Screen } from '@/src/components/ui/Screen';
 import { FormSheet } from '@/src/components/ui/FormSheet';
@@ -86,24 +85,10 @@ function FournisseurForm({ visible, editing, products, onClose, onSave, saving }
   const [showCreate, setShowCreate] = useState(false);
   const [newProductName, setNewProductName] = useState('');
   const [dropdownOpen, setDropdownOpen] = useState(false);
-  const reduceMotion = useReduceMotion();
-  const pulseAnim = useRef(new Animated.Value(1)).current;
 
   useEffect(() => {
     if (Platform.OS === 'android') UIManager.setLayoutAnimationEnabledExperimental?.(true);
   }, []);
-
-  useEffect(() => {
-    const loop = Animated.loop(
-      Animated.sequence([
-        Animated.delay(3000),
-        Animated.timing(pulseAnim, { toValue: 1.08, duration: 300, easing: Easing.inOut(Easing.ease), useNativeDriver: true }),
-        Animated.timing(pulseAnim, { toValue: 1.0, duration: 300, easing: Easing.inOut(Easing.ease), useNativeDriver: true }),
-      ])
-    );
-    if (visible && !reduceMotion) { pulseAnim.setValue(1); loop.start(); } else pulseAnim.setValue(1);
-    return () => loop.stop();
-  }, [visible, reduceMotion]);
 
   useEffect(() => {
     if (visible) {
@@ -214,9 +199,9 @@ function FournisseurForm({ visible, editing, products, onClose, onSave, saving }
               setShowCreate(prev => !prev);
               if (showCreate) setNewProductName('');
             }}>
-            <Animated.View style={[styles.addBadge, showCreate && styles.addBadgeActive, { transform: [{ scale: pulseAnim }] }]}>
+            <View style={[styles.addBadge, showCreate && styles.addBadgeActive]}>
               <Text style={[styles.addBadgePlus, showCreate && { color: palette.textInverse }]}>+</Text>
-            </Animated.View>
+            </View>
           </Pressable>
         </View>
 

@@ -1,7 +1,7 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { useCacheHealthStore, failingCacheTables } from '@/lib/cacheHealth';
 import { appAlert } from '@/src/utils/appAlert';
-import { Animated, KeyboardAvoidingView, Linking, Platform, Pressable, ScrollView, Share, StyleSheet, Switch, TextInput, View } from 'react-native';
+import { KeyboardAvoidingView, Linking, Platform, Pressable, ScrollView, Share, StyleSheet, Switch, TextInput, View } from 'react-native';
 import * as Clipboard from 'expo-clipboard';
 import * as Application from 'expo-application';
 import * as Updates from 'expo-updates';
@@ -20,6 +20,7 @@ import { useAuthStore } from '@/stores/auth';
 import { generateFallbackName } from '@/lib/id';
 import { supabase } from '@/lib/supabase';
 import { translateError } from '@/lib/errors';
+import { showUnsavedDot } from '@/src/utils/unsavedDot';
 import { haptics, setEnabled, isHapticsEnabled, HAPTICS_KV_KEY } from '@/lib/haptics';
 import { getKV, setKV, wipeAccountLocalData } from '@/lib/db';
 import { toast } from '@/stores/toast';
@@ -239,26 +240,6 @@ export default function ParametresScreen() {
     ? (bizName.trim() !== (business?.name ?? '') || bizPhone.trim() !== defaultPhone || (hasSales === false && currency !== (business?.currency ?? 'GNF')))
     : false
   ) || userName.trim() !== (session?.user.name ?? '');
-
-  const breathAnim = useRef(new Animated.Value(1)).current;
-  const loopRef = useRef<Animated.CompositeAnimation | null>(null);
-
-  useEffect(() => {
-    if (isDirty) {
-      loopRef.current = Animated.loop(
-        Animated.sequence([
-          Animated.timing(breathAnim, { toValue: 0.35, duration: 850, useNativeDriver: true }),
-          Animated.timing(breathAnim, { toValue: 1, duration: 850, useNativeDriver: true }),
-        ]),
-      );
-      loopRef.current.start();
-    } else {
-      loopRef.current?.stop();
-      loopRef.current = null;
-      Animated.timing(breathAnim, { toValue: 1, duration: 150, useNativeDriver: true }).start();
-    }
-    return () => { loopRef.current?.stop(); };
-  }, [isDirty]);
 
   const [deleteTarget, setDeleteTarget] = useState<'account' | 'business' | null>(null);
   // Last administrateur of a business that still has a team: pick a successor
@@ -670,13 +651,16 @@ export default function ParametresScreen() {
           <Text variant="body" color="secondary">‹ Retour</Text>
         </Pressable>
         <Text variant="h4">Paramètres</Text>
-        <Animated.View style={{ opacity: breathAnim }}>
-          <Pressable onPress={saveAll} disabled={saving || !isDirty}>
+        <View>
+          <Pressable onPress={saveAll} disabled={saving || !isDirty} style={{ flexDirection: 'row', alignItems: 'center' }}>
+            {showUnsavedDot(isDirty, saving) ? (
+              <View testID="unsaved-dot" style={{ width: 8, height: 8, borderRadius: 4, backgroundColor: palette.warning, marginRight: 6 }} />
+            ) : null}
             <Text variant="label" style={{ color: isDirty ? palette.primary : palette.textDisabled }}>
               {saving ? 'Enreg…' : 'Enregistrer'}
             </Text>
           </Pressable>
-        </Animated.View>
+        </View>
       </View>
 
       <KeyboardAvoidingView behavior={Platform.OS === 'ios' ? 'padding' : undefined} style={{ flex: 1, backgroundColor: palette.background }}>

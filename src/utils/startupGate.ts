@@ -7,7 +7,20 @@
 // preventAutoHideAsync() held the splash permanently. Structural, not device-specific.
 
 /** Longest the splash may ever stay up, whatever fonts/auth/db do. */
-export const SPLASH_CEILING_MS = 5000;
+export const SPLASH_CEILING_MS = 8000;
+
+/** Wraps hideAsync so it runs exactly once, whichever of init-complete / ceiling gets there first. */
+export function createSplashHider(hide: () => unknown): () => void {
+  let done = false;
+  return () => {
+    if (done) return;
+    done = true;
+    try {
+      const r = hide();
+      if (r && typeof (r as Promise<unknown>).catch === 'function') (r as Promise<unknown>).catch(() => { /* already hidden */ });
+    } catch { /* already hidden */ }
+  };
+}
 
 /**
  * May startup (auth + SQLite init) proceed? Yes once fonts loaded, once they FAILED

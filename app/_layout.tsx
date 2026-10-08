@@ -36,7 +36,7 @@ import { identifyUser, resetAnalytics, trackEvent, analyticsIsTest, loadDeviceTe
 import { recordInstallIfFirstOpen, recordFunnelStep, flushFunnelOutbox } from '@/lib/funnel';
 import { configurePurchases } from '@/lib/purchases';
 import { withStartupTiming, reportFirstScreenRender, reportFirstInteraction } from '@/lib/startupTiming';
-import { scheduleSplashCeiling, startupReady } from '@/src/utils/startupGate';
+import { createSplashHider, scheduleSplashCeiling, startupReady } from '@/src/utils/startupGate';
 
 // Only active when EXPO_PUBLIC_SENTRY_DSN is set (no-op in local dev without it)
 if (process.env.EXPO_PUBLIC_SENTRY_DSN) {
@@ -61,6 +61,10 @@ setCacheFailureReporter((table, err) => {
 configurePurchases();
 
 SplashScreen.preventAutoHideAsync();
+
+// The splash lifts exactly once: when init has completed (and the first screen
+// has painted) or at the 8s ceiling, whichever comes first.
+const hideSplashOnce = createSplashHider(() => SplashScreen.hideAsync());
 
 // Stable reference — Ionicons.font is a getter that creates a new object on every
 // access, which breaks React 18's useSyncExternalStore snapshot check in useFonts.
@@ -135,7 +139,7 @@ function RootLayout() {
   // never settles, the splash is dismissed after SPLASH_CEILING_MS. hideAsync is
   // idempotent, so this is harmless when the normal path already hid it.
   useEffect(() => scheduleSplashCeiling({
-    hide: () => { SplashScreen.hideAsync().catch(() => { /* already hidden */ }); },
+    hide: hideSplashOnce,
     onElapsed: () => setCeilingElapsed(true),
     setTimeoutFn: (cb, ms) => setTimeout(cb, ms),
     clearTimeoutFn: h => clearTimeout(h as ReturnType<typeof setTimeout>),
@@ -153,9 +157,10 @@ function RootLayout() {
 
   useEffect(() => {
     if (!ready) return;
-    // Hard ceiling so a stuck init can never pin the splash forever; the
-    // normal path hides it only after the first screen has painted (below).
-    const timeout = setTimeout(() => SplashScreen.hideAsync(), 2000);
+    // The splash is held until init resolves (below). The only backstop is the
+    // 8s ceiling above (scheduleSplashCeiling) — the old fixed 2s timeout hid
+    // it before a slow phone's encrypted-SQLite open + auth check finished,
+    // leaving a blank screen.
     // Connectivity first: awaited (capped at ~1.2s) alongside init so the app
     // already knows if it is offline before the first screen paints.
     Promise.all([
@@ -182,12 +187,11 @@ function RootLayout() {
     }).catch(() => {
       /* non-fatal */
     }).finally(() => {
-      clearTimeout(timeout);
       // Hold the splash until the first screen has actually painted — two
       // animation frames after init resolves lets the router commit and the
       // native view draw, so there's no unbranded flash between the splash
       // fade and first paint.
-      requestAnimationFrame(() => requestAnimationFrame(() => SplashScreen.hideAsync()));
+      requestAnimationFrame(() => requestAnimationFrame(() => hideSplashOnce()));
       // A real cold start — one half of PaymentReminderAsker's "fresh
       // session" trigger condition (the other half is a 10+min-backgrounded
       // return, bumped from app/(app)/_layout.tsx's own AppState handler).
