@@ -10,6 +10,7 @@ import { trackEvent } from '@/lib/analytics';
 import { haptics } from '@/lib/haptics';
 import { useToastStore } from '@/stores/toast';
 import type { PaymentMethod, Product, ProductVariant } from '@/src/types';
+import { isOutboxValidationError } from '@/lib/outboxValidation';
 
 export interface CartLine {
   product: Product;
@@ -271,7 +272,7 @@ export const useSalesStore = create<SalesStore>((set, get) => ({
       await enqueue('submit_carnet_debt', payload);
     } catch (err) {
       console.error('[submitCarnetDebt] local write failed', err);
-      useToastStore.getState().show("Impossible d'enregistrer sur cet appareil. Réessayez.", 'warning');
+      if (!isOutboxValidationError(err)) useToastStore.getState().show("Impossible d'enregistrer sur cet appareil. Réessayez.", 'warning');
       haptics.error();
       set({ lastCarnetDebtQueued: false });
       return false;
@@ -319,7 +320,7 @@ export const useSalesStore = create<SalesStore>((set, get) => ({
       await enqueue('submit_quick_sale', payload);
     } catch (err) {
       console.error('[submitQuickSale] local write failed', err);
-      useToastStore.getState().show("Impossible d'enregistrer sur cet appareil. Réessayez.", 'warning');
+      if (!isOutboxValidationError(err)) useToastStore.getState().show("Impossible d'enregistrer sur cet appareil. Réessayez.", 'warning');
       haptics.error();
       set({ lastQuickSaleQueued: false });
       return false;
@@ -410,7 +411,7 @@ export const useSalesStore = create<SalesStore>((set, get) => ({
     } catch (err) {
       console.error('[submitSale] local write failed', err);
       haptics.error();
-      set({ error: "Impossible d'enregistrer sur cet appareil. Réessayez.", submitting: false, lastSubmitQueued: false, lastSaleId: null });
+      set({ error: isOutboxValidationError(err) ? null : "Impossible d'enregistrer sur cet appareil. Réessayez.", submitting: false, lastSubmitQueued: false, lastSaleId: null });
       return false;
     }
 

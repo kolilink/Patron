@@ -14,6 +14,7 @@ import { useSyncStore } from '@/stores/sync';
 import { getProductCache, saveProductCache, getQueueCount, getVariantsCache, saveVariantsCache } from '@/lib/db';
 import { enqueue, getAllQueueItemsForOverlay, getClientLedgerCache, saveClientLedgerCache } from '@/lib/db';
 import { applyPendingSupplierOps, type QueuedSupplierOp } from '@/lib/pendingSupplier';
+import { isOutboxValidationError } from '@/lib/outboxValidation';
 
 // A réception books money (stock, cost, transport expense): never twice from a double-tap.
 const receptionGuard = createInflightGuard();
@@ -417,7 +418,7 @@ export const useFournisseursStore = create<FournisseursStore>((set, get) => ({
       });
     } catch (err) {
       console.error('[payDebt] local write failed', err);
-      set({ saving: false, error: "Impossible d'enregistrer sur cet appareil. Réessayez." });
+      set({ saving: false, error: isOutboxValidationError(err) ? null : "Impossible d'enregistrer sur cet appareil. Réessayez." });
       return false;
     }
     try { await refreshSupplierView(businessId); } catch (err) { console.error('[payDebt] refresh failed (write already succeeded)', err); }
@@ -533,7 +534,7 @@ export const useFournisseursStore = create<FournisseursStore>((set, get) => ({
     } catch (err) {
       // The only failure left: the phone itself could not store it. Nothing was recorded.
       console.error('[confirmReception] local write failed', err);
-      set({ saving: false, error: failureReason(err) ?? null });
+      set({ saving: false, error: isOutboxValidationError(err) ? null : (failureReason(err) ?? null) });
       return null;
     }
     // The write is durable from here on: nothing below may turn this into a failure.
@@ -670,7 +671,7 @@ export const useFournisseursStore = create<FournisseursStore>((set, get) => ({
       await enqueue('create_supplier_debt', row);
     } catch (err) {
       console.error('[createDebt] local write failed', err);
-      set({ saving: false, error: "Impossible d'enregistrer sur cet appareil. Réessayez." });
+      set({ saving: false, error: isOutboxValidationError(err) ? null : "Impossible d'enregistrer sur cet appareil. Réessayez." });
       return false;
     }
     try { await refreshSupplierView(businessId); } catch (err) { console.error('[createDebt] refresh failed (write already succeeded)', err); }

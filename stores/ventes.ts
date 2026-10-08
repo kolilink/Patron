@@ -13,6 +13,7 @@ import { notifyEvent } from '@/src/utils/notifications';
 import { useAuthStore } from '@/stores/auth';
 import { formatAmount } from '@/src/utils/format';
 import { rebuildPendingOverlay, type OverlayContext } from '@/lib/pendingOverlay';
+import { isOutboxValidationError } from '@/lib/outboxValidation';
 
 // See stores/products.ts for the full explanation — a fetch already in
 // flight when the user switches businesses must not overwrite the new
@@ -689,7 +690,7 @@ export const useVentesStore = create<VentesStore>((set, get) => ({
           await enqueueOnce('record_payment', rpcPayload);
         } catch (enqErr) {
           console.error('[recordPayment] local write failed', enqErr);
-          set({ saving: false, error: "Impossible d'enregistrer sur cet appareil. Réessayez." });
+          set({ saving: false, error: isOutboxValidationError(enqErr) ? null : "Impossible d'enregistrer sur cet appareil. Réessayez." });
           return { ok: false, fullyPaid: false, reason: undefined };
         }
         // The write is durable from here on: nothing below may turn this into a failure.
@@ -804,7 +805,7 @@ export const useVentesStore = create<VentesStore>((set, get) => ({
           await enqueueOnce('record_client_payment', rpcPayload);
         } catch (enqErr) {
           console.error('[recordClientPayment] local write failed', enqErr);
-          set({ saving: false, error: "Impossible d'enregistrer sur cet appareil. Réessayez." });
+          set({ saving: false, error: isOutboxValidationError(enqErr) ? null : "Impossible d'enregistrer sur cet appareil. Réessayez." });
           return { ok: false, fullySettled: false };
         }
         // The write is durable from here on: nothing below may turn this into a failure.
@@ -874,7 +875,7 @@ export const useVentesStore = create<VentesStore>((set, get) => ({
       await enqueue('cancel_sale', rpcPayload);
     } catch (err) {
       console.error('[cancelSale] local write failed', err);
-      set({ saving: false, error: "Impossible d'annuler sur cet appareil. Réessayez." });
+      set({ saving: false, error: isOutboxValidationError(err) ? null : "Impossible d'annuler sur cet appareil. Réessayez." });
       return false;
     }
 

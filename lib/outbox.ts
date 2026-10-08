@@ -1,6 +1,10 @@
 // Outbox helpers shared by the stores that write local-first.
 import { enqueue, getAllQueueItemsForOverlay } from '@/lib/db';
 
+// Every payload is validated inside enqueue() itself (lib/db.ts), so enqueueOnce
+// and any direct enqueue() caller go through the same chokepoint.
+export { validateOutboxPayload, OutboxValidationError } from '@/lib/outboxValidation';
+
 /**
  * Enqueue unless an item for this operation + idempotency key is already in the
  * outbox. A retry after a failure (or two taps in one tick) carries the same

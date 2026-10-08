@@ -2,6 +2,7 @@ import * as SQLite from 'expo-sqlite';
 import { recordCacheWriteFailure, recordCacheWriteSuccess, recordCacheReadFailure } from '@/lib/cacheHealth';
 import type { Product } from '@/src/types';
 import { encrypt, decrypt } from '@/lib/encryption';
+import { validateOutboxPayload, OUTBOX_VALIDATION_USER_MESSAGE } from '@/lib/outboxValidation';
 
 // Cache the Promise so concurrent callers all await the same migration run.
 let _dbPromise: Promise<SQLite.SQLiteDatabase> | null = null;
@@ -623,6 +624,18 @@ const EXPENSE_OPS = new Set([
 ]);
 
 export async function enqueue(operation: string, payload: object): Promise<void> {
+  // The single chokepoint: nothing reaches SQLite unless the server can
+  // understand it (contracts in lib/outboxValidation.ts). Runs before openDb().
+  try {
+    validateOutboxPayload(operation, payload);
+  } catch (err) {
+    console.error('[outbox] refused invalid payload', err);
+    try {
+      // Lazy: keeps lib/db free of a store import cycle.
+      require('@/stores/toast').useToastStore.getState().show(OUTBOX_VALIDATION_USER_MESSAGE, 'warning');
+    } catch { /* toast is cosmetic; the throw below is the real signal */ }
+    throw err;
+  }
   const db = await openDb();
   let stored: string;
   try {

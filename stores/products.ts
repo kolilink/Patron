@@ -16,6 +16,7 @@ import { createKeyedInflightGuard } from '@/lib/inflight';
 // One archive per product at a time: a double-tap on a slow connection must not fire twice.
 const archiveGuard = createKeyedInflightGuard();
 import type { Product, ProductVariant } from '@/src/types';
+import { isOutboxValidationError } from '@/lib/outboxValidation';
 
 // Every fetch* function below is called with a specific businessId, but by
 // the time its network/cache round trip resolves, the user may have already
@@ -369,7 +370,7 @@ export const useProductStore = create<ProductStore>((set, get) => ({
       await enqueue('create_product', { product: productRow, stockMove: stockMoveRow });
     } catch (err) {
       console.error('[createProduct] local write failed', err);
-      set({ error: "Impossible d'enregistrer sur cet appareil. Réessayez.", saving: false });
+      set({ error: isOutboxValidationError(err) ? null : "Impossible d'enregistrer sur cet appareil. Réessayez.", saving: false });
       return false;
     }
     try { await rebuildProducts(businessId); } catch (err) { console.error('[createProduct] rebuild failed (write already succeeded)', err); }
@@ -404,7 +405,7 @@ export const useProductStore = create<ProductStore>((set, get) => ({
       await enqueue('update_product', { id, ...patch });
     } catch (err) {
       console.error('[updateProduct] local write failed', err);
-      set({ error: "Impossible d'enregistrer sur cet appareil. Réessayez.", saving: false });
+      set({ error: isOutboxValidationError(err) ? null : "Impossible d'enregistrer sur cet appareil. Réessayez.", saving: false });
       return false;
     }
     try { await rebuildProducts(businessId); } catch (err) { console.error('[updateProduct] rebuild failed (write already succeeded)', err); }
@@ -481,7 +482,7 @@ export const useProductStore = create<ProductStore>((set, get) => ({
       });
     } catch (err) {
       console.error('[adjustStock] local write failed', err);
-      set({ error: "Impossible d'enregistrer sur cet appareil. Réessayez.", saving: false });
+      set({ error: isOutboxValidationError(err) ? null : "Impossible d'enregistrer sur cet appareil. Réessayez.", saving: false });
       return false;
     }
     try { await rebuildProducts(businessId); } catch (err) { console.error('[adjustStock] rebuild failed (write already succeeded)', err); }

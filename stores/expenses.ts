@@ -1,6 +1,7 @@
 import { create } from 'zustand';
 import { supabase } from '@/lib/supabase';
 import { translateError } from '@/lib/errors';
+import { isOutboxValidationError } from '@/lib/outboxValidation';
 import { generateId } from '@/lib/id';
 import {
   enqueue, getQueueCount, saveExpenseCache, getExpenseCache, getCacheTimestamp,
@@ -140,7 +141,7 @@ export const useExpensesStore = create<ExpensesStore>((set, get) => {
     // failure: speaks — the local write itself failed (storage), nothing was queued
     set({
       saving: false,
-      error: translateError(err, operation === 'approve_expense' ? "Impossible d'approuver la dépense" : 'Impossible de rejeter la dépense'),
+      error: isOutboxValidationError(err) ? null : translateError(err, operation === 'approve_expense' ? "Impossible d'approuver la dépense" : 'Impossible de rejeter la dépense'),
     });
     return false;
   }
@@ -252,7 +253,7 @@ export const useExpensesStore = create<ExpensesStore>((set, get) => {
       return payload.id;
     } catch (err) {
       // failure: speaks — the local write itself failed (storage), nothing was queued
-      set({ error: translateError(err, "Impossible d'enregistrer la dépense"), saving: false });
+      set({ error: isOutboxValidationError(err) ? null : translateError(err, "Impossible d'enregistrer la dépense"), saving: false });
       return null;
     }
   },
@@ -279,7 +280,7 @@ export const useExpensesStore = create<ExpensesStore>((set, get) => {
       return true;
     } catch (err) {
       // failure: speaks — local write failed
-      set({ error: translateError(err, 'Impossible de mettre à jour la dépense'), saving: false });
+      set({ error: isOutboxValidationError(err) ? null : translateError(err, 'Impossible de mettre à jour la dépense'), saving: false });
       return false;
     }
   },
@@ -305,7 +306,7 @@ export const useExpensesStore = create<ExpensesStore>((set, get) => {
       return true;
     } catch (err) {
       // failure: speaks — local write failed
-      set({ error: translateError(err, 'Impossible de supprimer la dépense') });
+      set({ error: isOutboxValidationError(err) ? null : translateError(err, 'Impossible de supprimer la dépense') });
       return false;
     }
   },
@@ -332,7 +333,7 @@ export const useExpensesStore = create<ExpensesStore>((set, get) => {
       return true;
     } catch (err) {
       // failure: speaks — local write failed
-      set({ error: translateError(err, 'Impossible de rétablir la dépense') });
+      set({ error: isOutboxValidationError(err) ? null : translateError(err, 'Impossible de rétablir la dépense') });
       return false;
     }
   },
