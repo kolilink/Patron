@@ -23,8 +23,11 @@ import { getKV, setKV } from '@/lib/db';
 import { haptics } from '@/lib/haptics';
 import { toast } from '@/stores/toast';
 import { trackEvent } from '@/lib/analytics';
-import { formatAmountInput, parseAmountInput, formatAmount } from '@/src/utils/format';
+import { formatAmountInput, parseAmountInput, formatAmount, amountInputToCents } from '@/src/utils/format';
 import { DatePickerField } from '@/src/components/ui/DatePickerField';
+import { Input } from '@/src/components/ui/Input';
+import { PhoneInput } from '@/src/components/ui/PhoneInput';
+import { appAlert } from '@/src/utils/appAlert';
 
 // ── "Nouvelle livraison" — replaces the old "commande" 2-phase flow. ────────
 // A livraison is what actually arrived, recorded once, atomically. There is
@@ -33,16 +36,16 @@ import { DatePickerField } from '@/src/components/ui/DatePickerField';
 // "tu", throughout — a shopkeeper being helped, not a friend being texted.
 //
 // The old "Qui ?" step (pick a supplier first, mandatory) is gone. The
-// supplier is now a skippable chip on the Confirmé step only — see the
-// Restructuration Fournisseurs brief. `poId` (an existing purchase_order to
-// close out) is kept as a load path purely so a pre-existing pending order
-// from before this change isn't permanently stranded — nothing in the new UI
-// links to it anymore.
+// supplier is now a skippable chip on Écran 1, and can still be edited from
+// the Confirmé step after the fact — see the Restructuration Fournisseurs
+// brief. `poId` (an existing purchase_order to close out) is kept as a load
+// path purely so a pre-existing pending order from before this change isn't
+// permanently stranded — nothing in the new UI links to it anymore.
 
 const ACCESSORY_ID = 'reception-silent-accessory';
 const OTHER_SUPPLIER_NAME = 'Marché';
 
-type Step = 'quoi' | 'marge' | 'confirme';
+type Step = 'quoi' | 'recap' | 'confirme';
 
 interface VariantSplit {
   variant_id: string;
@@ -57,8 +60,13 @@ interface DraftLine {
   name: string;
   qty: string;
   unitCost: string;
+  // "Je vends à" — the sale price this line should book. `salePriceInput` is the
+  // formatted display string; `salePriceCents` its parsed cents (null when blank —
+  // never 0). `salePriceTouched` flips the moment she edits it, so an untouched
+  // prefill is only a hint and never overwrites a product's real sale_price.
+  salePriceInput: string;
   salePriceCents: number | null;
-  salePriceOverridden: boolean;
+  salePriceTouched: boolean;
   hasVariants: boolean;
   variantSplits: VariantSplit[] | null; // non-null once the linked product's variants are loaded
   dismissedMatchId: string | null; // "nouveau produit quand même" for this name
@@ -71,7 +79,6 @@ interface Draft {
   poId: string | null;
   lines: DraftLine[];
   transportInput: string;
-  marginInput: string;
   receivedDate: string;      // 'YYYY-MM-DD' real/backdated delivery date ('' = today)
   createdAt: number;
 }
@@ -89,8 +96,8 @@ function newLocalId() {
 function emptyLine(): DraftLine {
   return {
     localId: newLocalId(), product_id: null, variant_id: null, name: '', qty: '', unitCost: '',
-    salePriceCents: null, salePriceOverridden: false, hasVariants: false, variantSplits: null,
-    dismissedMatchId: null,
+    salePriceInput: '', salePriceCents: null, salePriceTouched: false,
+    hasVariants: false, variantSplits: null, dismissedMatchId: null,
   };
 }
 
@@ -100,7 +107,7 @@ function emptyDraft(businessId: string, presetSupplier?: Fournisseur): Draft {
     supplierId: presetSupplier?.id ?? null,
     supplierName: presetSupplier?.name ?? '',
     poId: null,
-    lines: [emptyLine()], transportInput: '', marginInput: '', receivedDate: '',
+    lines: [emptyLine()], transportInput: '', receivedDate: '',
     createdAt: Date.now(),
   };
 }
@@ -111,6 +118,21 @@ async function loadDraft(businessId: string): Promise<Draft | null> {
     if (!raw) return null;
     const d = JSON.parse(raw) as Draft;
     if (Date.now() - d.createdAt > DRAFT_MAX_AGE_MS) { await setKV(draftKey(businessId), ''); return null; }
+    // Normalize pre-redesign drafts (which carried `marginInput` and
+    // `salePriceOverridden`) onto the new "Je vends à" shape. An untouched
+    // prefill must never overwrite a product's real sale_price.
+    delete (d as Draft & { marginInput?: string }).marginInput;
+    d.lines = (d.lines ?? []).map(l => {
+      const overridden = (l as DraftLine & { salePriceOverridden?: boolean }).salePriceOverridden;
+      return {
+        localId: l.localId, product_id: l.product_id, variant_id: l.variant_id, name: l.name,
+        qty: l.qty, unitCost: l.unitCost,
+        salePriceInput: l.salePriceInput ?? '',
+        salePriceCents: overridden ? l.salePriceCents : null,
+        salePriceTouched: overridden ?? l.salePriceTouched ?? false,
+        hasVariants: l.hasVariants, variantSplits: l.variantSplits, dismissedMatchId: l.dismissedMatchId,
+      };
+    });
     return d;
   } catch {
     // failure: silent — draft JSON unreadable: no draft
@@ -218,13 +240,13 @@ export default function ReceptionScreen() {
             qty: String(l.qty_ordered - l.qty_received),
             // v221: unit_cost may be NULL ("Prix inconnu") — pre-fill blank.
             unitCost: l.unit_cost !== null ? String(Math.round(l.unit_cost)) : '',
-            salePriceCents: null, salePriceOverridden: false,
+            salePriceInput: '', salePriceCents: null, salePriceTouched: false,
             hasVariants: false, variantSplits: null, dismissedMatchId: null,
           }));
           const d: Draft = {
             businessId, supplierId: commande.supplier_id, supplierName: commande.supplier_name,
             poId: poIdParam, lines: lines.length ? lines : [emptyLine()],
-            transportInput: '', marginInput: '', receivedDate: '', createdAt: Date.now(),
+            transportInput: '', receivedDate: '', createdAt: Date.now(),
           };
           setDraft(d);
           setReady(true);
@@ -278,6 +300,11 @@ export default function ReceptionScreen() {
       // NULL cost_price = "Prix inconnu" (v221) — pre-fill blank so the user
       // can leave it unknown instead of inheriting a false 0.
       unitCost: product.cost_price ? String(Math.round(product.cost_price)) : '',
+      // "Je vends à" prefilled with the product's current sale_price as a hint —
+      // NOT touched, so it never overwrites the real price unless she edits it.
+      salePriceInput: product.sale_price > 0 ? formatAmountInput(String(product.sale_price), currency) : '',
+      salePriceCents: product.sale_price > 0 ? Math.round(product.sale_price * 100) : null,
+      salePriceTouched: false,
     });
     if (product.has_variants) {
       fetchVariants(product.id, businessId).then(variants => {
@@ -353,14 +380,8 @@ export default function ReceptionScreen() {
       return;
     }
     haptics.success();
-    setStep('marge');
+    setStep('recap');
   };
-
-  // ── Margin ───────────────────────────────────────────────────────────────
-  const marginPct = draft ? parseFloat(draft.marginInput.replace(',', '.')) || 0 : 0;
-  const computedSalePrice = (unitCostDisplay: number) => Math.round(unitCostDisplay * (1 + marginPct / 100) * 100);
-
-  const [showPerLine, setShowPerLine] = useState(false);
 
   // Confirming books a money record (stock, cost, transport): a second tap while
   // the first is in flight is swallowed, and the control shows it is working.
@@ -369,13 +390,13 @@ export default function ReceptionScreen() {
     if (!draft) return;
     const rpcLines: ReceptionLine[] = [];
     for (const l of draft.lines) {
-      // v221: blank cost → null (unknown), not 0. A sale price is only
-      // computed when a cost is actually known.
+      // v221: blank cost → null (unknown), not 0.
       const unitCostDisplay = parseAmountInput(l.unitCost, currency);
       const unitCostCents = unitCostDisplay > 0 ? Math.round(unitCostDisplay * 100) : null;
-      const salePriceCents = l.salePriceOverridden && l.salePriceCents !== null
-        ? l.salePriceCents
-        : (unitCostCents !== null ? computedSalePrice(unitCostDisplay) : null);
+      // "Je vends à": only a price she actually touched is booked. An untouched
+      // prefill is a hint, not an instruction — it must never overwrite the
+      // product's real sale_price (or invent one for a new product).
+      const salePriceCents = l.salePriceTouched ? l.salePriceCents : null;
 
       if (l.hasVariants && l.variantSplits) {
         for (const v of l.variantSplits) {
@@ -403,7 +424,7 @@ export default function ReceptionScreen() {
     const key = receptionKeyRef.current;
     const poId = await confirmReception(businessId, userId, {
       supplierId: draft.supplierId, poId: draft.poId, lines: rpcLines,
-      transportCostCents: transportCents, marginPercent: draft.marginInput ? marginPct : null,
+      transportCostCents: transportCents, marginPercent: null,
       receivedDate: draft.receivedDate || null,
       idempotencyKey: key,
     });
@@ -442,9 +463,7 @@ export default function ReceptionScreen() {
           <Text variant="body" color="secondary">‹ Retour</Text>
         </Pressable>
         <Text variant="h4" numberOfLines={1}>
-          {step === 'quoi' ? 'Ce qui est arrivé.'
-            : step === 'marge' ? 'Votre marge'
-              : 'Enregistré'}
+          {step === 'quoi' ? 'Ce qui est arrivé.' : step === 'recap' ? 'C\'est tout bon ?' : 'Enregistré'}
         </Text>
         <View style={{ width: 60 }} />
       </View>
@@ -466,22 +485,19 @@ export default function ReceptionScreen() {
           onLinkProduct={linkProduct}
           onAddLine={addLine}
           onRemoveLine={removeLine}
+          onChangeSupplier={() => setShowSupplierPicker(true)}
           onDone={handleVerifyDone}
           styles={styles}
           palette={palette}
         />
       )}
 
-      {step === 'marge' && (
-        <MargeStep
+      {step === 'recap' && (
+        <RecapStep
           draft={draft}
           currency={currency}
-          marginPct={marginPct}
-          computedSalePrice={computedSalePrice}
-          showPerLine={showPerLine}
-          setShowPerLine={setShowPerLine}
+          linesTotal={linesTotal}
           onUpdate={update}
-          onUpdateLine={updateLine}
           onBack={() => setStep('quoi')}
           onConfirm={handleConfirm}
           saving={saving || confirming}
@@ -506,6 +522,8 @@ export default function ReceptionScreen() {
       <SupplierPickerSheet
         visible={showSupplierPicker}
         fournisseurs={fournisseurs}
+        businessId={businessId}
+        userId={userId}
         onSelect={selectSupplier}
         onClose={() => setShowSupplierPicker(false)}
         styles={styles}
@@ -515,18 +533,38 @@ export default function ReceptionScreen() {
   );
 }
 
-// ─── Supplier picker (Confirmé step's "De :" chip) ──────────────────────────
+// ─── Supplier picker (Écran 1 "De qui ?" chip + Confirmé chip) ───────────────
 
-function SupplierPickerSheet({ visible, fournisseurs, onSelect, onClose, styles, palette }: {
+function SupplierPickerSheet({ visible, fournisseurs, businessId, userId, onSelect, onClose, styles, palette }: {
   visible: boolean;
   fournisseurs: Fournisseur[];
+  businessId: string;
+  userId: string;
   onSelect: (f: Fournisseur | null) => void;
   onClose: () => void;
   styles: ReturnType<typeof makeStyles>;
   palette: Palette;
 }) {
+  const { createFournisseur, saving: fSaving } = useFournisseursStore();
+  const [showNewForm, setShowNewForm] = useState(false);
+  const [newName, setNewName] = useState('');
+  const [newPhone, setNewPhone] = useState('');
+
+  const handleCreate = async () => {
+    if (!newName.trim()) { appAlert('Ajoutez un nom'); return; }
+    const ok = await createFournisseur(businessId, userId, { name: newName, phone: newPhone });
+    if (ok) {
+      haptics.success();
+      const latest = useFournisseursStore.getState().fournisseurs.find(f => f.name.trim() === newName.trim());
+      if (latest) onSelect(latest);
+      setShowNewForm(false);
+      setNewName('');
+      setNewPhone('');
+    }
+  };
+
   return (
-    <Modal visible={visible} animationType="slide" presentationStyle="pageSheet" onRequestClose={onClose}>
+    <Modal visible={visible} animationType="slide" presentationStyle="pageSheet" onRequestClose={onClose} statusBarTranslucent navigationBarTranslucent>
       <SafeAreaView style={styles.pickerSafe} edges={['top', 'bottom']}>
         <View style={styles.pickerHeader}>
           <Text variant="h4">De qui ?</Text>
@@ -534,7 +572,7 @@ function SupplierPickerSheet({ visible, fournisseurs, onSelect, onClose, styles,
             <Text variant="body" color="secondary">Fermer</Text>
           </Pressable>
         </View>
-        <ScrollView contentContainerStyle={styles.pad}>
+        <ScrollView contentContainerStyle={styles.pad} keyboardShouldPersistTaps="handled">
           {fournisseurs.map(f => {
             const ac = SUPPLIER_AVATAR_PALETTE[f.name.charCodeAt(0) % SUPPLIER_AVATAR_PALETTE.length];
             const initials = f.name.split(/\s+/).slice(0, 2).map(w => w[0]?.toUpperCase() ?? '').join('');
@@ -562,6 +600,22 @@ function SupplierPickerSheet({ visible, fournisseurs, onSelect, onClose, styles,
             <Text variant="body" style={{ flex: 1 }}>{OTHER_SUPPLIER_NAME}</Text>
             <Ionicons name="chevron-forward" size={18} color={palette.textDisabled} />
           </Pressable>
+
+          {!showNewForm ? (
+            <Pressable onPress={() => setShowNewForm(true)} style={styles.addLineRow}>
+              <Ionicons name="add-circle-outline" size={18} color={palette.primary} />
+              <Text variant="label" style={{ color: palette.primary }}>+ Nouveau fournisseur</Text>
+            </Pressable>
+          ) : (
+            <View style={styles.newSupplierForm}>
+              <Input label="Nom *" value={newName} onChangeText={setNewName} placeholder="Alimentation, Électronique…" />
+              <PhoneInput label="Téléphone (optionnel)" onChange={(e164) => setNewPhone(e164)} strict={false} />
+              <View style={{ flexDirection: 'row', gap: spacing[2] }}>
+                <Button label="Annuler" onPress={() => { setShowNewForm(false); setNewName(''); setNewPhone(''); }} variant="outline" style={{ flex: 1 }} />
+                <Button label="Créer" loadingLabel="Création" onPress={handleCreate} loading={fSaving} style={{ flex: 1 }} disabled={!newName.trim()} />
+              </View>
+            </View>
+          )}
         </ScrollView>
       </SafeAreaView>
     </Modal>
@@ -573,13 +627,14 @@ function SupplierPickerSheet({ visible, fournisseurs, onSelect, onClose, styles,
 function QuoiStep({
   draft, currency, products, variantsByProduct, linesTotal,
   flagName, scrollRef, lineRefs, onUpdateLine, onLinkProduct, onAddLine, onRemoveLine,
-  onDone, styles, palette,
+  onChangeSupplier, onDone, styles, palette,
 }: {
   draft: Draft; currency: string; products: Product[]; variantsByProduct: Record<string, { id: string; name: string }[]>;
   linesTotal: number; flagName: boolean;
   scrollRef: React.RefObject<ScrollView | null>; lineRefs: React.MutableRefObject<Record<string, View | null>>;
   onUpdateLine: (id: string, p: Partial<DraftLine>) => void;
   onLinkProduct: (id: string, product: Product) => void; onAddLine: () => void; onRemoveLine: (id: string) => void;
+  onChangeSupplier: () => void;
   onDone: () => void; styles: ReturnType<typeof makeStyles>; palette: Palette;
 }) {
   // Plain running count as the list grows — no "à vérifier"/"vérifié" wording.
@@ -596,6 +651,11 @@ function QuoiStep({
             {typedCount} produit{typedCount > 1 ? 's' : ''}.
           </Text>
         )}
+
+        <Pressable onPress={onChangeSupplier} style={[styles.supplierChip, { alignSelf: 'flex-start' }]}>
+          <Ionicons name="storefront-outline" size={14} color={palette.textSecondary} />
+          <Text variant="caption" color="secondary">De : {draft.supplierName || '—'}</Text>
+        </Pressable>
 
         {draft.lines.map(line => {
           const isNameIssue = flagName && !line.name.trim();
@@ -674,6 +734,28 @@ function QuoiStep({
                 </View>
               )}
 
+              {!line.hasVariants && (
+                <View style={{ gap: spacing[1] }}>
+                  <Text variant="caption" color="secondary">Je vends à <Text variant="caption" color="secondary">(optionnel)</Text></Text>
+                  <TextInput
+                    value={line.salePriceInput}
+                    onChangeText={v => {
+                      const formatted = formatAmountInput(v, currency);
+                      onUpdateLine(line.localId, {
+                        salePriceInput: formatted,
+                        salePriceCents: amountInputToCents(formatted, currency),
+                        salePriceTouched: true,
+                      });
+                    }}
+                    keyboardType="decimal-pad"
+                    placeholder="Prix de vente"
+                    placeholderTextColor={palette.textDisabled}
+                    style={[styles.fieldInput, { color: palette.textPrimary }]}
+                    inputAccessoryViewID={Platform.OS === 'ios' ? ACCESSORY_ID : undefined}
+                  />
+                </View>
+              )}
+
               {parseQty(line.qty) && parseAmountInput(line.unitCost, currency) > 0 && !line.hasVariants && (
                 <Text variant="caption" color="secondary">
                   Total : {formatAmount(parseQty(line.qty)! * parseAmountInput(line.unitCost, currency), currency)}
@@ -682,7 +764,7 @@ function QuoiStep({
 
               {parseQty(line.qty) && !(parseAmountInput(line.unitCost, currency) > 0) && !line.hasVariants && (
                 <Text variant="caption" color="secondary">
-                  Prix inconnu — la marge ne sera pas calculée pour ce produit.
+                  Prix inconnu — le prix de vente saisi sera quand même enregistré.
                 </Text>
               )}
             </View>
@@ -757,62 +839,36 @@ function VariantSplitRow({ line, onUpdateLine, styles, palette }: {
   );
 }
 
-// ─── Étape 2 : Votre marge ───────────────────────────────────────────────────
+// ─── Étape 2 : C'est tout bon ? ───────────────────────────────────────────────
+// Absorbs the old "Votre marge" step: transport + delivery date + confirm. The
+// sale price is now typed per-line on Écran 1 ("Je vends à"), never derived
+// from a global margin %.
 
-function MargeStep({
-  draft, currency, marginPct, computedSalePrice, showPerLine, setShowPerLine,
-  onUpdate, onUpdateLine, onBack, onConfirm, saving, styles, palette,
+function RecapStep({
+  draft, currency, linesTotal, onUpdate, onBack, onConfirm, saving, styles, palette,
 }: {
-  draft: Draft; currency: string; marginPct: number; computedSalePrice: (c: number) => number;
-  showPerLine: boolean; setShowPerLine: (v: boolean) => void;
-  onUpdate: (p: Partial<Draft>) => void; onUpdateLine: (id: string, p: Partial<DraftLine>) => void;
+  draft: Draft; currency: string; linesTotal: number;
+  onUpdate: (p: Partial<Draft>) => void;
   onBack: () => void; onConfirm: () => void; saving: boolean;
   styles: ReturnType<typeof makeStyles>; palette: Palette;
 }) {
-  const exampleLine = draft.lines.find(l => parseAmountInput(l.unitCost, currency) > 0);
-  const exampleCost = exampleLine ? parseAmountInput(exampleLine.unitCost, currency) : 0;
-  const exampleSale = exampleCost > 0 ? computedSalePrice(exampleCost) / 100 : 0;
-  const exampleGain = exampleCost > 0 ? exampleSale - exampleCost : 0;
-
   return (
     <>
-      <ScrollView contentContainerStyle={styles.pad}>
+      <ScrollView contentContainerStyle={styles.pad} keyboardShouldPersistTaps="handled">
         <Pressable onPress={onBack} hitSlop={8} style={{ alignSelf: 'flex-start', marginBottom: spacing[3] }}>
           <Text variant="caption" color="secondary">‹ Revoir les produits</Text>
         </Pressable>
 
-        <View style={styles.marginBox}>
-          <TextInput
-            value={draft.marginInput}
-            onChangeText={v => onUpdate({ marginInput: v.replace(/[^0-9.,]/g, '') })}
-            keyboardType="decimal-pad"
-            placeholder="0"
-            placeholderTextColor={palette.textDisabled}
-            style={styles.marginInput}
-            inputAccessoryViewID={Platform.OS === 'ios' ? ACCESSORY_ID : undefined}
-          />
-          <Text style={styles.marginPercentSign}>%</Text>
+        <Text variant="h2">C'est tout bon ?</Text>
+
+        <View style={styles.checkCard}>
+          <View style={styles.checkRow}>
+            <Text variant="label">Total</Text>
+            <Text variant="label">{formatAmount(linesTotal, currency)}</Text>
+          </View>
         </View>
 
-        {exampleCost > 0 ? (
-          <>
-            <Text variant="body" color="secondary">
-              Prix d'achat {formatAmount(exampleCost, currency)} → vous vendez à{' '}
-              <Text variant="body" style={{ color: palette.textPrimary, fontFamily: fontFamily.semibold }}>
-                {formatAmount(exampleSale, currency)}
-              </Text>
-            </Text>
-            <Text variant="body" style={{ color: palette.success, fontFamily: fontFamily.semibold }}>
-              Vous gagnez {formatAmount(exampleGain, currency)} par produit.
-            </Text>
-          </>
-        ) : (
-          <Text variant="body" color="secondary">
-            Marge non calculable — renseignez un prix d'achat pour la voir.
-          </Text>
-        )}
-
-        <View style={{ marginTop: spacing[6], gap: spacing[2] }}>
+        <View style={{ marginTop: spacing[4], gap: spacing[2] }}>
           <Text variant="label">Transport <Text variant="caption" color="secondary">(optionnel)</Text></Text>
           <TextInput
             value={draft.transportInput}
@@ -834,31 +890,6 @@ function MargeStep({
             maxToday
           />
         </View>
-
-        <Pressable onPress={() => setShowPerLine(!showPerLine)} style={{ marginTop: spacing[6] }}>
-          <Text variant="caption" style={{ color: palette.primary }}>
-            {showPerLine ? 'Masquer' : 'Modifier'} le prix par produit
-          </Text>
-        </Pressable>
-
-        {showPerLine && draft.lines.filter(l => l.name.trim() && !l.hasVariants).map(l => {
-          const cost = parseAmountInput(l.unitCost, currency) || 0;
-          const current = l.salePriceOverridden && l.salePriceCents !== null ? l.salePriceCents : computedSalePrice(cost);
-          return (
-            <View key={l.localId} style={styles.perLineRow}>
-              <Text variant="body" numberOfLines={1} style={{ flex: 1 }}>{l.name}</Text>
-              <TextInput
-                value={String(Math.round(current / 100))}
-                onChangeText={v => onUpdateLine(l.localId, {
-                  salePriceOverridden: true,
-                  salePriceCents: Math.round((parseFloat(v.replace(/[^0-9]/g, '')) || 0) * 100),
-                })}
-                keyboardType="number-pad"
-                style={[styles.fieldInput, { width: 110, textAlign: 'right', color: palette.textPrimary }]}
-              />
-            </View>
-          );
-        })}
       </ScrollView>
 
       <View style={styles.footer}>
@@ -968,15 +999,8 @@ function makeStyles(p: Palette) {
     variantGrid: { flexDirection: 'row', flexWrap: 'wrap', gap: spacing[2] },
     variantCell: { gap: spacing[1], minWidth: 70 },
 
-    // Votre marge
-    marginBox: { flexDirection: 'row', alignItems: 'baseline', gap: spacing[2], marginVertical: spacing[4] },
-    marginInput: {
-      fontFamily: fontFamily.bold, fontSize: 48, lineHeight: 58, color: p.textPrimary,
-      borderBottomWidth: 2, borderBottomColor: p.primary, minWidth: 100,
-      fontVariant: ['tabular-nums'] as ['tabular-nums'],
-    },
-    marginPercentSign: { fontFamily: fontFamily.bold, fontSize: 28, lineHeight: 34, color: p.textSecondary },
-    perLineRow: { flexDirection: 'row', alignItems: 'center', gap: spacing[3], paddingVertical: spacing[2] },
+    // Supplier picker — inline "Nouveau fournisseur" form
+    newSupplierForm: { gap: spacing[3], paddingTop: spacing[2] },
 
     // Confirmé
     confirmWrap: { flex: 1, alignItems: 'center', justifyContent: 'center', padding: spacing[8], gap: spacing[3] },

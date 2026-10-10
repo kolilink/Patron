@@ -499,7 +499,7 @@ export default function FournisseursScreen() {
           showFailureAlert(buildFailure({
             what: `Le produit « ${np.name} » n'a pas été enregistré.`,
             why: failureReason(pErr),
-            action: { label: 'Retour', onPress: () => {} },
+            action: { label: 'Retour', onPress: () => { } },
           }));
         } else {
           newProductIds.push(newId);
@@ -542,7 +542,14 @@ export default function FournisseursScreen() {
       <View style={styles.hdr}>
         <Pressable onPress={() => router.back()}><Text variant="body" color="secondary">‹ Retour</Text></Pressable>
         <Text variant="h4">Fournisseurs</Text>
-        <View style={{ width: 60 }} />
+        <Pressable
+          onPress={() => { setEditF(null); setShowForm(true); }}
+          hitSlop={12}
+          accessibilityLabel="Nouveau fournisseur"
+          accessibilityRole="button"
+        >
+          <Ionicons name="add" size={24} color={palette.primary} />
+        </Pressable>
       </View>
 
       {offline && (

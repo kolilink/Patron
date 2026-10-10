@@ -247,6 +247,22 @@ export default function AccueilScreen() {
   // from Accueil drops noticeably.
 
   const loadedForRef = useRef<string | null>(null);
+  // Monotonic generation counter — each loadAll() bumps it; a stale run
+  // compares its captured id against it before every UI write, so a slow fetch
+  // that started for business A can never clobber business B's freshly-painted
+  // KPIs (or clear its skeleton).
+  const loadRunId = useRef(0);
+  // The last non-null KPIs actually shown, keyed by business id. The screen
+  // falls back to this (never to an empty state) whenever `kpis` is momentarily
+  // null — and the key ensures a flap A→B→A shows A's numbers, not B's or none.
+  const lastGoodKpis = useRef<{ businessId: string; kpis: KPIs } | null>(null);
+
+  // The single writer for `kpis`: records the last good value keyed by the
+  // business it belongs to. A null (wipe) never overwrites lastGoodKpis.
+  const updateKpis = useCallback((next: KPIs | null) => {
+    setKpis(next);
+    if (next) lastGoodKpis.current = { businessId, kpis: next };
+  }, [businessId]);
 
   const isOwner = !isInvestisseur && !isVendeur;
 
@@ -334,8 +350,13 @@ export default function AccueilScreen() {
 
   const loadAll = useCallback(async () => {
     if (!businessId) return;
+    const myRun = ++loadRunId.current;
     setIsOffline(false);
     if (loadedForRef.current !== businessId) {
+      // Layer 1 — claim the business synchronously, BEFORE any await below. If
+      // the business flips again mid-flight, the next loadAll() takes its own
+      // wipe branch while this run's myRun gate drops every later UI write.
+      loadedForRef.current = businessId;
       // A same-business remount (after the lock screen) already has its numbers
       // on screen from the snapshot: skip the blanking entirely and refresh in
       // the background. Only a REAL business change blanks and shows the
@@ -345,15 +366,17 @@ export default function AccueilScreen() {
       if (!haveSnapshot) {
         setLoading(true);
         setBestSellersBase([]);
-        setKpis(null);
+        updateKpis(null);
         setKpisBase(null);
       }
       const cachedKpis = await getDashboardKpiCache(businessId) as KPIs | null;
+      if (myRun !== loadRunId.current) return;
       if (cachedKpis) {
         setKpisBase(cachedKpis);
         if (!haveSnapshot) {
           const shown = await withOutbox(cachedKpis);
-          setKpis(shown);
+          if (myRun !== loadRunId.current) return;
+          updateKpis(shown);
           setKpiSnapshot(businessId, shown);
           setLoading(false);
         }
@@ -374,10 +397,10 @@ export default function AccueilScreen() {
     try {
       await Promise.all([
         fetchProducts(businessId, userId, membershipId, role),
-        ventesReady.then(() => loadKpis()),
+        ventesReady.then(() => loadKpis(myRun)),
         // Best sellers no longer render on Accueil; only an investisseur's own
         // stake figures ("Vos produits") still read them.
-        isInvestisseur ? loadBestSellers() : Promise.resolve(),
+        isInvestisseur ? loadBestSellers(myRun) : Promise.resolve(),
       ]);
       if (isInvestisseur && membershipId) {
         fetchMemberScope(membershipId).then(rows => setInvestorScope(rows)).catch(() => { });
@@ -386,12 +409,14 @@ export default function AccueilScreen() {
       }
     } catch (err) {
       // failure: control-flow — network error flips the offline banner, which speaks
+      if (myRun !== loadRunId.current) return;
       if (isNetworkError(err)) setIsOffline(true);
     } finally {
-      setLoading(false);
-      loadedForRef.current = businessId;
+      // Generation-guarded: only the run that is still current may clear the
+      // skeleton. A superseded run leaves loading alone — its successor owns it.
+      if (myRun === loadRunId.current) setLoading(false);
     }
-  }, [businessId, userId, isInvestisseur, isVendeur, membershipId, role]);
+  }, [businessId, userId, isInvestisseur, isVendeur, membershipId, role, updateKpis]);
 
   // Any change to the sales the lists read (a local write, a refetch) re-derives
   // the dashboard from the same server base — no remount, no refocus. Held while
@@ -401,9 +426,9 @@ export default function AccueilScreen() {
   useEffect(() => {
     if (!kpisBase || syncing) return;
     let alive = true;
-    void withOutbox(kpisBase).then(k => { if (alive) setKpis(k); }).catch(() => { /* keep what is shown */ });
+    void withOutbox(kpisBase).then(k => { if (alive) updateKpis(k); }).catch(() => { /* keep what is shown */ });
     return () => { alive = false; };
-  }, [ventesSales, kpisBase, syncing]);
+  }, [ventesSales, kpisBase, syncing, updateKpis]);
 
   // Reload every time this tab gains focus (catches sales made in caisse)
   useFocusEffect(
@@ -495,19 +520,22 @@ export default function AccueilScreen() {
     return applyKpiOverlay(base, overlay, baseline);
   };
 
-  const loadKpis = async () => {
+  const loadKpis = async (myRun: number) => {
     // Local-first: render immediately from the last server base + the outbox,
     // before touching the network. With no base at all (first ever open,
     // nothing cached) the list-derived estimate stands in.
     const cachedBase = await getDashboardKpiCache(businessId) as KPIs | null;
+    if (myRun !== loadRunId.current) return;
     if (cachedBase) {
       setKpisBase(cachedBase);
       const shown = await withOutbox(cachedBase);
-      setKpis(shown);
+      if (myRun !== loadRunId.current) return;
+      updateKpis(shown);
       setKpiSnapshot(businessId, shown);
     } else {
       const local = await computeLocalKpis();
-      setKpis(local);
+      if (myRun !== loadRunId.current) return;
+      updateKpis(local);
       setKpiSnapshot(businessId, local);
     }
 
@@ -532,6 +560,7 @@ export default function AccueilScreen() {
         if (isNetworkError(error)) return;
         throw error;
       }
+      if (myRun !== loadRunId.current) return;
       const d = data as Record<string, number | string | null>;
       const freshKpis: KPIs = {
         revenue_today: Number(d.revenue_today) / 100,
@@ -548,7 +577,8 @@ export default function AccueilScreen() {
       serverBaseRef.current = { kpis: freshKpis, epoch: useSyncStore.getState().drainEpoch };
       void saveDashboardKpiCache(businessId, freshKpis);   // server truth only — never the overlaid figures
       const shownFresh = await withOutbox(freshKpis);
-      setKpis(shownFresh);
+      if (myRun !== loadRunId.current) return;
+      updateKpis(shownFresh);
       setKpiSnapshot(businessId, shownFresh);   // the DISPLAYED (post-overlay) numbers
     } catch (err) {
       // failure: control-flow — network error: base + outbox already on screen; anything else rethrows
@@ -556,7 +586,7 @@ export default function AccueilScreen() {
     }
   };
 
-  const loadBestSellers = async () => {
+  const loadBestSellers = async (myRun: number) => {
     const now = new Date();
     const monthStart = `${now.getFullYear()}-${String(now.getMonth() + 1).padStart(2, '0')}-01`;
 
@@ -564,6 +594,7 @@ export default function AccueilScreen() {
     // A failed/offline refresh below must leave it on screen — it used to
     // simply throw, and the section vanished whenever the network did.
     const cachedBase = await getBestSellersCache(businessId) as BestSeller[] | null;
+    if (myRun !== loadRunId.current) return;
     if (cachedBase) setBestSellersBase(cachedBase);
 
     try {
@@ -584,6 +615,7 @@ export default function AccueilScreen() {
         if (isNetworkError(bsErr)) return;
         throw bsErr;
       }
+      if (myRun !== loadRunId.current) return;
       const base: BestSeller[] = (data ?? []).map((r: BestSeller) => ({
         product_id: r.product_id,
         product_name: r.product_name,
@@ -613,7 +645,13 @@ export default function AccueilScreen() {
     return applyTopSellers(bestSellersBase, topSellers);
   }, [bestSellersBase, ventesSales, products]);
 
-  const lowStock = kpis?.low_stock ?? 0;
+  // What the screen actually renders — `kpis` when present, otherwise the last
+  // good numbers for THIS business (see lastGoodKpis above). A business switch
+  // shows nothing from the old business, and a same-business remount keeps its
+  // numbers rather than flashing to the empty state.
+  const shownKpis = kpis ?? (lastGoodKpis.current && lastGoodKpis.current.businessId === businessId ? lastGoodKpis.current.kpis : null);
+
+  const lowStock = shownKpis?.low_stock ?? 0;
 
   // Oldest-debt aging for the "clients qui doivent" card — computed
   // client-side from the already-fetched sales list (same per-client
@@ -663,13 +701,13 @@ export default function AccueilScreen() {
 
   const monthOrderCount = rapportsSnapshot?.period_order_count ?? 0;
 
-  const salesCount = kpis?.sales_today ?? 0;
+  const salesCount = shownKpis?.sales_today ?? 0;
   const hasSoldToday = salesCount > 0;
-  const delta = (kpis?.revenue_today ?? 0) - (kpis?.revenue_yesterday ?? 0);
+  const delta = (shownKpis?.revenue_today ?? 0) - (shownKpis?.revenue_yesterday ?? 0);
 
   const dayPart = getDayPart();
   const dayGreeting = dayPart === 'evening' ? 'Voici votre journée'
-      : null;
+    : null;
   // Never prints "0 ventes" — a zero-sales day drops the count entirely
   // rather than stating it, same reasoning as the debt card's zero-state
   // below: a quiet fact stated as a number reads as a verdict, a CTA reads
@@ -691,7 +729,7 @@ export default function AccueilScreen() {
   // deliberately does NOT count — submit_carnet_debt writes status='credit',
   // which the RPC's MIN(paid_at) WHERE status='paye' never touches, so a
   // business whose only activity so far is a debt still reads "Bienvenue."
-  const firstSaleAt = kpis?.first_sale_at ? new Date(kpis.first_sale_at) : null;
+  const firstSaleAt = shownKpis?.first_sale_at ? new Date(shownKpis.first_sale_at) : null;
   const hasEverSold = firstSaleAt !== null;
   // "Local midnight" per the spec — toDateString() compares in device local
   // time, same technique the old isBusinessCreatedToday check already used.
@@ -702,8 +740,8 @@ export default function AccueilScreen() {
   // never says "Première vente" again for this business (falls through to
   // the ordinary comparison instead — see below) — a
   // one-time acknowledgment, not a recurring one.
-  const monthRevenue = kpis?.revenue_month ?? 0;
-  const lastMonthRevenue = kpis?.revenue_last_month ?? 0;
+  const monthRevenue = shownKpis?.revenue_month ?? 0;
+  const lastMonthRevenue = shownKpis?.revenue_last_month ?? 0;
   // The home speaks ONLY on genuine gains. "Même niveau qu'hier" is gone (flat
   // day → nothing), a down day shows nothing, and "Ce mois : X" appears only
   // when this month is strictly ahead of last month (never zero, never lower
@@ -714,9 +752,9 @@ export default function AccueilScreen() {
   const showDeltaPill = comparison.kind === 'pill';
   const comparisonText =
     comparison.kind === 'welcome' ? 'Bienvenue sur Patron'
-    : comparison.kind === 'first_sale' ? 'Première vente enregistrée ✓'
-    : comparison.kind === 'month' ? `Ce mois : ${amtOrMask(monthRevenue)}`
-    : '';
+      : comparison.kind === 'first_sale' ? 'Première vente enregistrée ✓'
+        : comparison.kind === 'month' ? `Ce mois : ${amtOrMask(monthRevenue)}`
+          : '';
 
   return (
     <KeyboardAvoidingView style={{ flex: 1, backgroundColor: palette.background }} behavior={Platform.OS === 'ios' ? 'padding' : undefined}>
@@ -925,7 +963,7 @@ export default function AccueilScreen() {
                   {hasSoldToday ? (
                     <View style={styles.heroAmountRow}>
                       <Text variant="amountLarge" color="success" style={styles.heroAmount}>
-                        {rawOrMask(kpis?.revenue_today ?? 0)}
+                        {rawOrMask(shownKpis?.revenue_today ?? 0)}
                       </Text>
                       <Text variant="amountLarge" color="success" style={styles.heroCurrency}>
                         {currency}
@@ -971,7 +1009,7 @@ export default function AccueilScreen() {
                 zero-state. The two resolve independently of each other. ── */}
               <View style={styles.attentionZone}>
                 {isOwner && <DebtReminderDeniedCard userId={userId} refreshSignal={debtDeniedRefresh} />}
-                {(kpis?.credit_count ?? 0) > 0 ? (
+                {(shownKpis?.credit_count ?? 0) > 0 ? (
                   // Bespoke, not <KpiCard> — this is about PEOPLE who owe
                   // her, not a warning/cash state, so it deliberately skips
                   // KpiCard's colored icon-circle + tone-tinted amount
@@ -984,11 +1022,11 @@ export default function AccueilScreen() {
                   >
                     <View style={{ flexDirection: 'row', alignItems: 'center', gap: spacing[2] }}>
                       <Text variant="caption" color="secondary" style={{ flex: 1 }}>
-                        {kpis?.credit_count} client{(kpis?.credit_count ?? 0) > 1 ? 's' : ''} vous {(kpis?.credit_count ?? 0) > 1 ? 'doivent' : 'doit'}
+                        {shownKpis?.credit_count} client{(shownKpis?.credit_count ?? 0) > 1 ? 's' : ''} vous {(shownKpis?.credit_count ?? 0) > 1 ? 'doivent' : 'doit'}
                       </Text>
                       <Ionicons name="chevron-forward" size={16} color={palette.textSecondary} />
                     </View>
-                    <Text variant="amountLarge">{amtOrMask(kpis?.credit_total ?? 0)}</Text>
+                    <Text variant="amountLarge">{amtOrMask(shownKpis?.credit_total ?? 0)}</Text>
                     {creditAging.agingCount > 0 && (
                       <Text variant="caption" style={{ color: debtAgeColor(creditAging.oldestDays, palette) }}>
                         dont {creditAging.agingCount} depuis {creditAging.oldestDays} jour{creditAging.oldestDays > 1 ? 's' : ''}

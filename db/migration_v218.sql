@@ -85,7 +85,7 @@ BEGIN
     IF recv_qty IS NULL OR recv_qty <= 0 THEN CONTINUE; END IF;
     recv_qty := LEAST(recv_qty, l.qty_ordered - l.qty_received);
 
-    total_value_cents := total_value_cents + ROUND(l.unit_cost * 100)::bigint * recv_qty;
+    total_value_cents := total_value_cents + COALESCE(ROUND(l.unit_cost * 100)::bigint, 0) * recv_qty;
     line_count := line_count + 1;
   END LOOP;
 

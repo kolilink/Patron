@@ -38,7 +38,7 @@ describe('screen wiring', () => {
   const src = fs.readFileSync(path.resolve(__dirname, '../app/(app)/(tabs)/index.tsx'), 'utf8');
   it('reads revenue_last_month and gates BOTH month spots on showMonthLine', () => {
     expect(src).toMatch(/revenue_last_month: Number\(d\.revenue_last_month \?\? 0\) \/ 100/);
-    expect(src).toMatch(/const lastMonthRevenue = kpis\?\.revenue_last_month \?\? 0;/);
+    expect(src).toMatch(/const lastMonthRevenue = shownKpis\?\.revenue_last_month \?\? 0;/);
     expect(src).toMatch(/const showMonthLine = monthRevenue > lastMonthRevenue;/);
     expect(src).toMatch(/dayPart !== 'evening' && dayPart !== 'night' && showMonthLine/);
     expect(src).toMatch(/comparison\.kind === 'month' \? `Ce mois : \$\{amtOrMask\(monthRevenue\)\}`/);   // privacy mask kept

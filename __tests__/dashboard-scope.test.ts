@@ -29,7 +29,8 @@ describe('Accueil scope — sales + debts only', () => {
   });
 
   it('best sellers are only fetched for an investisseur (their own stake figures)', () => {
-    expect(src).toMatch(/isInvestisseur \? loadBestSellers\(\) : Promise\.resolve\(\)/);
+    // Generation-guarded since the KPI flash fix (Part 2): the load takes myRun.
+    expect(src).toMatch(/isInvestisseur \? loadBestSellers\(myRun\) : Promise\.resolve\(\)/);
   });
 
   it('shows base + outbox, never a bare server read, and refreshes when a sync pass completes', () => {
@@ -40,7 +41,7 @@ describe('Accueil scope — sales + debts only', () => {
     // a finished drain bumps homeRefreshToken (stores/sync.ts refreshAfterSync) → loadAll + the integrity check
     expect(src).toMatch(/useAuthStore\(s => s\.homeRefreshToken\)/);
     expect(src).toMatch(/verifyIntegrity\(\)/);
-    expect(src).toMatch(/\[ventesSales, kpisBase, syncing\]/);      // local writes re-derive it live
+    expect(src).toMatch(/\[ventesSales, kpisBase, syncing, updateKpis\]/);      // local writes re-derive it live
     expect(src).toMatch(/saveDashboardKpiCache\(businessId, freshKpis\)/); // cache keeps server truth only
   });
 });
