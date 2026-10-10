@@ -5,6 +5,7 @@ import { generateFallbackName } from '@/lib/id';
 import { saveApportsCache, getApportsCache, getCacheTimestamp } from '@/lib/db';
 import { isNetworkError, withNetworkRetry, reportOfflineFallback } from '@/lib/sync';
 import { useAuthStore } from '@/stores/auth';
+import { abandonFetch, beginFetch, failFetch, IDLE, READY, type FetchStatus } from '@/lib/fetchStatus';
 
 // See stores/products.ts for the full explanation.
 function isStaleBusiness(businessId: string): boolean {
@@ -32,6 +33,8 @@ export interface Apport {
 interface AportsStore {
   apports: Apport[];
   loading: boolean;
+  /** idle → loading → ready | error. See lib/fetchStatus.ts. */
+  fetchStatus: FetchStatus;
   saving: boolean;
   error: string | null;
   offline: boolean;
@@ -76,7 +79,7 @@ interface AportsStore {
 
 export const useAportsStore = create<AportsStore>((set, get) => ({
   apports: [],
-  loading: false,
+  ...IDLE,
   saving: false,
   error: null,
   offline: false,
@@ -84,16 +87,13 @@ export const useAportsStore = create<AportsStore>((set, get) => ({
 
   fetchApports: async (businessId) => {
     if (isStaleBusiness(businessId)) return;
-    if (get().apports.length === 0) {
+    // A 'ready' store — even with zero apports — refreshes silently.
+    const startedFrom = get().fetchStatus;
+    set({ ...beginFetch(startedFrom), error: null });
+    if (startedFrom !== 'ready') {
       const cached = await getApportsCache(businessId) as Apport[] | null;
       if (isStaleBusiness(businessId)) return;
-      if (cached) {
-        set({ apports: cached, loading: false, error: null });
-      } else {
-        set({ loading: true, error: null });
-      }
-    } else {
-      set({ error: null });
+      if (cached) set({ apports: cached, ...READY });
     }
 
     const { data, error } = await withNetworkRetry(() =>
@@ -104,7 +104,7 @@ export const useAportsStore = create<AportsStore>((set, get) => ({
         .order('injected_at', { ascending: false }),
     ).catch(err => ({ data: null, error: err }));
 
-    if (isStaleBusiness(businessId)) { set({ loading: false }); return; }
+    if (isStaleBusiness(businessId)) { set(abandonFetch(get().fetchStatus)); return; }
     if (error) {
       if (isNetworkError(error)) {
         reportOfflineFallback('apports.fetchApports', error);
@@ -113,13 +113,13 @@ export const useAportsStore = create<AportsStore>((set, get) => ({
         if (cached) {
           const ts = await getCacheTimestamp('apports_cache', businessId);
           if (isStaleBusiness(businessId)) return;
-          set({ apports: cached, loading: false, offline: true, offlineSince: ts, error: null });
+          set({ apports: cached, ...READY, offline: true, offlineSince: ts, error: null });
           return;
         }
-        set({ loading: false, offline: true, offlineSince: null, error: null });
+        set({ ...READY, offline: true, offlineSince: null, error: null });
         return;
       }
-      set({ loading: false, error: translateError(error, "Le chargement n'a pas abouti.") });
+      set({ ...failFetch(get().fetchStatus), error: translateError(error, "Le chargement n'a pas abouti.") });
       return;
     }
 
@@ -143,8 +143,8 @@ export const useAportsStore = create<AportsStore>((set, get) => ({
     }));
 
     void saveApportsCache(businessId, apports as unknown[]);
-    if (isStaleBusiness(businessId)) { set({ loading: false }); return; }
-    set({ apports, loading: false, offline: false, offlineSince: null });
+    if (isStaleBusiness(businessId)) { set(abandonFetch(get().fetchStatus)); return; }
+    set({ apports, ...READY, offline: false, offlineSince: null });
   },
 
   addApport: async ({ businessId, amount, injectedById, sourceName, note, injectedAt }) => {
@@ -255,5 +255,5 @@ export const useAportsStore = create<AportsStore>((set, get) => ({
     }
   },
 
-  reset: () => set({ apports: [], loading: false, saving: false, error: null, offline: false, offlineSince: null }),
+  reset: () => set({ apports: [], ...IDLE, saving: false, error: null, offline: false, offlineSince: null }),
 }));

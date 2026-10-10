@@ -16,6 +16,7 @@ const {
   findResurrectedForkViolations,
   findHeroModalFadeViolations,
   findSystemAlertViolations,
+  findSkeletonOutsideDataStateViolations,
 } = require('./lib/consistency-checks');
 
 const hexViolations = findHexViolations();
@@ -27,6 +28,7 @@ const functionExposureViolations = findFunctionExposureViolations();
 const resurrectedForkViolations = findResurrectedForkViolations();
 const heroModalFadeViolations = findHeroModalFadeViolations();
 const systemAlertViolations = findSystemAlertViolations();
+const skeletonViolations = findSkeletonOutsideDataStateViolations();
 
 let failed = false;
 
@@ -76,6 +78,12 @@ if (systemAlertViolations.length) {
   failed = true;
   console.error(`\n✗ no-system-alert (${systemAlertViolations.length}) — Alert.alert is the OS dialog (white Material dialog on Android). Use appAlert() from src/utils/appAlert.ts (same arguments) so the app's own ConfirmSheet shows on both platforms:\n`);
   systemAlertViolations.forEach(l => console.error(`  ${l}`));
+}
+
+if (skeletonViolations.length) {
+  failed = true;
+  console.error(`\n✗ data-state-invariant (${skeletonViolations.length}) — a Skeleton* component may only render as the skeleton={…} slot of <DataState> (src/components/ui/DataState.tsx). Hand-rolled loading gates replay the skeleton for loaded-but-empty lists. Drive it from the store's fetchStatus (lib/fetchStatus.ts):\n`);
+  skeletonViolations.forEach(l => console.error(`  ${l}`));
 }
 
 if (failed) {

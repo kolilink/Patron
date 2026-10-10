@@ -8,6 +8,7 @@ import { notifyEvent } from '@/src/utils/notifications';
 import { uploadMessageImage } from '@/lib/chatImages';
 import { generateId } from '@/lib/id';
 import type { SupportConversation, SupportMessage, SupportAiDraft } from '@/src/types';
+import { beginFetch, failFetch, type FetchStatus } from '@/lib/fetchStatus';
 
 const PENDING_KEY = 'support_pending_messages';
 
@@ -61,6 +62,8 @@ interface SupportChatStore {
   // ─── Founder slice ───────────────────────────────────────────────────────
   founderConversations: SupportConversation[];
   founderLoading: boolean;
+  /** Founder inbox: idle → loading → ready | error. See lib/fetchStatus.ts. */
+  founderStatus: FetchStatus;
   founderError: string | null;
   founderUnreadTotal: number;
 
@@ -107,6 +110,7 @@ const initialState = {
 
   founderConversations: [] as SupportConversation[],
   founderLoading: false,
+  founderStatus: 'idle' as FetchStatus,
   founderError: null as string | null,
   founderUnreadTotal: 0,
 
@@ -368,7 +372,7 @@ export const useSupportChatStore = create<SupportChatStore>((set, get) => ({
   // list (see migration_v126.sql). businesses(name) is a FK embed, not a
   // second round trip per conversation.
   loadFounderConversations: async () => {
-    set({ founderLoading: true, founderError: null });
+    { const p = beginFetch(get().founderStatus); set({ founderLoading: p.loading, founderStatus: p.fetchStatus, founderError: null }); }
     try {
       const { data: convs, error: convErr } = await withTimeout(
         supabase
@@ -387,9 +391,9 @@ export const useSupportChatStore = create<SupportChatStore>((set, get) => ({
         !c.founder_last_read_at || new Date(c.last_message_at) > new Date(c.founder_last_read_at),
       ).length;
 
-      set({ founderConversations: withNames, founderUnreadTotal: unreadTotal, founderLoading: false });
+      set({ founderConversations: withNames, founderUnreadTotal: unreadTotal, founderLoading: false, founderStatus: 'ready' });
     } catch (err) {
-      set({ founderLoading: false, founderError: translateError(err, "Le chargement n'a pas abouti.") });
+      set({ founderLoading: false, founderStatus: failFetch(get().founderStatus).fetchStatus, founderError: translateError(err, "Le chargement n'a pas abouti.") });
     }
   },
 

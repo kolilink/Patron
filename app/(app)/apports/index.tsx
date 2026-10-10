@@ -9,6 +9,7 @@ import { Text } from '@/src/components/ui/Text';
 import { Button } from '@/src/components/ui/Button';
 import { DatePickerField } from '@/src/components/ui/DatePickerField';
 import { SkeletonList } from '@/src/components/ui/SkeletonPlaceholder';
+import { DataState } from '@/src/components/ui/DataState';
 import { EmptyState } from '@/src/components/ui/EmptyState';
 import { OfflineNotice } from '@/src/components/ui/OfflineNotice';
 import { ProofPhotoField, type PickedImage } from '@/src/components/ui/ProofPhotoField';
@@ -401,7 +402,7 @@ export default function AportsScreen() {
   const userId = session?.user?.id;
   const canWrite = role === 'administrateur' || role === 'manager';
 
-  const { apports, loading, saving, offline, offlineSince, fetchApports, addApport, editApport, recordWithdrawal, editWithdrawal } = useAportsStore();
+  const { apports, fetchStatus, saving, offline, offlineSince, fetchApports, addApport, editApport, recordWithdrawal, editWithdrawal } = useAportsStore();
   const fetchMembres = useEquipeStore(s => s.fetchMembres);
   const [showForm, setShowForm] = useState(false);
   const [formMode, setFormMode] = useState<FormMode>('add');
@@ -540,64 +541,7 @@ export default function AportsScreen() {
   const filterContributor = contributors.find(c => c.injected_by_id === filterMemberId);
   const filterMemberName = filterMemberId && filterContributor ? displayName(filterContributor, userId, membres) : null;
 
-  return (
-    <Screen>
-      {/* Header — back + optional add */}
-      <View style={styles.headerTop}>
-        <Pressable onPress={() => router.back()} hitSlop={8}>
-          <Text variant="body" color="secondary">‹ Retour</Text>
-        </Pressable>
-        {canWrite && (
-          <Pressable onPress={() => setShowAddChooser(true)} hitSlop={8} style={styles.addBtn}>
-            <Ionicons name="add" size={20} color={palette.apportsPurple} />
-            <Text variant="label" style={{ color: palette.apportsPurple }}>Ajouter</Text>
-          </Pressable>
-        )}
-      </View>
-
-      {offline && (
-        <OfflineNotice offlineSince={offlineSince} onRetry={() => fetchApports(businessId)} />
-      )}
-
-      {/* Title + total — omitted entirely on the true-empty state (no apports
-          at all): a "—" placeholder for a total that doesn't exist yet is
-          just noise above the empty illustration below. The label itself
-          answers "whose money" together with the number — "Capital de
-          [nom]" once a person tab is active, not just the number alone. */}
-      {(loading || apports.length > 0) && (
-        <View style={styles.headerMeta}>
-          <Text variant="caption" style={{ color: palette.apportsSecondary, letterSpacing: 0.4 }}>
-            {filterMemberName ? `Capital de ${filterMemberName}` : 'Capital investi'}
-          </Text>
-          {!loading && apports.length > 0 && (
-            <>
-              <Text
-                style={[styles.totalText, { color: palette.apportsGreen, fontSize: totalFontSize, lineHeight: totalFontSize + 8 }]}
-                numberOfLines={1}
-                adjustsFontSizeToFit
-                minimumFontScale={0.6}
-              >
-                {displayTotal}
-              </Text>
-              {filterMemberId && (
-                <Text variant="caption" style={{ color: palette.apportsSecondary }}>
-                  sur {formatAmount(total, currency)} au total
-                </Text>
-              )}
-            </>
-          )}
-        </View>
-      )}
-
-      {loading && apports.length === 0 ? (
-        <SkeletonList count={4} />
-      ) : !loading && apports.length === 0 && offline ? (
-        <View style={styles.empty}>
-          <Text variant="body" color="secondary" style={{ textAlign: 'center' }}>
-            Données non disponibles hors ligne. Ouvrez l'application en ligne une première fois pour activer le mode hors ligne.
-          </Text>
-        </View>
-      ) : (
+  const apportsList = (
         <FlatList
           data={filtered}
           keyExtractor={a => a.id}
@@ -688,7 +632,70 @@ export default function AportsScreen() {
             );
           }}
         />
+  );
+  return (
+    <Screen>
+      {/* Header — back + optional add */}
+      <View style={styles.headerTop}>
+        <Pressable onPress={() => router.back()} hitSlop={8}>
+          <Text variant="body" color="secondary">‹ Retour</Text>
+        </Pressable>
+        {canWrite && (
+          <Pressable onPress={() => setShowAddChooser(true)} hitSlop={8} style={styles.addBtn}>
+            <Ionicons name="add" size={20} color={palette.apportsPurple} />
+            <Text variant="label" style={{ color: palette.apportsPurple }}>Ajouter</Text>
+          </Pressable>
+        )}
+      </View>
+
+      {offline && (
+        <OfflineNotice offlineSince={offlineSince} onRetry={() => fetchApports(businessId)} />
       )}
+
+      {/* Title + total — omitted entirely on the true-empty state (no apports
+          at all): a "—" placeholder for a total that doesn't exist yet is
+          just noise above the empty illustration below. The label itself
+          answers "whose money" together with the number — "Capital de
+          [nom]" once a person tab is active, not just the number alone. */}
+      {(fetchStatus === 'loading' || apports.length > 0) && (
+        <View style={styles.headerMeta}>
+          <Text variant="caption" style={{ color: palette.apportsSecondary, letterSpacing: 0.4 }}>
+            {filterMemberName ? `Capital de ${filterMemberName}` : 'Capital investi'}
+          </Text>
+          {fetchStatus !== 'loading' && apports.length > 0 && (
+            <>
+              <Text
+                style={[styles.totalText, { color: palette.apportsGreen, fontSize: totalFontSize, lineHeight: totalFontSize + 8 }]}
+                numberOfLines={1}
+                adjustsFontSizeToFit
+                minimumFontScale={0.6}
+              >
+                {displayTotal}
+              </Text>
+              {filterMemberId && (
+                <Text variant="caption" style={{ color: palette.apportsSecondary }}>
+                  sur {formatAmount(total, currency)} au total
+                </Text>
+              )}
+            </>
+          )}
+        </View>
+      )}
+
+      <DataState
+        status={fetchStatus}
+        isEmpty={apports.length === 0}
+        skeleton={<SkeletonList count={4} />}
+        empty={offline ? (
+        <View style={styles.empty}>
+          <Text variant="body" color="secondary" style={{ textAlign: 'center' }}>
+            Données non disponibles hors ligne. Ouvrez l'application en ligne une première fois pour activer le mode hors ligne.
+          </Text>
+        </View>
+      ) : apportsList}
+      >
+        {apportsList}
+      </DataState>
 
       <ApportFormModal
         visible={showForm}

@@ -12,6 +12,7 @@ import { FormSheet } from '@/src/components/ui/FormSheet';
 import { router, useFocusEffect } from 'expo-router';
 import { AppSheet } from '@/src/components/ui/AppSheet';
 import { SkeletonList } from '@/src/components/ui/SkeletonPlaceholder';
+import { DataState } from '@/src/components/ui/DataState';
 import { OfflineNotice } from '@/src/components/ui/OfflineNotice';
 import { EmptyState } from '@/src/components/ui/EmptyState';
 import { Button } from '@/src/components/ui/Button';
@@ -1043,7 +1044,7 @@ export default function EquipeScreen() {
     }
   }, [role]);
 
-  const { membres, codes, redeemedCodes, loading, saving, error, hasFetched, offline, offlineSince, fetchMembres, fetchCodes, createCode, revokeCode } = useEquipeStore();
+  const { membres, codes, redeemedCodes, fetchStatus, codesStatus, saving, error, offline, offlineSince, fetchMembres, fetchCodes, createCode, revokeCode } = useEquipeStore();
   const { products, fetchProducts } = useProductStore();
 
   const [tab, setTab] = useState<'membres' | 'codes'>('membres');
@@ -1104,44 +1105,9 @@ export default function EquipeScreen() {
     setRevealData({ code, role });
   };
 
-  return (
-    <Screen>
-      <View style={styles.hdr}>
-        <Pressable onPress={() => router.back()}><Text variant="body" color="secondary">‹ Retour</Text></Pressable>
-        <Text variant="h4">Équipe</Text>
-        <Pressable onPress={() => setShowNewCode(true)}>
-          <Text variant="label" style={{ color: palette.primary }}>+ Inviter</Text>
-        </Pressable>
-      </View>
-
-      {offline && (
-        <OfflineNotice offlineSince={offlineSince} onRetry={() => fetchMembres(businessId)} />
-      )}
-
-      {hasCodes && (
-        <View style={styles.tabs}>
-          {(['membres', 'codes'] as const).map(t => (
-            <Pressable key={t} onPress={() => setTab(t)} style={[styles.tab, effectiveTab === t && styles.tabActive]}>
-              <Text variant="label" style={{ color: effectiveTab === t ? palette.textInverse : palette.textSecondary }}>
-                {t === 'membres' ? 'Membres' : "Codes d'invitation"}
-              </Text>
-            </Pressable>
-          ))}
-        </View>
-      )}
-
-      {searchVisible && (
-        <View style={styles.searchRow}>
-          <Input placeholder="Rechercher un membre…" value={search} onChangeText={setSearch} />
-        </View>
-      )}
-
-      {effectiveTab === 'membres' ? (
-        (!hasFetched || loading) && membres.length === 0 ? (
-          <SkeletonList count={5} />
-        ) : !loading && membres.length === 0 && (error || offline) ? (
-          <Text variant="body" color="secondary" style={styles.center}>Données non disponibles hors ligne</Text>
-        ) : filteredMembres.length === 0 ? (
+  // Search/no-members empty states vs the grouped list — a loaded-but-empty
+  // team is the screen's own empty state, never a skeleton.
+  const membersBody = filteredMembres.length === 0 ? (
           search.trim() ? (
             <View style={styles.empty}>
               <Ionicons name="search-outline" size={40} color={palette.textDisabled} />
@@ -1156,7 +1122,8 @@ export default function EquipeScreen() {
               <Button label="+ Inviter quelqu'un" size="sm" onPress={() => setShowNewCode(true)} style={{ marginTop: spacing[3] }} />
             </View>
           )
-        ) : (
+  ) : (
+
           // Grouped by role instead of one flat list — who can do what reads
           // from which section someone is in, not from a colored badge per
           // row. A plain ScrollView (not FlatList) is deliberate: a team
@@ -1211,8 +1178,52 @@ export default function EquipeScreen() {
               );
             })}
           </ScrollView>
-        )
-      ) : !loading && codes.length === 0 && error ? (
+  );
+  return (
+    <Screen>
+      <View style={styles.hdr}>
+        <Pressable onPress={() => router.back()}><Text variant="body" color="secondary">‹ Retour</Text></Pressable>
+        <Text variant="h4">Équipe</Text>
+        <Pressable onPress={() => setShowNewCode(true)}>
+          <Text variant="label" style={{ color: palette.primary }}>+ Inviter</Text>
+        </Pressable>
+      </View>
+
+      {offline && (
+        <OfflineNotice offlineSince={offlineSince} onRetry={() => fetchMembres(businessId)} />
+      )}
+
+      {hasCodes && (
+        <View style={styles.tabs}>
+          {(['membres', 'codes'] as const).map(t => (
+            <Pressable key={t} onPress={() => setTab(t)} style={[styles.tab, effectiveTab === t && styles.tabActive]}>
+              <Text variant="label" style={{ color: effectiveTab === t ? palette.textInverse : palette.textSecondary }}>
+                {t === 'membres' ? 'Membres' : "Codes d'invitation"}
+              </Text>
+            </Pressable>
+          ))}
+        </View>
+      )}
+
+      {searchVisible && (
+        <View style={styles.searchRow}>
+          <Input placeholder="Rechercher un membre…" value={search} onChangeText={setSearch} />
+        </View>
+      )}
+
+      {effectiveTab === 'membres' ? (
+        <DataState
+          status={fetchStatus}
+          isEmpty={membres.length === 0}
+          skeleton={<SkeletonList count={5} />}
+          empty={(error || offline) ? (
+          <Text variant="body" color="secondary" style={styles.center}>Données non disponibles hors ligne</Text>
+          ) : membersBody}
+        >
+          {membersBody}
+        </DataState>
+        
+      ) : codesStatus !== 'loading' && codes.length === 0 && error ? (
         <Text variant="body" color="secondary" style={styles.center}>Données non disponibles hors ligne</Text>
       ) : (
         <FlatList

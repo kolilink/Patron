@@ -17,6 +17,7 @@ import { createKeyedInflightGuard } from '@/lib/inflight';
 const archiveGuard = createKeyedInflightGuard();
 import type { Product, ProductVariant } from '@/src/types';
 import { isOutboxValidationError } from '@/lib/outboxValidation';
+import { beginFetch, failFetch, IDLE, READY, type FetchStatus } from '@/lib/fetchStatus';
 
 // Every fetch* function below is called with a specific businessId, but by
 // the time its network/cache round trip resolves, the user may have already
@@ -88,6 +89,8 @@ interface ProductStore {
   // has a product, before this fetch had resolved.
   productsFetchedFor: string | null;
   loading: boolean;
+  /** idle → loading → ready | error. See lib/fetchStatus.ts. */
+  fetchStatus: FetchStatus;
   saving: boolean;
   error: string | null;
   offline: boolean;
@@ -162,21 +165,23 @@ export const useProductStore = create<ProductStore>((set, get) => ({
   vendeurProductScope: [],
   vendeurScopeAll: true,
   productsFetchedFor: null,
-  loading: false,
+  ...IDLE,
   saving: false,
   error: null,
   offline: false,
   offlineSince: null,
 
   fetchProducts: async (businessId, userId, membershipId, role) => {
-    if (get().products.length === 0) {
-      set({ loading: true, error: null });
+    // Only a store that has never produced data (idle/error) may show a
+    // skeleton; a 'ready' store — even one holding zero products — refreshes
+    // silently. See lib/fetchStatus.ts.
+    const startedFrom = get().fetchStatus;
+    set({ ...beginFetch(startedFrom), error: null });
+    if (startedFrom !== 'ready') {
       const cached = await getProductCache(businessId);
       if (cached && !isStaleBusiness(businessId)) {
-        set({ products: await overlayOnBase(businessId, cached), loading: false });
+        set({ products: await overlayOnBase(businessId, cached), ...READY });
       }
-    } else {
-      set({ error: null });
     }
     try {
       // Security audit 2026-09-27 (1.14, real enforcement): vendeur's own
@@ -207,7 +212,7 @@ export const useProductStore = create<ProductStore>((set, get) => ({
       }));
       const products = await overlayOnBase(businessId, baseProducts);
       if (isStaleBusiness(businessId)) return;
-      set({ products, loading: false, offline: false, offlineSince: null, productsFetchedFor: businessId });
+      set({ products, ...READY, offline: false, offlineSince: null, productsFetchedFor: businessId });
       void saveProductCache(businessId, baseProducts);
 
       // Low-stock detection: notify admins/managers for each product crossing its threshold.
@@ -288,12 +293,12 @@ export const useProductStore = create<ProductStore>((set, get) => ({
           if (isStaleBusiness(businessId)) return;
           const shown = await overlayOnBase(businessId, cached);
           if (isStaleBusiness(businessId)) return;
-          set({ products: shown, loading: false, offline: true, offlineSince: ts, productsFetchedFor: businessId });
+          set({ products: shown, ...READY, offline: true, offlineSince: ts, productsFetchedFor: businessId });
           return;
         }
         set({
           error: 'Pas de connexion. Ouvrez l\'application en ligne une première fois pour activer le mode hors ligne.',
-          loading: false,
+          ...failFetch(get().fetchStatus),
           offline: true,
           offlineSince: null,
           productsFetchedFor: businessId,
@@ -301,7 +306,7 @@ export const useProductStore = create<ProductStore>((set, get) => ({
         return;
       }
       if (isStaleBusiness(businessId)) return;
-      set({ error: translateError(err, "Le chargement n'a pas abouti."), loading: false, productsFetchedFor: businessId });
+      set({ error: translateError(err, "Le chargement n'a pas abouti."), ...failFetch(get().fetchStatus), productsFetchedFor: businessId });
     }
   },
 
@@ -619,6 +624,6 @@ export const useProductStore = create<ProductStore>((set, get) => ({
   reset: () => {
     notifiedLowStockIds.clear();
     _baseProducts = null;
-    set({ products: [], archivingIds: [], archivedProducts: [], variantsByProduct: {}, vendeurProductScope: [], vendeurScopeAll: true, productsFetchedFor: null, loading: false, error: null, offline: false, offlineSince: null });
+    set({ products: [], archivingIds: [], archivedProducts: [], variantsByProduct: {}, vendeurProductScope: [], vendeurScopeAll: true, productsFetchedFor: null, ...IDLE, error: null, offline: false, offlineSince: null });
   },
 }));

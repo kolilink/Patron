@@ -40,6 +40,8 @@ import { supabase } from '@/lib/supabase';
 import { getKV, setKV } from '@/lib/db';
 import { haptics } from '@/lib/haptics';
 import { SkeletonList } from '@/src/components/ui/SkeletonPlaceholder';
+import { DataState } from '@/src/components/ui/DataState';
+import { resolveDataState } from '@/src/components/ui/dataState';
 import { trackEvent } from '@/lib/analytics';
 import { activationPriming } from '@/stores/activationPriming';
 import { failAlert } from '@/src/components/ui/FailureView';
@@ -1394,7 +1396,7 @@ export default function VendreScreen() {
   const role = session?.activeMembership?.role;
   const isVendeur = role === 'vendeur';
 
-  const { products: allProducts, vendeurProductScope, vendeurScopeAll, variantsByProduct, loading, offline, offlineSince, fetchProducts, fetchVariants } = useProductStore();
+  const { products: allProducts, vendeurProductScope, vendeurScopeAll, variantsByProduct, fetchStatus, offline, offlineSince, fetchProducts, fetchVariants } = useProductStore();
 
   // Apply vendeur product scope. Fix C(2): scope_all_products=true → see all;
   // scope_all_products=false → ONLY the assigned products (so zero assigned =
@@ -1825,10 +1827,17 @@ export default function VendreScreen() {
   // products at all, so blocking it behind a product-shaped skeleton was
   // showing unrelated content before the real destination, not a genuine
   // loading state for what was actually about to render.
-  if (loading && products.length === 0) {
+  if (resolveDataState(fetchStatus, products.length === 0) === 'skeleton') {
     return (
       <Screen tab>
-        <SkeletonList count={9} />
+        <DataState
+          status={fetchStatus}
+          isEmpty={products.length === 0}
+          skeleton={<SkeletonList count={9} />}
+          empty={null}
+        >
+          {null}
+        </DataState>
       </Screen>
     );
   }

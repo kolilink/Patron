@@ -26,6 +26,7 @@ import { SaleReceiptView, type ReceiptData, type ReceiptItem } from '@/src/compo
 import { haptics } from '@/lib/haptics';
 import { supabase } from '@/lib/supabase';
 import { SkeletonList } from '@/src/components/ui/SkeletonPlaceholder';
+import { DataState } from '@/src/components/ui/DataState';
 import { EmptyState } from '@/src/components/ui/EmptyState';
 import { failAlert } from '@/src/components/ui/FailureView';
 import { saleCancelledConfirmation } from '@/src/utils/saveConfirmationCopy';
@@ -769,7 +770,12 @@ function DetailModal({ sale, currency, businessName, singleVendor, role, onClose
           </Card>
         )}
 
-        {!sale.lines ? <DetailSkeleton /> : (
+        <DataState
+          status={sale.lines ? 'ready' : 'loading'}
+          isEmpty={!sale.lines}
+          skeleton={<DetailSkeleton />}
+          empty={null}
+        >
           <View style={[{ gap: spacing[2] }, displayState === 'annule' && { opacity: 0.5 }]}>
             {/* Single unified card — articles, info, payments, profit */}
             <Card style={{ gap: 0, overflow: 'hidden', padding: 0 }}>
@@ -994,7 +1000,7 @@ function DetailModal({ sale, currency, businessName, singleVendor, role, onClose
               </Card>
             )}
           </View>
-        )}
+        </DataState>
 
         {/* Receipt lives behind this button — tapping it opens the preview
               sheet the merchant shares from, instead of duplicating the sale
@@ -1147,7 +1153,7 @@ export default function VentesScreen() {
   const fabOpacity = useRef(new Animated.Value(1)).current;
 
 
-  const { sales, loading, saving, error, offline, offlineSince, fetchSales, loadDetail, recordPayment, cancelSale, updateSaleClient, editSale } = useVentesStore();
+  const { sales, loading, fetchStatus, saving, error, offline, offlineSince, fetchSales, loadDetail, recordPayment, cancelSale, updateSaleClient, editSale } = useVentesStore();
   const [selected, setSelected] = useState<Vente | null>(null);
   const [filter, setFilter] = useState<'all' | 'paye' | 'credit' | 'annule'>('all');
   const [refreshing, setRefreshing] = useState(false);
@@ -1368,65 +1374,9 @@ export default function VentesScreen() {
     [sales, filtered, filter, currency],
   );
 
-  return (
-    <Screen>
-      <View style={styles.header}>
-        <Pressable onPress={() => router.back()}><Text variant="body" color="secondary">‹ Retour</Text></Pressable>
-        <Text variant="h4">Ventes</Text>
-        <Pressable
-          onPress={openFilterSheet}
-          style={styles.filterIconBtn}
-          accessibilityLabel="Filtrer les ventes"
-          accessibilityRole="button"
-        >
-          <Ionicons name="funnel-outline" size={20} color={hasActiveFilter ? palette.primary : palette.textSecondary} />
-          {hasActiveFilter && <View style={styles.filterDot} />}
-        </Pressable>
-      </View>
-
-      {/* Inline summary line */}
-      {sales.length > 0 && (
-        <View style={styles.summaryLine}>
-          <Text
-            variant="caption"
-            color="secondary"
-            numberOfLines={1}
-            adjustsFontSizeToFit
-            style={{ flex: 1 }}
-          >
-            {summaryLine}
-          </Text>
-        </View>
-      )}
-
-      {/* Filter tabs */}
-      <View style={styles.filterRow}>
-        {(['all', 'paye', 'credit', 'annule'] as const).map(f => (
-          <Pressable key={f} onPress={() => setFilter(f)}
-            style={[styles.filterTab, filter === f && styles.filterTabActive]}>
-            <Text variant="caption" style={{ color: filter === f ? palette.textInverse : palette.textSecondary }}>
-              {f === 'all' ? 'Tout' : f === 'paye' ? 'Payés' : f === 'credit' ? 'En dette' : 'Annulés'}
-            </Text>
-          </Pressable>
-        ))}
-      </View>
-
-      <RefusedOpsNotice />
-
-      {offline && (
-        <OfflineNotice
-          offlineSince={offlineSince}
-          onRetry={() => fetchSales(businessId, isVendeur ? userId : undefined, undefined, limit, statusParam)}
-        />
-      )}
-
-      {loading && sales.length === 0 ? (
-        <SkeletonList count={7} />
-      ) : !loading && sales.length === 0 && error ? (
-        <View style={styles.emptyState}>
-          <Text variant="body" color="secondary" style={{ textAlign: 'center' }}>Données non disponibles hors ligne</Text>
-        </View>
-      ) : filtered.length === 0 ? (
+  // Filter/no-sales empty states vs the list itself — a loaded-but-empty list
+  // is the screen's own EmptyState, never a skeleton.
+  const ventesBody = filtered.length === 0 ? (
         sales.length === 0 ? (
           <EmptyState
             icon="receipt-outline"
@@ -1445,7 +1395,7 @@ export default function VentesScreen() {
             </Pressable>
           </View>
         )
-      ) : (
+  ) : (
         <FlatList
           data={visibleItems}
           CellRendererComponent={AnimatedRowCell}
@@ -1523,7 +1473,71 @@ export default function VentesScreen() {
           }}
           ItemSeparatorComponent={() => <View style={{ height: 1, backgroundColor: palette.border }} />}
         />
+  );
+  return (
+    <Screen>
+      <View style={styles.header}>
+        <Pressable onPress={() => router.back()}><Text variant="body" color="secondary">‹ Retour</Text></Pressable>
+        <Text variant="h4">Ventes</Text>
+        <Pressable
+          onPress={openFilterSheet}
+          style={styles.filterIconBtn}
+          accessibilityLabel="Filtrer les ventes"
+          accessibilityRole="button"
+        >
+          <Ionicons name="funnel-outline" size={20} color={hasActiveFilter ? palette.primary : palette.textSecondary} />
+          {hasActiveFilter && <View style={styles.filterDot} />}
+        </Pressable>
+      </View>
+
+      {/* Inline summary line */}
+      {sales.length > 0 && (
+        <View style={styles.summaryLine}>
+          <Text
+            variant="caption"
+            color="secondary"
+            numberOfLines={1}
+            adjustsFontSizeToFit
+            style={{ flex: 1 }}
+          >
+            {summaryLine}
+          </Text>
+        </View>
       )}
+
+      {/* Filter tabs */}
+      <View style={styles.filterRow}>
+        {(['all', 'paye', 'credit', 'annule'] as const).map(f => (
+          <Pressable key={f} onPress={() => setFilter(f)}
+            style={[styles.filterTab, filter === f && styles.filterTabActive]}>
+            <Text variant="caption" style={{ color: filter === f ? palette.textInverse : palette.textSecondary }}>
+              {f === 'all' ? 'Tout' : f === 'paye' ? 'Payés' : f === 'credit' ? 'En dette' : 'Annulés'}
+            </Text>
+          </Pressable>
+        ))}
+      </View>
+
+      <RefusedOpsNotice />
+
+      {offline && (
+        <OfflineNotice
+          offlineSince={offlineSince}
+          onRetry={() => fetchSales(businessId, isVendeur ? userId : undefined, undefined, limit, statusParam)}
+        />
+      )}
+
+      <DataState
+        status={fetchStatus}
+        isEmpty={sales.length === 0}
+        skeleton={<SkeletonList count={7} />}
+        empty={error ? (
+        <View style={styles.emptyState}>
+          <Text variant="body" color="secondary" style={{ textAlign: 'center' }}>Données non disponibles hors ligne</Text>
+        </View>
+      ) : ventesBody}
+      >
+        {ventesBody}
+      </DataState>
 
       {selected && (
         <DetailModal

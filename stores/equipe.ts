@@ -12,6 +12,7 @@ import { createInflightGuard } from '@/lib/inflight';
 // Revoking a member fires a notification before the delete: a double-tap must not send it twice.
 const removeGuard = createInflightGuard();
 import type { Role, MemberProductStake } from '@/src/types';
+import { beginFetch, failFetch, IDLE, READY, type FetchStatus } from '@/lib/fetchStatus';
 
 // See stores/products.ts for the full explanation.
 function isStaleBusiness(businessId: string): boolean {
@@ -78,6 +79,10 @@ interface EquipeStore {
   // audit trail of who joined via which code and when.
   redeemedCodes: CodeInvitation[];
   loading: boolean;
+  /** Members: idle → loading → ready | error. See lib/fetchStatus.ts. */
+  fetchStatus: FetchStatus;
+  /** Invite codes have their own status. */
+  codesStatus: FetchStatus;
   saving: boolean;
   error: string | null;
   hasFetched: boolean;
@@ -103,7 +108,8 @@ export const useEquipeStore = create<EquipeStore>((set, get) => ({
   membres: [],
   codes: [],
   redeemedCodes: [],
-  loading: false,
+  ...IDLE,
+  codesStatus: 'idle',
   saving: false,
   error: null,
   hasFetched: false,
@@ -111,7 +117,7 @@ export const useEquipeStore = create<EquipeStore>((set, get) => ({
   offlineSince: null,
 
   fetchMembres: async (businessId) => {
-    set({ loading: true });
+    set(beginFetch(get().fetchStatus));
 
     const { data: mData, error: mErr } = await withNetworkRetry(() =>
       supabase
@@ -130,14 +136,14 @@ export const useEquipeStore = create<EquipeStore>((set, get) => ({
         if (cached) {
           const ts = await getCacheTimestamp('equipe_cache', businessId);
           if (isStaleBusiness(businessId)) return;
-          set({ membres: cached as Membre[], loading: false, hasFetched: true, offline: true, offlineSince: ts });
+          set({ membres: cached as Membre[], ...READY, hasFetched: true, offline: true, offlineSince: ts });
           return;
         }
-        set({ loading: false, hasFetched: true, offline: true, offlineSince: null });
+        set({ ...READY, hasFetched: true, offline: true, offlineSince: null });
         return;
       }
       console.error('[fetchMembres memberships]', mErr instanceof Error ? mErr.message : (mErr as { message?: string })?.message ?? JSON.stringify(mErr));
-      set({ loading: false, error: translateError(mErr, "Le chargement n'a pas abouti."), hasFetched: true });
+      set({ ...failFetch(get().fetchStatus), error: translateError(mErr, "Le chargement n'a pas abouti."), hasFetched: true });
       return;
     }
 
@@ -178,7 +184,7 @@ export const useEquipeStore = create<EquipeStore>((set, get) => ({
     if (isStaleBusiness(businessId)) return;
     set({
       membres,
-      loading: false,
+      ...READY,
       hasFetched: true,
       offline: false,
       offlineSince: null,
@@ -186,13 +192,13 @@ export const useEquipeStore = create<EquipeStore>((set, get) => ({
   },
 
   fetchCodes: async (businessId) => {
-    set({ loading: true });
+    set({ codesStatus: beginFetch(get().codesStatus).fetchStatus });
     const { data, error } = await supabase
       .from('invite_codes')
       .select('*')
       .eq('business_id', businessId)
       .order('created_at', { ascending: false });
-    if (error) { set({ loading: false, error: translateError(error, "Le chargement n'a pas abouti.") }); return; }
+    if (error) { set({ codesStatus: failFetch(get().codesStatus).fetchStatus, error: translateError(error, "Le chargement n'a pas abouti.") }); return; }
 
     const all = (data ?? []) as CodeInvitation[];
     const now = new Date();
@@ -236,7 +242,7 @@ export const useEquipeStore = create<EquipeStore>((set, get) => ({
         ...c,
         redeemed_by_name: c.redeemed_by ? (namesById[c.redeemed_by] ?? generateFallbackName(c.redeemed_by)) : null,
       })),
-      loading: false,
+      codesStatus: 'ready',
     });
   },
 
@@ -390,5 +396,5 @@ export const useEquipeStore = create<EquipeStore>((set, get) => ({
   },
 
   clearError: () => set({ error: null }),
-  reset: () => set({ membres: [], codes: [], redeemedCodes: [], loading: false, saving: false, error: null, hasFetched: false, offline: false, offlineSince: null }),
+  reset: () => set({ membres: [], codes: [], redeemedCodes: [], ...IDLE, codesStatus: 'idle', saving: false, error: null, hasFetched: false, offline: false, offlineSince: null }),
 }));

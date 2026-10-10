@@ -9,6 +9,7 @@ import { Screen } from '@/src/components/ui/Screen';
 import { FormSheet } from '@/src/components/ui/FormSheet';
 import { OfflineNotice } from '@/src/components/ui/OfflineNotice';
 import { SkeletonList } from '@/src/components/ui/SkeletonPlaceholder';
+import { DataState } from '@/src/components/ui/DataState';
 import { router, useFocusEffect } from 'expo-router';
 import { peekReceptionDraft } from './reception';
 import { Button } from '@/src/components/ui/Button';
@@ -373,7 +374,7 @@ export default function FournisseursScreen() {
 
   const { products, fetchProducts } = useProductStore();
   const {
-    fournisseurs, commandes, debts, loading, saving, offline, offlineSince,
+    fournisseurs, commandes, debts, fetchStatus, saving, offline, offlineSince,
     fetchFournisseurs, updateFournisseur, deleteFournisseur,
     fetchCommandes, fetchDebts, createDebt,
   } = useFournisseursStore();
@@ -593,11 +594,13 @@ export default function FournisseursScreen() {
         </Pressable>
       )}
 
-      {loading && fournisseurs.length === 0 ? (
-        <SkeletonList count={6} />
-      ) : !loading && fournisseurs.length === 0 && offline ? (
+      <DataState
+        status={fetchStatus}
+        isEmpty={fournisseurs.length === 0}
+        skeleton={<SkeletonList count={6} />}
+        empty={offline ? (
         <View style={styles.empty}><Text variant="body" color="secondary" style={{ textAlign: 'center' }}>Données non disponibles hors ligne. Ouvrez l'application en ligne une première fois pour activer le mode hors ligne.</Text></View>
-      ) : fournisseurs.length === 0 ? (
+      ) : (
         <EmptyState
           icon="cube-outline"
           title="Aucun fournisseur pour le moment."
@@ -609,7 +612,8 @@ export default function FournisseursScreen() {
           linkLabel="Nouvelle livraison"
           onLink={() => router.push('/(app)/fournisseurs/reception')}
         />
-      ) : (
+      )}
+      >
         <FlatList
           data={fournisseurs}
           keyExtractor={f => f.id}
@@ -691,7 +695,7 @@ export default function FournisseursScreen() {
             );
           }}
         />
-      )}
+      </DataState>
 
       <FournisseurForm
         visible={showForm} editing={editF} products={products}

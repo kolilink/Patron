@@ -4,6 +4,7 @@ import { translateError } from '@/lib/errors';
 import { generateFallbackName } from '@/lib/id';
 import { saveInvestorCache, getInvestorCache, getCacheTimestamp } from '@/lib/db';
 import { isNetworkError, withNetworkRetry, reportOfflineFallback } from '@/lib/sync';
+import { beginFetch, failFetch, IDLE, READY, type FetchStatus } from '@/lib/fetchStatus';
 
 export interface InvestorPayout {
   id: string;
@@ -22,6 +23,10 @@ interface InvestorStore {
   balance: number | null;       // display units (÷100), null = not loaded
   payouts: InvestorPayout[];
   loading: boolean;
+  /** Payouts: idle → loading → ready | error. See lib/fetchStatus.ts. */
+  fetchStatus: FetchStatus;
+  /** The balance has its own status — `balance === null` means unknown, never zero. */
+  balanceStatus: FetchStatus;
   saving: boolean;
   error: string | null;
   offline: boolean;
@@ -44,14 +49,15 @@ function payoutsCacheKey(businessId: string, investorId?: string) {
 export const useInvestorStore = create<InvestorStore>((set, get) => ({
   balance: null,
   payouts: [],
-  loading: false,
+  ...IDLE,
+  balanceStatus: 'idle',
   saving: false,
   error: null,
   offline: false,
   offlineSince: null,
 
   fetchBalance: async (businessId, investorId) => {
-    set({ loading: true, error: null });
+    set({ balanceStatus: beginFetch(get().balanceStatus).fetchStatus, error: null });
     const { data, error } = await withNetworkRetry(() =>
       supabase
         .from('investor_balance')
@@ -68,22 +74,22 @@ export const useInvestorStore = create<InvestorStore>((set, get) => ({
         const cached = await getInvestorCache(key);
         if (cached != null) {
           const ts = await getCacheTimestamp('investor_cache', key);
-          set({ balance: cached as number, loading: false, offline: true, offlineSince: ts });
+          set({ balance: cached as number, balanceStatus: 'ready', offline: true, offlineSince: ts });
           return;
         }
-        set({ loading: false, offline: true, offlineSince: null });
+        set({ balanceStatus: 'ready', offline: true, offlineSince: null });
         return;
       }
-      set({ loading: false, error: translateError(error, 'Impossible de charger le solde') });
+      set({ balanceStatus: failFetch(get().balanceStatus).fetchStatus, error: translateError(error, 'Impossible de charger le solde') });
       return;
     }
     const balance = data ? (data.balance as number) / 100 : 0;
-    set({ balance, loading: false, offline: false, offlineSince: null });
+    set({ balance, balanceStatus: 'ready', offline: false, offlineSince: null });
     void saveInvestorCache(balanceCacheKey(businessId, investorId), balance);
   },
 
   fetchPayouts: async (businessId, investorId) => {
-    set({ loading: true, error: null });
+    set({ ...beginFetch(get().fetchStatus), error: null });
 
     let query = supabase
       .from('investor_payouts')
@@ -104,13 +110,13 @@ export const useInvestorStore = create<InvestorStore>((set, get) => ({
         const cached = await getInvestorCache(key);
         if (cached) {
           const ts = await getCacheTimestamp('investor_cache', key);
-          set({ payouts: cached as InvestorPayout[], loading: false, offline: true, offlineSince: ts });
+          set({ payouts: cached as InvestorPayout[], ...READY, offline: true, offlineSince: ts });
           return;
         }
-        set({ loading: false, offline: true, offlineSince: null });
+        set({ ...READY, offline: true, offlineSince: null });
         return;
       }
-      set({ loading: false, error: translateError(error, 'Impossible de charger les retraits') });
+      set({ ...failFetch(get().fetchStatus), error: translateError(error, 'Impossible de charger les retraits') });
       return;
     }
 
@@ -131,7 +137,7 @@ export const useInvestorStore = create<InvestorStore>((set, get) => ({
       };
     });
 
-    set({ payouts, loading: false, offline: false, offlineSince: null });
+    set({ payouts, ...READY, offline: false, offlineSince: null });
     void saveInvestorCache(payoutsCacheKey(businessId, investorId), payouts);
   },
 
@@ -174,5 +180,5 @@ export const useInvestorStore = create<InvestorStore>((set, get) => ({
     }
   },
 
-  reset: () => set({ balance: null, payouts: [], loading: false, saving: false, error: null, offline: false, offlineSince: null }),
+  reset: () => set({ balance: null, payouts: [], ...IDLE, balanceStatus: 'idle', saving: false, error: null, offline: false, offlineSince: null }),
 }));

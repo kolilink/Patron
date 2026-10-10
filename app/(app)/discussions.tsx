@@ -49,6 +49,7 @@ import { useEquipeStore } from '@/stores/equipe';
 import { enabledDiscussionsTabs, resolveActiveTab, showTabBar, type DiscussionsTab } from '@/src/utils/discussionsTabs';
 import { useTeamsEnabled } from '@/src/hooks/useTeamsEnabled';
 import { SkeletonList } from '@/src/components/ui/SkeletonPlaceholder';
+import { DataState } from '@/src/components/ui/DataState';
 import { supabase } from '@/lib/supabase';
 import { generateFallbackName, generateId } from '@/lib/id';
 import { friendlyMessage } from '@/lib/errors';
@@ -455,7 +456,7 @@ export default function DiscussionsScreen() {
   // ─── Chat store (Ma Boutique — untouched) ─────────────────────────────────
   const {
     boutiqueRoom, globalRoom, messages,
-    loading, sending, error,
+    fetchStatus, sending, error,
     boutiqueUnread,
     offline: chatOffline,
     load, sendMessage, sendVoiceMessage, sendImageMessage, editMessage, appendMessage, updateMessage, markRead,
@@ -473,7 +474,7 @@ export default function DiscussionsScreen() {
 
   // ─── Market store (Le Marché forum — independent) ─────────────────────────
   const {
-    posts, loading: marketLoading, creating, error: marketError,
+    posts, fetchStatus: marketStatus, creating, error: marketError,
     fetchPosts, createPost, prependPost, markVisited,
     likedPostIds, lastVisitedAt, toggleLike,
     userLevel, offline: marketOffline,
@@ -1041,6 +1042,48 @@ export default function DiscussionsScreen() {
   const isAdmin = role === 'administrateur';
   const canPost = isAdmin || userLevel >= 2;
 
+  // Filtered-empty / offline-empty states vs the post list itself — a loaded-but-
+  // empty forum is the screen's own EmptyState, never a skeleton.
+  const marketBody = filteredPosts.length === 0 ? (
+                marketOffline && posts.length === 0 ? (
+                  <View style={styles.empty}>
+                    <Text variant="body" color="secondary" style={{ textAlign: 'center' }}>
+                      Données non disponibles hors ligne
+                    </Text>
+                  </View>
+                ) : selectedCat === 'tout' ? (
+                  <EmptyState
+                    icon="chatbubbles-outline"
+                    title="Le Marché est calme pour le moment."
+                    subtitle="Les discussions du marché apparaîtront ici."
+                  />
+                ) : (
+                  // A filtered category with no posts is a narrower state than
+                  // "the whole forum is empty" — never conflate the two, or a
+                  // real post elsewhere in the forum reads as if it vanished.
+                  <EmptyState
+                    icon="chatbubbles-outline"
+                    title="Aucun post dans cette catégorie."
+                  />
+                )
+  ) : (
+
+                <FlatList<MarketPost>
+                  data={filteredPosts}
+                  keyExtractor={p => p.id}
+                  contentContainerStyle={styles.marketListContent}
+                  renderItem={({ item }) => (
+                    <PostCard
+                      post={item}
+                      isNew={isNewPost(item)}
+                      isLiked={likedPostIds.includes(item.id)}
+                      isOwnPost={item.author_id === userId}
+                      onPress={() => router.push(`/(app)/marche/${item.id}`)}
+                      onLike={() => { haptics.tap(); toggleLike(item.id, userId); }}
+                    />
+                  )}
+                />
+  );
   return (
     <KeyboardAvoidingView
       style={{ flex: 1, backgroundColor: palette.background }}
@@ -1155,22 +1198,27 @@ export default function DiscussionsScreen() {
                   <Text variant="caption" color="secondary">Hors ligne — dernières données connues</Text>
                 </View>
               )}
-              {loading && !boutiqueRoom ? (
-                <SkeletonList count={6} />
-              ) : !boutiqueRoom ? (
+              <DataState
+                status={fetchStatus}
+                isEmpty={!boutiqueRoom}
+                skeleton={<SkeletonList count={6} />}
+                empty={(
                 <View style={styles.empty}>
                   <Text variant="body" color="secondary">
                     {chatOffline ? 'Données non disponibles hors ligne' : 'Chargement…'}
                   </Text>
                 </View>
-              ) : listItems.length === 0 ? (
+              )}
+              >
+                {listItems.length === 0 ? (
                 <View style={styles.empty}>
                   <Text variant="h4" style={{ textAlign: 'center', marginBottom: 8 }}>Votre espace privé</Text>
                   <Text variant="body" color="secondary" style={{ textAlign: 'center', lineHeight: 22 }}>
                     Seuls vous et votre équipe pouvez lire ce qui s'écrit ici.
                   </Text>
                 </View>
-              ) : (
+                ) : (
+
                 <FlatList<ListItem>
                   ref={boutiqueFlatListRef}
                   onScrollToIndexFailed={() => { }}
@@ -1223,7 +1271,8 @@ export default function DiscussionsScreen() {
                     );
                   }}
                 />
-              )}
+                )}
+              </DataState>
 
               {error ? (
                 <View style={styles.errorStrip}>
@@ -1480,47 +1529,14 @@ export default function DiscussionsScreen() {
             /* ── Le Marché (forum) ── */
             <>
               {/* Post list */}
-              {marketLoading && posts.length === 0 ? (
-                <SkeletonList count={5} />
-              ) : filteredPosts.length === 0 ? (
-                marketOffline && posts.length === 0 ? (
-                  <View style={styles.empty}>
-                    <Text variant="body" color="secondary" style={{ textAlign: 'center' }}>
-                      Données non disponibles hors ligne
-                    </Text>
-                  </View>
-                ) : selectedCat === 'tout' ? (
-                  <EmptyState
-                    icon="chatbubbles-outline"
-                    title="Le Marché est calme pour le moment."
-                    subtitle="Les discussions du marché apparaîtront ici."
-                  />
-                ) : (
-                  // A filtered category with no posts is a narrower state than
-                  // "the whole forum is empty" — never conflate the two, or a
-                  // real post elsewhere in the forum reads as if it vanished.
-                  <EmptyState
-                    icon="chatbubbles-outline"
-                    title="Aucun post dans cette catégorie."
-                  />
-                )
-              ) : (
-                <FlatList<MarketPost>
-                  data={filteredPosts}
-                  keyExtractor={p => p.id}
-                  contentContainerStyle={styles.marketListContent}
-                  renderItem={({ item }) => (
-                    <PostCard
-                      post={item}
-                      isNew={isNewPost(item)}
-                      isLiked={likedPostIds.includes(item.id)}
-                      isOwnPost={item.author_id === userId}
-                      onPress={() => router.push(`/(app)/marche/${item.id}`)}
-                      onLike={() => { haptics.tap(); toggleLike(item.id, userId); }}
-                    />
-                  )}
-                />
-              )}
+              <DataState
+                status={marketStatus}
+                isEmpty={posts.length === 0}
+                skeleton={<SkeletonList count={5} />}
+                empty={marketBody}
+              >
+                {marketBody}
+              </DataState>
 
               {marketError ? (
                 <View style={styles.errorStrip}>

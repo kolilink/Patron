@@ -5,6 +5,7 @@ import { Screen } from '@/src/components/ui/Screen';
 import { router, useFocusEffect } from 'expo-router';
 import { Text } from '@/src/components/ui/Text';
 import { SkeletonList } from '@/src/components/ui/SkeletonPlaceholder';
+import { DataState } from '@/src/components/ui/DataState';
 import { useTheme, spacing, radius } from '@/src/theme';
 import type { Palette } from '@/src/theme';
 import { useAuthStore } from '@/stores/auth';
@@ -31,7 +32,7 @@ export default function SupportInboxScreen() {
   const session = useAuthStore(s => s.session);
   const isFounder = isFounderPhone(session?.user.phone);
 
-  const { founderConversations, founderLoading, loadFounderConversations } = useSupportChatStore();
+  const { founderConversations, founderStatus, loadFounderConversations } = useSupportChatStore();
 
   useEffect(() => {
     // router.back() is a no-op when this screen is the only entry in the
@@ -65,13 +66,16 @@ export default function SupportInboxScreen() {
         <View style={{ width: 60 }} />
       </View>
 
-      {founderLoading && founderConversations.length === 0 ? (
-        <SkeletonList count={6} />
-      ) : founderConversations.length === 0 ? (
+      <DataState
+        status={founderStatus}
+        isEmpty={founderConversations.length === 0}
+        skeleton={<SkeletonList count={6} />}
+        empty={(
         <View style={styles.empty}>
           <Text variant="body" color="secondary">Aucune conversation pour le moment.</Text>
         </View>
-      ) : (
+      )}
+      >
         <FlatList<SupportConversation>
           data={founderConversations}
           keyExtractor={c => c.id}
@@ -123,7 +127,7 @@ export default function SupportInboxScreen() {
           }}
           ItemSeparatorComponent={() => <View style={{ height: 1, backgroundColor: palette.border }} />}
         />
-      )}
+      </DataState>
     </Screen>
   );
 }

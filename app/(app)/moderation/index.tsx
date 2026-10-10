@@ -9,6 +9,7 @@ import { Text } from '@/src/components/ui/Text';
 import { Button } from '@/src/components/ui/Button';
 import { EmptyState } from '@/src/components/ui/EmptyState';
 import { SkeletonList } from '@/src/components/ui/SkeletonPlaceholder';
+import { DataState } from '@/src/components/ui/DataState';
 import { useTheme, spacing, radius } from '@/src/theme';
 import type { Palette } from '@/src/theme';
 import { useAuthStore } from '@/stores/auth';
@@ -49,7 +50,7 @@ export default function ModerationScreen() {
     const session = useAuthStore(s => s.session);
     const isFounder = isFounderPhone(session?.user.phone);
 
-    const { reports, loading, updating, error, fetchReports, setReportEtat, deletePost, blockUser } =
+    const { reports, fetchStatus, updating, error, fetchReports, setReportEtat, deletePost, blockUser } =
         useModerationStore();
 
     const [active, setActive] = useState<Report | null>(null);
@@ -163,15 +164,18 @@ export default function ModerationScreen() {
                 <View style={{ width: 60 }} />
             </View>
 
-            {loading && reports.length === 0 ? (
-                <SkeletonList count={6} />
-            ) : reports.length === 0 ? (
+            <DataState
+              status={fetchStatus}
+              isEmpty={reports.length === 0}
+              skeleton={<SkeletonList count={6} />}
+              empty={(
                 <EmptyState
                     icon="shield-checkmark-outline"
                     title="Aucun signalement."
                     subtitle="La communauté est calme pour le moment."
                 />
-            ) : (
+            )}
+            >
                 <FlatList<Report>
                     data={reports}
                     keyExtractor={r => r.id}
@@ -179,7 +183,7 @@ export default function ModerationScreen() {
                     renderItem={renderReport}
                     ItemSeparatorComponent={() => <View style={{ height: 1, backgroundColor: palette.border }} />}
                 />
-            )}
+            </DataState>
 
             {error ? (
                 <View style={styles.errorStrip}>

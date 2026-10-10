@@ -5,6 +5,7 @@ import { router, useFocusEffect, useLocalSearchParams } from 'expo-router';
 import { Screen } from '@/src/components/ui/Screen';
 import { Text } from '@/src/components/ui/Text';
 import { SkeletonKpiGrid } from '@/src/components/ui/SkeletonPlaceholder';
+import { DataState } from '@/src/components/ui/DataState';
 import { useTheme, spacing, radius } from '@/src/theme';
 import type { Palette } from '@/src/theme';
 import { supabase } from '@/lib/supabase';
@@ -125,16 +126,19 @@ export default function FounderVendorDirectoryScreen() {
         })}
       </View>
 
-      {error && !rows ? (
+      <DataState
+        status={rows ? 'ready' : error ? 'error' : 'loading'}
+        isEmpty={!rows}
+        skeleton={<View style={styles.pad}><SkeletonKpiGrid /></View>}
+        empty={(
         <View style={styles.pad}>
           <Text variant="bodySmall" color="secondary">{error}</Text>
           <Pressable onPress={() => setReloadToken(t => t + 1)} style={{ paddingVertical: spacing[2] }}>
             <Text variant="label" color="primary">Réessayer</Text>
           </Pressable>
         </View>
-      ) : !rows ? (
-        <View style={styles.pad}><SkeletonKpiGrid /></View>
-      ) : (
+      )}
+      >
         <FlatList
           data={visible}
           keyExtractor={r => r.business_id}
@@ -163,7 +167,7 @@ export default function FounderVendorDirectoryScreen() {
             </Pressable>
           )}
         />
-      )}
+      </DataState>
     </Screen>
   );
 }

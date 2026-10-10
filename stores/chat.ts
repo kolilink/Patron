@@ -9,6 +9,7 @@ import { generateId } from '@/lib/id';
 import { FAILURE_COPY } from '@/src/utils/failureCopy';
 import { uploadMessageImage } from '@/lib/chatImages';
 import type { ChatRoom, ChatMessage } from '@/src/types';
+import { beginFetch, failFetch, IDLE, READY, type FetchStatus } from '@/lib/fetchStatus';
 
 const GLOBAL_ROOM_ID = '00000000-0000-0000-0000-000000000001';
 
@@ -30,6 +31,8 @@ interface ChatStore {
   globalRoom: ChatRoom | null;
   messages: ChatMessage[];
   loading: boolean;
+  /** idle → loading → ready | error. See lib/fetchStatus.ts. */
+  fetchStatus: FetchStatus;
   sending: boolean;
   error: string | null;
   boutiqueUnread: number;
@@ -81,7 +84,7 @@ const initialState = {
   boutiqueRoom: null,
   globalRoom: null,
   messages: [],
-  loading: false,
+  ...IDLE,
   sending: false,
   error: null,
   boutiqueUnread: 0,
@@ -100,7 +103,10 @@ export const useChatStore = create<ChatStore>((set, get) => ({
   setCurrentlyPlayingVoice: (id) => set({ currentlyPlayingVoiceId: id }),
 
   load: async (businessId, currentUserId) => {
-    if (get().messages.length === 0) {
+    // A 'ready' store — even with zero messages — refreshes silently.
+    const startedFrom = get().fetchStatus;
+    set({ ...beginFetch(startedFrom), error: null });
+    if (startedFrom !== 'ready') {
       const cached = await getChatCache(businessId) as {
         boutiqueRoom: ChatRoom | null;
         globalRoom: ChatRoom | null;
@@ -119,13 +125,9 @@ export const useChatStore = create<ChatStore>((set, get) => ({
           _currentUserId: currentUserId,
           _boutiqueLastRead: boutiqueLastRead,
           _marcheLastRead: marcheLastRead,
-          loading: false,
+          ...READY,
         });
-      } else {
-        set({ loading: true, error: null, offline: false, offlineSince: null });
       }
-    } else {
-      set({ error: null });
     }
     try {
       // 1. Fetch both accessible rooms (boutique + global)
@@ -184,7 +186,7 @@ export const useChatStore = create<ChatStore>((set, get) => ({
         _currentUserId: currentUserId,
         _boutiqueLastRead: boutiqueLastRead,
         _marcheLastRead: marcheLastRead,
-        loading: false,
+        ...READY,
         offline: false,
         offlineSince: null,
       });
@@ -253,15 +255,15 @@ export const useChatStore = create<ChatStore>((set, get) => ({
             _currentUserId: currentUserId,
             _boutiqueLastRead: boutiqueLastRead,
             _marcheLastRead: marcheLastRead,
-            loading: false,
+            ...READY,
             offline: true,
             offlineSince: ts,
           });
           return;
         }
-        set({ loading: false, offline: true, offlineSince: null });
+        set({ ...failFetch(get().fetchStatus), offline: true, offlineSince: null });
       } else {
-        set({ loading: false, error: translateError(err, "Le chargement n'a pas abouti.") });
+        set({ ...failFetch(get().fetchStatus), error: translateError(err, "Le chargement n'a pas abouti.") });
       }
     }
   },

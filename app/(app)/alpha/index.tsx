@@ -8,6 +8,7 @@ import { Ionicons } from '@expo/vector-icons';
 import { Text } from '@/src/components/ui/Text';
 import { EmptyState } from '@/src/components/ui/EmptyState';
 import { SkeletonList } from '@/src/components/ui/SkeletonPlaceholder';
+import { DataState } from '@/src/components/ui/DataState';
 import { PaywallScreen } from '@/src/components/PaywallScreen';
 import { LiveWaveformBars } from '@/src/components/ui/VoiceMessageBubble';
 import { AppSheet } from '@/src/components/ui/AppSheet';
@@ -100,7 +101,7 @@ export default function AlphaScreen() {
   const params = useLocalSearchParams<{ q?: string; autoRecord?: string }>();
 
   const {
-    messages, quota, loading, sending, error, offline, load, sendMessage,
+    messages, quota, fetchStatus, sending, error, offline, load, sendMessage,
   } = useAlphaStore();
   const [text, setText] = useState('');
   const [pendingQuestion, setPendingQuestion] = useState<string | null>(null);
@@ -342,9 +343,11 @@ export default function AlphaScreen() {
           </View>
         )}
 
-        {loading && messages.length === 0 ? (
-          <SkeletonList count={4} />
-        ) : messages.length === 0 ? (
+        <DataState
+          status={fetchStatus}
+          isEmpty={messages.length === 0}
+          skeleton={<SkeletonList count={4} />}
+          empty={(
           <View style={[styles.empty, { justifyContent: 'flex-start' }]}>
             <EmptyState
               icon="chatbubble-ellipses-outline"
@@ -359,7 +362,8 @@ export default function AlphaScreen() {
               ))}
             </View>
           </View>
-        ) : (
+        )}
+        >
           <FlatList
             ref={listRef}
             onScrollToIndexFailed={() => { }}
@@ -389,7 +393,7 @@ export default function AlphaScreen() {
               );
             }}
           />
-        )}
+        </DataState>
 
         {sending && (
           <View style={styles.typingRow}>

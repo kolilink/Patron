@@ -7,6 +7,7 @@ import { Button } from '@/src/components/ui/Button';
 import { Input } from '@/src/components/ui/Input';
 import { FormSheet } from '@/src/components/ui/FormSheet';
 import { SkeletonKpiGrid } from '@/src/components/ui/SkeletonPlaceholder';
+import { DataState } from '@/src/components/ui/DataState';
 import { useTheme, spacing, radius } from '@/src/theme';
 import type { Palette } from '@/src/theme';
 import { supabase } from '@/lib/supabase';
@@ -76,27 +77,30 @@ export function FounderDashboard() {
 
   const reload = () => setReloadToken(t => t + 1);
 
-  if (loading && !kpis) return <SkeletonKpiGrid />;
-
-  if (error && !kpis) {
-    return (
-      <View style={styles.errorBox}>
-        <Text variant="bodySmall" color="secondary">{error}</Text>
-        <Pressable onPress={reload} style={styles.retry}>
-          <Text variant="label" color="primary">Réessayer</Text>
-        </Pressable>
-      </View>
-    );
-  }
-
   if (!kpis) {
     return (
-      <View style={styles.errorBox}>
-        <Text variant="bodySmall" color="secondary">Aucune donnée pour le moment.</Text>
-        <Pressable onPress={reload} style={styles.retry}>
-          <Text variant="label" color="primary">Actualiser</Text>
-        </Pressable>
-      </View>
+      <DataState
+        status={error ? 'error' : loading ? 'loading' : 'ready'}
+        isEmpty
+        skeleton={<SkeletonKpiGrid />}
+        empty={error ? (
+          <View style={styles.errorBox}>
+            <Text variant="bodySmall" color="secondary">{error}</Text>
+            <Pressable onPress={reload} style={styles.retry}>
+              <Text variant="label" color="primary">Réessayer</Text>
+            </Pressable>
+          </View>
+        ) : (
+          <View style={styles.errorBox}>
+            <Text variant="bodySmall" color="secondary">Aucune donnée pour le moment.</Text>
+            <Pressable onPress={reload} style={styles.retry}>
+              <Text variant="label" color="primary">Actualiser</Text>
+            </Pressable>
+          </View>
+        )}
+      >
+        {null}
+      </DataState>
     );
   }
 

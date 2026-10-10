@@ -5,10 +5,13 @@ import { translateError } from '@/lib/errors';
 import { isNetworkError, withNetworkRetry, reportOfflineFallback } from '@/lib/sync';
 import { toast } from '@/stores/toast';
 import type { Report, ReportEtat, ReportMotif } from '@/src/types';
+import { beginFetch, failFetch, IDLE, READY, type FetchStatus } from '@/lib/fetchStatus';
 
 interface ModerationStore {
     reports: Report[];
     loading: boolean;
+    /** idle → loading → ready | error. See lib/fetchStatus.ts. */
+    fetchStatus: FetchStatus;
     updating: boolean;
     error: string | null;
     blockedIds: string[];
@@ -26,7 +29,7 @@ interface ModerationStore {
 
 const initialState = {
     reports: [] as Report[],
-    loading: false,
+    ...IDLE,
     updating: false,
     error: null as string | null,
     blockedIds: [] as string[],
@@ -37,20 +40,20 @@ export const useModerationStore = create<ModerationStore>((set, get) => ({
     ...initialState,
 
     fetchReports: async () => {
-        set({ loading: true, error: null });
+        set({ ...beginFetch(get().fetchStatus), error: null });
         try {
             const { data, error } = await withNetworkRetry(() =>
                 supabase.rpc('list_reports'),
             );
             if (error) throw error;
-            set({ reports: (data ?? []) as Report[], loading: false });
+            set({ reports: (data ?? []) as Report[], ...READY });
         } catch (err) {
             if (isNetworkError(err)) {
                 reportOfflineFallback('moderation.fetchReports', err);
-                set({ loading: false, error: 'Hors ligne — impossible de charger la file.' });
+                set({ ...failFetch(get().fetchStatus), error: 'Hors ligne — impossible de charger la file.' });
                 return;
             }
-            set({ loading: false, error: translateError(err, "Le chargement n'a pas abouti.") });
+            set({ ...failFetch(get().fetchStatus), error: translateError(err, "Le chargement n'a pas abouti.") });
         }
     },
 

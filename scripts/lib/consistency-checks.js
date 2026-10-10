@@ -292,7 +292,68 @@ function findSystemAlertViolations() {
   return out;
 }
 
+
+// data-state-invariant: a Skeleton* component may only be rendered as the
+// `skeleton` slot of <DataState> (src/components/ui/DataState.tsx), which is
+// the one place that decides loading vs. empty vs. error vs. content from a
+// store's fetchStatus. Hand-rolling `{loading && list.length === 0 ? <Skeleton/> …}`
+// is what made every tab replay a skeleton before "Aucun produit" (CLAUDE.md
+// "Data-state invariant"). Enforces the invariant, not a file list: any
+// `<…Skeleton…>` JSX usage must sit on a `skeleton={…}` prop line within a
+// few lines of a `<DataState` opening — except usages inside the body of a
+// Skeleton component's own definition (skeletons compose other skeletons).
+const SKELETON_ALLOWED_FILES = new Set([
+  'src/components/ui/DataState.tsx',
+  'src/components/ui/SkeletonPlaceholder.tsx',
+]);
+
+function findSkeletonViolationsInSource(src) {
+  const lines = src.split('\n');
+
+  // Line ranges of `function …Skeleton…(…) { … }` bodies.
+  const exempt = [];
+  const decl = /function\s+\w*Skeleton\w*\s*\(/g;
+  let m;
+  while ((m = decl.exec(src))) {
+    let depth = 1;
+    let i = decl.lastIndex;
+    while (i < src.length && depth > 0) { if (src[i] === '(') depth++; else if (src[i] === ')') depth--; i++; }
+    const open = src.indexOf('{', i);
+    if (open === -1) continue;
+    const block = extractBlock(src, open + 1);
+    const startLine = src.slice(0, m.index).split('\n').length;
+    exempt.push([startLine, startLine + block.split('\n').length]);
+  }
+
+  const out = [];
+  lines.forEach((line, idx) => {
+    const t = line.trim();
+    if (t.startsWith('//') || t.startsWith('*') || t.startsWith('/*')) return;
+    if (!/<\w*Skeleton\w*[\s/>]/.test(line)) return;
+    const n = idx + 1;
+    if (exempt.some(([a, b]) => n >= a && n <= b)) return;
+    const within = lines.slice(Math.max(0, idx - 12), idx + 1).join('\n');
+    if (/skeleton=\{/.test(line) && /<DataState\b/.test(within)) return;
+    out.push({ line: n, text: t });
+  });
+  return out;
+}
+
+function findSkeletonOutsideDataStateViolations() {
+  const files = execSync(`find app src -name "*.tsx"`, { cwd: ROOT, encoding: 'utf-8' })
+    .trim().split('\n').filter(Boolean);
+  const violations = [];
+  for (const rel of files) {
+    if (SKELETON_ALLOWED_FILES.has(rel)) continue;
+    const src = fs.readFileSync(path.join(ROOT, rel), 'utf-8');
+    for (const v of findSkeletonViolationsInSource(src)) violations.push(`${rel}:${v.line}: ${v.text}`);
+  }
+  return violations;
+}
+
 module.exports = {
+  findSkeletonViolationsInSource,
+  findSkeletonOutsideDataStateViolations,
   findSystemAlertViolations,
   findResurrectedForkViolations,
   findHeroModalFadeViolations,

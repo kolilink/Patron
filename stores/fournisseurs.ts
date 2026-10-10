@@ -16,6 +16,7 @@ import { enqueue, getAllQueueItemsForOverlay, getClientLedgerCache, saveClientLe
 import { applyPendingSupplierOps, type QueuedSupplierOp } from '@/lib/pendingSupplier';
 import { applyReceptionOps } from '@/lib/receptionOverlay';
 import { isOutboxValidationError } from '@/lib/outboxValidation';
+import { abandonFetch, beginFetch, failFetch, IDLE, READY, type FetchStatus } from '@/lib/fetchStatus';
 
 // A réception books money (stock, cost, transport expense): never twice from a double-tap.
 const receptionGuard = createInflightGuard();
@@ -166,6 +167,10 @@ interface FournisseursStore {
   debts: SupplierDebt[];
   payments: SupplierPayment[];
   loading: boolean;
+  /** Suppliers + debts: idle → loading → ready | error. See lib/fetchStatus.ts. */
+  fetchStatus: FetchStatus;
+  /** Purchase orders have their own status — a ready supplier list says nothing about them. */
+  commandesStatus: FetchStatus;
   saving: boolean;
   error: string | null;
   offline: boolean;
@@ -282,7 +287,8 @@ export const useFournisseursStore = create<FournisseursStore>((set, get) => ({
   commandes: [],
   debts: [],
   payments: [],
-  loading: false,
+  ...IDLE,
+  commandesStatus: 'idle',
   saving: false,
   error: null,
   offline: false,
@@ -290,14 +296,14 @@ export const useFournisseursStore = create<FournisseursStore>((set, get) => ({
 
   fetchFournisseurs: async (businessId) => {
     if (isStaleBusiness(businessId)) return;
-    set({ loading: true });
+    set(beginFetch(get().fetchStatus));
     const [suppliersRes, debtsRes] = await Promise.all([
       withNetworkRetry(() => supabase.from('suppliers').select('*').eq('business_id', businessId).order('name'))
         .catch(err => ({ data: null, error: err })),
       withTimeout(supabase.from('supplier_debts').select('*').eq('business_id', businessId).order('date', { ascending: false }))
         .catch(err => ({ data: null, error: err })),
     ]);
-    if (isStaleBusiness(businessId)) { set({ loading: false }); return; }
+    if (isStaleBusiness(businessId)) { set(abandonFetch(get().fetchStatus)); return; }
     if (suppliersRes.error) {
       if (isNetworkError(suppliersRes.error)) {
         reportOfflineFallback('fournisseurs.fetchFournisseurs', suppliersRes.error);
@@ -306,21 +312,21 @@ export const useFournisseursStore = create<FournisseursStore>((set, get) => ({
         if (cached) {
           const ts = await getCacheTimestamp('fournisseur_cache', businessId);
           if (isStaleBusiness(businessId)) return;
-          set({ fournisseurs: cached, loading: false, offline: true, offlineSince: ts, error: null });
+          set({ fournisseurs: cached, ...READY, offline: true, offlineSince: ts, error: null });
           await loadDebtsFromCache(businessId);
           return;
         }
-        set({ loading: false, offline: true, offlineSince: null, error: null });
+        set({ ...READY, offline: true, offlineSince: null, error: null });
         return;
       }
-      set({ loading: false, error: translateError(suppliersRes.error, "Le chargement n'a pas abouti.") });
+      set({ ...failFetch(get().fetchStatus), error: translateError(suppliersRes.error, "Le chargement n'a pas abouti.") });
       return;
     }
     const fournisseurs = (suppliersRes.data ?? []) as Fournisseur[];
     void saveFournisseurCache(businessId, fournisseurs as unknown[]);
     if (debtsRes.error) {
       // Suppliers loaded but debts didn't: keep what we know (cache) rather than blank them.
-      set({ fournisseurs, loading: false, offline: false, offlineSince: null });
+      set({ fournisseurs, ...READY, offline: false, offlineSince: null });
       await loadDebtsFromCache(businessId);
       return;
     }
@@ -329,7 +335,7 @@ export const useFournisseursStore = create<FournisseursStore>((set, get) => ({
     void saveClientLedgerCache(debtsCacheKey(businessId), baseDebts);
     const v = await supplierView(businessId);
     if (isStaleBusiness(businessId)) return;
-    set({ fournisseurs, debts: v.debts, loading: false, offline: false, offlineSince: null });
+    set({ fournisseurs, debts: v.debts, ...READY, offline: false, offlineSince: null });
   },
 
   createFournisseur: async (businessId, userId, d) => {
@@ -451,7 +457,7 @@ export const useFournisseursStore = create<FournisseursStore>((set, get) => ({
 
   fetchCommandes: async (businessId) => {
     if (isStaleBusiness(businessId)) return;
-    set({ loading: true });
+    set({ commandesStatus: beginFetch(get().commandesStatus).fetchStatus });
     const { data, error } = await withNetworkRetry(() =>
       supabase
         .from('purchase_orders')
@@ -460,7 +466,7 @@ export const useFournisseursStore = create<FournisseursStore>((set, get) => ({
         .order('ordered_at', { ascending: false }),
     ).catch(err => ({ data: null, error: err }));
 
-    if (isStaleBusiness(businessId)) { set({ loading: false }); return; }
+    if (isStaleBusiness(businessId)) { if (get().commandesStatus === 'loading') set({ commandesStatus: 'idle' }); return; }
     if (error) {
       if (isNetworkError(error)) {
         reportOfflineFallback('fournisseurs.fetchCommandes', error);
@@ -470,14 +476,14 @@ export const useFournisseursStore = create<FournisseursStore>((set, get) => ({
           const ts = await getCacheTimestamp('commande_cache', businessId);
           if (isStaleBusiness(businessId)) return;
           _baseCommandes = { businessId, list: cached };
-          set({ commandes: cached, loading: false, offline: true, offlineSince: ts, error: null });
+          set({ commandes: cached, commandesStatus: 'ready', offline: true, offlineSince: ts, error: null });
           await publishCommandes(businessId);
           return;
         }
-        set({ loading: false, offline: true, offlineSince: null, error: null });
+        set({ commandesStatus: 'ready', offline: true, offlineSince: null, error: null });
         return;
       }
-      set({ loading: false, error: translateError(error, "Le chargement n'a pas abouti.") });
+      set({ commandesStatus: failFetch(get().commandesStatus).fetchStatus, error: translateError(error, "Le chargement n'a pas abouti.") });
       return;
     }
 
@@ -486,9 +492,9 @@ export const useFournisseursStore = create<FournisseursStore>((set, get) => ({
       supplier_name: (c.supplier as { name: string } | null)?.name ?? '—',
     } as CommandeAchat));
     void saveCommandeCache(businessId, commandes as unknown[]);
-    if (isStaleBusiness(businessId)) { set({ loading: false }); return; }
+    if (isStaleBusiness(businessId)) { if (get().commandesStatus === 'loading') set({ commandesStatus: 'idle' }); return; }
     _baseCommandes = { businessId, list: commandes };
-    set({ commandes, loading: false, offline: false, offlineSince: null });
+    set({ commandes, commandesStatus: 'ready', offline: false, offlineSince: null });
     await publishCommandes(businessId);
   },
 
@@ -741,5 +747,5 @@ export const useFournisseursStore = create<FournisseursStore>((set, get) => ({
   },
 
   clearError: () => set({ error: null }),
-  reset: () => { _baseCommandes = null; _baseDebts = null; _basePayments = null; set({ fournisseurs: [], commandes: [], debts: [], payments: [], loading: false, saving: false, error: null, offline: false, offlineSince: null }); },
+  reset: () => { _baseCommandes = null; _baseDebts = null; _basePayments = null; set({ fournisseurs: [], commandes: [], debts: [], payments: [], ...IDLE, commandesStatus: 'idle', saving: false, error: null, offline: false, offlineSince: null }); },
 }));

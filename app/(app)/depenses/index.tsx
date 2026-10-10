@@ -6,6 +6,7 @@ import { router } from 'expo-router';
 import { Text } from '@/src/components/ui/Text';
 import { OfflineNotice } from '@/src/components/ui/OfflineNotice';
 import { SkeletonList } from '@/src/components/ui/SkeletonPlaceholder';
+import { DataState } from '@/src/components/ui/DataState';
 import { EmptyState } from '@/src/components/ui/EmptyState';
 import { ExpenseRow } from '@/src/components/expenses/ExpenseRow';
 import { ExpenseSheet, type SheetMode } from '@/src/components/expenses/ExpenseSheet';
@@ -38,7 +39,7 @@ export default function DepensesScreen() {
   const isManager = role === 'administrateur' || role === 'manager';
 
   const {
-    expenses, loading, saving, error, offline, offlineSince,
+    expenses, fetchStatus, saving, error, offline, offlineSince,
     fetchExpenses, createExpense, updateExpense, deleteExpense, restoreExpense, approveExpense, rejectExpense,
   } = useExpensesStore();
   const lastSyncedAt = useSyncStore(s => s.lastSyncedAt);
@@ -190,13 +191,15 @@ export default function DepensesScreen() {
         <OfflineNotice offlineSince={offlineSince} onRetry={() => fetchExpenses(businessId)} />
       )}
 
-      {loading && isEmpty ? (
-        <SkeletonList count={6} />
-      ) : !loading && isEmpty && error ? (
+      <DataState
+        status={fetchStatus}
+        isEmpty={isEmpty}
+        skeleton={<SkeletonList count={6} />}
+        empty={error ? (
         <View style={styles.empty}>
           <Text variant="body" color="secondary" style={{ textAlign: 'center' }}>Données non disponibles hors ligne</Text>
         </View>
-      ) : isEmpty ? (
+      ) : (
         <EmptyState
           icon="wallet-outline"
           title="Aucune dépense pour le moment"
@@ -204,7 +207,8 @@ export default function DepensesScreen() {
           actionLabel="+ Dépense"
           onAction={handleAdd}
         />
-      ) : (
+      )}
+      >
         <ScrollView contentContainerStyle={styles.list} showsVerticalScrollIndicator={false}>
           {pendingExpenses.length > 0 && (
             <View style={styles.pendingSection}>
@@ -241,7 +245,7 @@ export default function DepensesScreen() {
             );
           })}
         </ScrollView>
-      )}
+      </DataState>
 
       <ExpenseSheet
         visible={!!sheet}

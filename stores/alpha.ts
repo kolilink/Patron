@@ -4,6 +4,7 @@ import { supabase } from '@/lib/supabase';
 import { translateError } from '@/lib/errors';
 import { isNetworkError, withTimeout, withNetworkRetry, reportOfflineFallback } from '@/lib/sync';
 import type { AlphaConversation, AlphaMessage, AlphaQuotaStatus } from '@/src/types';
+import { beginFetch, failFetch, IDLE, READY, type FetchStatus } from '@/lib/fetchStatus';
 
 function dedupeAppend(messages: AlphaMessage[], msg: AlphaMessage): AlphaMessage[] {
   if (messages.some(m => m.id === msg.id)) return messages;
@@ -22,6 +23,8 @@ interface AlphaStore {
   messages: AlphaMessage[];
   quota: AlphaQuotaStatus | null;
   loading: boolean;
+  /** idle → loading → ready | error. See lib/fetchStatus.ts. */
+  fetchStatus: FetchStatus;
   sending: boolean;
   error: string | null;
   offline: boolean;
@@ -41,7 +44,7 @@ const initialState = {
   conversation: null as AlphaConversation | null,
   messages: [] as AlphaMessage[],
   quota: null as AlphaQuotaStatus | null,
-  loading: false,
+  ...IDLE,
   sending: false,
   error: null as string | null,
   offline: false,
@@ -51,7 +54,7 @@ export const useAlphaStore = create<AlphaStore>((set, get) => ({
   ...initialState,
 
   load: async (businessId) => {
-    set({ loading: get().messages.length === 0, error: null });
+    set({ ...beginFetch(get().fetchStatus), error: null });
     try {
       const { data: conv, error: convErr } = await withNetworkRetry(() =>
         supabase.rpc('open_or_get_alpha_conversation', {
@@ -71,14 +74,14 @@ export const useAlphaStore = create<AlphaStore>((set, get) => ({
       );
       if (msgsErr) throw msgsErr;
 
-      set({ conversation, messages: msgs ?? [], loading: false, offline: false });
+      set({ conversation, messages: msgs ?? [], ...READY, offline: false });
       void get().fetchQuota(businessId);
     } catch (err) {
       if (isNetworkError(err)) {
         reportOfflineFallback('alpha.load', err);
-        set({ loading: false, offline: true });
+        set({ ...failFetch(get().fetchStatus), offline: true });
       } else {
-        set({ loading: false, error: translateError(err, "Le chargement n'a pas abouti.") });
+        set({ ...failFetch(get().fetchStatus), error: translateError(err, "Le chargement n'a pas abouti.") });
       }
     }
   },

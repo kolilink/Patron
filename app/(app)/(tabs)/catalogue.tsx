@@ -11,6 +11,7 @@ import { FormSheet } from '@/src/components/ui/FormSheet';
 import { Button } from '@/src/components/ui/Button';
 import { Card } from '@/src/components/ui/Card';
 import { EmptyState } from '@/src/components/ui/EmptyState';
+import { DataState } from '@/src/components/ui/DataState';
 import { Input } from '@/src/components/ui/Input';
 import { NoResultsState } from '@/src/components/ui/NoResultsState';
 import { Pill } from '@/src/components/ui/Pill';
@@ -1307,7 +1308,7 @@ export default function CatalogueScreen() {
   const role = session?.activeMembership?.role;
   const canEdit = role === 'administrateur' || role === 'manager';
 
-  const { products, archivedProducts, variantsByProduct, loading, saving, offline, offlineSince, fetchProducts, fetchArchivedProducts, fetchVariants, upsertVariants, createProduct, updateProduct, archiveProduct, restoreProduct, adjustStock, fetchProductStats, archivingIds } =
+  const { products, archivedProducts, variantsByProduct, fetchStatus, saving, offline, offlineSince, fetchProducts, fetchArchivedProducts, fetchVariants, upsertVariants, createProduct, updateProduct, archiveProduct, restoreProduct, adjustStock, fetchProductStats, archivingIds } =
     useProductStore();
   const { fournisseurs, fetchFournisseurs } = useFournisseursStore();
 
@@ -1621,6 +1622,75 @@ export default function CatalogueScreen() {
 
   const displayList = tab === 'actifs' ? inStockActive : archivedFiltered;
 
+  // Everything below the stat row once products exist (or the archives tab).
+  const catalogueBody = tab === 'archives' && archivedFiltered.length === 0 ? (
+        // Two distinct states, never conflated: a search with no match must
+        // never read as "your archive is empty" — that would make a merchant
+        // fear her archived products are gone, when they simply don't match
+        // what she typed.
+        search.trim() ? (
+          <NoResultsState query={search} />
+        ) : (
+          <EmptyState
+            icon="cube-outline"
+            title="Aucun produit non actif pour le moment."
+            subtitle="Les produits que vous désactivez apparaîtront ici."
+          />
+        )
+  ) : (
+        // Inset, rounded container matching the search field / "Valeur du
+        // stock" card above it — the list used to be a full-width, sharp-
+        // edged block with no visual relationship to those. overflow:
+        // 'hidden' is what clips the first/last row's corners to the
+        // container's own radius instead of them staying square.
+        <View style={styles.listContainer}>
+          <FlatList
+            style={{ flex: 1 }}
+            data={displayList}
+            keyExtractor={p => p.id}
+            CellRendererComponent={AnimatedRowCell}
+            renderItem={({ item }) => (
+              <ProductRow
+                product={item}
+                currency={currency}
+                archived={tab === 'archives'}
+                variants={variantsByProduct[item.id]}
+                archiving={archivingIds.includes(item.id)}
+                onPress={() => {
+                  if (tab === 'archives') {
+                    setRestoreSheetProduct(item);
+                    setShowRestoreSheet(true);
+                    return;
+                  }
+                  openOptions(item);
+                }}
+                onLongPress={() => tab === 'archives' ? undefined : openOptions(item)}
+              />
+            )}
+            ItemSeparatorComponent={() => <View style={styles.separator} />}
+            contentContainerStyle={styles.list}
+            showsVerticalScrollIndicator={false}
+            keyboardShouldPersistTaps="handled"
+            refreshControl={
+              <RefreshControl refreshing={refreshing} onRefresh={onRefresh} tintColor={palette.primary} colors={[palette.primary]} />
+            }
+            ListEmptyComponent={
+              search.trim() ? (
+                <NoResultsState
+                  query={search}
+                  createLabel={`+ Nouveau produit « ${search.trim()} »`}
+                  onCreate={() => {
+                    setEditingProduct(null);
+                    setPrefillProductName(search.trim());
+                    setShowForm(true);
+                  }}
+                />
+              ) : null
+            }
+          />
+        </View>
+  );
+
   return (
     <Screen tab>
       {/* Post-action banners */}
@@ -1711,9 +1781,11 @@ export default function CatalogueScreen() {
       )}
 
       {/* Product list */}
-      {loading && products.length === 0 ? (
-        <SkeletonList count={8} />
-      ) : tab === 'actifs' && products.length === 0 ? (
+      <DataState
+        status={fetchStatus}
+        isEmpty={products.length === 0}
+        skeleton={<SkeletonList count={8} />}
+        empty={tab === 'actifs' ? (
         !offline && canEdit ? (
           // One consistent empty state regardless of the 24h activation-fork
           // window — the fork is a modal that overlays whatever's behind it
@@ -1737,73 +1809,10 @@ export default function CatalogueScreen() {
               : 'Votre responsable ajoutera les produits bientôt.'}
           />
         )
-      ) : tab === 'archives' && archivedFiltered.length === 0 ? (
-        // Two distinct states, never conflated: a search with no match must
-        // never read as "your archive is empty" — that would make a merchant
-        // fear her archived products are gone, when they simply don't match
-        // what she typed.
-        search.trim() ? (
-          <NoResultsState query={search} />
-        ) : (
-          <EmptyState
-            icon="cube-outline"
-            title="Aucun produit non actif pour le moment."
-            subtitle="Les produits que vous désactivez apparaîtront ici."
-          />
-        )
-      ) : (
-        // Inset, rounded container matching the search field / "Valeur du
-        // stock" card above it — the list used to be a full-width, sharp-
-        // edged block with no visual relationship to those. overflow:
-        // 'hidden' is what clips the first/last row's corners to the
-        // container's own radius instead of them staying square.
-        <View style={styles.listContainer}>
-          <FlatList
-            style={{ flex: 1 }}
-            data={displayList}
-            keyExtractor={p => p.id}
-            CellRendererComponent={AnimatedRowCell}
-            renderItem={({ item }) => (
-              <ProductRow
-                product={item}
-                currency={currency}
-                archived={tab === 'archives'}
-                variants={variantsByProduct[item.id]}
-                archiving={archivingIds.includes(item.id)}
-                onPress={() => {
-                  if (tab === 'archives') {
-                    setRestoreSheetProduct(item);
-                    setShowRestoreSheet(true);
-                    return;
-                  }
-                  openOptions(item);
-                }}
-                onLongPress={() => tab === 'archives' ? undefined : openOptions(item)}
-              />
-            )}
-            ItemSeparatorComponent={() => <View style={styles.separator} />}
-            contentContainerStyle={styles.list}
-            showsVerticalScrollIndicator={false}
-            keyboardShouldPersistTaps="handled"
-            refreshControl={
-              <RefreshControl refreshing={refreshing} onRefresh={onRefresh} tintColor={palette.primary} colors={[palette.primary]} />
-            }
-            ListEmptyComponent={
-              search.trim() ? (
-                <NoResultsState
-                  query={search}
-                  createLabel={`+ Nouveau produit « ${search.trim()} »`}
-                  onCreate={() => {
-                    setEditingProduct(null);
-                    setPrefillProductName(search.trim());
-                    setShowForm(true);
-                  }}
-                />
-              ) : null
-            }
-          />
-        </View>
-      )}
+        ) : catalogueBody}
+      >
+        {catalogueBody}
+      </DataState>
 
       {/* Out-of-stock bottom sheet */}
       <Modal

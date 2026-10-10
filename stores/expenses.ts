@@ -15,6 +15,7 @@ import { notifyEvent } from '@/src/utils/notifications';
 import { useAuthStore } from '@/stores/auth';
 import { formatAmount } from '@/src/utils/format';
 import type { Expense, ExpenseStatus } from '@/src/types';
+import { beginFetch, failFetch, IDLE, READY, type FetchStatus } from '@/lib/fetchStatus';
 
 // See stores/products.ts for the full explanation.
 function isStaleBusiness(businessId: string): boolean {
@@ -86,6 +87,8 @@ interface ExpensesStore {
   baseline: Expense[];
   expenses: Expense[];
   loading: boolean;
+  /** idle → loading → ready | error. See lib/fetchStatus.ts. */
+  fetchStatus: FetchStatus;
   saving: boolean;
   error: string | null;
   offline: boolean;
@@ -150,14 +153,14 @@ export const useExpensesStore = create<ExpensesStore>((set, get) => {
   return ({
   baseline: [],
   expenses: [],
-  loading: false,
+  ...IDLE,
   saving: false,
   error: null,
   offline: false,
   offlineSince: null,
 
   fetchExpenses: async (businessId) => {
-    set({ loading: true, error: null });
+    set({ ...beginFetch(get().fetchStatus), error: null });
     try {
       const { data, error } = await withNetworkRetry(() =>
         supabase
@@ -211,7 +214,7 @@ export const useExpensesStore = create<ExpensesStore>((set, get) => {
       set({
         baseline: result,
         expenses: applyExpenseOverlay(result, ops, overlayContext()),
-        loading: false, offline: false, offlineSince: null,
+        ...READY, offline: false, offlineSince: null,
       });
     } catch (err) {
       if (isNetworkError(err)) {
@@ -226,19 +229,19 @@ export const useExpensesStore = create<ExpensesStore>((set, get) => {
           set({
             baseline: cached,
             expenses: applyExpenseOverlay(cached, ops, overlayContext()),
-            loading: false, offline: true, offlineSince: ts, error: null,
+            ...READY, offline: true, offlineSince: ts, error: null,
           });
           return;
         }
         set({
           error: 'Pas de connexion. Ouvrez l\'application en ligne une première fois pour activer le mode hors ligne.',
-          loading: false,
+          ...failFetch(get().fetchStatus),
           offline: true,
         });
         return;
       }
       if (isStaleBusiness(businessId)) return;
-      set({ error: translateError(err, "Le chargement n'a pas abouti."), loading: false });
+      set({ error: translateError(err, "Le chargement n'a pas abouti."), ...failFetch(get().fetchStatus) });
     }
   },
 
@@ -346,6 +349,6 @@ export const useExpensesStore = create<ExpensesStore>((set, get) => {
   rejectExpense: async (id, userId) => decideExpense('reject_expense', 'rejete', id, userId),
 
   clearError: () => set({ error: null }),
-  reset: () => { snapshots.clear(); cancelledCreates.clear(); set({ baseline: [], expenses: [], loading: false, saving: false, error: null, offline: false, offlineSince: null }); },
+  reset: () => { snapshots.clear(); cancelledCreates.clear(); set({ baseline: [], expenses: [], ...IDLE, saving: false, error: null, offline: false, offlineSince: null }); },
   });
 });

@@ -64,8 +64,8 @@ beforeEach(() => {
     jest.clearAllMocks();
     resolvers = [];
     mockSession = { activeBusiness: { id: 'biz-1' } };
-    useFournisseursStore.setState({ fournisseurs: [], debts: [], commandes: [], loading: false, offline: false, offlineSince: null, error: null });
-    useAportsStore.setState({ apports: [], loading: false, offline: false, offlineSince: null, error: null });
+    useFournisseursStore.setState({ fournisseurs: [], debts: [], commandes: [], loading: false, fetchStatus: 'idle', commandesStatus: 'idle', offline: false, offlineSince: null, error: null });
+    useAportsStore.setState({ apports: [], loading: false, fetchStatus: 'idle', offline: false, offlineSince: null, error: null });
 });
 
 describe('fetchFournisseurs — stale business mid-fetch', () => {
@@ -90,13 +90,13 @@ describe('fetchCommandes — stale business mid-fetch', () => {
         const fetchPromise = useFournisseursStore.getState().fetchCommandes('biz-1');
 
         await Promise.resolve();
-        expect(useFournisseursStore.getState().loading).toBe(true);
+        expect(useFournisseursStore.getState().commandesStatus).toBe('loading');
 
         mockSession = { activeBusiness: { id: 'biz-2' } };
         resolvers.forEach(r => r());
         await fetchPromise;
 
-        expect(useFournisseursStore.getState().loading).toBe(false);
+        expect(useFournisseursStore.getState().commandesStatus).not.toBe('loading');
     });
 });
 

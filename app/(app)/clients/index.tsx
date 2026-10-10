@@ -15,6 +15,7 @@ import { useVentesStore } from '@/stores/ventes';
 import { supabase } from '@/lib/supabase';
 import { OfflineNotice } from '@/src/components/ui/OfflineNotice';
 import { SkeletonList } from '@/src/components/ui/SkeletonPlaceholder';
+import { DataState } from '@/src/components/ui/DataState';
 import { formatDebtAge, debtAgeTier } from '@/src/utils/clientReminder';
 import { formatAmount } from '@/src/utils/format';
 
@@ -85,7 +86,7 @@ export default function ClientsScreen() {
   const isInvestisseur = role === 'investisseur';
 
   const { filter: filterParam } = useLocalSearchParams<{ filter?: FilterType }>();
-  const { sales, loading, error, offline, offlineSince, fetchSales } = useVentesStore();
+  const { sales, fetchStatus, error, offline, offlineSince, fetchSales } = useVentesStore();
   // "En dette" is the default — this screen's job is collection, not a plain
   // directory. An explicit ?filter= param (including 'tous') is still honored.
   const [filter, setFilter] = useState<FilterType>(
@@ -206,6 +207,98 @@ export default function ClientsScreen() {
   const totalOwedClients = allClients.filter(c => c.totalCredit > 0).length;
   const totalOwedAmount = allClients.reduce((s, c) => s + c.totalCredit, 0);
 
+  // Empty-by-filter/search vs the list itself — the loaded-but-empty cases
+  // are the screen's own EmptyStates, never a skeleton.
+  const clientsBody = displayedClients.length === 0 ? (
+        search.trim() ? (
+          <NoResultsState
+            query={search}
+            createLabel={isInvestisseur ? undefined : `+ Nouveau client « ${search.trim()} »`}
+            onCreate={isInvestisseur ? undefined : () => {
+              useAuthStore.setState({ requestQuickCapture: 'credit', requestQuickCaptureClientName: search.trim() });
+              router.push('/(app)/(tabs)/');
+            }}
+          />
+        ) : filter === 'doivent' ? (
+          // Neutral here, deliberately — the header above already carries
+          // the one "Tout est réglé ✓" green moment for this exact state;
+          // repeating it here would put two green elements on screen at once.
+          <EmptyState
+            icon="checkmark-circle-outline"
+            title="Aucune dette"
+            subtitle="Aucun client ne vous doit."
+            actionLabel="Effacer"
+            actionVariant="outline"
+            onAction={() => setFilter('tous')}
+          />
+        ) : (
+          <EmptyState
+            icon="people-outline"
+            title="Aucun client pour le moment."
+            subtitle={isVendeur ? 'Faites votre première vente.' : 'Chaque vente crée un client.'}
+            actionLabel={isInvestisseur ? undefined : '+ Ajouter un client'}
+            onAction={isInvestisseur ? undefined : () => {
+              useAuthStore.setState({ requestQuickCapture: 'credit', requestQuickCaptureClientName: null });
+              router.push('/(app)/(tabs)/');
+            }}
+          />
+        )
+  ) : (
+        <FlatList
+          data={displayedClients}
+          keyExtractor={c => c.clientId ?? c.name}
+          contentContainerStyle={styles.list}
+          refreshControl={
+            <RefreshControl refreshing={refreshing} onRefresh={onRefresh} tintColor={palette.primary} colors={[palette.primary]} />
+          }
+          renderItem={({ item }) => (
+            <Pressable
+              onPress={() => router.push(`/clients/${encodeURIComponent(item.clientId ?? item.name)}`)}
+              style={({ pressed }) => [styles.clientRow, pressed && { opacity: 0.75 }]}>
+              <View style={[styles.avatar, { backgroundColor: avatarColor(item.name) + '20' }]}>
+                <Text variant="label" allowFontScaling={false} style={{ color: avatarColor(item.name) }}>
+                  {item.name[0]?.toUpperCase()}
+                </Text>
+              </View>
+              <View style={{ flex: 1, gap: 2 }}>
+                <Text variant="label">{item.name}</Text>
+                {item.totalCredit > 0 && (
+                  <Text variant="caption" style={{ color: debtAgeColor(item.daysOldestDebt, palette) }}>
+                    {formatDebtAge(item.daysOldestDebt)}
+                  </Text>
+                )}
+              </View>
+              {item.totalCredit > 0 ? (
+                <View style={{ alignItems: 'flex-end', gap: 6 }}>
+                  {/* Plain, calm — not red. Color on this row lives entirely
+                      on the age caption above, not on the amount. */}
+                  <Text variant="label" style={{ color: palette.textPrimary, fontFamily: fontFamily.bold }}>
+                    Vous doit {fmt(item.totalCredit, currency)}
+                  </Text>
+                  {!isInvestisseur && (
+                    <Pressable
+                      onPress={() => sendWhatsAppReminder(item)}
+                      hitSlop={8}
+                      style={({ pressed }) => [styles.waBtn, { opacity: pressed ? 0.6 : 1 }]}
+                    >
+                      <Ionicons name="logo-whatsapp" size={14} color={palette.primary} />
+                      <Text variant="caption" style={styles.waBtnText}>Rappeler</Text>
+                    </Pressable>
+                  )}
+                </View>
+              ) : (
+                // Neutral — green is reserved for the one "Tout est réglé ✓"
+                // header moment, not sprinkled on every settled row too.
+                <View style={{ flexDirection: 'row', alignItems: 'center', justifyContent: 'flex-end' }}>
+                  <Text variant="caption" color="secondary" style={{ marginRight: 8 }}>Réglé</Text>
+                  <Text variant="caption" color="secondary">›</Text>
+                </View>
+              )}
+            </Pressable>
+          )}
+          ItemSeparatorComponent={() => <View style={{ height: 1, backgroundColor: palette.border }} />}
+        />
+  );
   return (
     <Screen>
       <View style={styles.hdr}>
@@ -279,102 +372,18 @@ export default function ClientsScreen() {
         />
       )}
 
-      {loading && allClients.length === 0 ? (
-        <SkeletonList count={6} />
-      ) : !loading && allClients.length === 0 && error ? (
+      <DataState
+        status={fetchStatus}
+        isEmpty={allClients.length === 0}
+        skeleton={<SkeletonList count={6} />}
+        empty={error ? (
         <View style={styles.empty}>
           <Text variant="body" color="secondary" style={{ textAlign: 'center' }}>Données non disponibles hors ligne</Text>
         </View>
-      ) : displayedClients.length === 0 ? (
-        search.trim() ? (
-          <NoResultsState
-            query={search}
-            createLabel={isInvestisseur ? undefined : `+ Nouveau client « ${search.trim()} »`}
-            onCreate={isInvestisseur ? undefined : () => {
-              useAuthStore.setState({ requestQuickCapture: 'credit', requestQuickCaptureClientName: search.trim() });
-              router.push('/(app)/(tabs)/');
-            }}
-          />
-        ) : filter === 'doivent' ? (
-          // Neutral here, deliberately — the header above already carries
-          // the one "Tout est réglé ✓" green moment for this exact state;
-          // repeating it here would put two green elements on screen at once.
-          <EmptyState
-            icon="checkmark-circle-outline"
-            title="Aucune dette"
-            subtitle="Aucun client ne vous doit."
-            actionLabel="Effacer"
-            actionVariant="outline"
-            onAction={() => setFilter('tous')}
-          />
-        ) : (
-          <EmptyState
-            icon="people-outline"
-            title="Aucun client pour le moment."
-            subtitle={isVendeur ? 'Faites votre première vente.' : 'Chaque vente crée un client.'}
-            actionLabel={isInvestisseur ? undefined : '+ Ajouter un client'}
-            onAction={isInvestisseur ? undefined : () => {
-              useAuthStore.setState({ requestQuickCapture: 'credit', requestQuickCaptureClientName: null });
-              router.push('/(app)/(tabs)/');
-            }}
-          />
-        )
-      ) : (
-        <FlatList
-          data={displayedClients}
-          keyExtractor={c => c.clientId ?? c.name}
-          contentContainerStyle={styles.list}
-          refreshControl={
-            <RefreshControl refreshing={refreshing} onRefresh={onRefresh} tintColor={palette.primary} colors={[palette.primary]} />
-          }
-          renderItem={({ item }) => (
-            <Pressable
-              onPress={() => router.push(`/clients/${encodeURIComponent(item.clientId ?? item.name)}`)}
-              style={({ pressed }) => [styles.clientRow, pressed && { opacity: 0.75 }]}>
-              <View style={[styles.avatar, { backgroundColor: avatarColor(item.name) + '20' }]}>
-                <Text variant="label" allowFontScaling={false} style={{ color: avatarColor(item.name) }}>
-                  {item.name[0]?.toUpperCase()}
-                </Text>
-              </View>
-              <View style={{ flex: 1, gap: 2 }}>
-                <Text variant="label">{item.name}</Text>
-                {item.totalCredit > 0 && (
-                  <Text variant="caption" style={{ color: debtAgeColor(item.daysOldestDebt, palette) }}>
-                    {formatDebtAge(item.daysOldestDebt)}
-                  </Text>
-                )}
-              </View>
-              {item.totalCredit > 0 ? (
-                <View style={{ alignItems: 'flex-end', gap: 6 }}>
-                  {/* Plain, calm — not red. Color on this row lives entirely
-                      on the age caption above, not on the amount. */}
-                  <Text variant="label" style={{ color: palette.textPrimary, fontFamily: fontFamily.bold }}>
-                    Vous doit {fmt(item.totalCredit, currency)}
-                  </Text>
-                  {!isInvestisseur && (
-                    <Pressable
-                      onPress={() => sendWhatsAppReminder(item)}
-                      hitSlop={8}
-                      style={({ pressed }) => [styles.waBtn, { opacity: pressed ? 0.6 : 1 }]}
-                    >
-                      <Ionicons name="logo-whatsapp" size={14} color={palette.primary} />
-                      <Text variant="caption" style={styles.waBtnText}>Rappeler</Text>
-                    </Pressable>
-                  )}
-                </View>
-              ) : (
-                // Neutral — green is reserved for the one "Tout est réglé ✓"
-                // header moment, not sprinkled on every settled row too.
-                <View style={{ flexDirection: 'row', alignItems: 'center', justifyContent: 'flex-end' }}>
-                  <Text variant="caption" color="secondary" style={{ marginRight: 8 }}>Réglé</Text>
-                  <Text variant="caption" color="secondary">›</Text>
-                </View>
-              )}
-            </Pressable>
-          )}
-          ItemSeparatorComponent={() => <View style={{ height: 1, backgroundColor: palette.border }} />}
-        />
-      )}
+      ) : clientsBody}
+      >
+        {clientsBody}
+      </DataState>
 
       {/* A real client isn't created here directly (see the empty state's own
           copy — "Chaque vente crée un client"), so this FAB is a shortcut

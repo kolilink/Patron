@@ -7,6 +7,7 @@ import { isNetworkError, withTimeout, withNetworkRetry, reportOfflineFallback } 
 import { getKV, setKV, saveMarketCache, getMarketCache, getCacheTimestamp } from '@/lib/db';
 import { toast } from '@/stores/toast';
 import type { MarketPost, MarketComment, MarketCategory } from '@/src/types';
+import { beginFetch, failFetch, IDLE, READY, type FetchStatus } from '@/lib/fetchStatus';
 
 const MARKET_VISIT_KEY = 'market_last_visit';
 
@@ -25,6 +26,8 @@ function normalizePostCategory(post: MarketPost): MarketPost {
 interface MarketStore {
   posts: MarketPost[];
   loading: boolean;
+  /** idle → loading → ready | error. See lib/fetchStatus.ts. */
+  fetchStatus: FetchStatus;
   creating: boolean;
   error: string | null;
   likedPostIds: string[];
@@ -60,7 +63,7 @@ interface MarketStore {
 
 const initialState = {
   posts: [],
-  loading: false,
+  ...IDLE,
   creating: false,
   error: null,
   likedPostIds: [],
@@ -81,15 +84,12 @@ export const useMarketStore = create<MarketStore>((set, get) => ({
   ...initialState,
 
   fetchPosts: async (userId, category) => {
-    if (get().posts.length === 0) {
+    // A 'ready' store — even with zero posts — refreshes silently.
+    const startedFrom = get().fetchStatus;
+    set({ ...beginFetch(startedFrom), error: null });
+    if (startedFrom !== 'ready') {
       const cached = await getMarketCache() as MarketPost[] | null;
-      if (cached) {
-        set({ posts: cached.map(normalizePostCategory), loading: false, error: null });
-      } else {
-        set({ loading: true, error: null });
-      }
-    } else {
-      set({ error: null });
+      if (cached) set({ posts: cached.map(normalizePostCategory), ...READY });
     }
     try {
       let q = supabase
@@ -156,7 +156,7 @@ export const useMarketStore = create<MarketStore>((set, get) => ({
         userPoints: profileRes.data?.points ?? 0,
         userLevel: profileRes.data?.community_level ?? 1,
         lastVisitedAt: visitTs ? new Date(visitTs) : null,
-        loading: false,
+        ...READY,
         offline: false,
         offlineSince: null,
       });
@@ -166,13 +166,13 @@ export const useMarketStore = create<MarketStore>((set, get) => ({
         const cached = await getMarketCache() as MarketPost[] | null;
         if (cached) {
           const ts = await getCacheTimestamp('market_cache');
-          set({ posts: cached.map(normalizePostCategory), loading: false, error: null, offline: true, offlineSince: ts });
+          set({ posts: cached.map(normalizePostCategory), ...READY, error: null, offline: true, offlineSince: ts });
           return;
         }
-        set({ loading: false, error: null, offline: true, offlineSince: null }); // show empty state, not an error
+        set({ ...READY, error: null, offline: true, offlineSince: null }); // show empty state, not an error
         return;
       }
-      set({ loading: false, error: translateError(err, "Le chargement n'a pas abouti.") });
+      set({ ...failFetch(get().fetchStatus), error: translateError(err, "Le chargement n'a pas abouti.") });
     }
   },
 

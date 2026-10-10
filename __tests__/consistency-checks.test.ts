@@ -13,6 +13,8 @@ const {
   findResurrectedForkViolations,
   findHeroModalFadeViolations,
   findSystemAlertViolations,
+  findSkeletonViolationsInSource,
+  findSkeletonOutsideDataStateViolations,
 } = require('../scripts/lib/consistency-checks');
 
 describe('consistency checks', () => {
@@ -66,5 +68,61 @@ describe('consistency checks', () => {
   // REVOKE ... FROM anon is callable by anyone with the public anon key.
   it('no db/ function is anon-callable without an auth check or a REVOKE FROM anon', () => {
     expect(findFunctionExposureViolations()).toEqual([]);
+  });
+
+  // Data-state invariant (CLAUDE.md): a skeleton renders only as DataState's
+  // `skeleton` slot, so a loaded-but-empty list can never replay one.
+  it('data-state-invariant: no Skeleton* is rendered outside <DataState>', () => {
+    expect(findSkeletonOutsideDataStateViolations()).toEqual([]);
+  });
+
+  describe('data-state-invariant detector', () => {
+    it('fails a hand-rolled `loading && list.length === 0` skeleton gate', () => {
+      const handRolled = [
+        'function Screen() {',
+        '  return (',
+        '    <View>',
+        '      {loading && products.length === 0 ? (',
+        '        <SkeletonList count={8} />',
+        '      ) : products.length === 0 ? <Empty /> : <List />}',
+        '    </View>',
+        '  );',
+        '}',
+      ].join('\n');
+      expect(findSkeletonViolationsInSource(handRolled)).toHaveLength(1);
+    });
+
+    it('fails a bare local skeleton component usage and a ternary one-liner', () => {
+      expect(findSkeletonViolationsInSource('const a = loading ? <ValueSkeleton /> : null;')).toHaveLength(1);
+      expect(findSkeletonViolationsInSource('{!rows ? <View><SkeletonKpiGrid /></View> : null}')).toHaveLength(1);
+    });
+
+    it('passes a skeleton passed as <DataState>\'s skeleton slot', () => {
+      const ok = [
+        '<DataState',
+        '  status={fetchStatus}',
+        '  isEmpty={products.length === 0}',
+        '  skeleton={<SkeletonList count={8} />}',
+        '  empty={<Empty />}',
+        '>',
+        '  <List />',
+        '</DataState>',
+      ].join('\n');
+      expect(findSkeletonViolationsInSource(ok)).toEqual([]);
+    });
+
+    it('a skeleton= prop on something that is not DataState does not count', () => {
+      expect(findSkeletonViolationsInSource('<Other skeleton={<SkeletonList />} />')).toHaveLength(1);
+    });
+
+    it('allows skeleton components composing other skeletons inside their own definition', () => {
+      const composed = [
+        'function SkeletonLine() { return null; }',
+        'function DetailSkeleton() {',
+        '  return (<View><SkeletonLine width="40%" /></View>);',
+        '}',
+      ].join('\n');
+      expect(findSkeletonViolationsInSource(composed)).toEqual([]);
+    });
   });
 });

@@ -42,6 +42,7 @@ import { isKnownOffline } from '@/lib/connectivity';
 import * as Sentry from '@sentry/react-native';
 import { buildReportDelta, applyTopSellers, type OverlaySale } from '@/lib/pendingOverlay';
 import { SkeletonKpiGrid } from '@/src/components/ui/SkeletonPlaceholder';
+import { DataState } from '@/src/components/ui/DataState';
 import { haptics } from '@/lib/haptics';
 import { toast } from '@/stores/toast';
 import { buildInviteLink, buildInviteMessage } from '@/stores/inviter';
@@ -795,9 +796,8 @@ export default function AccueilScreen() {
             <RefusedOpsNotice />
           </View>
 
-          {loading ? (
-            <SkeletonKpiGrid />
-          ) : isVendeur && products.length === 0 ? (
+          <DataState status={loading ? 'loading' : 'ready'} isEmpty={loading} skeleton={<SkeletonKpiGrid />} empty={null}>
+          {isVendeur && products.length === 0 ? (
             /* ── Empty state for vendeur: no products configured yet ── */
             <Card style={styles.welcome}>
               <Text variant="h4" style={{ textAlign: 'center' }}>Aucun produit</Text>
@@ -1042,6 +1042,7 @@ export default function AccueilScreen() {
               ) : null}
             </>
           )}
+          </DataState>
         </ScrollView>
 
         {/* ── Withdrawal sheet ── */}

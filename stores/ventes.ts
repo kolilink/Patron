@@ -14,6 +14,7 @@ import { useAuthStore } from '@/stores/auth';
 import { formatAmount } from '@/src/utils/format';
 import { rebuildPendingOverlay, type OverlayContext } from '@/lib/pendingOverlay';
 import { isOutboxValidationError } from '@/lib/outboxValidation';
+import { beginFetch, failFetch, IDLE, READY, type FetchStatus } from '@/lib/fetchStatus';
 
 // See stores/products.ts for the full explanation — a fetch already in
 // flight when the user switches businesses must not overwrite the new
@@ -111,6 +112,10 @@ interface VentesStore {
   // distinction to avoid flashing for a business that already has a sale.
   salesFetchedFor: string | null;
   loading: boolean;
+  /** idle → loading → ready | error, for the view named by `viewKey`. See lib/fetchStatus.ts. */
+  fetchStatus: FetchStatus;
+  /** The fetchSales view (business:seller[:status]) `fetchStatus` describes — a different tab/scope starts from 'idle'. */
+  viewKey: string | null;
   saving: boolean;
   error: string | null;
   offline: boolean;
@@ -234,8 +239,9 @@ const paymentGuard = createKeyedInflightGuard();
 
 export const useVentesStore = create<VentesStore>((set, get) => ({
   sales: [],
+  viewKey: null,
   salesFetchedFor: null,
-  loading: false,
+  ...IDLE,
   saving: false,
   error: null,
   offline: false,
@@ -315,22 +321,28 @@ export const useVentesStore = create<VentesStore>((set, get) => ({
     // the session's) stays a plain cache read.
     const sellerIsSession = sellerId === undefined || sellerId === useAuthStore.getState().session?.user.id;
     const isDefaultScope = !status && sellerIsSession;
+    // Only a view that has never produced data (idle/error) may show a
+    // skeleton; a 'ready' view — even one holding zero sales — refreshes
+    // silently. See lib/fetchStatus.ts.
+    const startedFrom: FetchStatus = get().viewKey === cacheKey ? get().fetchStatus : 'idle';
+    set({ ...beginFetch(startedFrom), viewKey: cacheKey, error: null });
     if (isDefaultScope) {
       await get().refreshPendingOverlay();
       if (isStaleBusiness(businessId)) return;
-      set({ loading: false, error: null });
+      if (startedFrom !== 'ready' && (await getVentesCache(cacheKey)) != null) {
+        if (isStaleBusiness(businessId)) return;
+        set(READY);
+      }
     } else {
       const cached = await getVentesCache(cacheKey) as Vente[] | null;
       if (isStaleBusiness(businessId)) return;
       if (cached) {
-        set({ sales: status ? await overlayForStatus(businessId, sellerId, status, cached) : cached, loading: false, error: null });
+        set({ sales: status ? await overlayForStatus(businessId, sellerId, status, cached) : cached, ...READY, error: null });
       } else if (status && sellerIsSession) {
         // No filtered snapshot yet, but the outbox + the unfiltered snapshot can already answer.
         const view = await overlayForStatus(businessId, sellerId, status, [], false);
         if (isStaleBusiness(businessId)) return;
-        set(view.length > 0 ? { sales: view, loading: false, error: null } : { loading: true, error: null });
-      } else {
-        set({ loading: true, error: null });
+        if (view.length > 0) set({ sales: view, ...READY, error: null });
       }
     }
 
@@ -362,7 +374,7 @@ export const useVentesStore = create<VentesStore>((set, get) => ({
           if (isStaleBusiness(businessId)) return;
           const ts = await getCacheTimestamp('ventes_cache', cacheKey);
           if (isStaleBusiness(businessId)) return;
-          set({ loading: false, offline: true, offlineSince: ts, error: null, salesFetchedFor: businessId });
+          set({ ...READY, offline: true, offlineSince: ts, error: null, salesFetchedFor: businessId });
           return;
         }
         // Non-default scope (a status-filtered tab, or another seller): the
@@ -374,21 +386,21 @@ export const useVentesStore = create<VentesStore>((set, get) => ({
           if (isStaleBusiness(businessId)) return;
           const shown = status ? await overlayForStatus(businessId, sellerId, status, cached) : cached;
           if (isStaleBusiness(businessId)) return;
-          set({ sales: shown, loading: false, offline: true, offlineSince: ts, error: null, salesFetchedFor: businessId });
+          set({ sales: shown, ...READY, offline: true, offlineSince: ts, error: null, salesFetchedFor: businessId });
           return;
         }
         set({
           error: 'Pas de connexion. Ouvrez l\'application en ligne une première fois pour activer le mode hors ligne.',
-          loading: false,
+          ...failFetch(get().fetchStatus),
           offline: true,
           salesFetchedFor: businessId,
         });
         return;
       }
-      set({ loading: false, error: translateError(fetchErr, "Le chargement n'a pas abouti."), salesFetchedFor: businessId });
+      set({ ...failFetch(get().fetchStatus), error: translateError(fetchErr, "Le chargement n'a pas abouti."), salesFetchedFor: businessId });
       return;
     }
-    if (!data) { set({ loading: false, salesFetchedFor: businessId }); return; }
+    if (!data) { set({ ...READY, salesFetchedFor: businessId }); return; }
 
     const orderIds = data.map((s: Record<string, unknown>) => s.id as string);
     const sellerIds = [...new Set(data.map((s: Record<string, unknown>) => s.seller_id as string))];
@@ -500,12 +512,12 @@ export const useVentesStore = create<VentesStore>((set, get) => ({
       // contain anything still sitting in the local outbox. Re-running
       // the same rebuild (now against the freshly-cached, just-saved
       // server data as its baseline) restores it in the same tick.
-      set({ loading: false, offline: false, offlineSince: null, salesFetchedFor: businessId });
+      set({ ...READY, offline: false, offlineSince: null, salesFetchedFor: businessId });
       await get().refreshPendingOverlay();
     } else {
       const shown = status && sellerIsSession ? await overlayForStatus(businessId, sellerId, status, sales as Vente[]) : sales;
       if (isStaleBusiness(businessId)) return;
-      set({ sales: shown, loading: false, offline: false, offlineSince: null, salesFetchedFor: businessId });
+      set({ sales: shown, ...READY, offline: false, offlineSince: null, salesFetchedFor: businessId });
     }
   },
 
@@ -996,5 +1008,5 @@ export const useVentesStore = create<VentesStore>((set, get) => ({
   },
 
   clearError: () => set({ error: null }),
-  reset: () => set({ sales: [], salesFetchedFor: null, loading: false, saving: false, error: null, offline: false, offlineSince: null }),
+  reset: () => set({ sales: [], salesFetchedFor: null, viewKey: null, ...IDLE, saving: false, error: null, offline: false, offlineSince: null }),
 }));

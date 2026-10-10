@@ -6,6 +6,7 @@ import { Screen } from '@/src/components/ui/Screen';
 import { router, useFocusEffect } from 'expo-router';
 import { Card } from '@/src/components/ui/Card';
 import { SkeletonKpiGrid } from '@/src/components/ui/SkeletonPlaceholder';
+import { DataState } from '@/src/components/ui/DataState';
 import { OfflineNotice } from '@/src/components/ui/OfflineNotice';
 import { Button } from '@/src/components/ui/Button';
 import { RefusedOpsNotice } from '@/src/components/RefusedOpsNotice';
@@ -125,11 +126,11 @@ function StatCard({
   return (
     <Card style={[styles.statCard, { backgroundColor: bg }]}>
       <Text style={styles.statLabel}>{label}</Text>
-      {loading ? <ValueSkeleton /> : (
+      <DataState status={loading ? 'loading' : 'ready'} isEmpty={!!loading} skeleton={<ValueSkeleton />} empty={null}>
         <Text style={[styles.statValue, { color: accent }]} numberOfLines={2}>
           {value}
         </Text>
-      )}
+      </DataState>
       {note ? <Text style={styles.statNote}>{note}</Text> : null}
     </Card>
   );
@@ -478,7 +479,7 @@ export default function RapportsScreen() {
           <Text variant="h4">{seesWholeBusiness ? 'Les chiffres' : 'Mes chiffres'}</Text>
           <View style={{ width: 60 }} />
         </View>
-        <SkeletonKpiGrid />
+        <DataState status={yearReportLoading ? 'loading' : 'idle'} isEmpty skeleton={<SkeletonKpiGrid />} empty={null}>{null}</DataState>
       </Screen>
     );
   }
@@ -542,7 +543,7 @@ export default function RapportsScreen() {
           <Text variant="h4">{seesWholeBusiness ? 'Les chiffres' : 'Mes chiffres'}</Text>
           <View style={{ width: 60 }} />
         </View>
-        <SkeletonKpiGrid />
+        <DataState status={yearReportLoading ? 'loading' : 'idle'} isEmpty skeleton={<SkeletonKpiGrid />} empty={null}>{null}</DataState>
       </Screen>
     );
   }
@@ -604,7 +605,7 @@ export default function RapportsScreen() {
         {!isVendeur && (
           <Card elevated style={styles.profitHero}>
             <Text style={styles.profitHeroLabel}>Bénéfice cumulé {year}</Text>
-            {yearReportLoading ? <ValueSkeleton /> : (
+            <DataState status={yearReportLoading ? 'loading' : 'ready'} isEmpty={yearReportLoading} skeleton={<ValueSkeleton />} empty={null}>
               <Text
                 style={[styles.profitHeroAmount, { color: yearProfit >= 0 ? palette.success : palette.warning }]}
                 numberOfLines={1}
@@ -612,7 +613,7 @@ export default function RapportsScreen() {
               >
                 {fmt(yearProfit, currency)}
               </Text>
-            )}
+            </DataState>
             <View style={styles.profitHeroComparison}>
               {showProfitDeltaPill ? (
                 <Pill
