@@ -113,6 +113,21 @@ function array(p: Problems, o: Obj, k: string): unknown[] | null {
 function prefixed(p: Problems, prefix: string, sub: Problems) {
   for (const s of sub) p.push(`${prefix}${s}`);
 }
+/** Array that may be empty (unlike `array` above, which requires ≥1 element). */
+function arrayAllowEmpty(p: Problems, o: Obj, k: string): unknown[] | null {
+  const v = o[k];
+  if (!Array.isArray(v)) { p.push(`${k} must be an array`); return null; }
+  return v;
+}
+function uuidArray(p: Problems, o: Obj, k: string) {
+  const v = o[k];
+  if (!Array.isArray(v)) { p.push(`${k} must be an array of UUIDs`); return; }
+  v.forEach((x, i) => { if (typeof x !== 'string' || !UUID_RE.test(x)) p.push(`${k}[${i}] is not a valid UUID`); });
+}
+function nullableInt(p: Problems, o: Obj, k: string) {
+  const v = o[k];
+  if (!missing(v) && (typeof v !== 'number' || !Number.isSafeInteger(v))) p.push(`${k} must be an integer or null`);
+}
 
 // ── per-operation contracts ─────────────────────────────────────────────────
 type Check = (o: Obj, p: Problems) => void;
@@ -290,6 +305,31 @@ const createSupplierDebt: Check = (o, p) => {
   date(p, o, 'date');
 };
 
+// create_supplier / update_supplier — the phone-first supplier write replayed
+// through upsert_supplier (migration_v244): the supplier plus its brand-new
+// products plus its product links/unlinks, applied atomically server-side.
+const supplierUpsert: Check = (o, p) => {
+  const supplier = o.p_supplier;
+  if (!isObj(supplier)) { p.push('p_supplier must be an object'); }
+  else {
+    const sp: Problems = [];
+    uuid(sp, supplier, 'id'); uuid(sp, supplier, 'business_id'); uuid(sp, supplier, 'created_by');
+    text(sp, supplier, 'name');
+    freeText(sp, supplier, 'phone'); freeText(sp, supplier, 'country'); freeText(sp, supplier, 'notes');
+    nullableInt(sp, supplier, 'lead_days');
+    prefixed(p, 'p_supplier.', sp);
+  }
+  const newProducts = arrayAllowEmpty(p, o, 'p_new_products');
+  newProducts?.forEach((np, i) => {
+    if (!isObj(np)) { p.push(`p_new_products[${i}] must be an object`); return; }
+    const npp: Problems = [];
+    uuid(npp, np, 'id'); text(npp, np, 'name'); freeText(npp, np, 'unit');
+    prefixed(p, `p_new_products[${i}].`, npp);
+  });
+  uuidArray(p, o, 'p_link_product_ids');
+  uuidArray(p, o, 'p_unlink_product_ids');
+};
+
 // Absolute-stock overwrite. No store queues it any more (adjustStock uses
 // adjust_stock_move) but drain still replays it and RefusedOpsNotice can
 // re-enqueue a refused one, so it keeps a real contract.
@@ -335,6 +375,8 @@ export const OUTBOX_CONTRACTS: Record<string, Check> = {
   confirm_reception: confirmReception,
   pay_supplier_debt: payDebt,
   create_supplier_debt: createSupplierDebt,
+  create_supplier: supplierUpsert,
+  update_supplier: supplierUpsert,
   adjust_stock: adjustStockLegacy,
 };
 

@@ -2,7 +2,7 @@ import * as Sentry from '@sentry/react-native';
 import { isKnownOffline } from '@/lib/connectivity';
 import { Platform, type AppStateStatus } from 'react-native';
 import { supabase } from '@/lib/supabase';
-import { getPendingOpsForDrain, deleteQueueItem, rescheduleOp, markOpPermanentlyFailed, markOpCorrupt } from '@/lib/db';
+import { getPendingOpsForDrain, deleteQueueItem, rescheduleOp, markOpPermanentlyFailed, markOpCorrupt, getPendingSupplierKeys } from '@/lib/db';
 import { notifyEvent, resolveSellerDisplayName } from '@/src/utils/notifications';
 import { formatAmount } from '@/src/utils/format';
 
@@ -467,6 +467,28 @@ async function executeOp(operation: string, payload: Record<string, unknown>): P
       if (error && (error as { code?: string }).code !== '23505') throw error;
       break;
     }
+    case 'create_supplier':
+    case 'update_supplier': {
+      // Phone-first supplier write replayed through upsert_supplier
+      // (migration_v244): the supplier + its brand-new products + its product
+      // links/unlinks applied atomically server-side, idempotent on the
+      // supplier id (the outbox idempotency key).
+      const { p_supplier, p_new_products, p_link_product_ids, p_unlink_product_ids } = payload as {
+        p_supplier: object;
+        p_new_products?: unknown[];
+        p_link_product_ids?: string[];
+        p_unlink_product_ids?: string[];
+      };
+      const { error } = await supabase.rpc('upsert_supplier', {
+        p_supplier,
+        p_new_products: p_new_products ?? [],
+        p_link_product_ids: p_link_product_ids ?? [],
+        p_unlink_product_ids: p_unlink_product_ids ?? [],
+        p_is_edit: operation === 'update_supplier',
+      });
+      if (error) throw error;
+      break;
+    }
     case 'adjust_stock': {
       // LEGACY shape, queued by app versions before adjust_stock_move existed.
       const { stockMove, productUpdate } = payload as {
@@ -509,7 +531,24 @@ function computeNextAttemptAt(attemptsSoFar: number): string {
 // block classification if a payload doesn't have one.
 function extractBusinessId(payload: Record<string, unknown> | null): string | null {
   const v = payload?.p_business_id;
-  return typeof v === 'string' ? v : null;
+  if (typeof v === 'string') return v;
+  const supplier = payload?.p_supplier;
+  if (supplier && typeof supplier === 'object') {
+    const bid = (supplier as { business_id?: unknown }).business_id;
+    if (typeof bid === 'string') return bid;
+  }
+  return null;
+}
+
+// The supplier id carried by create_supplier/update_supplier payloads — the
+// same UUID that doubles as the outbox idempotency key (migration_v244).
+function extractSupplierId(payload: Record<string, unknown> | null): string | null {
+  const supplier = payload?.p_supplier;
+  if (supplier && typeof supplier === 'object') {
+    const id = (supplier as { id?: unknown }).id;
+    if (typeof id === 'string') return id;
+  }
+  return null;
 }
 
 // §9b: fire-and-forget, durable sync-lag telemetry (migration_v204's
@@ -564,15 +603,49 @@ export async function drainQueue(): Promise<SyncResult> {
 
     if (ops.length === 0) return result;
 
+    // Design point 3: a queued réception that references a still-queued
+    // create_supplier MUST NOT drain first — the supplier UUID it points at
+    // does not exist server-side yet, so the réception would dangle. Read the
+    // pending supplier keys ONCE per drain pass; a create_supplier that
+    // succeeds (or fails permanently) later in this same pass removes its key
+    // from this set, so an earlier-held réception can still land in a
+    // subsequent pass. Held ops reschedule ~5s out and are counted as failed
+    // (they did not sync this pass), not dropped.
+    //
+    // Best-effort read: getPendingOpsForDrain already succeeded above, so the
+    // queue itself is readable; this secondary lookup failing must never abort
+    // the whole drain (returning synced:0 with no signal) — an empty set fails
+    // open (no hold) instead of wedging every op behind an unreadable key set.
+    let pendingSupplierKeys = new Set<string>();
+    try {
+      pendingSupplierKeys = await getPendingSupplierKeys();
+    } catch (err) {
+      console.error('[drainQueue] getPendingSupplierKeys failed', err);
+    }
+
     for (const op of ops) {
       let payload: Record<string, unknown> | null = null;
       let justSynced = false;
       try {
         payload = JSON.parse(op.payload) as Record<string, unknown>;
+
+        if (op.operation === 'confirm_reception') {
+          const supplierId = payload.p_supplier_id;
+          if (typeof supplierId === 'string' && pendingSupplierKeys.has(supplierId)) {
+            await rescheduleOp(op.id, new Date(Date.now() + 5_000).toISOString(), 'Création du fournisseur encore en attente');
+            result.failed++;
+            continue;
+          }
+        }
+
         await executeOp(op.operation, payload);
         await deleteQueueItem(op.id);
         result.synced++;
         justSynced = true;
+        if (op.operation === 'create_supplier') {
+          const supplierId = extractSupplierId(payload);
+          if (supplierId) pendingSupplierKeys.delete(supplierId);
+        }
       } catch (e) {
         if (payload === null) {
           // Decrypted cleanly (it wasn't in `corrupt` above) but the
@@ -608,6 +681,10 @@ export async function drainQueue(): Promise<SyncResult> {
           await markOpPermanentlyFailed(op.id, msg);
           result.failed++;
           result.syncHealthEvents.push({ name: 'sync_op_failed_permanent', businessId, metadata: { operation: op.operation, error: msg } });
+          if (op.operation === 'create_supplier') {
+            const supplierId = extractSupplierId(payload);
+            if (supplierId) pendingSupplierKeys.delete(supplierId);
+          }
           if (op.operation === 'record_payment' || op.operation === 'record_client_payment') {
             result.rejectedPayments.push(msg);
           }

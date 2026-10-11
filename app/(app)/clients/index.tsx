@@ -134,7 +134,10 @@ export default function ClientsScreen() {
   // credit lines, last payment), which only the detail screen loads — so the
   // list hands off there and the preview sheet opens on arrival.
   const sendWhatsAppReminder = (client: Client) => {
-    router.push(`/clients/${encodeURIComponent(client.clientId ?? client.name)}?remind=1`);
+    router.push({
+      pathname: '/clients/[name]',
+      params: { name: client.clientId ?? client.name, displayName: client.name, remind: '1' },
+    });
   };
 
   const allClients = useMemo<Client[]>(() => {
@@ -224,7 +227,7 @@ export default function ClientsScreen() {
               {/* Plain, calm foreground — never red. These are her own
                   receivables, not a loss; color here is reserved for AGE
                   (how overdue), not for the existence of a debt itself. */}
-<Text variant="caption" color="secondary" style={{ textAlign: 'center' }}>On vous doit au total</Text>
+              <Text variant="caption" color="secondary" style={{ textAlign: 'center' }}>On vous doit au total</Text>
               <Text style={{ color: palette.textPrimary, fontFamily: fontFamily.bold, fontSize: 40, lineHeight: 48, textAlign: 'center', alignSelf: 'stretch' }} numberOfLines={1} adjustsFontSizeToFit minimumFontScale={0.4}>
                 {fmt(totalOwedAmount, currency)}
               </Text>
@@ -329,7 +332,10 @@ export default function ClientsScreen() {
           }
           renderItem={({ item }) => (
             <Pressable
-              onPress={() => router.push(`/clients/${encodeURIComponent(item.clientId ?? item.name)}`)}
+              onPress={() => router.push({
+                pathname: '/clients/[name]',
+                params: { name: item.clientId ?? item.name, displayName: item.name },
+              })}
               style={({ pressed }) => [styles.clientRow, pressed && { opacity: 0.75 }]}>
               <View style={[styles.avatar, { backgroundColor: avatarColor(item.name) + '20' }]}>
                 <Text variant="label" allowFontScaling={false} style={{ color: avatarColor(item.name) }}>

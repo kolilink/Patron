@@ -89,3 +89,65 @@ export function applyPendingSupplierOps(
   }
   return { debts: d, payments: p };
 }
+
+// ─── Supplier list overlay (offline supplier creation, migration_v244) ────────
+// A supplier created offline appears immediately on this phone, marked
+// _pending, until its create_supplier op drains and the server list (or its
+// cache) replaces it. An offline edit of a still-pending supplier amends the
+// queued payload, so the overlay never sees a separate update op for it — but
+// an update op for an already-synced supplier does project here.
+// Recomputed from base + queued ops on every read, never patched in place.
+
+export interface PendingSupplierRow {
+  id: string;
+  business_id: string;
+  name: string;
+  phone: string | null;
+  country: string | null;
+  lead_days: number | null;
+  notes: string | null;
+  created_by: string;
+  created_at: string;
+  _pending?: boolean;
+}
+
+export function applyPendingSupplierList(
+  base: PendingSupplierRow[],
+  ops: QueuedSupplierOp[],
+  businessId: string,
+): PendingSupplierRow[] {
+  let list = base.filter(s => s.business_id === businessId);
+  for (const op of ops) {
+    if (op.operation === 'create_supplier') {
+      const s = op.payload.p_supplier as Record<string, unknown> | undefined;
+      if (!s || typeof s.id !== 'string') continue;
+      if (list.some(x => x.id === s.id)) continue; // already on the server list
+      list = [{
+        id: s.id,
+        business_id: (s.business_id as string) ?? businessId,
+        name: (s.name as string) ?? '—',
+        phone: (s.phone as string | null) ?? null,
+        country: (s.country as string | null) ?? null,
+        lead_days: (s.lead_days as number | null) ?? null,
+        notes: (s.notes as string | null) ?? null,
+        created_by: (s.created_by as string) ?? '',
+        created_at: op.queuedAt,
+        _pending: true,
+      }, ...list];
+    } else if (op.operation === 'update_supplier') {
+      const s = op.payload.p_supplier as Record<string, unknown> | undefined;
+      if (!s || typeof s.id !== 'string') continue;
+      list = list.map(x => (x.id === s.id
+        ? {
+          ...x,
+          name: (s.name as string) ?? x.name,
+          phone: (s.phone as string | null) ?? x.phone,
+          country: (s.country as string | null) ?? x.country,
+          lead_days: (s.lead_days as number | null) ?? x.lead_days,
+          notes: (s.notes as string | null) ?? x.notes,
+        }
+        : x));
+    }
+  }
+  return list;
+}

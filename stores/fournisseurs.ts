@@ -12,10 +12,11 @@ import { enqueueOnce } from '@/lib/outbox';
 import { failureReason } from '@/src/utils/failure';
 import { useSyncStore } from '@/stores/sync';
 import { getProductCache, saveProductCache, getQueueCount, getVariantsCache, saveVariantsCache } from '@/lib/db';
-import { enqueue, getAllQueueItemsForOverlay, getClientLedgerCache, saveClientLedgerCache } from '@/lib/db';
-import { applyPendingSupplierOps, type QueuedSupplierOp } from '@/lib/pendingSupplier';
+import { enqueue, getAllQueueItemsForOverlay, getClientLedgerCache, saveClientLedgerCache, amendPendingQueueItem } from '@/lib/db';
+import { applyPendingSupplierOps, applyPendingSupplierList, type QueuedSupplierOp } from '@/lib/pendingSupplier';
 import { applyReceptionOps } from '@/lib/receptionOverlay';
 import { isOutboxValidationError } from '@/lib/outboxValidation';
+import { isKnownOffline } from '@/lib/connectivity';
 
 // A réception books money (stock, cost, transport expense): never twice from a double-tap.
 const receptionGuard = createInflightGuard();
@@ -74,6 +75,23 @@ export interface Fournisseur {
   notes: string | null;
   created_by: string;
   created_at: string;
+  /** Set while a create_supplier op is still queued (offline create, migration_v244). */
+  _pending?: boolean;
+}
+
+// One shared shape for the list-view form and the picker inline form
+// (design point 6): the supplier fields plus the product work the server
+// applies atomically on create_supplier/update_supplier replay.
+export interface SupplierDraft {
+  name: string;
+  phone?: string;
+  country?: string;
+  notes?: string;
+  lead_days?: number | null;
+  linkedProductIds?: string[];
+  newProducts?: { name: string; unit: string }[];
+  /** Existing products to unlink from this supplier (edit only; empty on create). */
+  unlinkedProductIds?: string[];
 }
 
 export interface CommandeLigne {
@@ -172,8 +190,8 @@ interface FournisseursStore {
   offlineSince: number | null;
 
   fetchFournisseurs: (businessId: string) => Promise<void>;
-  createFournisseur: (businessId: string, userId: string, d: { name: string; phone?: string; country?: string; notes?: string; lead_days?: number | null }) => Promise<boolean>;
-  updateFournisseur: (id: string, d: { name: string; phone?: string; country?: string; notes?: string; lead_days?: number | null }) => Promise<boolean>;
+  createFournisseur: (businessId: string, userId: string, d: SupplierDraft) => Promise<string | null>;
+  updateFournisseur: (id: string, businessId: string, userId: string, d: SupplierDraft) => Promise<boolean>;
   deleteFournisseur: (id: string, businessId: string) => Promise<{ ok: boolean; message: string | null }>;
   payDebt: (businessId: string, supplierId: string, paymentAmount: number) => Promise<boolean>;
 
@@ -238,6 +256,31 @@ async function readSupplierOps(): Promise<QueuedSupplierOp[]> {
     try { ops.push({ operation: i.operation, payload: JSON.parse(i.payload) as Record<string, unknown>, queuedAt: i.queued_at ?? new Date().toISOString() }); } catch { /* skip unreadable */ }
   }
   return ops;
+}
+
+// Server/cache truth for the fournisseurs list; `fournisseurs` = this + still-queued
+// create_supplier/update_supplier ops, recomputed — see lib/pendingSupplier.ts.
+// Never patched in place (offline creates are marked `_pending` by the overlay).
+let _baseFournisseurs: { businessId: string; list: Fournisseur[] } | null = null;
+
+/** Re-derive `fournisseurs` from the base + the outbox after a local write. */
+async function publishFournisseurs(businessId: string): Promise<void> {
+  if (isStaleBusiness(businessId)) return;
+  let base = _baseFournisseurs && _baseFournisseurs.businessId === businessId
+    ? _baseFournisseurs.list
+    : useFournisseursStore.getState().fournisseurs.filter(f => !f._pending);
+  try {
+    const ops = await readSupplierOps();
+    if (isStaleBusiness(businessId)) return;
+    useFournisseursStore.setState({ fournisseurs: applyPendingSupplierList(base, ops, businessId) });
+  } catch {
+    useFournisseursStore.setState({ fournisseurs: base });
+  }
+}
+
+async function afterSupplierEnqueue(): Promise<void> {
+  try { useSyncStore.setState({ pendingCount: await getQueueCount() }); } catch { /* count is cosmetic */ }
+  useSyncStore.getState().kick();
 }
 
 /** base + queued ops → the lists to show (payments only for the supplier in view). */
@@ -306,7 +349,9 @@ export const useFournisseursStore = create<FournisseursStore>((set, get) => ({
         if (cached) {
           const ts = await getCacheTimestamp('fournisseur_cache', businessId);
           if (isStaleBusiness(businessId)) return;
-          set({ fournisseurs: cached, loading: false, offline: true, offlineSince: ts, error: null });
+          _baseFournisseurs = { businessId, list: cached };
+          set({ loading: false, offline: true, offlineSince: ts, error: null });
+          await publishFournisseurs(businessId);
           await loadDebtsFromCache(businessId);
           return;
         }
@@ -317,10 +362,12 @@ export const useFournisseursStore = create<FournisseursStore>((set, get) => ({
       return;
     }
     const fournisseurs = (suppliersRes.data ?? []) as Fournisseur[];
+    _baseFournisseurs = { businessId, list: fournisseurs };
     void saveFournisseurCache(businessId, fournisseurs as unknown[]);
     if (debtsRes.error) {
       // Suppliers loaded but debts didn't: keep what we know (cache) rather than blank them.
-      set({ fournisseurs, loading: false, offline: false, offlineSince: null });
+      set({ loading: false, offline: false, offlineSince: null });
+      await publishFournisseurs(businessId);
       await loadDebtsFromCache(businessId);
       return;
     }
@@ -329,49 +376,155 @@ export const useFournisseursStore = create<FournisseursStore>((set, get) => ({
     void saveClientLedgerCache(debtsCacheKey(businessId), baseDebts);
     const v = await supplierView(businessId);
     if (isStaleBusiness(businessId)) return;
-    set({ fournisseurs, debts: v.debts, loading: false, offline: false, offlineSince: null });
+    set({ debts: v.debts, loading: false, offline: false, offlineSince: null });
+    await publishFournisseurs(businessId);
   },
 
   createFournisseur: async (businessId, userId, d) => {
     set({ saving: true, error: null });
+    const id = generateId();
+    const supplier = {
+      id,
+      business_id: businessId,
+      name: d.name.trim(),
+      phone: d.phone?.trim() || null,
+      country: d.country?.trim() || null,
+      notes: d.notes?.trim() || null,
+      lead_days: d.lead_days ?? null,
+      created_by: userId,
+    };
+    const payload = {
+      p_supplier: supplier,
+      p_new_products: (d.newProducts ?? []).map(np => ({ id: generateId(), name: np.name.trim(), unit: np.unit || 'pcs' })),
+      p_link_product_ids: d.linkedProductIds ?? [],
+      p_unlink_product_ids: [],
+    };
+
+    if (isKnownOffline()) {
+      // Phone-first: the durable outbox write is the only thing awaited — the
+      // supplier appears on screen immediately (marked pending) and syncs later
+      // (upsert_supplier is idempotent on the client-generated id, migration_v244).
+      try {
+        await enqueue('create_supplier', payload);
+      } catch (err) {
+        console.error('[createFournisseur] local write failed', err);
+        set({ saving: false, error: isOutboxValidationError(err) ? null : "Impossible d'enregistrer sur cet appareil. Réessayez." });
+        return null;
+      }
+      try { await publishFournisseurs(businessId); } catch (err) { console.error('[createFournisseur] publish failed (write already succeeded)', err); }
+      void afterSupplierEnqueue();
+      set({ saving: false });
+      return id;
+    }
+
+    // Online: direct writes (unchanged behavior).
     try {
-      const { error } = await supabase.from('suppliers').insert({
-        id: generateId(),
-        business_id: businessId,
-        name: d.name.trim(),
-        phone: d.phone?.trim() || null,
-        country: d.country?.trim() || null,
-        notes: d.notes?.trim() || null,
-        lead_days: d.lead_days ?? null,
-        created_by: userId,
-      });
-      if (error) { set({ error: translateError(error, 'Impossible de créer le fournisseur'), saving: false }); return false; }
+      const { error } = await supabase.from('suppliers').insert(supplier);
+      if (error) { set({ error: translateError(error, 'Impossible de créer le fournisseur'), saving: false }); return null; }
+      for (const np of (d.newProducts ?? [])) {
+        const { error: pErr } = await supabase.from('products').insert({
+          id: generateId(),
+          business_id: businessId,
+          name: np.name.trim(),
+          unit: np.unit || 'pcs',
+          cost_price: 0,
+          sale_price: 0,
+          stock_qty: 0,
+          reorder_level: 0,
+          archived: false,
+          created_by: userId,
+          supplier_id: id,
+        });
+        if (pErr) console.error('[createFournisseur] product insert failed', pErr);
+      }
+      if ((d.linkedProductIds?.length ?? 0) > 0) {
+        const { error: lErr } = await supabase.from('products').update({ supplier_id: id }).in('id', d.linkedProductIds as string[]);
+        if (lErr) console.error('[createFournisseur] link failed', lErr);
+      }
       await get().fetchFournisseurs(businessId);
       set({ saving: false });
-      return true;
+      return id;
     } catch (err) {
       set({ saving: false, error: isNetworkError(err) ? 'Vérifiez votre connexion' : translateError(err, 'Impossible de créer le fournisseur') });
-      return false;
+      return null;
     }
   },
 
-  updateFournisseur: async (id, d) => {
+  updateFournisseur: async (id, businessId, userId, d) => {
     set({ saving: true, error: null });
+    const existing = get().fournisseurs.find(f => f.id === id);
+    const supplier = {
+      id,
+      business_id: businessId,
+      name: d.name.trim(),
+      phone: d.phone?.trim() || null,
+      country: d.country?.trim() || null,
+      notes: d.notes?.trim() || null,
+      lead_days: d.lead_days ?? null,
+      created_by: existing?.created_by ?? userId,
+    };
+    const payload = {
+      p_supplier: supplier,
+      p_new_products: (d.newProducts ?? []).map(np => ({ id: generateId(), name: np.name.trim(), unit: np.unit || 'pcs' })),
+      p_link_product_ids: d.linkedProductIds ?? [],
+      p_unlink_product_ids: d.unlinkedProductIds ?? [],
+    };
+
+    if (isKnownOffline()) {
+      try {
+        // Offline edit of a still-pending create amends that queued payload
+        // instead of enqueueing a second op; otherwise amend a pending update,
+        // else enqueue a fresh update (design point 5).
+        const amendedCreate = await amendPendingQueueItem('create_supplier', id, payload);
+        if (amendedCreate === 0) {
+          const amendedUpdate = await amendPendingQueueItem('update_supplier', id, payload);
+          if (amendedUpdate === 0) await enqueue('update_supplier', payload);
+        }
+      } catch (err) {
+        console.error('[updateFournisseur] local write failed', err);
+        set({ saving: false, error: isOutboxValidationError(err) ? null : "Impossible d'enregistrer sur cet appareil. Réessayez." });
+        return false;
+      }
+      try { await publishFournisseurs(businessId); } catch (err) { console.error('[updateFournisseur] publish failed (write already succeeded)', err); }
+      void afterSupplierEnqueue();
+      set({ saving: false });
+      return true;
+    }
+
+    // Online: direct writes (unchanged behavior).
     try {
       const { error } = await supabase.from('suppliers').update({
-        name: d.name.trim(),
-        phone: d.phone?.trim() || null,
-        country: d.country?.trim() || null,
-        notes: d.notes?.trim() || null,
-        lead_days: d.lead_days ?? null,
+        name: supplier.name,
+        phone: supplier.phone,
+        country: supplier.country,
+        notes: supplier.notes,
+        lead_days: supplier.lead_days,
       }).eq('id', id);
       if (error) { set({ error: translateError(error, 'Impossible de modifier le fournisseur'), saving: false }); return false; }
-      set(state => ({
-        fournisseurs: state.fournisseurs.map(f =>
-          f.id === id ? { ...f, ...d, name: d.name.trim() } : f,
-        ),
-        saving: false,
-      }));
+      for (const np of (d.newProducts ?? [])) {
+        const { error: pErr } = await supabase.from('products').insert({
+          id: generateId(),
+          business_id: businessId,
+          name: np.name.trim(),
+          unit: np.unit || 'pcs',
+          cost_price: 0,
+          sale_price: 0,
+          stock_qty: 0,
+          reorder_level: 0,
+          archived: false,
+          created_by: userId,
+          supplier_id: id,
+        });
+        if (pErr) console.error('[updateFournisseur] product insert failed', pErr);
+      }
+      if ((d.unlinkedProductIds?.length ?? 0) > 0) {
+        await supabase.from('products').update({ supplier_id: null }).in('id', d.unlinkedProductIds as string[]);
+      }
+      if ((d.linkedProductIds?.length ?? 0) > 0) {
+        await supabase.from('products').update({ supplier_id: id }).in('id', d.linkedProductIds as string[]);
+      }
+      await get().fetchFournisseurs(businessId);
+      set({ saving: false });
       return true;
     } catch (err) {
       set({ saving: false, error: isNetworkError(err) ? 'Vérifiez votre connexion' : translateError(err, 'Impossible de modifier le fournisseur') });
@@ -381,35 +534,35 @@ export const useFournisseursStore = create<FournisseursStore>((set, get) => ({
 
   deleteFournisseur: (id, businessId) =>
     supplierDeleteGuard.run(async () => {
-    try {
-      // Try the raw delete FIRST so the DB guard (unpaid debt / purchase
-      // orders) can block it with a truthful message and zero side effects.
-      // If a linked product's FK is what blocks it, unlink and retry.
-      const first = await supabase.from('suppliers').delete().eq('id', id).eq('business_id', businessId);
-      if (first.error) {
-        if (first.error.code === '23503') {
-          // Foreign-key violation from products.supplier_id — unlink then retry.
-          await supabase.from('products').update({ supplier_id: null }).eq('supplier_id', id);
-          const retry = await supabase.from('suppliers').delete().eq('id', id).eq('business_id', businessId);
-          if (retry.error) {
-            const message = friendlyMessage(retry.error, 'Impossible de supprimer le fournisseur');
+      try {
+        // Try the raw delete FIRST so the DB guard (unpaid debt / purchase
+        // orders) can block it with a truthful message and zero side effects.
+        // If a linked product's FK is what blocks it, unlink and retry.
+        const first = await supabase.from('suppliers').delete().eq('id', id).eq('business_id', businessId);
+        if (first.error) {
+          if (first.error.code === '23503') {
+            // Foreign-key violation from products.supplier_id — unlink then retry.
+            await supabase.from('products').update({ supplier_id: null }).eq('supplier_id', id);
+            const retry = await supabase.from('suppliers').delete().eq('id', id).eq('business_id', businessId);
+            if (retry.error) {
+              const message = friendlyMessage(retry.error, 'Impossible de supprimer le fournisseur');
+              set({ error: message });
+              return { ok: false, message };
+            }
+          } else {
+            const message = friendlyMessage(first.error, 'Impossible de supprimer le fournisseur');
             set({ error: message });
             return { ok: false, message };
           }
-        } else {
-          const message = friendlyMessage(first.error, 'Impossible de supprimer le fournisseur');
-          set({ error: message });
-          return { ok: false, message };
         }
+        set(state => ({ fournisseurs: state.fournisseurs.filter(f => f.id !== id) }));
+        return { ok: true, message: null };
+      } catch (err) {
+        const message = isNetworkError(err) ? 'Vérifiez votre connexion' : friendlyMessage(err, 'Impossible de supprimer le fournisseur');
+        set({ error: message });
+        return { ok: false, message };
       }
-      set(state => ({ fournisseurs: state.fournisseurs.filter(f => f.id !== id) }));
-      return { ok: true, message: null };
-    } catch (err) {
-      const message = isNetworkError(err) ? 'Vérifiez votre connexion' : friendlyMessage(err, 'Impossible de supprimer le fournisseur');
-      set({ error: message });
-      return { ok: false, message };
-    }
-  }).then(r => (r.ran ? r.value : { ok: false, message: null })),
+    }).then(r => (r.ran ? r.value : { ok: false, message: null })),
 
   payDebt: async (businessId, supplierId, paymentAmount) => {
     if (get().saving) return false; // a second tap while the first is being recorded
@@ -535,43 +688,43 @@ export const useFournisseursStore = create<FournisseursStore>((set, get) => ({
   // history — all of those come from the server and appear after sync.
   confirmReception: (businessId, userId, input) =>
     receptionGuard.run(async () => {
-    set({ saving: true, error: null });
-    const key = input.idempotencyKey ?? generateId();
-    const payload = {
-      p_business_id: businessId,
-      p_supplier_id: input.supplierId,
-      p_po_id: input.poId ?? null,
-      p_lines: input.lines.map(l => ({
-        product_id: l.product_id,
-        variant_id: l.variant_id,
-        name: l.name,
-        qty: l.qty,
-        unit_cost_cents: l.unit_cost_cents,
-        sale_price_cents: l.sale_price_cents,
-      })),
-      p_transport_cost_cents: input.transportCostCents ?? 0,
-      p_margin_percent: input.marginPercent ?? null,
-      p_received_date: input.receivedDate ?? null,
-      p_idempotency_key: key,
-    };
-    try {
-      await enqueueOnce('confirm_reception', payload);
-    } catch (err) {
-      // The only failure left: the phone itself could not store it. Nothing was recorded.
-      console.error('[confirmReception] local write failed', err);
-      set({ saving: false, error: isOutboxValidationError(err) ? null : (failureReason(err) ?? null) });
-      return null;
-    }
-    // The write is durable from here on: nothing below may turn this into a failure.
-    try { useSyncStore.setState({ pendingCount: await getQueueCount() }); } catch { /* refreshed on the next sync tick */ }
-    try { await publishCommandes(businessId); } catch (err) { console.error('[confirmReception] history projection failed (write already succeeded)', err); }
-    try { await applyReceptionStockLocally(businessId, input.lines); } catch (err) {
-      console.error('[confirmReception] local stock estimate failed (write already succeeded)', err);
-    }
-    set({ saving: false });
-    useSyncStore.getState().kick();
-    return input.poId ?? key;
-  }).then(r => (r.ran ? r.value : null)),
+      set({ saving: true, error: null });
+      const key = input.idempotencyKey ?? generateId();
+      const payload = {
+        p_business_id: businessId,
+        p_supplier_id: input.supplierId,
+        p_po_id: input.poId ?? null,
+        p_lines: input.lines.map(l => ({
+          product_id: l.product_id,
+          variant_id: l.variant_id,
+          name: l.name,
+          qty: l.qty,
+          unit_cost_cents: l.unit_cost_cents,
+          sale_price_cents: l.sale_price_cents,
+        })),
+        p_transport_cost_cents: input.transportCostCents ?? 0,
+        p_margin_percent: input.marginPercent ?? null,
+        p_received_date: input.receivedDate ?? null,
+        p_idempotency_key: key,
+      };
+      try {
+        await enqueueOnce('confirm_reception', payload);
+      } catch (err) {
+        // The only failure left: the phone itself could not store it. Nothing was recorded.
+        console.error('[confirmReception] local write failed', err);
+        set({ saving: false, error: isOutboxValidationError(err) ? null : (failureReason(err) ?? null) });
+        return null;
+      }
+      // The write is durable from here on: nothing below may turn this into a failure.
+      try { useSyncStore.setState({ pendingCount: await getQueueCount() }); } catch { /* refreshed on the next sync tick */ }
+      try { await publishCommandes(businessId); } catch (err) { console.error('[confirmReception] history projection failed (write already succeeded)', err); }
+      try { await applyReceptionStockLocally(businessId, input.lines); } catch (err) {
+        console.error('[confirmReception] local stock estimate failed (write already succeeded)', err);
+      }
+      set({ saving: false });
+      useSyncStore.getState().kick();
+      return input.poId ?? key;
+    }).then(r => (r.ran ? r.value : null)),
 
   recevoirCommande: async (commandeId, businessId, userId, lines, shippingCostCents = 0) => {
     set({ saving: true, error: null });
@@ -741,5 +894,5 @@ export const useFournisseursStore = create<FournisseursStore>((set, get) => ({
   },
 
   clearError: () => set({ error: null }),
-  reset: () => { _baseCommandes = null; _baseDebts = null; _basePayments = null; set({ fournisseurs: [], commandes: [], debts: [], payments: [], loading: false, saving: false, error: null, offline: false, offlineSince: null }); },
+  reset: () => { _baseFournisseurs = null; _baseCommandes = null; _baseDebts = null; _basePayments = null; set({ fournisseurs: [], commandes: [], debts: [], payments: [], loading: false, saving: false, error: null, offline: false, offlineSince: null }); },
 }));

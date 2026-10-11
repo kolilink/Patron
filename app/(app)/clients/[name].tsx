@@ -207,10 +207,10 @@ function PayModal({
   // handleRecord), so retrying can never record the payment twice.
   const failure = failed
     ? buildFailure({
-        what: FAILURE_COPY.paymentNotRecorded.what,
-        why: failed.reason ?? FAILURE_COPY.paymentNotRecorded.why,
-        action: { label: 'Réessayer', onPress: handleRecord },
-      })
+      what: FAILURE_COPY.paymentNotRecorded.what,
+      why: failed.reason ?? FAILURE_COPY.paymentNotRecorded.why,
+      action: { label: 'Réessayer', onPress: handleRecord },
+    })
     : null;
 
   return (
@@ -295,8 +295,11 @@ const UUID_RE = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/
 export default function ClientLedgerScreen() {
   const { palette } = useTheme();
   const styles = useMemo(() => makeStyles(palette), [palette]);
-  const { name: encodedName, remind } = useLocalSearchParams<{ name: string; remind?: string }>();
+  const { name: encodedName, remind, displayName: encodedDisplayName } = useLocalSearchParams<{ name: string; remind?: string; displayName?: string }>();
   const routeParam = decodeURIComponent(encodedName ?? '');
+  // Passed alongside the UUID by clients/index.tsx so an id-routed screen never
+  // starts nameless (offline-created credits match by name via selectClientSales).
+  const seededDisplayName = encodedDisplayName ? decodeURIComponent(encodedDisplayName) : '';
   const isClientId = UUID_RE.test(routeParam);
 
   const session = useAuthStore(s => s.session);
@@ -313,7 +316,7 @@ export default function ClientLedgerScreen() {
   const clientKey = isClientId ? `id:${routeParam}` : `name:${routeParam}`;
 
   // displayName is resolved after clientRecord loads when routing by UUID
-  const [displayName, setDisplayName] = useState(isClientId ? '' : routeParam);
+  const [displayName, setDisplayName] = useState(isClientId ? seededDisplayName : routeParam);
   const [ledgerPayments, setLedgerPayments] = useState<LedgerPayment[]>([]);
   // Payments still in the outbox, projected as the same per-sale rows the server will create.
   const [pendingLedger, setPendingLedger] = useState<PendingLedgerPayment[]>([]);
@@ -325,6 +328,11 @@ export default function ClientLedgerScreen() {
   const [ledgerLines, setLedgerLines] = useState<Record<string, string>>({});
   const [clientRecord, setClientRecord] = useState<ClientRecord | null>(null);
   const [loadingLocal, setLoadingLocal] = useState(true);
+  // True once the payments read reaches a terminal state (success, returned
+  // error, thrown timeout, or the "no sales" early return). Until then the
+  // banner amount slot keeps its placeholder so an empty payments list can
+  // never paint an overstated "vous doit" total.
+  const [paymentsResolved, setPaymentsResolved] = useState(false);
   const [showPayModal, setShowPayModal] = useState(false);
   const [payFailed, setPayFailed] = useState<{ reason?: string } | null>(null);
   // One idempotency key per LOGICAL payment: reused when she retries the same
@@ -434,7 +442,7 @@ export default function ClientLedgerScreen() {
     const clientSales = isClientId
       ? sales.filter(s => s.client_id === routeParam || (s.client_id == null && s.customer_name === name))
       : sales.filter(s => s.customer_name === routeParam);
-    if (clientSales.length === 0) { setLoadingLocal(false); return; }
+    if (clientSales.length === 0) { setLoadingLocal(false); setPaymentsResolved(true); return; }
 
     const paymentsCacheKey = `${businessId}:payments:${clientKey}`;
 
@@ -472,18 +480,21 @@ export default function ClientLedgerScreen() {
           if (cached) setLedgerPayments(cached);
         }
         setLoadingLocal(false);
+        setPaymentsResolved(true);
         return;
       }
       const payments = (data ?? []).map(p => ({ ...(p as object), amount: (p as { amount: number }).amount / 100 })) as LedgerPayment[];
       setLedgerPayments(payments);
       void saveClientLedgerCache(paymentsCacheKey, payments);
       setLoadingLocal(false);
+      setPaymentsResolved(true);
     } catch {
       // failure: control-flow — timeout = network error: cache fallback, offline notice speaks
       // timeout — treat exactly like a returned network error above
       const cached = await getClientLedgerCache(paymentsCacheKey) as LedgerPayment[] | null;
       if (cached) setLedgerPayments(cached);
       setLoadingLocal(false);
+      setPaymentsResolved(true);
     }
   };
 
@@ -741,7 +752,11 @@ export default function ClientLedgerScreen() {
     ]);
   }, [displayName, canEdit]);
 
-  if (loadingLocal && loading) {
+  // Full-screen loading only while the store itself is still resolving AND we
+  // have no sales for this client yet. Once sales exist, render the real
+  // screen immediately — the banner amount slot below handles its own payment
+  // placeholder, so a slow payments read never blanks the whole page.
+  if (loading && clientSales.length === 0) {
     return (
       <Screen>
         <View style={styles.hdr}>
@@ -786,7 +801,11 @@ export default function ClientLedgerScreen() {
             <Text style={styles.bannerLabel}>{displayName} vous doit</Text>
             {/* Plain, calm foreground — this is her own receivable, not a
                 loss; color lives on the age line below, not the amount. */}
-            <Text style={styles.bannerAmount}>{fmt(totalOwed, currency)}</Text>
+            {!paymentsResolved && allPayments.length === 0 ? (
+              <Text style={styles.bannerAmount}>Chargement…</Text>
+            ) : (
+              <Text style={styles.bannerAmount}>{fmt(totalOwed, currency)}</Text>
+            )}
             <RNText style={[styles.bannerAge, { color: debtAgeColor(debtAge, palette) }]}>
               {formatDebtAge(debtAge)}
             </RNText>
