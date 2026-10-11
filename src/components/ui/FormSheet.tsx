@@ -21,6 +21,8 @@ interface FormSheetProps {
   onClose: () => void;
   /** Fires once the Modal has FINISHED presenting — use it to focus a field so the keyboard never animates alongside the sheet. */
   onShow?: () => void;
+  /** iOS: fires after a native swipe-down dismiss of the page sheet — parents must sync `visible` here. */
+  onDismiss?: () => void;
   title: string;
   cancelLabel?: string;
   /** Replaces the default empty right-side header spacer (e.g. a "⋯" menu button). */
@@ -69,6 +71,7 @@ export const FormSheet = forwardRef<ScrollView, FormSheetProps>(function FormShe
     visible,
     onClose,
     onShow,
+    onDismiss,
     title,
     cancelLabel = 'Annuler',
     headerRight,
@@ -117,6 +120,7 @@ export const FormSheet = forwardRef<ScrollView, FormSheetProps>(function FormShe
       presentationStyle={presentationStyle}
       onRequestClose={onClose}
       onShow={onShow}
+      onDismiss={onDismiss}
       statusBarTranslucent
       navigationBarTranslucent
       backdropColor={palette.background}

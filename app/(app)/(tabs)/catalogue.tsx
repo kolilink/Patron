@@ -30,7 +30,7 @@ import { haptics } from '@/lib/haptics';
 import { toast } from '@/stores/toast';
 import { QuantityStepper } from '@/src/components/ui/QuantityStepper';
 import { QuickAddProductSheet } from '@/src/components/QuickAddProductSheet';
-import { needsPurchasePrice } from '@/src/utils/quickAddProduct';
+import { needsPurchasePrice, needsSalePrice, type QuickAddPayload } from '@/src/utils/quickAddProduct';
 import { LoadingStatus } from '@/src/components/ui/LoadingStatus';
 import { perUnitCost, totalInvested, unitProfit } from '@/src/utils/productPricing';
 import { formatAmount, formatAmountInput, parseAmountInput, formatAmountValue, formatSignedAmount } from '@/src/utils/format';
@@ -984,6 +984,8 @@ interface ProductRowProps {
   archiving?: boolean;
   /** Draft principle: a product born without a purchase price stays sellable; this opens the full form to complete it. */
   onFixPrice?: () => void;
+  /** Just created via the quick-add loop: brief highlight so she sees where it landed. */
+  pulse?: boolean;
 }
 
 function StockStatus({ product, variants }: { product: Product; variants?: ProductVariant[] }) {
@@ -1082,7 +1084,7 @@ function ArchiveSwitch({ value, onChange }: { value: 'actifs' | 'archives'; onCh
   );
 }
 
-function ProductRow({ product, currency, onPress, onLongPress, archived, variants, archiving, onFixPrice }: ProductRowProps) {
+function ProductRow({ product, currency, onPress, onLongPress, archived, variants, archiving, onFixPrice, pulse }: ProductRowProps) {
   const { palette } = useTheme();
   const styles = useMemo(() => makeStyles(palette), [palette]);
   const initial = product.name.charAt(0).toUpperCase();
@@ -1091,6 +1093,14 @@ function ProductRow({ product, currency, onPress, onLongPress, archived, variant
       ? !!(variants && variants.length > 0 && variants.every(v => v.stock_qty <= 0))
       : product.stock_qty === 0
   );
+
+  // Highlight pulse for a product just added from the quick-add sheet.
+  const pulseAnim = useRef(new Animated.Value(0)).current;
+  useEffect(() => {
+    if (!pulse) return;
+    pulseAnim.setValue(1);
+    Animated.timing(pulseAnim, { toValue: 0, duration: 1400, useNativeDriver: true }).start();
+  }, [pulse, pulseAnim]);
 
   if (archived) {
     return (
@@ -1119,6 +1129,7 @@ function ProductRow({ product, currency, onPress, onLongPress, archived, variant
       disabled={archiving}
       style={({ pressed }) => [styles.productRow, (pressed || archiving) && { opacity: archiving ? 0.5 : 0.65 }]}
     >
+      <Animated.View pointerEvents="none" style={[StyleSheet.absoluteFill, { backgroundColor: palette.primaryLight, opacity: pulseAnim }]} />
       <View style={[styles.productBadge, { opacity: isOutOfStock ? 0.38 : 1 }]}>
         <Text style={styles.productBadgeText}>{initial}</Text>
       </View>
@@ -1137,7 +1148,7 @@ function ProductRow({ product, currency, onPress, onLongPress, archived, variant
         {archiving
           ? <LoadingStatus word="Désactivation" color={palette.textSecondary} variant="caption" />
           : <StockStatus product={product} variants={variants} />}
-        {onFixPrice && needsPurchasePrice(product) && !product.has_variants && (
+        {onFixPrice && (needsSalePrice(product) || needsPurchasePrice(product)) && !product.has_variants && (
           <Pressable onPress={onFixPrice} hitSlop={8} accessibilityRole="button" accessibilityLabel={`Fixer le prix d'achat de ${product.name}`}>
             <Text variant="caption" style={{ color: palette.primary }}>Prix à fixer</Text>
           </Pressable>
@@ -1616,6 +1627,39 @@ export default function CatalogueScreen() {
   const handleSaveRef = useRef<typeof handleSave>(handleSave);
   handleSaveRef.current = handleSave;
 
+  // Rapid loop save (QuickAddProductSheet): same createProduct → outbox path as the full form, but
+  // the sheet STAYS OPEN, so no undo banner / activation priming here — priming fires when the sheet closes.
+  const quickAddedCount = useRef(0);
+  const [pulseId, setPulseId] = useState<string | null>(null);
+  const handleQuickAdd = useCallback(
+    async ({ data, hasVariants, variants }: QuickAddPayload): Promise<{ ok: boolean }> => {
+      const ok = await createProduct(businessId, userId, data);
+      if (!ok) {
+        haptics.error();
+        showFailureAlert(buildFailure({
+          what: FAILURE_COPY.productNotSaved.what,
+          why: failureReason(useProductStore.getState().error) ?? FAILURE_COPY.productNotSaved.why,
+          action: { label: 'Réessayer', onPress: () => { /* the sheet kept everything typed: tap Ajouter again */ } },
+        }));
+        return { ok: false };
+      }
+      const nameLower = data.name.trim().toLowerCase();
+      const created = useProductStore.getState().products.find(p => p.name.trim().toLowerCase() === nameLower) ?? null;
+      if (created && hasVariants && variants.length > 0) {
+        await upsertVariants(businessId, created.id, userId, variants);
+      }
+      if (created) setPulseId(created.id);
+      quickAddedCount.current += 1;
+      return { ok: true };
+    },
+    [businessId, userId, createProduct, upsertVariants],
+  );
+  useEffect(() => {
+    if (!pulseId) return;
+    const t = setTimeout(() => setPulseId(null), 1600);
+    return () => clearTimeout(t);
+  }, [pulseId]);
+
   const handleAdjust = useCallback(
     async (qty: number, type: 'entree' | 'perte', note: string) => {
       if (!adjustTarget) return;
@@ -1783,6 +1827,7 @@ export default function CatalogueScreen() {
                 archived={tab === 'archives'}
                 variants={variantsByProduct[item.id]}
                 archiving={archivingIds.includes(item.id)}
+                pulse={pulseId === item.id}
                 onFixPrice={canEdit && tab === 'actifs' ? () => { setEditingProduct(item); setShowForm(true); } : undefined}
                 onPress={() => {
                   if (tab === 'archives') {
@@ -1909,8 +1954,14 @@ export default function CatalogueScreen() {
       {/* Quick-add sheet — the "+" flow. Same handleSave as the full form. */}
       <QuickAddProductSheet
         visible={showQuickAdd}
-        onClose={() => { setShowQuickAdd(false); setPrefillProductName(undefined); }}
-        onSubmit={({ data, hasVariants, variants }) => handleSave(data, hasVariants, variants)}
+        onClose={() => {
+          setShowQuickAdd(false);
+          setPrefillProductName(undefined);
+          // First value moment: fire once the loop ends, not over the open sheet.
+          if (quickAddedCount.current > 0) { quickAddedCount.current = 0; activationPriming.maybeTrigger(); }
+        }}
+        businessId={businessId}
+        onSubmit={handleQuickAdd}
         onPickExisting={p => {
           setShowQuickAdd(false);
           setPrefillProductName(undefined);
