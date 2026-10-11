@@ -1,6 +1,6 @@
 import React, { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { Animated, Easing, Keyboard, Platform, Pressable, ScrollView, StyleSheet, Switch, TextInput, View } from 'react-native';
-import ReAnimated, { FadeIn, FadeInDown, LinearTransition } from 'react-native-reanimated';
+import ReAnimated, { FadeIn, FadeInDown, FadeOut, LinearTransition } from 'react-native-reanimated';
 import { Ionicons } from '@expo/vector-icons';
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
 import { FormSheet } from '@/src/components/ui/FormSheet';
@@ -16,8 +16,12 @@ import { haptics } from '@/lib/haptics';
 import { useReduceMotion } from '@/src/hooks/useReduceMotion';
 import { SilentKeyboardAccessory } from '@/src/components/ui/SilentKeyboardAccessory';
 import { formatAmount, formatAmountInput } from '@/src/utils/format';
+import { clearQuickAddDraft, loadQuickAddDraft, saveQuickAddDraft } from '@/lib/quickAddDraft';
 import {
   EMPTY_QUICK_ADD,
+  afterAdd,
+  canSubmit,
+  isBlankDraft,
   addVariant,
   computeCostLine,
   derivedTotalPieces,
@@ -28,7 +32,6 @@ import {
   setModels,
   suggestProducts,
   toQuickAddPayload,
-  validateQuickAdd,
   type QuickAddPayload,
   type QuickAddState,
 } from '@/src/utils/quickAddProduct';
@@ -37,7 +40,7 @@ interface Props {
   visible: boolean;
   onClose: () => void;
   /** Same save path as the full form (offline outbox, variants, undo banner). */
-  onSubmit: (payload: QuickAddPayload) => Promise<void>;
+  onSubmit: (payload: QuickAddPayload) => Promise<{ ok: boolean }>;
   /** She tapped an existing product in the suggestions: open it, don't duplicate it. */
   onPickExisting: (product: Product) => void;
   saving: boolean;
@@ -45,6 +48,8 @@ interface Props {
   products: Product[];
   fournisseurs: Fournisseur[];
   initialName?: string;
+  /** Scopes the (temporary, local-only) draft. */
+  businessId: string;
 }
 
 // Number pads have no return key on iOS, so the OS injects its own "Next/Done" pill above them
@@ -120,7 +125,7 @@ function ValidCheck({ valid, color }: { valid: boolean; color: string }) {
 }
 
 export function QuickAddProductSheet({
-  visible, onClose, onSubmit, onPickExisting, saving, currency, products, fournisseurs, initialName,
+  visible, onClose, onSubmit, onPickExisting, saving, currency, products, fournisseurs, initialName, businessId,
 }: Props) {
   const { palette } = useTheme();
   const styles = useMemo(() => makeStyles(palette), [palette]);
@@ -132,6 +137,15 @@ export function QuickAddProductSheet({
   const [s, setS] = useState<QuickAddState>(EMPTY_QUICK_ADD);
   const [expanded, setExpanded] = useState(false);
   const [error, setError] = useState<string | null>(null);
+  const [restored, setRestored] = useState(false);
+  const [toastName, setToastName] = useState<string | null>(null);
+  const fade = useRef(new Animated.Value(1)).current;
+  const sRef = useRef(s);
+  sRef.current = s;
+  const draftReady = useRef(false);
+  const wasVisible = useRef(false);
+  const submitting = useRef(false);
+  const toastTimer = useRef<ReturnType<typeof setTimeout> | null>(null);
 
   const scrollRef = useRef<ScrollView>(null);
   const nameRef = useRef<TextInput>(null);
@@ -145,25 +159,55 @@ export function QuickAddProductSheet({
   const resetPending = useRef(false);
   useEffect(() => {
     if (visible) {
+      wasVisible.current = true;
       if (resetPending.current) {
         resetPending.current = false;
         setS({ ...EMPTY_QUICK_ADD, name: initialName ?? '' });
         setExpanded(false);
         setError(null);
+        setRestored(false);
       } else if (initialName) {
         setS(prev => (prev.name ? prev : { ...prev, name: initialName }));
       }
+      // TEMPORARY (see lib/quickAddDraft.ts): restore the last draft; a prefilled name is a new intent, so it wins.
+      draftReady.current = false;
+      if (initialName) {
+        draftReady.current = true;
+      } else {
+        void loadQuickAddDraft(businessId).then(d => {
+          if (d) {
+            setS(prev => (isBlankDraft(prev) ? d : prev));
+            setRestored(true);
+          }
+          draftReady.current = true;
+        }).catch(() => { draftReady.current = true; }); // failure: silent — a draft that cannot load is simply absent
+      }
       return;
+    }
+    // Closing (swipe-down, Annuler, or after a save): persist what is on screen right now.
+    if (wasVisible.current) {
+      wasVisible.current = false;
+      if (draftReady.current) void saveQuickAddDraft(businessId, sRef.current).catch(() => {}); // failure: silent — draft is best-effort
     }
     resetPending.current = true;
     const t = setTimeout(() => {
       setS(EMPTY_QUICK_ADD);
       setExpanded(false);
       setError(null);
+      setRestored(false);
       resetPending.current = false;
     }, 500);
     return () => clearTimeout(t);
-  }, [visible, initialName]);
+  }, [visible, initialName, businessId]);
+
+  // Keep the draft current while the sheet is open (debounced). Blank state clears it.
+  useEffect(() => {
+    if (!visible || !draftReady.current) return;
+    const t = setTimeout(() => { void saveQuickAddDraft(businessId, s).catch(() => {}); }, 400); // failure: silent — draft is best-effort
+    return () => clearTimeout(t);
+  }, [s, visible, businessId]);
+
+  useEffect(() => () => { if (toastTimer.current) clearTimeout(toastTimer.current); }, []);
 
   // Lower fields: keep the focused one above the keyboard (footer stays put; content scrolls).
   const revealFocused = () => { setTimeout(() => scrollRef.current?.scrollToEnd({ animated: !reduce }), 250); };
@@ -187,11 +231,51 @@ export function QuickAddProductSheet({
     setS(prev => setModels(prev, on));
   };
 
+  const showToast = (name: string) => {
+    setToastName(name);
+    if (toastTimer.current) clearTimeout(toastTimer.current);
+    toastTimer.current = setTimeout(() => setToastName(null), 2200);
+  };
+
+  // The rapid loop: the sheet stays open, fields fade-clear, Nom is focused again (keyboard never
+  // dismisses). Quantité is sticky; everything else — notably the price — is cleared.
+  const resetForNext = () => {
+    const apply = () => {
+      setS(prev => afterAdd(prev));
+      setExpanded(false);
+      setError(null);
+      setRestored(false);
+      void clearQuickAddDraft(businessId).catch(() => {}); // failure: silent — draft is best-effort
+      requestAnimationFrame(() => {
+        nameRef.current?.focus();
+        if (reduce) fade.setValue(1);
+        else Animated.timing(fade, { toValue: 1, duration: 130, useNativeDriver: true }).start();
+      });
+    };
+    if (reduce) { apply(); return; }
+    Animated.timing(fade, { toValue: 0, duration: 120, useNativeDriver: true }).start(apply);
+  };
+
   const submit = async () => {
-    const err = validateQuickAdd(s, currency);
-    if (err) { setError(err); haptics.error(); return; }
+    if (!canSubmit(s) || submitting.current) return;
+    submitting.current = true;
     setError(null);
-    await onSubmit(toQuickAddPayload(s, currency));
+    const name = s.name.trim();
+    const res = await onSubmit(toQuickAddPayload(s, currency));
+    submitting.current = false;
+    if (!res.ok) return; // the failure alert is shown by the host; everything typed stays
+    haptics.success();
+    showToast(name);
+    resetForNext();
+  };
+
+  const discardDraft = () => {
+    haptics.select();
+    setS(EMPTY_QUICK_ADD);
+    setExpanded(false);
+    setRestored(false);
+    void clearQuickAddDraft(businessId).catch(() => {}); // failure: silent — draft is best-effort
+    nameRef.current?.focus();
   };
 
   const collapsedName = expanded && nameOk;
@@ -206,19 +290,41 @@ export function QuickAddProductSheet({
       onClose={onClose}
       onShow={() => nameRef.current?.focus()}
       title="Nouveau produit"
-      // fullScreen: KeyboardAvoidingView offset is exactly 0 (the pageSheet offset of 46 is a guess
-      // that left the footer and scroll content disagreeing about where the keyboard starts).
-      presentationStyle="fullScreen"
+      onDismiss={onClose}
       contentContainerStyle={{ paddingBottom: 16 }}
       keyboardShouldPersistTaps="handled"
       keyboardDismissMode="on-drag"
-      accessory={<SilentKeyboardAccessory nativeID={SILENT_ID} />}
+      accessory={
+        <>
+          <SilentKeyboardAccessory nativeID={SILENT_ID} />
+          {toastName != null && (
+            <ReAnimated.View
+              pointerEvents="none"
+              entering={reduce ? undefined : FadeInDown.duration(200)}
+              exiting={reduce ? undefined : FadeOut.duration(200)}
+              style={styles.toast}
+            >
+              <Ionicons name="checkmark-circle" size={18} color={palette.success} />
+              <Text style={styles.toastText} numberOfLines={1}>{`${toastName} ajouté`}</Text>
+            </ReAnimated.View>
+          )}
+        </>
+      }
       footer={
         <View style={[styles.footer, { paddingBottom: keyboardUp ? spacing[3] : Math.max(insets.bottom, spacing[5]) }]}>
-          <Button label="Ajouter" loadingLabel="Ajout" onPress={submit} loading={saving} fullWidth size="lg" />
+          <Button label="Ajouter" loadingLabel="Ajout" onPress={submit} loading={saving} disabled={!canSubmit(s)} fullWidth size="lg" />
         </View>
       }
     >
+      <Animated.View style={{ opacity: fade }}>
+      {restored && (
+        <View style={styles.draftChip}>
+          <Text variant="bodySmall" color="secondary" style={{ flex: 1 }}>Brouillon repris</Text>
+          <Pressable onPress={discardDraft} hitSlop={12} accessibilityRole="button" accessibilityLabel="Effacer le brouillon">
+            <Ionicons name="close-circle" size={20} color={palette.textSecondary} />
+          </Pressable>
+        </View>
+      )}
       {error && (
         <View style={styles.formError}>
           <Text variant="bodySmall" color="warning">{error}</Text>
@@ -464,6 +570,7 @@ export function QuickAddProductSheet({
           </Card>
         </ReAnimated.View>
       )}
+      </Animated.View>
     </FormSheet>
   );
 }
@@ -474,6 +581,13 @@ function makeStyles(p: Palette) {
   return StyleSheet.create({
     // Transparent on purpose: the button floats over the sheet's own background — no slab, border or shadow.
     footer: { paddingHorizontal: spacing[5], paddingTop: spacing[3], backgroundColor: 'transparent' },
+    toast: {
+      position: 'absolute', top: 64, alignSelf: 'center', flexDirection: 'row', alignItems: 'center', gap: spacing[2],
+      maxWidth: '86%', paddingHorizontal: spacing[4], paddingVertical: spacing[2.5], borderRadius: 999,
+      backgroundColor: p.surface,
+    },
+    toastText: { fontFamily: FF.semibold, fontSize: 15, color: p.textPrimary, flexShrink: 1 },
+    draftChip: { flexDirection: 'row', alignItems: 'center', gap: spacing[2], marginHorizontal: spacing[4], marginTop: spacing[3], paddingHorizontal: spacing[4], paddingVertical: spacing[2.5], borderRadius: 12, backgroundColor: p.surface },
     formError: { backgroundColor: p.warningLight, borderRadius: 12, padding: spacing[3], marginHorizontal: spacing[4], marginTop: spacing[3] },
     fieldBlock: { ...card, paddingHorizontal: spacing[4], paddingVertical: spacing[2.5], gap: 2 },
     labelRow: { flexDirection: 'row', alignItems: 'center', justifyContent: 'space-between' },

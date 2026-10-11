@@ -27,7 +27,7 @@ jest.mock('@/lib/posthog', () => ({ posthog: null }));
 jest.mock('@/src/utils/notifications', () => ({ notifyEvent: jest.fn(), resolveSellerDisplayName: jest.fn() }));
 
 import {
-  EMPTY_QUICK_ADD, addVariant, computeCostLine, derivedTotalPieces, needsPurchasePrice,
+  EMPTY_QUICK_ADD, addVariant, afterAdd, canSubmit, isBlankDraft, needsSalePrice, computeCostLine, derivedTotalPieces, needsPurchasePrice,
   patchVariant, removeVariant, resolvedVariantPrice, setModels, suggestProducts,
   toQuickAddPayload, validateQuickAdd, type QuickAddState,
 } from '@/src/utils/quickAddProduct';
@@ -39,17 +39,20 @@ const C = 'GNF';
 const st = (over: Partial<QuickAddState> = {}): QuickAddState => ({ ...EMPTY_QUICK_ADD, ...over });
 const prod = (id: string, name: string, over: any = {}) => ({ id, name, sale_price: 1000, cost_price: 500, ...over } as any);
 
-describe('validation (unchanged rule: name + price > 0)', () => {
-  it('requires a name', () => expect(validateQuickAdd(st({ price: '1 000' }), C)).toBe('Indiquez le nom'));
-  it('requires price > 0', () => {
-    expect(validateQuickAdd(st({ name: 'Riz' }), C)).toMatch(/prix de vente/);
-    expect(validateQuickAdd(st({ name: 'Riz', price: '0' }), C)).toMatch(/prix de vente/);
+describe('validation: ONLY an empty name blocks', () => {
+  it('requires a name', () => {
+    expect(validateQuickAdd(st({ price: '1 000' }), C)).toBe('Indiquez le nom');
+    expect(canSubmit(st({ price: '1 000' }))).toBe(false);
+    expect(canSubmit(st({ name: '   ' }))).toBe(false);
   });
-  it('nothing else is required', () => expect(validateQuickAdd(st({ name: 'Riz', price: '5 000' }), C)).toBeNull());
-  it('with Modèles, every row needs a name', () => {
+  it('a name alone is enough — no price, no quantity, nothing else blocks', () => {
+    expect(validateQuickAdd(st({ name: 'Riz' }), C)).toBeNull();
+    expect(canSubmit(st({ name: 'Riz' }))).toBe(true);
+    expect(canSubmit(st({ name: 'Riz', price: '0', qty: '' }))).toBe(true);
+  });
+  it('with Modèles, an unnamed row does not block', () => {
     const s = setModels(st({ name: 'T-shirt', price: '5 000' }), true);
-    expect(validateQuickAdd(s, C)).toBe('Chaque modèle doit avoir un nom');
-    expect(validateQuickAdd(patchVariant(s, s.variants[0].key, { name: 'M' }), C)).toBeNull();
+    expect(canSubmit(s)).toBe(true);
   });
 });
 
@@ -142,6 +145,24 @@ describe('payload', () => {
     expect(p.data).toMatchObject({ name: 'Riz', cost_price: 0, sale_price: 5000, initial_stock: 1, unit: 'pcs', reorder_level: 0, supplier_id: null });
     expect(p.hasVariants).toBe(false);
   });
+  it('name-only: sale_price 0 (column is NOT NULL → 0 means "Prix à fixer"), quantity 1, no variants', () => {
+    const p = toQuickAddPayload(st({ name: 'Savon' }), C);
+    expect(p.data).toMatchObject({ name: 'Savon', sale_price: 0, cost_price: 0, initial_stock: 1 });
+    expect(p.hasVariants).toBe(false);
+    expect(needsSalePrice({ sale_price: p.data.sale_price })).toBe(true);
+    expect(needsSalePrice({ sale_price: 5000 })).toBe(false);
+  });
+  it('Modèles with only unnamed rows degrades to a plain product; unnamed rows are dropped', () => {
+    const unnamed = setModels(st({ name: 'T', qty: '3' }), true);
+    const plain = toQuickAddPayload(unnamed, C);
+    expect(plain.hasVariants).toBe(false);
+    expect(plain.variants).toEqual([]);
+    let s = addVariant(patchVariant(unnamed, unnamed.variants[0].key, { name: 'M', qty: '2' }));
+    s = patchVariant(s, s.variants[1].key, { qty: '9' }); // no name
+    const p = toQuickAddPayload(s, C);
+    expect(p.hasVariants).toBe(true);
+    expect(p.variants.map(v => v.name)).toEqual(['M']);
+  });
   it('no stock/seuil field: reorder_level is always 0', () => {
     expect(toQuickAddPayload(st({ name: 'a', price: '1' }), C).data.reorder_level).toBe(0);
   });
@@ -204,6 +225,20 @@ describe('offline create (phone-first, same UUID)', () => {
   });
 });
 
+describe('name-only create', () => {
+  beforeEach(() => { enqueued.length = 0; rpcCalls.length = 0; });
+  it('goes through the outbox with sale_price 0 and lands in the grid as a "Prix à fixer" product', async () => {
+    const payload = toQuickAddPayload(st({ name: 'Savon' }), C);
+    expect(await useProductStore.getState().createProduct('biz', 'user', payload.data)).toBe(true);
+    expect(rpcCalls).toEqual([]);
+    expect(enqueued).toHaveLength(1);
+    expect(enqueued[0].payload.product).toMatchObject({ name: 'Savon', sale_price: 0 });
+    const shown = useProductStore.getState().products.find(p => p.name === 'Savon');
+    expect(shown).toBeTruthy();
+    expect(needsSalePrice(shown!)).toBe(true);
+  });
+});
+
 describe('offline create drains with the same UUID', () => {
   it('create_product replays the queued product id to create_product_with_stock', async () => {
     // Drain is covered in depth by idempotent-replay-drain.test.ts; here we
@@ -234,6 +269,82 @@ describe('offline create drains with the same UUID', () => {
 // keep the import used so the module graph matches production
 void drainQueue;
 
+describe('between adds (the rapid loop)', () => {
+  it('quantity is sticky; price, name, fees, supplier are cleared; Modèles resets to off', () => {
+    let s = st({ name: 'Riz', price: '5 000', qty: '7', purchasePrice: '1 000', fees: '500', supplierId: 'sup' });
+    s = setModels(s, true);
+    const next = afterAdd(s);
+    expect(next.qty).toBe('7');
+    expect(next).toMatchObject({ name: '', price: '', purchasePrice: '', fees: '', supplierId: '', models: false, variants: [] });
+  });
+  it('the price is NEVER carried over, however many adds', () => {
+    let s = st({ name: 'A', price: '9 999', qty: '2' });
+    for (let i = 0; i < 3; i++) s = afterAdd({ ...s, name: 'N' + i, price: '1 234' });
+    expect(s.price).toBe('');
+  });
+});
+
+describe('temporary draft (local only)', () => {
+  const store: Record<string, string> = {};
+  const outbox: any[] = [];
+  const load = () => {
+    jest.resetModules();
+    jest.doMock('@/lib/db', () => ({
+      getKV: async (k: string) => store[k] ?? null,
+      setKV: async (k: string, v: string) => { store[k] = v; },
+      enqueue: async (...a: any[]) => { outbox.push(a); },
+    }));
+    return require('@/lib/quickAddDraft') as typeof import('@/lib/quickAddDraft');
+  };
+  beforeEach(() => { Object.keys(store).forEach(k => delete store[k]); outbox.length = 0; });
+
+  it('a half-filled sheet is saved, and reopening restores it (last draft wins)', async () => {
+    const d = load();
+    await d.saveQuickAddDraft('biz', st({ name: 'Rizz', price: '2 500', qty: '3' }));
+    await d.saveQuickAddDraft('biz', st({ name: 'Huile', price: '9 000', qty: '1' }));
+    const back = await d.loadQuickAddDraft('biz');
+    expect(back).toMatchObject({ name: 'Huile', price: '9 000' });
+  });
+  it('survives an app restart (fresh module instance reads the same persisted store)', async () => {
+    await load().saveQuickAddDraft('biz', st({ name: 'Sucre', price: '1 000' }));
+    const afterRestart = load(); // new module graph, same kv_store
+    expect(await afterRestart.loadQuickAddDraft('biz')).toMatchObject({ name: 'Sucre' });
+  });
+  it('× discards: cleared draft restores nothing', async () => {
+    const d = load();
+    await d.saveQuickAddDraft('biz', st({ name: 'Sucre' }));
+    await d.clearQuickAddDraft('biz');
+    expect(await d.loadQuickAddDraft('biz')).toBeNull();
+  });
+  it('saving a blank sheet clears the draft (quantity alone is not a draft)', async () => {
+    const d = load();
+    await d.saveQuickAddDraft('biz', st({ name: 'Sucre' }));
+    await d.saveQuickAddDraft('biz', st({ qty: '9' }));
+    expect(isBlankDraft(st({ qty: '9' }))).toBe(true);
+    expect(await d.loadQuickAddDraft('biz')).toBeNull();
+  });
+  it('drafts are per business and a corrupt draft is no draft', async () => {
+    const d = load();
+    await d.saveQuickAddDraft('a', st({ name: 'X' }));
+    expect(await d.loadQuickAddDraft('b')).toBeNull();
+    store['quick_add_draft_a'] = '{not json';
+    expect(await d.loadQuickAddDraft('a')).toBeNull();
+  });
+  it('a draft never touches the outbox', async () => {
+    const d = load();
+    await d.saveQuickAddDraft('biz', st({ name: 'Sucre', price: '1' }));
+    await d.loadQuickAddDraft('biz');
+    await d.clearQuickAddDraft('biz');
+    expect(outbox).toEqual([]);
+    expect(require('fs').readFileSync(require('path').join(__dirname, '../lib/quickAddDraft.ts'), 'utf8')).not.toMatch(/enqueue|supabase/);
+  });
+  it('is marked TEMPORARY so the catalogue→Vendre merge replaces it rather than layering on it', () => {
+    const src = require('fs').readFileSync(require('path').join(__dirname, '../lib/quickAddDraft.ts'), 'utf8');
+    expect(src).toMatch(/TEMPORARY/);
+    expect(src).toMatch(/À compléter/);
+  });
+});
+
 const sheetSrc = () => require('fs').readFileSync(require('path').join(__dirname, '../src/components/QuickAddProductSheet.tsx'), 'utf8') as string;
 
 describe('sheet chrome', () => {
@@ -258,10 +369,10 @@ describe('sheet chrome', () => {
     expect(src).not.toMatch(/LayoutAnimation|configureLayoutNext/);
     expect(src).toContain('LinearTransition');
   });
-  it('footer: single button, full-screen presentation, keyboard-aware inset', () => {
+  it('footer: single button, page-sheet presentation, keyboard-aware inset', () => {
     const src = sheetSrc();
     expect((src.match(/label="Ajouter"/g) || []).length).toBe(1);
-    expect(src).toContain('presentationStyle="fullScreen"');
+    expect(src).not.toContain('presentationStyle="fullScreen"'); // native swipe-down needs the page sheet
     expect(src).toContain('useKeyboardVisible');
   });
   it('state resets after close, not as the sheet opens', () => {
@@ -312,5 +423,44 @@ describe('labels, currency suffix, variants', () => {
   });
   it('variant name placeholder teaches one-model-per-row', () => {
     expect(sheetSrc()).toContain('placeholder="Ex : S"');
+  });
+});
+
+
+describe('rapid loop wiring (source-level: this repo has no component-render harness)', () => {
+  const src = () => sheetSrc();
+  const cat = () => require('fs').readFileSync(require('path').join(__dirname, '../app/(app)/(tabs)/catalogue.tsx'), 'utf8') as string;
+  it('Ajouter is disabled only by an empty name', () => {
+    expect(src()).toContain('disabled={!canSubmit(s)}');
+  });
+  it('after a successful add the sheet stays open: no onClose in the submit path, Nom is re-focused, fields fade-clear', () => {
+    const body = src().slice(src().indexOf('const resetForNext'), src().indexOf('const discardDraft'));
+    expect(body).not.toContain('onClose');
+    expect(body).toContain('nameRef.current?.focus()');
+    expect(body).toContain('afterAdd(prev)');
+    expect(body).toMatch(/toValue: 0, duration: 120/);
+  });
+  it('a failed add keeps everything typed (no reset) and the success path ticks + toasts the product name', () => {
+    const body = src().slice(src().indexOf('const submit = async'), src().indexOf('const discardDraft'));
+    expect(body).toMatch(/if \(!res\.ok\) return;/);
+    expect(body).toContain('haptics.success()');
+    expect(body).toContain('showToast(name)');
+    expect(src()).toContain('`${toastName} ajouté`');
+  });
+  it('swipe-down and Annuler both close; a visible × discards the restored draft', () => {
+    expect(src()).toContain('onDismiss={onClose}');
+    expect(src()).toContain('accessibilityLabel="Effacer le brouillon"');
+    expect(src()).toContain('Brouillon repris');
+  });
+  it('the host adds via createProduct (outbox) without closing the sheet and pulses the new card', () => {
+    const c = cat();
+    const body = c.slice(c.indexOf('const handleQuickAdd'), c.indexOf('useEffect(() => {\n    if (!pulseId)'));
+    expect(body).toContain('createProduct(businessId, userId, data)');
+    expect(body).not.toContain('setShowQuickAdd(false)');
+    expect(body).toContain('setPulseId(created.id)');
+    expect(c).toContain('pulse={pulseId === item.id}');
+  });
+  it('a product with no sale price shows the tappable "Prix à fixer"', () => {
+    expect(cat()).toContain('needsSalePrice(product) || needsPurchasePrice(product)');
   });
 });

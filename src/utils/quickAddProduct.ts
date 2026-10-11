@@ -68,16 +68,18 @@ export function priceValid(s: QuickAddState, currency: string): boolean {
   return !isNaN(sp) && sp > 0;
 }
 
-/** Same rule as the old form, unchanged: name + sale price > 0. Models add: every row named. */
-export function validateQuickAdd(s: QuickAddState, currency: string): string | null {
-  if (!nameValid(s)) return 'Indiquez le nom';
-  if (!priceValid(s, currency)) return 'Le prix de vente doit être supérieur à 0';
-  if (s.models) {
-    if (s.variants.length === 0) return 'Ajoutez au moins un modèle';
-    if (s.variants.some(v => !v.name.trim())) return 'Chaque modèle doit avoir un nom';
-    if (s.variants.some(v => resolvedVariantPrice(v, s, currency) <= 0)) return 'Entrez tous les prix de vente';
-  }
-  return null;
+/**
+ * Rapid-loop rule: ONLY an empty name blocks. A product with no price is created with
+ * sale_price 0 (the column is NOT NULL, so 0 is "not set") and shows "Prix à fixer".
+ * `currency` is kept for call-site compatibility.
+ */
+export function validateQuickAdd(s: QuickAddState, _currency?: string): string | null {
+  return nameValid(s) ? null : 'Indiquez le nom';
+}
+
+/** Ajouter is enabled exactly when the name is non-empty. */
+export function canSubmit(s: QuickAddState): boolean {
+  return nameValid(s);
 }
 
 // ── Models ───────────────────────────────────────────────────────────────────
@@ -180,6 +182,11 @@ export interface QuickAddPayload {
  * once, completable later.
  */
 export function toQuickAddPayload(s: QuickAddState, currency: string): QuickAddPayload {
+  // Nothing but the name may block, so a model row with no name is simply ignored; if no named
+  // row is left the product is created as a plain product with the single quantity.
+  const namedRows = s.models ? s.variants.filter(v => v.name.trim()) : [];
+  if (s.models && namedRows.length === 0) s = { ...s, models: false };
+  else if (s.models) s = { ...s, variants: namedRows };
   const fees = parseAmountInput(s.fees, currency) || 0;
   const pp = parseAmountInput(s.purchasePrice, currency) || 0;
   const pieces = piecesBought(s);
@@ -188,7 +195,7 @@ export function toQuickAddPayload(s: QuickAddState, currency: string): QuickAddP
     name: s.name.trim(),
     unit: 'pcs',
     cost_price: cost,
-    sale_price: parseAmountInput(s.price, currency),
+    sale_price: Math.max(parseAmountInput(s.price, currency) || 0, 0),
     reorder_level: 0,
     initial_stock: s.models ? 0 : singleQty(s),
     supplier_id: s.supplierId || null,
@@ -196,7 +203,7 @@ export function toQuickAddPayload(s: QuickAddState, currency: string): QuickAddP
   const variants: DraftVariant[] = s.models
     ? s.variants.map(v => ({
         name: v.name.trim(),
-        sale_price: resolvedVariantPrice(v, s, currency),
+        sale_price: Math.max(resolvedVariantPrice(v, s, currency) || 0, 0),
         cost_price: cost,
         stock_qty: variantQty(v),
         reorder_level: 0,
@@ -228,4 +235,25 @@ export function suggestProducts(typed: string, products: Product[], limit = 3): 
 /** A product still waiting for its purchase price — shown as "Prix à fixer". */
 export function needsPurchasePrice(p: Pick<Product, 'cost_price'>): boolean {
   return !(p.cost_price > 0);
+}
+
+/** No sale price yet (stored as 0): the grid card shows "Prix à fixer", tappable to complete. */
+export function needsSalePrice(p: Pick<Product, 'sale_price'>): boolean {
+  return !(p.sale_price > 0);
+}
+
+/**
+ * Anything worth keeping if the sheet is dismissed? Quantity alone never counts (it defaults to 1
+ * and is sticky), so an untouched sheet leaves no draft.
+ */
+export function isBlankDraft(s: QuickAddState): boolean {
+  return (
+    !s.name.trim() && !s.price.trim() && !s.purchasePrice.trim() && !s.fees.trim() &&
+    !s.supplierId && !s.variants.some(v => v.name.trim() || v.qty.trim() || v.touched)
+  );
+}
+
+/** Next sheet state after a successful add: everything cleared EXCEPT the quantity (sticky). */
+export function afterAdd(s: QuickAddState): QuickAddState {
+  return { ...EMPTY_QUICK_ADD, qty: s.qty };
 }
