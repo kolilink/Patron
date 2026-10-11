@@ -410,7 +410,7 @@ function makeStyles(p: Palette) {
     suggestionRow: {
       flexDirection: 'row', alignItems: 'center', gap: spacing[3],
       paddingVertical: spacing[2], paddingHorizontal: spacing[3],
-      borderRadius: 10, backgroundColor: p.surface,
+      borderRadius: 10, backgroundColor: p.background,
     },
     variantList: { marginTop: spacing[3] },
     variantHeader: { flexDirection: 'row', alignItems: 'center', gap: spacing[2], paddingHorizontal: spacing[7], paddingBottom: spacing[1.5] },
