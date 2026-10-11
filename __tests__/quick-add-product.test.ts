@@ -271,6 +271,16 @@ describe('sheet chrome', () => {
   });
 });
 
+describe('footer background', () => {
+  it('the footer container is transparent: no background colour, border or shadow behind Ajouter', () => {
+    const src = sheetSrc();
+    const m = src.match(/footer: \{[^}]*\}/);
+    expect(m).not.toBeNull();
+    expect(m![0]).toContain("backgroundColor: 'transparent'");
+    expect(m![0]).not.toMatch(/p\.background|p\.surface|shadow|border/);
+  });
+});
+
 describe('labels, currency suffix, variants', () => {
   it('labels carry no currency, parenthetical or "unitaire"', () => {
     const src = sheetSrc();

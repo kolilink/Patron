@@ -472,7 +472,8 @@ function makeStyles(p: Palette) {
   // Soft rounded card; whitespace (not hairlines) separates groups.
   const card = { backgroundColor: p.surface, borderRadius: 16, marginHorizontal: spacing[4], marginTop: spacing[3] } as const;
   return StyleSheet.create({
-    footer: { padding: spacing[5], backgroundColor: p.background },
+    // Transparent on purpose: the button floats over the sheet's own background — no slab, border or shadow.
+    footer: { paddingHorizontal: spacing[5], paddingTop: spacing[3], backgroundColor: 'transparent' },
     formError: { backgroundColor: p.warningLight, borderRadius: 12, padding: spacing[3], marginHorizontal: spacing[4], marginTop: spacing[3] },
     fieldBlock: { ...card, paddingHorizontal: spacing[4], paddingVertical: spacing[2.5], gap: 2 },
     labelRow: { flexDirection: 'row', alignItems: 'center', justifyContent: 'space-between' },
