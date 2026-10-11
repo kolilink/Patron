@@ -2,7 +2,7 @@ import * as Sentry from '@sentry/react-native';
 import { isKnownOffline } from '@/lib/connectivity';
 import { Platform, type AppStateStatus } from 'react-native';
 import { supabase } from '@/lib/supabase';
-import { getPendingOpsForDrain, deleteQueueItem, rescheduleOp, markOpPermanentlyFailed, markOpCorrupt, getPendingSupplierKeys } from '@/lib/db';
+import { getPendingOpsForDrain, deleteQueueItem, rescheduleOp, markOpPermanentlyFailed, markOpCorrupt, getPendingSupplierKeys, getPendingProductKeys } from '@/lib/db';
 import { notifyEvent, resolveSellerDisplayName } from '@/src/utils/notifications';
 import { formatAmount } from '@/src/utils/format';
 
@@ -623,6 +623,16 @@ export async function drainQueue(): Promise<SyncResult> {
       console.error('[drainQueue] getPendingSupplierKeys failed', err);
     }
 
+    // Same ordering guarantee for products: a delivery whose lines book stock onto a product that is
+    // still waiting in the outbox (created from the add sheet, offline) holds until that create has
+    // drained. A create that lands — or is refused for good — later in this pass releases its key.
+    let pendingProductKeys = new Set<string>();
+    try {
+      pendingProductKeys = await getPendingProductKeys();
+    } catch (err) {
+      console.error('[drainQueue] getPendingProductKeys failed', err);
+    }
+
     for (const op of ops) {
       let payload: Record<string, unknown> | null = null;
       let justSynced = false;
@@ -636,6 +646,12 @@ export async function drainQueue(): Promise<SyncResult> {
             result.failed++;
             continue;
           }
+          const lines = Array.isArray(payload.p_lines) ? payload.p_lines as { product_id?: unknown }[] : [];
+          if (lines.some(l => typeof l.product_id === 'string' && pendingProductKeys.has(l.product_id))) {
+            await rescheduleOp(op.id, new Date(Date.now() + 5_000).toISOString(), 'Création du produit encore en attente');
+            result.failed++;
+            continue;
+          }
         }
 
         await executeOp(op.operation, payload);
@@ -645,6 +661,10 @@ export async function drainQueue(): Promise<SyncResult> {
         if (op.operation === 'create_supplier') {
           const supplierId = extractSupplierId(payload);
           if (supplierId) pendingSupplierKeys.delete(supplierId);
+        }
+        if (op.operation === 'create_product') {
+          const productId = (payload.product as { id?: unknown } | undefined)?.id;
+          if (typeof productId === 'string') pendingProductKeys.delete(productId);
         }
       } catch (e) {
         if (payload === null) {
@@ -684,6 +704,10 @@ export async function drainQueue(): Promise<SyncResult> {
           if (op.operation === 'create_supplier') {
             const supplierId = extractSupplierId(payload);
             if (supplierId) pendingSupplierKeys.delete(supplierId);
+          }
+          if (op.operation === 'create_product') {
+            const productId = (payload.product as { id?: unknown } | undefined)?.id;
+            if (typeof productId === 'string') pendingProductKeys.delete(productId);
           }
           if (op.operation === 'record_payment' || op.operation === 'record_client_payment') {
             result.rejectedPayments.push(msg);

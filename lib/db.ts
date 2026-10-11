@@ -967,6 +967,27 @@ export async function getPendingSupplierKeys(): Promise<Set<string>> {
   );
 }
 
+// The product ids that still have a pending create_product op. drainQueue uses this to HOLD a
+// confirm_reception whose lines point at one of them: the delivery must not drain before the product
+// it books stock onto exists server-side. Read from the decrypted payloads (not the idempotency_key
+// column) so rows queued by older builds are covered too. Best-effort per row: one unreadable row
+// is skipped rather than failing the whole lookup.
+export async function getPendingProductKeys(): Promise<Set<string>> {
+  const db = await openDb();
+  const rows = await db.getAllAsync<{ payload: string }>(
+    `SELECT payload FROM sync_queue WHERE status = 'pending' AND operation = 'create_product'`,
+  );
+  const ids = new Set<string>();
+  for (const row of rows) {
+    try {
+      const plain = row.payload.startsWith('PLAIN:') ? row.payload.slice(6) : await decrypt(row.payload);
+      const id = (JSON.parse(plain) as { product?: { id?: unknown } }).product?.id;
+      if (typeof id === 'string') ids.add(id);
+    } catch { /* unreadable row: the drain loop classifies it as corrupt on its own */ }
+  }
+  return ids;
+}
+
 // ─── Shared encrypted-cache writer ─────────────────────────────────────────────
 // Every store re-fetches and re-writes its whole cache on every screen focus,
 // even when nothing changed. Encryption is pure-JS AES on the JS thread (see

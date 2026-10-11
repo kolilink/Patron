@@ -454,7 +454,8 @@ describe('rapid loop wiring (source-level: this repo has no component-render har
   const read = (p: string) => require('fs').readFileSync(require('path').join(__dirname, '..', p), 'utf8') as string;
   const hook = () => read('src/components/products/useProductSheets.tsx');
   it('Ajouter is disabled only by an empty name', () => {
-    expect(src()).toContain('disabled={!canSubmit(s)}');
+    // empty name always blocks; in delivery mode the price is additionally required (see reception tests)
+    expect(src()).toMatch(/disabled=\{!canSubmit\(s\)( \|\| \(isDelivery && !priceValid\(s, currency\)\))?\}/);
   });
   it('after a successful add the sheet stays open: no onClose in the reset path, Nom is re-focused, fields fade-clear', () => {
     const body = src().slice(src().indexOf('const resetForNext'), src().indexOf('const submit = async'));
@@ -467,7 +468,7 @@ describe('rapid loop wiring (source-level: this repo has no component-render har
     const body = src().slice(src().indexOf('const submit = async'), src().indexOf('const collapsedName'));
     expect(body).toMatch(/if \(!res\.ok\) return;/);
     expect(body).toContain('haptics.success()');
-    expect(body).toMatch(/if \(isEdit\) return;/);
+    expect(body).toMatch(/if \(isEdit \|\| isDelivery\) return;/);
     expect(body).toContain('showToast(name)');
     expect(src()).toContain('`${toastName} ajouté`');
   });
