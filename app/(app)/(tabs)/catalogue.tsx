@@ -146,11 +146,10 @@ function SupplierPicker({ fournisseurs, selectedId, onSelect, businessId, userId
 
   const handleCreate = async () => {
     if (!newName.trim()) { appAlert('Ajoutez un nom'); return; }
-    const ok = await createFournisseur(businessId, userId, { name: newName, phone: newPhone });
-    if (ok) {
+    const supplierId = await createFournisseur(businessId, userId, { name: newName, phone: newPhone });
+    if (supplierId) {
       haptics.success();
-      const latest = useFournisseursStore.getState().fournisseurs.find(f => f.name.trim() === newName.trim());
-      if (latest) onSelect(latest.id);
+      onSelect(supplierId);
       setShowNewForm(false);
       setNewName('');
       setNewPhone('');
@@ -1194,8 +1193,8 @@ function RestoreActionSheet({
           <Text style={[styles.actionRowLabel, { color: palette.primary }]}>Réactiver ce produit</Text>
         </Pressable>
       </View>
-    <ConfirmSheetHost active={!!(visible)} />
-</Modal>
+      <ConfirmSheetHost active={!!(visible)} />
+    </Modal>
   );
 }
 
@@ -1288,8 +1287,8 @@ function ProductActionSheet({
           </>
         )}
       </View>
-    <ConfirmSheetHost active={!!(visible)} />
-</Modal>
+      <ConfirmSheetHost active={!!(visible)} />
+    </Modal>
   );
 }
 
@@ -1847,8 +1846,8 @@ export default function CatalogueScreen() {
             showsVerticalScrollIndicator={false}
           />
         </View>
-      <ConfirmSheetHost active={!!(showOutOfStockModal)} />
-</Modal>
+        <ConfirmSheetHost active={!!(showOutOfStockModal)} />
+      </Modal>
 
       {/* Restore Action Sheet (archived products) */}
       <RestoreActionSheet

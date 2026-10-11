@@ -591,6 +591,8 @@ function deriveEntityType(operation: string): string {
       return 'produit';
     case 'pay_supplier_debt':
     case 'create_supplier_debt':
+    case 'create_supplier':
+    case 'update_supplier':
       return 'fournisseur';
     default:
       return operation;
@@ -609,6 +611,12 @@ function extractIdempotencyKey(operation: string, payload: object): string | nul
   if (typeof p.p_idempotency_key === 'string') return p.p_idempotency_key;
   // A queued supplier debt is keyed by its own (client-generated) row id.
   if (operation === 'create_supplier_debt' && typeof p.id === 'string') return p.id;
+  // A queued supplier create/edit is keyed by the supplier's client-generated id
+  // (p_supplier.id) — the id upsert_supplier idempotently upserts on (v244).
+  if (operation === 'create_supplier' || operation === 'update_supplier') {
+    const s = p.p_supplier as Record<string, unknown> | undefined;
+    if (s && typeof s.id === 'string') return s.id;
+  }
   // Expense ops are keyed by the expense id: that is what lets an Annuler find
   // (and cancel) the still-queued create/edit/delete for that very row.
   if (EXPENSE_OPS.has(operation)) {
@@ -681,6 +689,28 @@ export async function cancelPendingQueueItems(operations: string[], key: string)
   const res = await db.runAsync(
     `DELETE FROM sync_queue WHERE status = 'pending' AND idempotency_key = ? AND operation IN (${marks})`,
     [key, ...operations],
+  );
+  return res.changes ?? 0;
+}
+
+/**
+ * Overwrites the payload of every still-pending row for `operation`+`key`
+ * (the offline-edit path, migration_v244): a supplier edited while its
+ * create/update is still queued is amended in place — latest state wins —
+ * instead of queueing a second op. Returns how many rows changed; 0 means
+ * "nothing pending for that key, enqueue a fresh op".
+ */
+export async function amendPendingQueueItem(operation: string, key: string, payload: object): Promise<number> {
+  const db = await openDb();
+  let stored: string;
+  try {
+    stored = await encrypt(JSON.stringify(payload));
+  } catch {
+    stored = 'PLAIN:' + JSON.stringify(payload);
+  }
+  const res = await db.runAsync(
+    `UPDATE sync_queue SET payload = ? WHERE status = 'pending' AND idempotency_key = ? AND operation = ?`,
+    [stored, key, operation],
   );
   return res.changes ?? 0;
 }
@@ -883,6 +913,22 @@ export async function getPendingOpsForDrain(): Promise<{ ok: SyncQueueItem[]; co
     }
   }
   return { ok, corrupt };
+}
+
+// The set of supplier ids that still have a pending create_supplier op.
+// drainQueue uses this to HOLD a confirm_reception that references one of
+// them (migration_v244): the reception must not drain before its supplier
+// exists, or resolve_reception_supplier would fall back to 'Marché' and leave
+// the order pointing at a dangling id. Read once per drain; the key is dropped
+// as soon as its create_supplier drains (or is permanently refused).
+export async function getPendingSupplierKeys(): Promise<Set<string>> {
+  const db = await openDb();
+  const rows = await db.getAllAsync<{ idempotency_key: string | null }>(
+    `SELECT idempotency_key FROM sync_queue WHERE status = 'pending' AND operation = 'create_supplier'`,
+  );
+  return new Set(
+    rows.map(r => r.idempotency_key).filter((k): k is string => typeof k === 'string'),
+  );
 }
 
 // ─── Shared encrypted-cache writer ─────────────────────────────────────────────

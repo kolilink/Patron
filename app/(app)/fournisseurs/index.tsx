@@ -25,12 +25,9 @@ import { useProductStore } from '@/stores/products';
 import { useFournisseursStore, type CommandeAchat, type Fournisseur } from '@/stores/fournisseurs';
 import { haptics } from '@/lib/haptics';
 import { toast } from '@/stores/toast';
-import { translateError } from '@/lib/errors';
-import { generateId } from '@/lib/id';
-import { supabase } from '@/lib/supabase';
 import { formatAmountInput, parseAmountInput, formatAmount } from '@/src/utils/format';
 import { showFailureAlert } from '@/src/components/ui/FailureView';
-import { buildFailure, failureReason } from '@/src/utils/failure';
+import { buildFailure } from '@/src/utils/failure';
 import { FAILURE_COPY } from '@/src/utils/failureCopy';
 import { supplierDeletedConfirmation } from '@/src/utils/saveConfirmationCopy';
 import { failAlert } from '@/src/components/ui/FailureView';
@@ -374,7 +371,7 @@ export default function FournisseursScreen() {
   const { products, fetchProducts } = useProductStore();
   const {
     fournisseurs, commandes, debts, loading, saving, offline, offlineSince,
-    fetchFournisseurs, updateFournisseur, deleteFournisseur,
+    fetchFournisseurs, createFournisseur, updateFournisseur, deleteFournisseur,
     fetchCommandes, fetchDebts, createDebt,
   } = useFournisseursStore();
 
@@ -459,94 +456,49 @@ export default function FournisseursScreen() {
     const isEdit = !!editF;
     const leadDaysNum = parseInt(d.leadDays) || null;
 
-    // Client-side UUID eliminates fragile post-create name lookup (same pattern as business creation)
-    const supplierId: string = editF?.id ?? generateId();
+    // One shared code path for the list-view form and the picker inline form
+    // (design point 6): everything below routes through the store, which is
+    // phone-first (offline create/update enqueue into the outbox, migration_v244).
+    const draft = {
+      name: d.name,
+      phone: d.phone,
+      country: d.country,
+      notes: d.notes,
+      lead_days: leadDaysNum,
+      linkedProductIds: d.linkedProductIds,
+      newProducts: d.newProducts,
+      // Editing: unlink products that were deselected. Computed from the local
+      // product list (no server fetch — that would fail offline).
+      unlinkedProductIds: isEdit
+        ? products.filter(p => p.supplier_id === editF?.id && !d.linkedProductIds.includes(p.id)).map(p => p.id)
+        : [],
+    };
 
     try {
       if (isEdit) {
-        const ok = await updateFournisseur(supplierId, {
-          name: d.name, phone: d.phone, country: d.country, notes: d.notes, lead_days: leadDaysNum,
-        });
+        const ok = await updateFournisseur(editF!.id, businessId, userId, draft);
         if (!ok) return;
       } else {
-        const { error: sErr } = await supabase.from('suppliers').insert({
-          id: supplierId,
-          business_id: businessId,
-          name: d.name.trim(),
-          phone: d.phone?.trim() || null,
-          country: d.country?.trim() || null,
-          notes: d.notes?.trim() || null,
-          lead_days: leadDaysNum,
-          created_by: userId,
-        });
-        if (sErr) {
+        const supplierId = await createFournisseur(businessId, userId, draft);
+        if (!supplierId) {
           haptics.error();
           showFailureAlert(buildFailure({
             what: FAILURE_COPY.supplierNotCreated.what,
-            err: sErr,
-            why: failureReason(sErr) ?? FAILURE_COPY.supplierNotCreated.why,
+            err: null,
+            why: useFournisseursStore.getState().error ?? FAILURE_COPY.supplierNotCreated.why,
             action: { label: 'Réessayer', onPress: () => { void handleSaveFournisseur(d); } },
           }));
           return;
         }
         await fetchFournisseurs(businessId);
-      }
-
-      // Insert inline-created products with supplier_id baked into the INSERT row
-      const newProductIds: string[] = [];
-      for (const np of d.newProducts) {
-        const newId = generateId();
-        const { error: pErr } = await supabase.from('products').insert({
-          id: newId,
-          business_id: businessId,
-          name: np.name,
-          unit: np.unit,
-          cost_price: 0,
-          sale_price: 0,
-          stock_qty: 0,
-          reorder_level: 0,
-          archived: false,
-          created_by: userId,
-          supplier_id: supplierId,
-        });
-        if (pErr) {
-          haptics.error();
-          showFailureAlert(buildFailure({
-            what: `Le produit « ${np.name} » n'a pas été enregistré.`,
-            why: failureReason(pErr),
-            action: { label: 'Retour', onPress: () => {} },
-          }));
-        } else {
-          newProductIds.push(newId);
-        }
-      }
-
-      // When editing: explicitly unlink products that were deselected (fetch current → diff → unlink)
-      // When creating: nothing to unlink — the inserted products already carry supplier_id
-      if (isEdit) {
-        const { data: currentLinked } = await supabase
-          .from('products').select('id').eq('supplier_id', supplierId);
-        const keepIds = new Set([...d.linkedProductIds, ...newProductIds]);
-        const toUnlink = (currentLinked ?? []).map(r => r.id as string).filter(id => !keepIds.has(id));
-        if (toUnlink.length > 0) {
-          await supabase.from('products').update({ supplier_id: null }).in('id', toUnlink);
-        }
-      }
-
-      // Link any existing products selected from the dropdown
-      if (d.linkedProductIds.length > 0) {
-        await supabase.from('products').update({ supplier_id: supplierId }).in('id', d.linkedProductIds);
+        const f = useFournisseursStore.getState().fournisseurs.find(x => x.id === supplierId);
+        if (f) { setCreatedFournisseur(f); setShowSuccessSheet(true); }
       }
 
       await fetchProducts(businessId, userId, session?.activeMembership?.id, session?.activeMembership?.role);
       haptics.success();
       setShowForm(false);
       setEditF(null);
-
-      if (!isEdit) {
-        const f = useFournisseursStore.getState().fournisseurs.find(x => x.id === supplierId);
-        if (f) { setCreatedFournisseur(f); setShowSuccessSheet(true); }
-      }
     } finally {
       setIsSaving(false);
     }
@@ -557,7 +509,14 @@ export default function FournisseursScreen() {
       <View style={styles.hdr}>
         <Pressable onPress={() => router.back()}><Text variant="body" color="secondary">‹ Retour</Text></Pressable>
         <Text variant="h4">Fournisseurs</Text>
-        <View style={{ width: 60 }} />
+        <Pressable
+          onPress={() => { setEditF(null); setShowForm(true); }}
+          hitSlop={12}
+          accessibilityLabel="Nouveau fournisseur"
+          accessibilityRole="button"
+        >
+          <Ionicons name="add" size={24} color={palette.primary} />
+        </Pressable>
       </View>
 
       {offline && (

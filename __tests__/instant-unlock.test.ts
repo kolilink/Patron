@@ -5,39 +5,39 @@
 // and its state machine is tested through the snapshot module itself.
 
 jest.mock('@/lib/supabase', () => ({
-    supabase: {
-        rpc: jest.fn(),
-        from: jest.fn(),
-        auth: {
-            getSession: jest.fn().mockResolvedValue({ data: { session: null } }),
-            onAuthStateChange: jest.fn(() => ({
-                data: { subscription: { unsubscribe: jest.fn() } },
-            })),
-            refreshSession: jest.fn(),
-        },
-        functions: { invoke: jest.fn() },
+  supabase: {
+    rpc: jest.fn(),
+    from: jest.fn(),
+    auth: {
+      getSession: jest.fn().mockResolvedValue({ data: { session: null } }),
+      onAuthStateChange: jest.fn(() => ({
+        data: { subscription: { unsubscribe: jest.fn() } },
+      })),
+      refreshSession: jest.fn(),
     },
-    clearSupabaseLocalSession: jest.fn(),
-    revokeAccessToken: jest.fn(),
+    functions: { invoke: jest.fn() },
+  },
+  clearSupabaseLocalSession: jest.fn(),
+  revokeAccessToken: jest.fn(),
 }));
 
 jest.mock('@/lib/db', () => ({
-    enqueue: jest.fn(),
-    getQueueCount: jest.fn().mockResolvedValue(0),
-    openDb: jest.fn(),
-    setKV: jest.fn().mockResolvedValue(undefined),
-    getKV: jest.fn().mockResolvedValue(null),
+  enqueue: jest.fn(),
+  getQueueCount: jest.fn().mockResolvedValue(0),
+  openDb: jest.fn(),
+  setKV: jest.fn().mockResolvedValue(undefined),
+  getKV: jest.fn().mockResolvedValue(null),
 }));
 
 jest.mock('@/lib/analytics', () => ({ trackEvent: jest.fn(), resetAnalytics: jest.fn(), identifyUser: jest.fn() }));
 jest.mock('@/lib/posthog', () => ({ posthog: null }));
 
 jest.mock('@/lib/sync', () => {
-    const actual = jest.requireActual('@/lib/sync');
-    return {
-        ...actual,
-        reportOfflineFallback: jest.fn(),
-    };
+  const actual = jest.requireActual('@/lib/sync');
+  return {
+    ...actual,
+    reportOfflineFallback: jest.fn(),
+  };
 });
 
 import fs from 'fs';
@@ -103,10 +103,10 @@ describe('A. KPI snapshot (stale-while-revalidate)', () => {
       expect(src).toMatch(/useState\(\(\) => getKpiSnapshot<KPIs>\(businessId\) === null\)/);
     });
     it('loadAll blanks + skeletons ONLY when there is no snapshot for this business', () => {
-      expect(src).toMatch(/const haveSnapshot = getKpiSnapshot<KPIs>\(businessId\) !== null;\s*if \(!haveSnapshot\) \{\s*setLoading\(true\);\s*setBestSellersBase\(\[\]\);\s*setKpis\(null\);\s*setKpisBase\(null\);/);
+      expect(src).toMatch(/const haveSnapshot = getKpiSnapshot<KPIs>\(businessId\) !== null;\s*if \(!haveSnapshot\) \{\s*setLoading\(true\);\s*setBestSellersBase\(\[\]\);\s*updateKpis\(null\);\s*setKpisBase\(null\);/);
     });
     it('the DISPLAYED (post-overlay) numbers are stored on every successful load', () => {
-      expect(src).toMatch(/const shownFresh = await withOutbox\(freshKpis\);\s*setKpis\(shownFresh\);\s*setKpiSnapshot\(businessId, shownFresh\)/);
+      expect(src).toMatch(/const shownFresh = await withOutbox\(freshKpis\);\s*if \(myRun !== loadRunId\.current\) return;\s*updateKpis\(shownFresh\);\s*setKpiSnapshot\(businessId, shownFresh\)/);
     });
     it('the auth store clears it in logout()', () => {
       expect(read('stores/auth.ts')).toMatch(/resetAllStores\(\);[\s\S]{0,200}clearKpiSnapshot\(\);/);

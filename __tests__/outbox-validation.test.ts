@@ -5,7 +5,7 @@
 const runAsync = jest.fn(async (..._a: unknown[]) => ({}));
 jest.mock('expo-sqlite', () => ({
   openDatabaseAsync: async () => ({
-    execAsync: async () => {},
+    execAsync: async () => { },
     runAsync: (...a: unknown[]) => runAsync(...a),
     getFirstAsync: async () => ({ version: 9999 }),
     getAllAsync: async () => [],
@@ -56,6 +56,18 @@ const valid: Record<string, () => Record<string, any>> = {
   }),
   pay_supplier_debt: () => ({ p_business_id: BIZ, p_supplier_id: SUP, p_amount_cents: 100000, p_idempotency_key: KEY }),
   create_supplier_debt: () => ({ id: U(11), business_id: BIZ, supplier_id: SUP, amount: 100000, description: null, date: '2026-10-07', amount_paid: 0, created_by: USER }),
+  create_supplier: () => ({
+    p_supplier: { id: SUP, business_id: BIZ, name: 'Diallo Import', phone: '+224 620 00 00 00', country: null, notes: null, lead_days: 3, created_by: USER },
+    p_new_products: [{ id: U(14), name: 'Riz parfumé', unit: 'sac' }],
+    p_link_product_ids: [PROD],
+    p_unlink_product_ids: [],
+  }),
+  update_supplier: () => ({
+    p_supplier: { id: SUP, business_id: BIZ, name: 'Diallo Import', phone: null, country: 'GN', notes: 'Préféré', lead_days: null, created_by: USER },
+    p_new_products: [],
+    p_link_product_ids: [PROD],
+    p_unlink_product_ids: [U(13)],
+  }),
 };
 
 // Each: [description, mutation]. Mutations edit a fresh valid payload in place.
@@ -211,12 +223,34 @@ const bad: Record<string, Mut[]> = {
     ['bad supplier', p => { p.supplier_id = null; }],
     ['bad date', p => { p.date = ''; }],
   ],
+  create_supplier: [
+    ['missing p_supplier', p => { delete p.p_supplier; }],
+    ['bad supplier id', p => { p.p_supplier.id = 's1'; }],
+    ['bad business', p => { p.p_supplier.business_id = 'b'; }],
+    ['bad creator', p => { p.p_supplier.created_by = null; }],
+    ['empty name', p => { p.p_supplier.name = '  '; }],
+    ['non-integer lead days', p => { p.p_supplier.lead_days = 1.5; }],
+    ['bad new product id', p => { p.p_new_products[0].id = 'np'; }],
+    ['empty new product name', p => { p.p_new_products[0].name = ''; }],
+    ['non-array new products', p => { p.p_new_products = 'x'; }],
+    ['bad link uuid', p => { p.p_link_product_ids = ['p']; }],
+    ['bad unlink uuid', p => { p.p_unlink_product_ids = [42]; }],
+  ],
+  update_supplier: [
+    ['bad supplier id', p => { p.p_supplier.id = ''; }],
+    ['bad business', p => { p.p_supplier.business_id = 1; }],
+    ['missing creator', p => { delete p.p_supplier.created_by; }],
+    ['empty name', p => { p.p_supplier.name = null; }],
+    ['bad lead days', p => { p.p_supplier.lead_days = '3'; }],
+    ['bad link uuid', p => { p.p_link_product_ids = [null]; }],
+    ['bad unlink uuid', p => { p.p_unlink_product_ids = ['x']; }],
+  ],
 };
 
 const OPS = Object.keys(valid);
 const storedWrites = () => runAsync.mock.calls.filter(c => String(c[0]).includes('INSERT INTO sync_queue'));
 
-beforeEach(() => { runAsync.mockClear(); toastShow.mockClear(); jest.spyOn(console, 'error').mockImplementation(() => {}); });
+beforeEach(() => { runAsync.mockClear(); toastShow.mockClear(); jest.spyOn(console, 'error').mockImplementation(() => { }); });
 afterEach(() => jest.restoreAllMocks());
 
 // Zero is a legitimate amount wherever the server accepts it.
