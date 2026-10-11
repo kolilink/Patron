@@ -1,7 +1,10 @@
 import React, { useCallback, useEffect, useRef, useState } from 'react';
 import { QuickAddProductSheet } from '@/src/components/QuickAddProductSheet';
 import { ProductStatsModal, StockAdjustModal } from '@/src/components/products/ProductSubSheets';
-import { showFailureAlert } from '@/src/components/ui/FailureView';
+import { failAlert, showFailureAlert } from '@/src/components/ui/FailureView';
+import { appAlert } from '@/src/utils/appAlert';
+import { useSaveConfirmationStore } from '@/stores/saveConfirmation';
+import { archivedConfirmation } from '@/src/utils/saveConfirmationCopy';
 import { haptics } from '@/lib/haptics';
 import { toast } from '@/stores/toast';
 import { useAuthStore } from '@/stores/auth';
@@ -42,7 +45,7 @@ export function useProductSheets(): { api: ProductSheetsApi; sheets: React.React
   const businessId = session?.activeBusiness?.id ?? '';
   const userId = session?.user.id ?? '';
   const currency = session?.activeBusiness?.currency ?? 'GNF';
-  const { products, saving, variantsByProduct, createProduct, updateProduct, upsertVariants, adjustStock, fetchVariants, fetchProductStats } = useProductStore();
+  const { products, saving, variantsByProduct, createProduct, updateProduct, upsertVariants, adjustStock, fetchVariants, fetchProductStats, archiveProduct, restoreProduct } = useProductStore();
   const fournisseurs = useFournisseursStore(s => s.fournisseurs);
   const fetchFournisseurs = useFournisseursStore(s => s.fetchFournisseurs);
   const role = session?.activeMembership?.role;
@@ -142,6 +145,47 @@ export function useProductSheets(): { api: ProductSheetsApi; sheets: React.React
     [adjustTarget, businessId, userId, adjustStock],
   );
 
+  // Archive / restore live in the edit sheet (Gérer rows have no buttons). Both go through the outbox, so
+  // they work offline and the lists move at once.
+  const handleArchive = useCallback((p: Product) => {
+    appAlert(
+      'Archiver ce produit ?',
+      `"${p.name}" ne sera plus proposé à la vente. Vous pourrez le restaurer depuis Gérer.`,
+      [
+        { text: 'Annuler', style: 'cancel' },
+        {
+          text: 'Archiver', style: 'destructive',
+          onPress: async () => {
+            const done = await archiveProduct(p.id, businessId);
+            if (!done) {
+              haptics.error();
+              failAlert('productNotArchived', {
+                err: useProductStore.getState().error, label: 'Réessayer',
+                onPress: () => { void archiveProduct(p.id, businessId); },
+              });
+              return;
+            }
+            haptics.destructive();
+            setEditOpen(false);
+            // Archiving is a flag flip, so it can be undone: Annuler = restoreProduct.
+            useSaveConfirmationStore.getState().show({
+              message: archivedConfirmation(p.name),
+              tone: 'success',
+              undo: async () => { await restoreProduct(p.id, businessId, userId); },
+            });
+          },
+        },
+      ],
+    );
+  }, [archiveProduct, restoreProduct, businessId, userId]);
+
+  const handleRestore = useCallback(async (p: Product) => {
+    await restoreProduct(p.id, businessId, userId);
+    haptics.success();
+    setEditOpen(false);
+    toast.success(`${p.name} restauré ✓`);
+  }, [restoreProduct, businessId, userId]);
+
   const api: ProductSheetsApi = {
     openAdd: name => { setResume(null); setPrefill(name); setAddOpen(true); },
     openEdit: (p, opts) => { setEditTarget(p); setEditExpand(!!opts?.expandCost); setEditOpen(true); },
@@ -196,6 +240,12 @@ export function useProductSheets(): { api: ProductSheetsApi; sheets: React.React
           // One sheet at a time: close the edit sheet, then open the stock adjustment.
           setEditOpen(false);
           setTimeout(() => { setAdjustTarget(p); setAdjustOpen(true); }, 350);
+        }}
+        onArchive={handleArchive}
+        onRestore={p => { void handleRestore(p); }}
+        onStats={p => {
+          setEditOpen(false);
+          setTimeout(() => { setStatsTarget(p); setStatsOpen(true); }, 350);
         }}
       />
       <StockAdjustModal

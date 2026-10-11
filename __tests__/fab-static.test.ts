@@ -1,4 +1,4 @@
-// The "Produit" (Gérer mode) and "Livraison" (Fournisseurs) floating buttons used to
+// The "Livraison" (Fournisseurs) floating buttons used to
 // "breathe" (a 4-second scale + opacity loop). They now just sit there.
 import fs from 'fs';
 import path from 'path';
@@ -7,7 +7,6 @@ const read = (p: string) => fs.readFileSync(path.resolve(__dirname, '..', p), 'u
 const code = (s: string) => s.split('\n').filter(l => !l.trim().startsWith('//')).join('\n');
 
 describe.each([
-  ['src/components/products/ProductManager.tsx', 'Produit'],
   ['app/(app)/fournisseurs/index.tsx', 'Livraison'],
 ])('%s', (file, label) => {
   const src = code(read(file));
@@ -21,6 +20,15 @@ describe.each([
   });
   it('the button itself and its position are unchanged', () => {
     expect(src).toMatch(new RegExp(`<Text style=\\{styles\\.fabExtendedLabel\\}>${label}</Text>`));
+    expect(src).toMatch(/fabContainer: \{ position: 'absolute'/);
+  });
+});
+
+describe("Gérer mode's floating +", () => {
+  const src = code(read('src/components/products/ProductManager.tsx'));
+  it('is a plain View + Pressable: no breathing animation, no animated transform', () => {
+    expect(src).not.toMatch(/fabScale|fabOpacity|fabReduceMotion|toValue: 1\.06/);
+    expect(src).toMatch(/<View style=\{styles\.fabContainer\}>/);
     expect(src).toMatch(/fabContainer: \{ position: 'absolute'/);
   });
 });

@@ -1423,8 +1423,9 @@ export default function VendreScreen() {
   // Add / edit / stock / stats sheets live here so sell mode and Gérer mode share them.
   const { api: productSheets, sheets: productSheetElements } = useProductSheets();
   const [gerer, setGerer] = useState(false);
-  const [focusProductId, setFocusProductId] = useState<string | null>(null);
-  const exitGerer = useCallback(() => { setGerer(false); setFocusProductId(null); }, []);
+  // A product to open in the edit sheet as soon as the list has it (old low_stock push links).
+  const [pendingEditId, setPendingEditId] = useState<string | null>(null);
+  const exitGerer = useCallback(() => setGerer(false), []);
   // Vendre is a tab and stays mounted: params from other screens (low-stock card, old deep links)
   // are re-applied on every arrival, then cleared.
   const { openForm, prefillName, gerer: gererParam, focus: focusParam } = useLocalSearchParams<{ openForm?: string; prefillName?: string; gerer?: string; focus?: string }>();
@@ -1435,9 +1436,12 @@ export default function VendreScreen() {
       router.setParams({ openForm: undefined, prefillName: undefined });
     }
     if (gererParam === '1') {
-      setFocusProductId(focusParam ? String(focusParam) : null);
       setGerer(true);
-      router.setParams({ gerer: undefined, focus: undefined });
+      router.setParams({ gerer: undefined });
+    }
+    if (focusParam) {
+      setPendingEditId(String(focusParam));
+      router.setParams({ focus: undefined });
     }
   }, [openForm, prefillName, gererParam, focusParam, canManage]);
   // A non-manager can never be left in Gérer (role change / business switch).
@@ -1452,6 +1456,14 @@ export default function VendreScreen() {
     if (!isVendeur || vendeurScopeAll) return allProducts;
     return allProducts.filter(p => vendeurProductScope.includes(p.id));
   }, [allProducts, vendeurProductScope, vendeurScopeAll, isVendeur]);
+  // Resolve a deep-linked product (low_stock push → /catalogue/<id>) once the list has it.
+  useEffect(() => {
+    if (!pendingEditId || !canManage) return;
+    const p = products.find(x => x.id === pendingEditId);
+    if (!p) return;
+    setPendingEditId(null);
+    productSheets.openEdit(p);
+  }, [pendingEditId, products, canManage]);
   const { cart, submitting, error: saleError, addToCart, addToCartVariant, removeFromCart, setQty, toggleBulk, clearCart, submitSale, submitCarnetDebt, clearError } =
     useSalesStore();
 
@@ -1875,7 +1887,7 @@ export default function VendreScreen() {
   if (gerer && canManage) {
     return (
       <Screen tab>
-        <ProductManager sheets={productSheets} onExit={exitGerer} focusProductId={focusProductId} />
+        <ProductManager sheets={productSheets} onExit={exitGerer} />
         {productSheetElements}
       </Screen>
     );
@@ -2016,7 +2028,8 @@ export default function VendreScreen() {
             cartBulkQty={cartQtyMap[item.id]?.bulk ?? 0}
             variants={variantsByProduct[item.id]}
             pulse={productSheets.pulseId === item.id}
-            onManage={canManage ? () => { setFocusProductId(item.id); setGerer(true); } : undefined}
+            // Long-press = the fast path to the SAME edit sheet a Gérer row opens.
+            onManage={canManage ? () => productSheets.openEdit(item) : undefined}
             onAdd={() => {
               if (item.sale_price <= 0) {
                 // "Prix à fixer": a manager completes it right here; a seller is told who can.
@@ -2261,7 +2274,7 @@ export default function VendreScreen() {
       {showFloating && (
         <View style={[styles.floatingActions, { bottom: floatingBottom }]} pointerEvents="box-none">
           <Pressable
-            onPress={() => { haptics.select(); setFocusProductId(null); setGerer(true); }}
+            onPress={() => { haptics.select(); setGerer(true); }}
             style={({ pressed }) => [styles.gererPill, pressed && { opacity: 0.8 }]}
             accessibilityRole="button"
             accessibilityLabel="Gérer les produits"

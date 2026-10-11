@@ -13,7 +13,6 @@ describe('"Nouveau produit" speaks of modèles', () => {
     expect(sheet).toMatch(/>Modèle<\/Text>/);                       // column header (style uppercases it)
     expect(sheet).toMatch(/>Ajouter un modèle<\/Text>/);
     expect(sheet).toMatch(/accessibilityLabel="Retirer ce modèle"/);
-    expect(cat).toMatch(/'Modifier · Gérer les modèles'/);
   });
   it('the derived total reads "Total : N" — a count, no unit', () => {
     expect(sheet).toMatch(/Total : \{totalPieces\}/);

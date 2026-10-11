@@ -15,7 +15,7 @@ const read = (rel: string) => fs.readFileSync(path.resolve(__dirname, '..', rel)
 describe('messages name exactly what was deleted', () => {
   const nbsp = (s: string) => s.replace(/ /g, ' ');
   it('every kind', () => {
-    expect(archivedConfirmation('Riz 5kg')).toBe('Riz 5kg désactivé.');
+    expect(archivedConfirmation('Riz 5kg')).toBe('Riz 5kg archivé.');
     expect(nbsp(saleCancelledConfirmation(45000, 'GNF', 'Aïssatou'))).toBe('Vente annulée : Aïssatou, 45 000 GNF.');
     expect(nbsp(saleCancelledConfirmation(45000, 'GNF'))).toBe('Vente annulée : 45 000 GNF.');
     expect(supplierDeletedConfirmation('Mamadou Diallo')).toBe('Fournisseur supprimé : Mamadou Diallo.');
@@ -33,8 +33,8 @@ describe('messages name exactly what was deleted', () => {
 
 describe('where each delete says something (source contract)', () => {
   it('product archive: Annuler = restoreProduct; a failure speaks with Réessayer', () => {
-    const src = read('src/components/products/ProductManager.tsx');
-    expect(src).toMatch(/message: archivedConfirmation\(product\.name\),[\s\S]*?undo: async \(\) => \{ await restoreProduct\(product\.id, businessId, userId\); \}/);
+    const src = read('src/components/products/useProductSheets.tsx');
+    expect(src).toMatch(/message: archivedConfirmation\(p\.name\),[\s\S]*?undo: async \(\) => \{ await restoreProduct\(p\.id, businessId, userId\); \}/);
     expect(src).toMatch(/failAlert\('productNotArchived'/);
     expect(read('stores/products.ts')).toMatch(/archiveProduct: \(id: string, businessId: string\) => Promise<boolean>/);
   });

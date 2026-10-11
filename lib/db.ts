@@ -1091,6 +1091,19 @@ export async function getVariantsCache(businessId: string, productId: string): P
   return getDashboardKpiCache(`variants:${businessId}:${productId}`);
 }
 
+// The "Archivés" list in Gérer mode. Server truth (display units), never overlaid — a queued
+// archive/restore is applied on top by the store. Same table/encryption/logout wipe as the other
+// dashboard-side caches, under a prefixed key — no new migration.
+export async function saveArchivedProductsCache(businessId: string, products: unknown): Promise<void> {
+  try {
+    await writeCache({ table: 'dashboard_kpi_cache', keyCol: 'business_id', keyValue: `archived_products:${businessId}`, json: JSON.stringify(products), hashKey: `archived_products:${businessId}` });
+  } catch { }
+}
+
+export async function getArchivedProductsCache(businessId: string): Promise<unknown | null> {
+  return getDashboardKpiCache(`archived_products:${businessId}`);
+}
+
 // ─── Rapports snapshot cache ────────────────────────────────────────────────────
 
 export async function saveRapportsCache(businessId: string, snapshot: unknown): Promise<void> {

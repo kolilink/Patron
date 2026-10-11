@@ -481,7 +481,7 @@ describe('rapid loop wiring (source-level: this repo has no component-render har
   });
   it('a product with no sale price shows a tappable "Prix à fixer", never a 0 price', () => {
     const pm = read('src/components/products/ProductManager.tsx');
-    expect(pm).toContain("needsSalePrice(product) ? '—' :");
+    expect(pm).toContain('noPrice\n            ? <Text variant="caption" style={{ color: palette.primary }}>Prix à fixer</Text>');
     expect(pm).toContain('Prix à fixer');
     const vendre = read('app/(app)/(tabs)/vendre.tsx');
     expect(vendre).toContain('Prix à fixer');
