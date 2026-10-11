@@ -29,6 +29,8 @@ import { useFournisseursStore, type Fournisseur } from '@/stores/fournisseurs';
 import { haptics } from '@/lib/haptics';
 import { toast } from '@/stores/toast';
 import { QuantityStepper } from '@/src/components/ui/QuantityStepper';
+import { QuickAddProductSheet } from '@/src/components/QuickAddProductSheet';
+import { needsPurchasePrice } from '@/src/utils/quickAddProduct';
 import { LoadingStatus } from '@/src/components/ui/LoadingStatus';
 import { perUnitCost, totalInvested, unitProfit } from '@/src/utils/productPricing';
 import { formatAmount, formatAmountInput, parseAmountInput, formatAmountValue, formatSignedAmount } from '@/src/utils/format';
@@ -980,6 +982,8 @@ interface ProductRowProps {
   variants?: ProductVariant[];
   /** Deactivate call in flight: the row shows "Désactivation…" and ignores taps. */
   archiving?: boolean;
+  /** Draft principle: a product born without a purchase price stays sellable; this opens the full form to complete it. */
+  onFixPrice?: () => void;
 }
 
 function StockStatus({ product, variants }: { product: Product; variants?: ProductVariant[] }) {
@@ -1078,7 +1082,7 @@ function ArchiveSwitch({ value, onChange }: { value: 'actifs' | 'archives'; onCh
   );
 }
 
-function ProductRow({ product, currency, onPress, onLongPress, archived, variants, archiving }: ProductRowProps) {
+function ProductRow({ product, currency, onPress, onLongPress, archived, variants, archiving, onFixPrice }: ProductRowProps) {
   const { palette } = useTheme();
   const styles = useMemo(() => makeStyles(palette), [palette]);
   const initial = product.name.charAt(0).toUpperCase();
@@ -1133,6 +1137,11 @@ function ProductRow({ product, currency, onPress, onLongPress, archived, variant
         {archiving
           ? <LoadingStatus word="Désactivation" color={palette.textSecondary} variant="caption" />
           : <StockStatus product={product} variants={variants} />}
+        {onFixPrice && needsPurchasePrice(product) && !product.has_variants && (
+          <Pressable onPress={onFixPrice} hitSlop={8} accessibilityRole="button" accessibilityLabel={`Fixer le prix d'achat de ${product.name}`}>
+            <Text variant="caption" style={{ color: palette.primary }}>Prix à fixer</Text>
+          </Pressable>
+        )}
       </View>
       {/* One non-wrapping row: price, then — only for a real variant product
           — its chevron. Previously the chevron sat absolutely positioned at
@@ -1328,7 +1337,10 @@ export default function CatalogueScreen() {
   // screen was visible for a frame before the form slid up on top of it,
   // reading as "arrive, then it opens" instead of one direct motion.
   const { openForm, prefillName } = useLocalSearchParams<{ openForm?: string; prefillName?: string }>();
-  const [showForm, setShowForm] = useState(openForm === '1');
+  const [showForm, setShowForm] = useState(false);
+  // The "+" flow is the compact quick-add sheet; the full form (showForm) is now
+  // only for editing an existing product / completing a draft ("Prix à fixer").
+  const [showQuickAdd, setShowQuickAdd] = useState(openForm === '1');
   const [editingProduct, setEditingProduct] = useState<Product | null>(null);
   // Set only by the "no search match" create-shortcut below; cleared on every
   // other way of opening the form so a stale searched name never leaks into
@@ -1344,7 +1356,7 @@ export default function CatalogueScreen() {
     if (openForm === '1') {
       setEditingProduct(null);
       setPrefillProductName(prefillName ?? undefined);
-      setShowForm(true);
+      setShowQuickAdd(true);
       router.setParams({ openForm: undefined, prefillName: undefined });
     }
   }, [openForm, prefillName]);
@@ -1562,6 +1574,8 @@ export default function CatalogueScreen() {
       if (ok) {
         haptics.success();
         setShowForm(false);
+        setShowQuickAdd(false);
+        setPrefillProductName(undefined);
         const wasNewProduct = !editingProduct;
         setEditingProduct(null);
         if (wasNewProduct) {
@@ -1725,7 +1739,7 @@ export default function CatalogueScreen() {
             title="Aucun produit pour le moment."
             subtitle="Ajoutez ce que vous vendez pour aller plus vite à la caisse."
             actionLabel="+ Ajouter un produit"
-            onAction={() => { setEditingProduct(null); setPrefillProductName(undefined); setShowForm(true); }}
+            onAction={() => { setEditingProduct(null); setPrefillProductName(undefined); setShowQuickAdd(true); }}
           />
         ) : (
           <EmptyState
@@ -1769,6 +1783,7 @@ export default function CatalogueScreen() {
                 archived={tab === 'archives'}
                 variants={variantsByProduct[item.id]}
                 archiving={archivingIds.includes(item.id)}
+                onFixPrice={canEdit && tab === 'actifs' ? () => { setEditingProduct(item); setShowForm(true); } : undefined}
                 onPress={() => {
                   if (tab === 'archives') {
                     setRestoreSheetProduct(item);
@@ -1795,7 +1810,7 @@ export default function CatalogueScreen() {
                   onCreate={() => {
                     setEditingProduct(null);
                     setPrefillProductName(search.trim());
-                    setShowForm(true);
+                    setShowQuickAdd(true);
                   }}
                 />
               ) : null
@@ -1891,6 +1906,24 @@ export default function CatalogueScreen() {
         initialName={prefillProductName}
       />
 
+      {/* Quick-add sheet — the "+" flow. Same handleSave as the full form. */}
+      <QuickAddProductSheet
+        visible={showQuickAdd}
+        onClose={() => { setShowQuickAdd(false); setPrefillProductName(undefined); }}
+        onSubmit={({ data, hasVariants, variants }) => handleSave(data, hasVariants, variants)}
+        onPickExisting={p => {
+          setShowQuickAdd(false);
+          setPrefillProductName(undefined);
+          // Open the EXISTING product for editing instead of duplicating it.
+          setTimeout(() => { setEditingProduct(p); setShowForm(true); }, 350);
+        }}
+        saving={saving}
+        currency={currency}
+        products={products}
+        fournisseurs={fournisseurs}
+        initialName={prefillProductName}
+      />
+
       {/* Stock Adjust Modal */}
       <StockAdjustModal
         visible={showAdjust}
@@ -1914,7 +1947,7 @@ export default function CatalogueScreen() {
       {canEdit && tab === 'actifs' && products.length > 0 && (
         <View style={styles.fabContainer}>
           <Pressable
-            onPress={() => { setEditingProduct(null); setPrefillProductName(undefined); setShowForm(true); }}
+            onPress={() => { setEditingProduct(null); setPrefillProductName(undefined); setShowQuickAdd(true); }}
             style={({ pressed }) => [styles.fabExtended, pressed && { opacity: 0.82 }]}
             accessibilityLabel="Ajouter un produit"
             accessibilityRole="button"
