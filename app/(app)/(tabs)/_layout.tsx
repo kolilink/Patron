@@ -24,12 +24,11 @@ import { trackEvent } from '@/lib/analytics';
 
 type IoniconName = React.ComponentProps<typeof Ionicons>['name'];
 
-// Same 4 tabs, same order, same icons as before — outline inactive → filled
+// The Produits tab is gone (merged into Vendre's Gérer mode): 3 tabs now. Same order/icons as before — outline inactive → filled
 // active (spec §4). Keyed by route name so the visible-set filter below can
 // resolve any subset (investisseur sees fewer tabs).
 const TAB_DEFS: Record<string, { label: string; outline: IoniconName; filled: IoniconName }> = {
   index: { label: 'Accueil', outline: 'home-outline', filled: 'home' },
-  catalogue: { label: 'Produits', outline: 'grid-outline', filled: 'grid' },
   vendre: { label: 'Vendre', outline: 'cart-outline', filled: 'cart' },
   plus: { label: 'Moi', outline: 'person-outline', filled: 'person' },
 };
@@ -134,13 +133,6 @@ export default function TabsLayout() {
       }}
     >
       <Tabs.Screen name="index" options={{ title: 'Accueil' }} />
-      <Tabs.Screen
-        name="catalogue"
-        options={{
-          title: 'Produits',
-          href: isInvestisseur || isVendeur ? null : undefined,
-        }}
-      />
       <Tabs.Screen
         name="vendre"
         options={{

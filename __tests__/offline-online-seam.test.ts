@@ -87,7 +87,7 @@ describe('4. cache-write failures are never silent', () => {
 });
 
 describe('5. a FAB never sits beside an empty state\'s own actions', () => {
-  it('Vendre has no FAB at all any more (its offline-empty FAB collided with the empty state)', () => {
+  it('Vendre has no legacy animated FAB (its floating Gérer/+ only show with products, never beside an empty state)', () => {
     const v = read('app/(app)/(tabs)/vendre.tsx');
     expect(v).not.toMatch(/AnimatedFAB/);
     expect(v).not.toMatch(/styles\.fabContainer/);
@@ -96,12 +96,13 @@ describe('5. a FAB never sits beside an empty state\'s own actions', () => {
     expect(read('app/(app)/fournisseurs/index.tsx')).toMatch(/\{fournisseurs\.length > 0 && \(\s*\n\s*<View style=\{styles\.fabContainer\}>/);
     expect(read('app/(app)/ventes/index.tsx')).toMatch(/canSell && !selected && sales\.length > 0/);
     expect(read('app/(app)/clients/index.tsx')).toMatch(/allClients\.length > 0 && !isInvestisseur/);
-    expect(read('app/(app)/(tabs)/catalogue.tsx')).toMatch(/tab === 'actifs' && products\.length > 0/);
+    expect(read('src/components/products/ProductManager.tsx')).toMatch(/tab === 'actifs' && products\.length > 0 && !anySheetOpen/);
+    expect(read('app/(app)/(tabs)/vendre.tsx')).toMatch(/const showFloating = canManage && products\.length > 0 && !anySheetOpen/);
     expect(read('app/(app)/depenses/index.tsx')).toMatch(/\{!isEmpty && \(/);
   });
   it('the empty states that lost a FAB still offer the action', () => {
     expect(read('app/(app)/fournisseurs/index.tsx')).toMatch(/linkLabel="Nouvelle livraison"/);
-    expect(read('app/(app)/(tabs)/vendre.tsx')).toMatch(/linkLabel=\{offline && !isVendeur \? 'Ajouter un produit'/);
+    expect(read('app/(app)/(tabs)/vendre.tsx')).toMatch(/linkLabel=\{offline && canManage \? 'Ajouter un produit'/);
   });
 });
 

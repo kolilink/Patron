@@ -3,24 +3,25 @@ import { Animated, Easing, Keyboard, Platform, Pressable, ScrollView, StyleSheet
 import ReAnimated, { FadeIn, FadeInDown, FadeOut, LinearTransition } from 'react-native-reanimated';
 import { Ionicons } from '@expo/vector-icons';
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
-import { FormSheet } from '@/src/components/ui/FormSheet';
+import { GestureSheet } from '@/src/components/ui/GestureSheet';
 import { Button } from '@/src/components/ui/Button';
 import { Text } from '@/src/components/ui/Text';
 import { QuantityStepper } from '@/src/components/ui/QuantityStepper';
 import { useKeyboardVisible } from '@/src/hooks/useKeyboardVisible';
 import { useTheme, spacing, fontFamily as FF } from '@/src/theme';
 import type { Palette } from '@/src/theme';
-import type { Product } from '@/src/types';
+import type { Product, ProductVariant } from '@/src/types';
 import type { Fournisseur } from '@/stores/fournisseurs';
 import { haptics } from '@/lib/haptics';
 import { useReduceMotion } from '@/src/hooks/useReduceMotion';
 import { SilentKeyboardAccessory } from '@/src/components/ui/SilentKeyboardAccessory';
 import { formatAmount, formatAmountInput } from '@/src/utils/format';
-import { clearQuickAddDraft, loadQuickAddDraft, saveQuickAddDraft } from '@/lib/quickAddDraft';
+import { newDraftId, removeQuickAddDraft, saveQuickAddDraft, type QuickAddDraft } from '@/lib/quickAddDraft';
 import {
   EMPTY_QUICK_ADD,
   afterAdd,
   canSubmit,
+  editingToState,
   isBlankDraft,
   addVariant,
   computeCostLine,
@@ -39,7 +40,7 @@ import {
 interface Props {
   visible: boolean;
   onClose: () => void;
-  /** Same save path as the full form (offline outbox, variants, undo banner). */
+  /** Add: createProduct via the outbox (sheet stays open). Edit: updateProduct (host closes the sheet on ok). */
   onSubmit: (payload: QuickAddPayload) => Promise<{ ok: boolean }>;
   /** She tapped an existing product in the suggestions: open it, don't duplicate it. */
   onPickExisting: (product: Product) => void;
@@ -48,8 +49,17 @@ interface Props {
   products: Product[];
   fournisseurs: Fournisseur[];
   initialName?: string;
-  /** Scopes the (temporary, local-only) draft. */
+  /** Scopes the local-only "À compléter" drafts. */
   businessId: string;
+  /** Edit mode: the stored product (the sheet becomes "Modifier le produit" and closes on save). */
+  editing?: Product | null;
+  initialVariants?: ProductVariant[];
+  /** Edit mode: open with "Plus d'informations" already expanded (the "Prix d'achat ?" affordance). */
+  startExpanded?: boolean;
+  /** Edit mode: stock is shown as a fact; this opens the entrée/perte sheet. */
+  onAdjust?: (product: Product) => void;
+  /** Reopen an "À compléter" draft instead of starting fresh. */
+  resumeDraft?: QuickAddDraft | null;
 }
 
 // Number pads have no return key on iOS, so the OS injects its own "Next/Done" pill above them
@@ -126,7 +136,9 @@ function ValidCheck({ valid, color }: { valid: boolean; color: string }) {
 
 export function QuickAddProductSheet({
   visible, onClose, onSubmit, onPickExisting, saving, currency, products, fournisseurs, initialName, businessId,
+  editing, initialVariants, startExpanded, onAdjust, resumeDraft,
 }: Props) {
+  const isEdit = !!editing;
   const { palette } = useTheme();
   const styles = useMemo(() => makeStyles(palette), [palette]);
   const insets = useSafeAreaInsets();
@@ -137,13 +149,12 @@ export function QuickAddProductSheet({
   const [s, setS] = useState<QuickAddState>(EMPTY_QUICK_ADD);
   const [expanded, setExpanded] = useState(false);
   const [error, setError] = useState<string | null>(null);
-  const [restored, setRestored] = useState(false);
   const [toastName, setToastName] = useState<string | null>(null);
   const fade = useRef(new Animated.Value(1)).current;
   const sRef = useRef(s);
   sRef.current = s;
-  const draftReady = useRef(false);
-  const wasVisible = useRef(false);
+  const draftId = useRef(newDraftId());
+  const added = useRef(false);
   const submitting = useRef(false);
   const toastTimer = useRef<ReturnType<typeof setTimeout> | null>(null);
 
@@ -154,58 +165,48 @@ export function QuickAddProductSheet({
   const purchaseRef = useRef<TextInput>(null);
   const feesRef = useRef<TextInput>(null);
 
-  // Reset AFTER the sheet has gone, never as it opens: resetting on open swapped stale rows for
-  // fresh ones mid slide-in, which read as overlapping text. A quick reopen resets immediately.
-  const resetPending = useRef(false);
+  // Initialise whenever the sheet opens. The sheet slides up from off-screen (GestureSheet), so this
+  // swap is never visible. Add mode opens FRESH (or resumes an "À compléter" draft the host hands in);
+  // edit mode loads the stored product.
   useEffect(() => {
-    if (visible) {
-      wasVisible.current = true;
-      if (resetPending.current) {
-        resetPending.current = false;
-        setS({ ...EMPTY_QUICK_ADD, name: initialName ?? '' });
-        setExpanded(false);
-        setError(null);
-        setRestored(false);
-      } else if (initialName) {
-        setS(prev => (prev.name ? prev : { ...prev, name: initialName }));
-      }
-      // TEMPORARY (see lib/quickAddDraft.ts): restore the last draft; a prefilled name is a new intent, so it wins.
-      draftReady.current = false;
-      if (initialName) {
-        draftReady.current = true;
-      } else {
-        void loadQuickAddDraft(businessId).then(d => {
-          if (d) {
-            setS(prev => (isBlankDraft(prev) ? d : prev));
-            setRestored(true);
-          }
-          draftReady.current = true;
-        }).catch(() => { draftReady.current = true; }); // failure: silent — a draft that cannot load is simply absent
-      }
+    if (!visible) return;
+    added.current = false;
+    setError(null);
+    if (editing) {
+      setS(editingToState(editing, initialVariants ?? [], currency));
+      setExpanded(!!startExpanded);
       return;
     }
-    // Closing (swipe-down, Annuler, or after a save): persist what is on screen right now.
-    if (wasVisible.current) {
-      wasVisible.current = false;
-      if (draftReady.current) void saveQuickAddDraft(businessId, sRef.current).catch(() => {}); // failure: silent — draft is best-effort
+    if (resumeDraft) {
+      draftId.current = resumeDraft.id;
+      setS(resumeDraft.state);
+    } else {
+      draftId.current = newDraftId();
+      setS({ ...EMPTY_QUICK_ADD, name: initialName ?? '' });
     }
-    resetPending.current = true;
-    const t = setTimeout(() => {
-      setS(EMPTY_QUICK_ADD);
-      setExpanded(false);
-      setError(null);
-      setRestored(false);
-      resetPending.current = false;
-    }, 500);
+    setExpanded(false);
+    const t = setTimeout(() => nameRef.current?.focus(), 340);
     return () => clearTimeout(t);
-  }, [visible, initialName, businessId]);
+  }, [visible, editing?.id, resumeDraft?.id, initialName]);
 
-  // Keep the draft current while the sheet is open (debounced). Blank state clears it.
+  // Edit mode: a variant product's models arrive asynchronously after the sheet opens.
   useEffect(() => {
-    if (!visible || !draftReady.current) return;
-    const t = setTimeout(() => { void saveQuickAddDraft(businessId, s).catch(() => {}); }, 400); // failure: silent — draft is best-effort
+    if (!visible || !editing?.has_variants || !initialVariants?.length) return;
+    setS(prev => (prev.variants.length > 0 ? prev : { ...prev, models: true, variants: editingToState(editing, initialVariants, currency).variants }));
+  }, [visible, editing?.id, initialVariants]);
+
+  // "À compléter": keep what is half-filled (debounced) so a swipe-down, Annuler or app kill never loses it.
+  // Add mode only; a blank sheet removes its own draft. Never synced, never in the outbox.
+  useEffect(() => {
+    if (!visible || isEdit) return;
+    const t = setTimeout(() => { void saveQuickAddDraft(businessId, draftId.current, s).catch(() => {}); }, 400); // failure: silent — draft is best-effort
     return () => clearTimeout(t);
-  }, [s, visible, businessId]);
+  }, [s, visible, isEdit, businessId]);
+
+  const handleClose = () => {
+    if (!isEdit && !added.current) void saveQuickAddDraft(businessId, draftId.current, sRef.current).catch(() => {}); // failure: silent — draft is best-effort
+    onClose();
+  };
 
   useEffect(() => () => { if (toastTimer.current) clearTimeout(toastTimer.current); }, []);
 
@@ -244,8 +245,9 @@ export function QuickAddProductSheet({
       setS(prev => afterAdd(prev));
       setExpanded(false);
       setError(null);
-      setRestored(false);
-      void clearQuickAddDraft(businessId).catch(() => {}); // failure: silent — draft is best-effort
+      // This product is saved: its draft is done; the next entry is a new draft.
+      void removeQuickAddDraft(businessId, draftId.current).catch(() => {}); // failure: silent — draft is best-effort
+      draftId.current = newDraftId();
       requestAnimationFrame(() => {
         nameRef.current?.focus();
         if (reduce) fade.setValue(1);
@@ -261,21 +263,15 @@ export function QuickAddProductSheet({
     submitting.current = true;
     setError(null);
     const name = s.name.trim();
-    const res = await onSubmit(toQuickAddPayload(s, currency));
+    const payload = toQuickAddPayload(s, currency, editing ? { reorder_level: editing.reorder_level, unit: editing.unit, cost_price: editing.cost_price } : undefined);
+    const res = await onSubmit(payload);
     submitting.current = false;
     if (!res.ok) return; // the failure alert is shown by the host; everything typed stays
     haptics.success();
+    if (isEdit) return; // edit: the host closes the sheet and confirms
+    added.current = true;
     showToast(name);
     resetForNext();
-  };
-
-  const discardDraft = () => {
-    haptics.select();
-    setS(EMPTY_QUICK_ADD);
-    setExpanded(false);
-    setRestored(false);
-    void clearQuickAddDraft(businessId).catch(() => {}); // failure: silent — draft is best-effort
-    nameRef.current?.focus();
   };
 
   const collapsedName = expanded && nameOk;
@@ -284,13 +280,11 @@ export function QuickAddProductSheet({
   const stagger = (i: number) => (reduce ? undefined : FadeInDown.delay(i * 60).duration(200));
 
   return (
-    <FormSheet
+    <GestureSheet
       ref={scrollRef}
       visible={visible}
-      onClose={onClose}
-      onShow={() => nameRef.current?.focus()}
-      title="Nouveau produit"
-      onDismiss={onClose}
+      onClose={handleClose}
+      title={isEdit ? 'Modifier le produit' : 'Nouveau produit'}
       contentContainerStyle={{ paddingBottom: 16 }}
       keyboardShouldPersistTaps="handled"
       keyboardDismissMode="on-drag"
@@ -312,19 +306,11 @@ export function QuickAddProductSheet({
       }
       footer={
         <View style={[styles.footer, { paddingBottom: keyboardUp ? spacing[3] : Math.max(insets.bottom, spacing[5]) }]}>
-          <Button label="Ajouter" loadingLabel="Ajout" onPress={submit} loading={saving} disabled={!canSubmit(s)} fullWidth size="lg" />
+          <Button label={isEdit ? 'Enregistrer' : 'Ajouter'} loadingLabel={isEdit ? 'Enregistrement' : 'Ajout'} onPress={submit} loading={saving} disabled={!canSubmit(s)} fullWidth size="lg" />
         </View>
       }
     >
       <Animated.View style={{ opacity: fade }}>
-      {restored && (
-        <View style={styles.draftChip}>
-          <Text variant="bodySmall" color="secondary" style={{ flex: 1 }}>Brouillon repris</Text>
-          <Pressable onPress={discardDraft} hitSlop={12} accessibilityRole="button" accessibilityLabel="Effacer le brouillon">
-            <Ionicons name="close-circle" size={20} color={palette.textSecondary} />
-          </Pressable>
-        </View>
-      )}
       {error && (
         <View style={styles.formError}>
           <Text variant="bodySmall" color="warning">{error}</Text>
@@ -356,9 +342,9 @@ export function QuickAddProductSheet({
             onSubmitEditing={() => priceRef.current?.focus()}
             autoFocus={false}
           />
-          {suggestions.length > 0 && (
+          {!isEdit && suggestions.length > 0 && (
             <View style={styles.suggestions}>
-              <Text style={styles.suggestionsHint}>Déjà dans votre catalogue</Text>
+              <Text style={styles.suggestionsHint}>Déjà dans vos produits</Text>
               {suggestions.map(p => (
                 <Pressable
                   key={p.id}
@@ -416,7 +402,21 @@ export function QuickAddProductSheet({
       )}
 
       {/* QUANTITÉ (Modèles OFF) or the model rows (Modèles ON) */}
-      {!s.models ? (
+      {!s.models && isEdit && editing ? (
+        // Edit: the stock is a FACT (it has a movement history); changing it goes through "Ajuster"
+        // (entrée / perte + note) so nothing is silently rewritten here.
+        <Card style={styles.fieldBlock}>
+          <Text style={styles.fieldLabel}>Stock</Text>
+          <View style={styles.qtyRow}>
+            <Text style={[styles.fieldInput, { flex: 1 }]}>{s.qty}</Text>
+            {onAdjust && (
+              <Pressable onPress={() => onAdjust(editing)} hitSlop={10} accessibilityRole="button" accessibilityLabel="Ajuster le stock">
+                <Text variant="label" style={{ color: palette.primary }}>Ajuster</Text>
+              </Pressable>
+            )}
+          </View>
+        </Card>
+      ) : !s.models ? (
         <Card style={styles.fieldBlock}>
           <Text style={styles.fieldLabel}>Quantité</Text>
           <View style={styles.qtyRow}>
@@ -455,16 +455,20 @@ export function QuickAddProductSheet({
                   placeholder="Ex : S"
                   placeholderTextColor={palette.textDisabled}
                 />
-                <TextInput
-                  style={[styles.fieldInput, { width: 60, textAlign: 'right', fontSize: 17 }]}
-                  value={v.qty}
-                  onChangeText={t => setS(prev => patchVariant(prev, v.key, { qty: t.replace(/[^\d]/g, '') }))}
-                  keyboardType="number-pad"
-                  placeholder="0"
-                  placeholderTextColor={palette.textDisabled}
-                  inputAccessoryViewID={IOS_SILENT}
-                  onFocus={revealFocused}
-                />
+                {v.locked ? (
+                  <Text style={[styles.fieldInput, { width: 60, textAlign: 'right', fontSize: 17, color: palette.textSecondary }]}>{v.qty}</Text>
+                ) : (
+                  <TextInput
+                    style={[styles.fieldInput, { width: 60, textAlign: 'right', fontSize: 17 }]}
+                    value={v.qty}
+                    onChangeText={t => setS(prev => patchVariant(prev, v.key, { qty: t.replace(/[^\d]/g, '') }))}
+                    keyboardType="number-pad"
+                    placeholder="0"
+                    placeholderTextColor={palette.textDisabled}
+                    inputAccessoryViewID={IOS_SILENT}
+                    onFocus={revealFocused}
+                  />
+                )}
                 <MoneyInput currency={currency}
                   style={[
                     styles.fieldInput,
@@ -571,7 +575,7 @@ export function QuickAddProductSheet({
         </ReAnimated.View>
       )}
       </Animated.View>
-    </FormSheet>
+    </GestureSheet>
   );
 }
 

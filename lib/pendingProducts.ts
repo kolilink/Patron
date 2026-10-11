@@ -23,7 +23,7 @@ function fromCentsPatch(patch: Record<string, unknown>): Partial<Product> {
   return out as Partial<Product>;
 }
 
-export function applyProductOp(list: Product[], op: QueuedProductOp, now: string = new Date().toISOString()): Product[] {
+export function applyProductOp(list: Product[], op: QueuedProductOp, now: string = new Date().toISOString(), pool: Product[] = []): Product[] {
   const p = op.payload;
   switch (op.operation) {
     case 'create_product': {
@@ -42,7 +42,15 @@ export function applyProductOp(list: Product[], op: QueuedProductOp, now: string
     case 'update_product': {
       const { id, ...patch } = p as { id?: string } & Record<string, unknown>;
       if (!id) return list;
+      // Archive ("désactiver"): the product leaves the active list at once.
+      if (patch.archived === true) return list.filter(x => x.id !== id);
       const disp = fromCentsPatch(patch);
+      // Restore ("réactiver"): it comes back from wherever it currently lives (the archived list).
+      if (patch.archived === false && !list.some(x => x.id === id)) {
+        const back = pool.find(x => x.id === id);
+        if (!back) return list;
+        return [...list, { ...back, ...disp, archived: false } as Product].sort((a, b) => a.name.localeCompare(b.name, 'fr'));
+      }
       return list.map(x => (x.id === id ? { ...x, ...disp } : x));
     }
     case 'adjust_stock_move': {
@@ -63,6 +71,43 @@ export function applyProductOp(list: Product[], op: QueuedProductOp, now: string
   }
 }
 
-export function applyPendingProductOps(base: Product[], ops: QueuedProductOp[], now?: string): Product[] {
-  return ops.reduce((list, op) => applyProductOp(list, op, now), base);
+const isArchiveOp = (o: QueuedProductOp) =>
+  o.operation === 'update_product' && typeof (o.payload as { archived?: unknown }).archived === 'boolean';
+
+/**
+ * Everything the phone knows about, before archive/restore is applied: the server list plus products
+ * created or edited by still-queued ops. A product created offline and then archived/restored before
+ * any sync exists ONLY here, so archive/restore must look it up in this set, not just the server lists.
+ */
+function knownProducts(base: Product[], ops: QueuedProductOp[], now?: string): Product[] {
+  return ops.filter(o => !isArchiveOp(o)).reduce((list, op) => applyProductOp(list, op, now), base);
+}
+
+/** `archivedBase` is the server's "non actifs" list: a queued restore pulls its product back from it. */
+export function applyPendingProductOps(base: Product[], ops: QueuedProductOp[], now?: string, archivedBase: Product[] = []): Product[] {
+  const pool = [...archivedBase, ...knownProducts(base, ops, now)];
+  return ops.reduce((list, op) => applyProductOp(list, op, now, pool), base);
+}
+
+/**
+ * The "non actifs" list under the same ops: a queued archive adds the product (found among everything
+ * known, including products created offline), a queued restore removes it. Recomputed from the base on
+ * every read, like the active list.
+ */
+export function applyPendingArchived(archivedBase: Product[], activeBase: Product[], ops: QueuedProductOp[]): Product[] {
+  const known = knownProducts(activeBase, ops);
+  let list = archivedBase;
+  for (const op of ops) {
+    if (!isArchiveOp(op)) continue;
+    const { id, archived } = op.payload as { id?: string; archived: boolean };
+    if (!id) continue;
+    if (archived) {
+      if (list.some(x => x.id === id)) continue;
+      const p = known.find(x => x.id === id);
+      if (p) list = [...list, { ...p, archived: true } as Product].sort((a, b) => a.name.localeCompare(b.name, 'fr'));
+    } else {
+      list = list.filter(x => x.id !== id);
+    }
+  }
+  return list;
 }

@@ -33,7 +33,7 @@ describe('messages name exactly what was deleted', () => {
 
 describe('where each delete says something (source contract)', () => {
   it('product archive: Annuler = restoreProduct; a failure speaks with Réessayer', () => {
-    const src = read('app/(app)/(tabs)/catalogue.tsx');
+    const src = read('src/components/products/ProductManager.tsx');
     expect(src).toMatch(/message: archivedConfirmation\(product\.name\),[\s\S]*?undo: async \(\) => \{ await restoreProduct\(product\.id, businessId, userId\); \}/);
     expect(src).toMatch(/failAlert\('productNotArchived'/);
     expect(read('stores/products.ts')).toMatch(/archiveProduct: \(id: string, businessId: string\) => Promise<boolean>/);

@@ -13,9 +13,9 @@
 //    merchant never divides.
 
 import { perUnitCost, unitProfit } from '@/src/utils/productPricing';
-import { parseAmountInput } from '@/src/utils/format';
+import { formatAmountInput, parseAmountInput } from '@/src/utils/format';
 import { parseQuantity } from '@/src/utils/quantity';
-import type { Product } from '@/src/types';
+import type { Product, ProductVariant } from '@/src/types';
 import type { CreateProductData, DraftVariant } from '@/stores/products';
 
 export interface QuickVariant {
@@ -27,6 +27,10 @@ export interface QuickVariant {
   price: string;
   /** Has the merchant typed into this row's price? false → follows the starting price. */
   touched: boolean;
+  /** Edit mode: an existing model. Its stock is a fact (changed via "Ajuster"), not an input. */
+  locked?: boolean;
+  /** Edit mode: the model's own purchase price (display units), kept when saving. */
+  cost?: number;
 }
 
 export interface QuickAddState {
@@ -181,7 +185,15 @@ export interface QuickAddPayload {
  * A product born without a purchase price gets cost_price 0 — sellable at
  * once, completable later.
  */
-export function toQuickAddPayload(s: QuickAddState, currency: string): QuickAddPayload {
+/** What an edit must carry over from the stored product so saving never silently rewrites it. */
+export interface ExistingProduct {
+  reorder_level: number;
+  unit: string;
+  /** Stored landed cost (display units) — kept as-is unless the purchase price / fees were touched. */
+  cost_price: number;
+}
+
+export function toQuickAddPayload(s: QuickAddState, currency: string, existing?: ExistingProduct): QuickAddPayload {
   // Nothing but the name may block, so a model row with no name is simply ignored; if no named
   // row is left the product is created as a plain product with the single quantity.
   const namedRows = s.models ? s.variants.filter(v => v.name.trim()) : [];
@@ -190,13 +202,15 @@ export function toQuickAddPayload(s: QuickAddState, currency: string): QuickAddP
   const fees = parseAmountInput(s.fees, currency) || 0;
   const pp = parseAmountInput(s.purchasePrice, currency) || 0;
   const pieces = piecesBought(s);
-  const cost = pp > 0 || fees > 0 ? perUnitCost(pp, fees, pieces) : 0;
+  const untouchedCost = !!existing && fees === 0 &&
+    s.purchasePrice === (existing.cost_price > 0 ? formatAmountInput(String(Math.round(existing.cost_price)), currency) : '');
+  const cost = untouchedCost ? existing!.cost_price : pp > 0 || fees > 0 ? perUnitCost(pp, fees, pieces) : 0;
   const data: CreateProductData = {
     name: s.name.trim(),
-    unit: 'pcs',
+    unit: existing?.unit ?? 'pcs',
     cost_price: cost,
     sale_price: Math.max(parseAmountInput(s.price, currency) || 0, 0),
-    reorder_level: 0,
+    reorder_level: existing?.reorder_level ?? 0,
     initial_stock: s.models ? 0 : singleQty(s),
     supplier_id: s.supplierId || null,
   };
@@ -204,7 +218,7 @@ export function toQuickAddPayload(s: QuickAddState, currency: string): QuickAddP
     ? s.variants.map(v => ({
         name: v.name.trim(),
         sale_price: Math.max(resolvedVariantPrice(v, s, currency) || 0, 0),
-        cost_price: cost,
+        cost_price: v.cost ?? cost,
         stock_qty: variantQty(v),
         reorder_level: 0,
       }))
@@ -256,4 +270,24 @@ export function isBlankDraft(s: QuickAddState): boolean {
 /** Next sheet state after a successful add: everything cleared EXCEPT the quantity (sticky). */
 export function afterAdd(s: QuickAddState): QuickAddState {
   return { ...EMPTY_QUICK_ADD, qty: s.qty };
+}
+
+/** Edit mode: the sheet's starting state for a stored product (its stock is shown as a fact, not typed). */
+export function editingToState(p: Product, variants: ProductVariant[], currency: string): QuickAddState {
+  const money = (n: number) => (n > 0 ? formatAmountInput(String(Math.round(n)), currency) : '');
+  return {
+    name: p.name,
+    price: money(p.sale_price),
+    qty: String(Math.max(Math.round(p.stock_qty || 0), 0)),
+    models: !!p.has_variants,
+    variants: p.has_variants
+      ? variants.map(v => ({
+          key: v.id, name: v.name, qty: String(v.stock_qty), price: money(v.sale_price),
+          touched: true, locked: true, cost: v.cost_price,
+        }))
+      : [],
+    purchasePrice: money(p.cost_price),
+    fees: '',
+    supplierId: p.supplier_id ?? '',
+  };
 }

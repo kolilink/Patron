@@ -3,7 +3,7 @@ import { supabase } from '@/lib/supabase';
 import { translateError } from '@/lib/errors';
 import { generateId, generateFallbackName } from '@/lib/id';
 import { saveProductCache, getProductCache, enqueue, getQueueCount, getCacheTimestamp, saveVariantsCache, getVariantsCache, getAllQueueItemsForOverlay } from '@/lib/db';
-import { applyPendingProductOps, type QueuedProductOp } from '@/lib/pendingProducts';
+import { applyPendingProductOps, applyPendingArchived, type QueuedProductOp } from '@/lib/pendingProducts';
 import { isKnownOffline } from '@/lib/connectivity';
 import { isNetworkError, withNetworkRetry, reportOfflineFallback } from '@/lib/sync';
 import { useSyncStore } from '@/stores/sync';
@@ -123,6 +123,11 @@ interface ProductStore {
 // recomputed — never patched in place — so a refetch can't lose a pending
 // change and nothing is applied twice. The cache only ever stores the BASE.
 let _baseProducts: { businessId: string; list: Product[] } | null = null;
+// The server's "non actifs" list (never overlaid) — a queued archive/restore is applied on top of it.
+let _baseArchived: { businessId: string; list: Product[] } | null = null;
+function baseArchivedFor(businessId: string): Product[] {
+  return _baseArchived && _baseArchived.businessId === businessId ? _baseArchived.list : [];
+}
 
 async function readProductOps(): Promise<QueuedProductOp[]> {
   const { ok } = await getAllQueueItemsForOverlay();
@@ -136,7 +141,7 @@ async function readProductOps(): Promise<QueuedProductOp[]> {
 
 async function overlayOnBase(businessId: string, base: Product[]): Promise<Product[]> {
   _baseProducts = { businessId, list: base };
-  try { return applyPendingProductOps(base, await readProductOps()); } catch { return base; }
+  try { return applyPendingProductOps(base, await readProductOps(), undefined, baseArchivedFor(businessId)); } catch { return base; }
 }
 
 /** Re-derive `products` from the base + the outbox after a local write. */
@@ -147,6 +152,13 @@ async function rebuildProducts(businessId: string): Promise<void> {
   if (useProductStore.getState().products.length > 0 || shown.length > 0) {
     useProductStore.setState({ products: shown, productsFetchedFor: businessId });
   }
+  // The "non actifs" list follows the same queued ops (archive adds, restore removes).
+  try {
+    const ops = await readProductOps();
+    if (ops.some(o => o.operation === 'update_product' && typeof o.payload.archived === 'boolean')) {
+      useProductStore.setState({ archivedProducts: applyPendingArchived(baseArchivedFor(businessId), base, ops) });
+    }
+  } catch { /* the active list is already right; the archive view corrects on its next fetch */ }
 }
 
 async function afterProductEnqueue(): Promise<void> {
@@ -323,7 +335,10 @@ export const useProductStore = create<ProductStore>((set, get) => ({
         sale_price: p.sale_price / 100,
         bulk_price: p.bulk_price != null ? p.bulk_price / 100 : null,
       }));
-      set({ archivedProducts });
+      _baseArchived = { businessId, list: archivedProducts };
+      let shown = archivedProducts;
+      try { shown = applyPendingArchived(archivedProducts, _baseProducts && _baseProducts.businessId === businessId ? _baseProducts.list : [], await readProductOps()); } catch { /* base is fine */ }
+      set({ archivedProducts: shown });
     } catch (err) {
       if (isStaleBusiness(businessId)) return;
       set({ error: translateError(err, "Le chargement n'a pas abouti.") });
@@ -439,31 +454,37 @@ export const useProductStore = create<ProductStore>((set, get) => ({
     return true;
   },
 
+  // Phone-first, like create/edit/adjust: the durable outbox write is the only thing awaited, so
+  // "désactiver" / "réactiver" work offline and the lists move at once (update_product {archived}).
   archiveProduct: (id, businessId) =>
     archiveGuard.run(id, async () => {
     set(state => ({ archivingIds: [...state.archivingIds, id] }));
     try {
-      const { error } = await supabase.from('products').update({ archived: true }).eq('id', id);
-      if (error) throw error;
-      set(state => ({ products: state.products.filter(p => p.id !== id) }));
+      try {
+        await enqueue('update_product', { id, archived: true });
+      } catch (err) {
+        set({ error: isOutboxValidationError(err) ? null : translateError(err, "Impossible de désactiver le produit") });
+        return false;
+      }
+      try { await rebuildProducts(businessId); } catch (err) { console.error('[archiveProduct] rebuild failed (write already succeeded)', err); }
+      void afterProductEnqueue();
       return true;
-    } catch (err) {
-      set({ error: translateError(err, "Impossible de désactiver le produit") });
-      return false;
     } finally {
       set(state => ({ archivingIds: state.archivingIds.filter(x => x !== id) }));
     }
   }).then(r => (r.ran ? r.value : false)),
 
-  restoreProduct: async (id, businessId, userId) => {
+  restoreProduct: async (id, businessId, _userId) => {
     try {
-      const { error } = await supabase.from('products').update({ archived: false }).eq('id', id);
-      if (error) throw error;
-      set(state => ({ archivedProducts: state.archivedProducts.filter(p => p.id !== id) }));
-      await get().fetchProducts(businessId, userId);
+      await enqueue('update_product', { id, archived: false });
     } catch (err) {
-      set({ error: translateError(err, 'Erreur de restauration') });
+      set({ error: isOutboxValidationError(err) ? null : translateError(err, 'Erreur de restauration') });
+      return;
     }
+    try { await rebuildProducts(businessId); } catch (err) { console.error('[restoreProduct] rebuild failed (write already succeeded)', err); }
+    // The product leaves "non actifs" even if no ops mention it yet (rebuild only touches it when ops exist).
+    set(state => ({ archivedProducts: state.archivedProducts.filter(p => p.id !== id) }));
+    void afterProductEnqueue();
   },
 
   adjustStock: async (productId, businessId, userId, qty, type, note) => {
@@ -619,6 +640,7 @@ export const useProductStore = create<ProductStore>((set, get) => ({
   reset: () => {
     notifiedLowStockIds.clear();
     _baseProducts = null;
+    _baseArchived = null;
     set({ products: [], archivingIds: [], archivedProducts: [], variantsByProduct: {}, vendeurProductScope: [], vendeurScopeAll: true, productsFetchedFor: null, loading: false, error: null, offline: false, offlineSince: null });
   },
 }));

@@ -284,7 +284,7 @@ describe('between adds (the rapid loop)', () => {
   });
 });
 
-describe('temporary draft (local only)', () => {
+describe('À compléter drafts (local only, max 3)', () => {
   const store: Record<string, string> = {};
   const outbox: any[] = [];
   const load = () => {
@@ -298,50 +298,71 @@ describe('temporary draft (local only)', () => {
   };
   beforeEach(() => { Object.keys(store).forEach(k => delete store[k]); outbox.length = 0; });
 
-  it('a half-filled sheet is saved, and reopening restores it (last draft wins)', async () => {
+  it('a half-filled sheet is kept and listed newest first', async () => {
     const d = load();
-    await d.saveQuickAddDraft('biz', st({ name: 'Rizz', price: '2 500', qty: '3' }));
-    await d.saveQuickAddDraft('biz', st({ name: 'Huile', price: '9 000', qty: '1' }));
-    const back = await d.loadQuickAddDraft('biz');
-    expect(back).toMatchObject({ name: 'Huile', price: '9 000' });
+    await d.saveQuickAddDraft('biz', 'a', st({ name: 'Riz', price: '2 500' }));
+    await new Promise(r => setTimeout(r, 2));
+    await d.saveQuickAddDraft('biz', 'b', st({ name: 'Huile' }));
+    expect((await d.listQuickAddDrafts('biz')).map(x => x.id)).toEqual(['b', 'a']);
+  });
+  it('saving the same id again updates that draft instead of adding another', async () => {
+    const d = load();
+    await d.saveQuickAddDraft('biz', 'a', st({ name: 'Ri' }));
+    await d.saveQuickAddDraft('biz', 'a', st({ name: 'Riz' }));
+    const l = await d.listQuickAddDrafts('biz');
+    expect(l).toHaveLength(1);
+    expect(l[0].state.name).toBe('Riz');
+  });
+  it('holds at most 3: the 4th pushes the oldest out', async () => {
+    const d = load();
+    for (const [i, n] of ['A', 'B', 'C', 'D'].entries()) {
+      await d.saveQuickAddDraft('biz', n, st({ name: n }));
+      await new Promise(r => setTimeout(r, 2 + i));
+    }
+    const l = await d.listQuickAddDrafts('biz');
+    expect(l.map(x => x.state.name)).toEqual(['D', 'C', 'B']);
+    expect(d.MAX_DRAFTS).toBe(3);
   });
   it('survives an app restart (fresh module instance reads the same persisted store)', async () => {
-    await load().saveQuickAddDraft('biz', st({ name: 'Sucre', price: '1 000' }));
-    const afterRestart = load(); // new module graph, same kv_store
-    expect(await afterRestart.loadQuickAddDraft('biz')).toMatchObject({ name: 'Sucre' });
+    await load().saveQuickAddDraft('biz', 'a', st({ name: 'Sucre', price: '1 000' }));
+    expect((await load().listQuickAddDrafts('biz'))[0].state).toMatchObject({ name: 'Sucre' });
   });
-  it('× discards: cleared draft restores nothing', async () => {
+  it('deleting a draft removes only that one', async () => {
     const d = load();
-    await d.saveQuickAddDraft('biz', st({ name: 'Sucre' }));
-    await d.clearQuickAddDraft('biz');
-    expect(await d.loadQuickAddDraft('biz')).toBeNull();
+    await d.saveQuickAddDraft('biz', 'a', st({ name: 'A' }));
+    await d.saveQuickAddDraft('biz', 'b', st({ name: 'B' }));
+    await d.removeQuickAddDraft('biz', 'a');
+    expect((await d.listQuickAddDrafts('biz')).map(x => x.id)).toEqual(['b']);
   });
-  it('saving a blank sheet clears the draft (quantity alone is not a draft)', async () => {
+  it('a blank sheet removes its own draft (quantity alone is not a draft)', async () => {
     const d = load();
-    await d.saveQuickAddDraft('biz', st({ name: 'Sucre' }));
-    await d.saveQuickAddDraft('biz', st({ qty: '9' }));
+    await d.saveQuickAddDraft('biz', 'a', st({ name: 'Sucre' }));
+    await d.saveQuickAddDraft('biz', 'a', st({ qty: '9' }));
     expect(isBlankDraft(st({ qty: '9' }))).toBe(true);
-    expect(await d.loadQuickAddDraft('biz')).toBeNull();
+    expect(await d.listQuickAddDrafts('biz')).toEqual([]);
   });
-  it('drafts are per business and a corrupt draft is no draft', async () => {
+  it('per business; a corrupt blob is no drafts', async () => {
     const d = load();
-    await d.saveQuickAddDraft('a', st({ name: 'X' }));
-    expect(await d.loadQuickAddDraft('b')).toBeNull();
-    store['quick_add_draft_a'] = '{not json';
-    expect(await d.loadQuickAddDraft('a')).toBeNull();
+    await d.saveQuickAddDraft('a', 'x', st({ name: 'X' }));
+    expect(await d.listQuickAddDrafts('b')).toEqual([]);
+    store['quick_add_drafts_a'] = '{not json';
+    expect(await d.listQuickAddDrafts('a')).toEqual([]);
   });
-  it('a draft never touches the outbox', async () => {
+  it('folds in the single draft written by the previous build, once', async () => {
     const d = load();
-    await d.saveQuickAddDraft('biz', st({ name: 'Sucre', price: '1' }));
-    await d.loadQuickAddDraft('biz');
-    await d.clearQuickAddDraft('biz');
+    store['quick_add_draft_biz'] = JSON.stringify(st({ name: 'Ancien', price: '5 000' }));
+    const l = await d.listQuickAddDrafts('biz');
+    expect(l.map(x => x.state.name)).toEqual(['Ancien']);
+    expect(store['quick_add_draft_biz']).toBe('');
+    expect((await d.listQuickAddDrafts('biz'))).toHaveLength(1);
+  });
+  it('a draft never touches the outbox or the network', async () => {
+    const d = load();
+    await d.saveQuickAddDraft('biz', 'a', st({ name: 'Sucre', price: '1' }));
+    await d.listQuickAddDrafts('biz');
+    await d.removeQuickAddDraft('biz', 'a');
     expect(outbox).toEqual([]);
     expect(require('fs').readFileSync(require('path').join(__dirname, '../lib/quickAddDraft.ts'), 'utf8')).not.toMatch(/enqueue|supabase/);
-  });
-  it('is marked TEMPORARY so the catalogue→Vendre merge replaces it rather than layering on it', () => {
-    const src = require('fs').readFileSync(require('path').join(__dirname, '../lib/quickAddDraft.ts'), 'utf8');
-    expect(src).toMatch(/TEMPORARY/);
-    expect(src).toMatch(/À compléter/);
   });
 });
 
@@ -369,16 +390,17 @@ describe('sheet chrome', () => {
     expect(src).not.toMatch(/LayoutAnimation|configureLayoutNext/);
     expect(src).toContain('LinearTransition');
   });
-  it('footer: single button, page-sheet presentation, keyboard-aware inset', () => {
+  it('footer: exactly one action button, in the gesture sheet, keyboard-aware inset', () => {
     const src = sheetSrc();
-    expect((src.match(/label="Ajouter"/g) || []).length).toBe(1);
-    expect(src).not.toContain('presentationStyle="fullScreen"'); // native swipe-down needs the page sheet
+    expect((src.match(/<Button label=/g) || []).length).toBe(1);
+    expect(src).toContain('<GestureSheet');
+    expect(src).not.toContain('<FormSheet');
     expect(src).toContain('useKeyboardVisible');
   });
-  it('state resets after close, not as the sheet opens', () => {
+  it('opens FRESH (or with the draft/product it is handed) — no auto-restore of a previous draft', () => {
     const src = sheetSrc();
-    expect(src).toContain('resetPending');
-    expect(src).toMatch(/setTimeout\(\(\) => \{\s*setS\(EMPTY_QUICK_ADD\)/);
+    expect(src).toContain('setS({ ...EMPTY_QUICK_ADD, name: initialName ?? \'\' })');
+    expect(src).not.toMatch(/loadQuickAddDraft|Brouillon repris/);
   });
 });
 
@@ -429,38 +451,38 @@ describe('labels, currency suffix, variants', () => {
 
 describe('rapid loop wiring (source-level: this repo has no component-render harness)', () => {
   const src = () => sheetSrc();
-  const cat = () => require('fs').readFileSync(require('path').join(__dirname, '../app/(app)/(tabs)/catalogue.tsx'), 'utf8') as string;
+  const read = (p: string) => require('fs').readFileSync(require('path').join(__dirname, '..', p), 'utf8') as string;
+  const hook = () => read('src/components/products/useProductSheets.tsx');
   it('Ajouter is disabled only by an empty name', () => {
     expect(src()).toContain('disabled={!canSubmit(s)}');
   });
-  it('after a successful add the sheet stays open: no onClose in the submit path, Nom is re-focused, fields fade-clear', () => {
-    const body = src().slice(src().indexOf('const resetForNext'), src().indexOf('const discardDraft'));
+  it('after a successful add the sheet stays open: no onClose in the reset path, Nom is re-focused, fields fade-clear', () => {
+    const body = src().slice(src().indexOf('const resetForNext'), src().indexOf('const submit = async'));
     expect(body).not.toContain('onClose');
     expect(body).toContain('nameRef.current?.focus()');
     expect(body).toContain('afterAdd(prev)');
     expect(body).toMatch(/toValue: 0, duration: 120/);
   });
-  it('a failed add keeps everything typed (no reset) and the success path ticks + toasts the product name', () => {
-    const body = src().slice(src().indexOf('const submit = async'), src().indexOf('const discardDraft'));
+  it('a failed add keeps everything typed (no reset); success ticks + toasts the product name; edit mode neither loops nor toasts', () => {
+    const body = src().slice(src().indexOf('const submit = async'), src().indexOf('const collapsedName'));
     expect(body).toMatch(/if \(!res\.ok\) return;/);
     expect(body).toContain('haptics.success()');
+    expect(body).toMatch(/if \(isEdit\) return;/);
     expect(body).toContain('showToast(name)');
     expect(src()).toContain('`${toastName} ajouté`');
   });
-  it('swipe-down and Annuler both close; a visible × discards the restored draft', () => {
-    expect(src()).toContain('onDismiss={onClose}');
-    expect(src()).toContain('accessibilityLabel="Effacer le brouillon"');
-    expect(src()).toContain('Brouillon repris');
-  });
   it('the host adds via createProduct (outbox) without closing the sheet and pulses the new card', () => {
-    const c = cat();
-    const body = c.slice(c.indexOf('const handleQuickAdd'), c.indexOf('useEffect(() => {\n    if (!pulseId)'));
+    const h = hook();
+    const body = h.slice(h.indexOf('const handleAdd'), h.indexOf('const handleEdit'));
     expect(body).toContain('createProduct(businessId, userId, data)');
-    expect(body).not.toContain('setShowQuickAdd(false)');
+    expect(body).not.toContain('setAddOpen(false)');
     expect(body).toContain('setPulseId(created.id)');
-    expect(c).toContain('pulse={pulseId === item.id}');
   });
-  it('a product with no sale price shows the tappable "Prix à fixer"', () => {
-    expect(cat()).toContain('needsSalePrice(product) || needsPurchasePrice(product)');
+  it('a product with no sale price shows a tappable "Prix à fixer", never a 0 price', () => {
+    const pm = read('src/components/products/ProductManager.tsx');
+    expect(pm).toContain("needsSalePrice(product) ? '—' :");
+    expect(pm).toContain('Prix à fixer');
+    const vendre = read('app/(app)/(tabs)/vendre.tsx');
+    expect(vendre).toContain('Prix à fixer');
   });
 });

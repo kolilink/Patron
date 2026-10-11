@@ -4,21 +4,19 @@ import fs from 'fs';
 import path from 'path';
 
 const read = (p: string) => fs.readFileSync(path.resolve(__dirname, '..', p), 'utf8');
-const cat = read('app/(app)/(tabs)/catalogue.tsx');
+const sheet = read('src/components/QuickAddProductSheet.tsx');
+const cat = read('src/components/products/ProductManager.tsx');
 
 describe('"Nouveau produit" speaks of modèles', () => {
   it('toggle, column header, add button, remove label, manage link', () => {
-    expect(cat).toMatch(/>Modèles<\/Text>/);                       // toggle
-    expect(cat).toMatch(/\n\s+Modèles\n/);                          // column header (style uppercases it)
-    expect(cat).toMatch(/>Ajouter un modèle<\/Text>/);
-    expect(cat).toMatch(/accessibilityLabel="Retirer ce modèle"/);
+    expect(sheet).toMatch(/>Modèles<\/Text>/);                      // toggle
+    expect(sheet).toMatch(/>Modèle<\/Text>/);                       // column header (style uppercases it)
+    expect(sheet).toMatch(/>Ajouter un modèle<\/Text>/);
+    expect(sheet).toMatch(/accessibilityLabel="Retirer ce modèle"/);
     expect(cat).toMatch(/'Modifier · Gérer les modèles'/);
   });
-  it('the stock total line pluralises "1 modèle" / "3 modèles"', () => {
-    const m = cat.match(/sur \{variantDraft\.length\} modèle\{variantDraft\.length !== 1 \? 's' : ''\}/);
-    expect(m).not.toBeNull();
-    const line = (n: number) => `${n} modèle${n !== 1 ? 's' : ''}`;
-    expect([line(1), line(2), line(3)]).toEqual(['1 modèle', '2 modèles', '3 modèles']);
+  it('the derived total reads "Total : N" — a count, no unit', () => {
+    expect(sheet).toMatch(/Total : \{totalPieces\}/);
   });
   it('the reception screen says "Répartition par modèle"', () => {
     expect(read('app/(app)/fournisseurs/reception.tsx')).toMatch(/Répartition par modèle/);
