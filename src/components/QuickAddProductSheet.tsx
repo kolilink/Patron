@@ -1,6 +1,6 @@
 import React, { useCallback, useEffect, useMemo, useRef, useState } from 'react';
-import { Animated, Easing, Keyboard, LayoutAnimation, Platform, Pressable, ScrollView, StyleSheet, Switch, TextInput, View } from 'react-native';
-import ReAnimated, { FadeInDown } from 'react-native-reanimated';
+import { Animated, Easing, Keyboard, Platform, Pressable, ScrollView, StyleSheet, Switch, TextInput, View } from 'react-native';
+import ReAnimated, { FadeIn, FadeInDown, LinearTransition } from 'react-native-reanimated';
 import { Ionicons } from '@expo/vector-icons';
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
 import { FormSheet } from '@/src/components/ui/FormSheet';
@@ -14,7 +14,7 @@ import type { Product } from '@/src/types';
 import type { Fournisseur } from '@/stores/fournisseurs';
 import { haptics } from '@/lib/haptics';
 import { useReduceMotion } from '@/src/hooks/useReduceMotion';
-import { configureLayoutNext } from '@/src/hooks/useAnimateLayoutChange';
+import { SilentKeyboardAccessory } from '@/src/components/ui/SilentKeyboardAccessory';
 import { formatAmount, formatAmountInput } from '@/src/utils/format';
 import {
   EMPTY_QUICK_ADD,
@@ -47,16 +47,58 @@ interface Props {
   initialName?: string;
 }
 
-/** Money field: a fixed, non-editable currency prefix INSIDE the field ("GNF 1 200"). */
-function MoneyInput({ currency, style, inputRef, ...rest }: React.ComponentProps<typeof TextInput> & { currency: string; inputRef?: React.Ref<TextInput> }) {
+// Number pads have no return key on iOS, so the OS injects its own "Next/Done" pill above them
+// unless a linked accessory claims the slot. This one is zero-height and shows nothing.
+const SILENT_ID = 'quick-add-product-silent-accessory';
+const IOS_SILENT = Platform.OS === 'ios' ? SILENT_ID : undefined;
+
+const AnimatedPressable = ReAnimated.createAnimatedComponent(Pressable);
+
+/**
+ * Money field. Empty → no currency anywhere. The moment digits exist, a non-editable gray
+ * lowercase currency fades in right AFTER the number ("1000 gnf"). Never used for quantities.
+ */
+function MoneyInput({ currency, style, inputRef, value, ...rest }: React.ComponentProps<typeof TextInput> & { currency: string; inputRef?: React.Ref<TextInput> }) {
   const { palette } = useTheme();
-  const flat = StyleSheet.flatten(style) as { fontSize?: number; textAlign?: 'right' | 'left'; [k: string]: unknown };
+  const reduce = useReduceMotion();
+  const flat = (StyleSheet.flatten(style) ?? {}) as { fontSize?: number; fontFamily?: string; textAlign?: string; flex?: number; minWidth?: number };
+  const has = typeof value === 'string' && value.length > 0;
+  const unit = currency.toLowerCase();
+  const fontSize = flat.fontSize ?? 22;
+  const unitSize = Math.max(fontSize - 6, 12);
+  const fade = reduce ? undefined : FadeIn.duration(180);
+
+  if (flat.textAlign === 'right') {
+    return (
+      <View style={{ flexDirection: 'row', alignItems: 'center', flex: flat.flex, minWidth: flat.minWidth }}>
+        <TextInput ref={inputRef} value={value} inputAccessoryViewID={IOS_SILENT} {...rest} style={[style, { flex: 1, minWidth: 0 }]} />
+        {has && (
+          <ReAnimated.Text entering={fade} style={{ fontFamily: FF.medium, fontSize: unitSize, color: palette.textSecondary, marginLeft: 4 }}>{unit}</ReAnimated.Text>
+        )}
+      </View>
+    );
+  }
   return (
-    <View style={{ flexDirection: 'row', alignItems: 'center', gap: spacing[1.5], flex: flat?.flex as number | undefined, minWidth: flat?.minWidth as number | undefined }}>
-      <Text style={{ fontFamily: FF.medium, fontSize: Math.max((flat?.fontSize ?? 22) - 4, 13), color: palette.textSecondary }}>{currency}</Text>
-      <TextInput ref={inputRef} {...rest} style={[style, { flex: 1, minWidth: 0 }]} />
+    <View style={{ justifyContent: 'center' }}>
+      <TextInput ref={inputRef} value={value} inputAccessoryViewID={IOS_SILENT} {...rest} style={style} />
+      {has && (
+        // Overlay: a transparent copy of the typed number (same font → same width) pushes the unit
+        // to sit directly after the digits. Purely visual, never intercepts touches.
+        <ReAnimated.View entering={fade} pointerEvents="none" style={[StyleSheet.absoluteFill, { justifyContent: 'center' }]}>
+          <Text numberOfLines={1} style={{ fontFamily: flat.fontFamily, fontSize, color: 'transparent' }}>
+            {value}
+            <Text style={{ fontFamily: FF.medium, fontSize: unitSize, color: palette.textSecondary }}>{` ${unit}`}</Text>
+          </Text>
+        </ReAnimated.View>
+      )}
     </View>
   );
+}
+
+/** A card that glides when siblings above it change height. Scoped to the scroll content only. */
+function Card({ style, children }: { style?: React.ComponentProps<typeof View>['style']; children: React.ReactNode }) {
+  const reduce = useReduceMotion();
+  return <ReAnimated.View layout={reduce ? undefined : LinearTransition.duration(220)} style={style}>{children}</ReAnimated.View>;
 }
 
 /** Checkmark that scales/fades in over ~200ms the moment its field becomes valid. */
@@ -98,15 +140,33 @@ export function QuickAddProductSheet({
   const purchaseRef = useRef<TextInput>(null);
   const feesRef = useRef<TextInput>(null);
 
+  // Reset AFTER the sheet has gone, never as it opens: resetting on open swapped stale rows for
+  // fresh ones mid slide-in, which read as overlapping text. A quick reopen resets immediately.
+  const resetPending = useRef(false);
   useEffect(() => {
     if (visible) {
-      setS({ ...EMPTY_QUICK_ADD, name: initialName ?? '' });
+      if (resetPending.current) {
+        resetPending.current = false;
+        setS({ ...EMPTY_QUICK_ADD, name: initialName ?? '' });
+        setExpanded(false);
+        setError(null);
+      } else if (initialName) {
+        setS(prev => (prev.name ? prev : { ...prev, name: initialName }));
+      }
+      return;
+    }
+    resetPending.current = true;
+    const t = setTimeout(() => {
+      setS(EMPTY_QUICK_ADD);
       setExpanded(false);
       setError(null);
-    }
+      resetPending.current = false;
+    }, 500);
+    return () => clearTimeout(t);
   }, [visible, initialName]);
 
-  const animate = useCallback(() => configureLayoutNext(LayoutAnimation.Presets.easeInEaseOut), []);
+  // Lower fields: keep the focused one above the keyboard (footer stays put; content scrolls).
+  const revealFocused = () => { setTimeout(() => scrollRef.current?.scrollToEnd({ animated: !reduce }), 250); };
 
   const nameOk = nameValid(s);
   const priceOk = priceValid(s, currency);
@@ -115,7 +175,6 @@ export function QuickAddProductSheet({
   const totalPieces = derivedTotalPieces(s.variants);
 
   const toggleExpanded = () => {
-    animate();
     const next = !expanded;
     setExpanded(next);
     haptics.toggle(next);
@@ -123,7 +182,6 @@ export function QuickAddProductSheet({
   };
 
   const onToggleModels = (on: boolean) => {
-    animate();
     haptics.toggle(on);
     setError(null);
     setS(prev => setModels(prev, on));
@@ -154,6 +212,7 @@ export function QuickAddProductSheet({
       contentContainerStyle={{ paddingBottom: 16 }}
       keyboardShouldPersistTaps="handled"
       keyboardDismissMode="on-drag"
+      accessory={<SilentKeyboardAccessory nativeID={SILENT_ID} />}
       footer={
         <View style={[styles.footer, { paddingBottom: keyboardUp ? spacing[3] : Math.max(insets.bottom, spacing[5]) }]}>
           <Button label="Ajouter" loadingLabel="Ajout" onPress={submit} loading={saving} fullWidth size="lg" />
@@ -168,13 +227,13 @@ export function QuickAddProductSheet({
 
       {/* NOM */}
       {collapsedName ? (
-        <Pressable style={styles.confirmedRow} onPress={() => { animate(); setExpanded(false); setTimeout(() => nameRef.current?.focus(), 60); }} accessibilityLabel="Modifier le nom">
+        <AnimatedPressable entering={reduce ? undefined : FadeIn.duration(180)} layout={reduce ? undefined : LinearTransition.duration(220)} style={styles.confirmedRow} onPress={() => { setExpanded(false); setTimeout(() => nameRef.current?.focus(), 60); }} accessibilityLabel="Modifier le nom">
           <Text style={styles.confirmedLabel}>Produit</Text>
           <Text style={styles.confirmedValue} numberOfLines={1}>{s.name.trim()}</Text>
           <ValidCheck valid color={palette.success} />
-        </Pressable>
+        </AnimatedPressable>
       ) : (
-        <View style={styles.fieldBlock}>
+        <Card style={styles.fieldBlock}>
           <View style={styles.labelRow}>
             <Text style={styles.fieldLabel}>Nom du produit</Text>
             <ValidCheck valid={nameOk} color={palette.success} />
@@ -208,11 +267,11 @@ export function QuickAddProductSheet({
               ))}
             </View>
           )}
-        </View>
+        </Card>
       )}
 
       {/* MODÈLES */}
-      <View style={styles.toggleRow}>
+      <Card style={styles.toggleRow}>
         <Text variant="body" color="secondary" style={{ flex: 1, fontFamily: FF.medium }}>Modèles</Text>
         <Switch
           value={s.models}
@@ -221,17 +280,17 @@ export function QuickAddProductSheet({
           thumbColor={palette.surface}
           accessibilityLabel="Modèles"
         />
-      </View>
+      </Card>
 
       {/* JE VENDS À */}
       {collapsedPrice ? (
-        <Pressable style={styles.confirmedRow} onPress={() => { animate(); setExpanded(false); setTimeout(() => priceRef.current?.focus(), 60); }} accessibilityLabel="Modifier le prix">
+        <AnimatedPressable entering={reduce ? undefined : FadeIn.duration(180)} layout={reduce ? undefined : LinearTransition.duration(220)} style={styles.confirmedRow} onPress={() => { setExpanded(false); setTimeout(() => priceRef.current?.focus(), 60); }} accessibilityLabel="Modifier le prix">
           <Text style={styles.confirmedLabel}>{s.models ? 'Prix de départ' : 'Je vends à'}</Text>
-          <Text style={styles.confirmedValue} numberOfLines={1}>{s.price} {currency}</Text>
+          <Text style={styles.confirmedValue} numberOfLines={1}>{s.price} {currency.toLowerCase()}</Text>
           <ValidCheck valid color={palette.success} />
-        </Pressable>
+        </AnimatedPressable>
       ) : (
-        <View style={styles.fieldBlock}>
+        <Card style={styles.fieldBlock}>
           <View style={styles.labelRow}>
             <Text style={styles.fieldLabel}>Je vends à</Text>
             <ValidCheck valid={priceOk} color={palette.success} />
@@ -247,12 +306,12 @@ export function QuickAddProductSheet({
             blurOnSubmit={false}
             onSubmitEditing={() => { if (s.models) Keyboard.dismiss(); else qtyRef.current?.focus(); }}
           />
-        </View>
+        </Card>
       )}
 
       {/* QUANTITÉ (Modèles OFF) or the model rows (Modèles ON) */}
       {!s.models ? (
-        <View style={styles.fieldBlock}>
+        <Card style={styles.fieldBlock}>
           <Text style={styles.fieldLabel}>Quantité</Text>
           <View style={styles.qtyRow}>
             <View style={{ flex: 1 }}>
@@ -261,15 +320,17 @@ export function QuickAddProductSheet({
                 onChange={v => setS(prev => ({ ...prev, qty: v }))}
                 inputRef={qtyRef}
                 compact
+                inputAccessoryViewID={SILENT_ID}
+                onFocus={revealFocused}
                 inputStyle={styles.fieldInput}
                 returnKeyType="done"
                 onSubmitEditing={() => Keyboard.dismiss()}
               />
             </View>
           </View>
-        </View>
+        </Card>
       ) : (
-        <View style={styles.variantList}>
+        <Card style={styles.variantList}>
           <View style={styles.variantHeader}>
             <Text style={[styles.fieldLabel, { flex: 1.3 }]}>Modèle</Text>
             <Text style={[styles.fieldLabel, { width: 60, textAlign: 'right' }]}>Qté</Text>
@@ -280,12 +341,12 @@ export function QuickAddProductSheet({
             // Untouched rows show the starting price as a quiet "prefilled" value.
             const shown = v.touched ? v.price : s.price;
             return (
-              <ReAnimated.View key={v.key} entering={stagger(i)} style={styles.variantRow}>
+              <ReAnimated.View key={v.key} entering={stagger(i)} layout={reduce ? undefined : LinearTransition.duration(220)} style={styles.variantRow}>
                 <TextInput
                   style={[styles.fieldInput, { flex: 1.3, fontSize: 17 }]}
                   value={v.name}
                   onChangeText={t => { setError(null); setS(prev => patchVariant(prev, v.key, { name: t })); }}
-                  placeholder="S, M, Rouge…"
+                  placeholder="Ex : S"
                   placeholderTextColor={palette.textDisabled}
                 />
                 <TextInput
@@ -295,6 +356,8 @@ export function QuickAddProductSheet({
                   keyboardType="number-pad"
                   placeholder="0"
                   placeholderTextColor={palette.textDisabled}
+                  inputAccessoryViewID={IOS_SILENT}
+                  onFocus={revealFocused}
                 />
                 <MoneyInput currency={currency}
                   style={[
@@ -305,12 +368,12 @@ export function QuickAddProductSheet({
                   value={shown}
                   onChangeText={t => setS(prev => patchVariant(prev, v.key, { price: formatAmountInput(t, currency) }))}
                   keyboardType="decimal-pad"
-                  placeholder="0"
                   placeholderTextColor={palette.textDisabled}
+                  onFocus={revealFocused}
                   accessibilityHint={v.touched ? undefined : 'Prix de départ, modifiable'}
                 />
                 <Pressable
-                  onPress={() => { animate(); setS(prev => removeVariant(prev, v.key)); }}
+                  onPress={() => { setS(prev => removeVariant(prev, v.key)); }}
                   hitSlop={10}
                   style={{ width: 28, alignItems: 'flex-end' }}
                   accessibilityLabel="Retirer ce modèle"
@@ -323,14 +386,14 @@ export function QuickAddProductSheet({
           })}
           <Pressable
             style={styles.addVariant}
-            onPress={() => { animate(); haptics.select(); setS(prev => addVariant(prev)); }}
+            onPress={() => { haptics.select(); setS(prev => addVariant(prev)); }}
             accessibilityRole="button"
           >
             <Ionicons name="add-circle-outline" size={18} color={palette.primary} />
             <Text variant="label" style={{ color: palette.primary, marginLeft: 4 }}>Ajouter un modèle</Text>
           </Pressable>
-          <Text style={styles.derived}>Total : {totalPieces} pièce{totalPieces > 1 ? 's' : ''}</Text>
-        </View>
+          <Text style={styles.derived}>Total : {totalPieces}</Text>
+        </Card>
       )}
 
       {/* PLUS D'INFORMATIONS */}
@@ -341,7 +404,7 @@ export function QuickAddProductSheet({
 
       {expanded && (
         <ReAnimated.View entering={reduce ? undefined : FadeInDown.duration(200)}>
-          <View style={styles.fieldBlock}>
+          <Card style={styles.fieldBlock}>
             <Text style={styles.fieldLabel}>Prix d'achat</Text>
             <MoneyInput currency={currency}
               inputRef={purchaseRef}
@@ -353,9 +416,10 @@ export function QuickAddProductSheet({
               returnKeyType="next"
               blurOnSubmit={false}
               onSubmitEditing={() => feesRef.current?.focus()}
+              onFocus={revealFocused}
             />
-          </View>
-          <View style={styles.fieldBlock}>
+          </Card>
+          <Card style={styles.fieldBlock}>
             <Text style={styles.fieldLabel}>Frais</Text>
             <MoneyInput currency={currency}
               inputRef={feesRef}
@@ -364,8 +428,9 @@ export function QuickAddProductSheet({
               onChangeText={v => setS(prev => ({ ...prev, fees: formatAmountInput(v, currency) }))}
               keyboardType="decimal-pad"
               placeholderTextColor={palette.textDisabled}
+              onFocus={revealFocused}
             />
-          </View>
+          </Card>
           {cost && (
             <View style={styles.costLine}>
               <Text style={[styles.costText, { color: cost.profit != null && cost.profit < 0 ? palette.warning : palette.success }]}>
@@ -378,7 +443,7 @@ export function QuickAddProductSheet({
               </Text>
             </View>
           )}
-          <View style={styles.fieldBlock}>
+          <Card style={styles.fieldBlock}>
             <Text style={styles.fieldLabel}>Fournisseur</Text>
             <ScrollView horizontal showsHorizontalScrollIndicator={false} keyboardShouldPersistTaps="handled" contentContainerStyle={{ gap: spacing[2], paddingVertical: spacing[1] }}>
               {[{ id: '', name: 'Marché' }, ...fournisseurs.map(f => ({ id: f.id, name: f.name }))].map(opt => {
@@ -396,7 +461,7 @@ export function QuickAddProductSheet({
                 );
               })}
             </ScrollView>
-          </View>
+          </Card>
         </ReAnimated.View>
       )}
     </FormSheet>
