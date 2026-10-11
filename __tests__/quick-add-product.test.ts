@@ -233,3 +233,28 @@ describe('offline create drains with the same UUID', () => {
 
 // keep the import used so the module graph matches production
 void drainQueue;
+
+describe('polish pass: labels, currency prefix, footer', () => {
+  const src = require('fs').readFileSync(require('path').join(__dirname, '../src/components/QuickAddProductSheet.tsx'), 'utf8');
+  it('labels carry no currency, parenthetical or "unitaire"', () => {
+    expect(src).toContain('>Je vends à<');
+    expect(src).toContain('>Prix d\'achat<');
+    expect(src).toContain('>Frais<');
+    expect(src).not.toMatch(/unitaire|transport, etc|\$\{currency\}`\}<\/Text>|· \$\{currency\}/);
+  });
+  it('every decimal-pad input is a MoneyInput (currency prefix inside the field); no bare money TextInput', () => {
+    const blocks = src.match(/<(TextInput|MoneyInput)\b[\s\S]*?\/>/g) as string[];
+    const decimal = blocks.filter(b => b.includes('decimal-pad'));
+    expect(decimal.length).toBe(4); // price, variant price, purchase, fees
+    decimal.forEach(b => expect(b.startsWith('<MoneyInput')).toBe(true));
+  });
+  it('quantity row has no unit label', () => {
+    expect(src).not.toContain('pièces</Text>\n            </View>');
+    expect(src).not.toMatch(/>pièces</);
+  });
+  it('footer: single button, full-screen presentation, keyboard-aware inset', () => {
+    expect((src.match(/label="Ajouter"/g) || []).length).toBe(1);
+    expect(src).toContain('presentationStyle="fullScreen"');
+    expect(src).toContain('useKeyboardVisible');
+  });
+});

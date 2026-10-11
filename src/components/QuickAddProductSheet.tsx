@@ -7,6 +7,7 @@ import { FormSheet } from '@/src/components/ui/FormSheet';
 import { Button } from '@/src/components/ui/Button';
 import { Text } from '@/src/components/ui/Text';
 import { QuantityStepper } from '@/src/components/ui/QuantityStepper';
+import { useKeyboardVisible } from '@/src/hooks/useKeyboardVisible';
 import { useTheme, spacing, fontFamily as FF } from '@/src/theme';
 import type { Palette } from '@/src/theme';
 import type { Product } from '@/src/types';
@@ -46,6 +47,18 @@ interface Props {
   initialName?: string;
 }
 
+/** Money field: a fixed, non-editable currency prefix INSIDE the field ("GNF 1 200"). */
+function MoneyInput({ currency, style, inputRef, ...rest }: React.ComponentProps<typeof TextInput> & { currency: string; inputRef?: React.Ref<TextInput> }) {
+  const { palette } = useTheme();
+  const flat = StyleSheet.flatten(style) as { fontSize?: number; textAlign?: 'right' | 'left'; [k: string]: unknown };
+  return (
+    <View style={{ flexDirection: 'row', alignItems: 'center', gap: spacing[1.5], flex: flat?.flex as number | undefined, minWidth: flat?.minWidth as number | undefined }}>
+      <Text style={{ fontFamily: FF.medium, fontSize: Math.max((flat?.fontSize ?? 22) - 4, 13), color: palette.textSecondary }}>{currency}</Text>
+      <TextInput ref={inputRef} {...rest} style={[style, { flex: 1, minWidth: 0 }]} />
+    </View>
+  );
+}
+
 /** Checkmark that scales/fades in over ~200ms the moment its field becomes valid. */
 function ValidCheck({ valid, color }: { valid: boolean; color: string }) {
   const reduce = useReduceMotion();
@@ -71,6 +84,8 @@ export function QuickAddProductSheet({
   const styles = useMemo(() => makeStyles(palette), [palette]);
   const insets = useSafeAreaInsets();
   const reduce = useReduceMotion();
+  // With the keyboard up there is no home indicator to clear: the footer sits flush on the keyboard.
+  const keyboardUp = useKeyboardVisible();
 
   const [s, setS] = useState<QuickAddState>(EMPTY_QUICK_ADD);
   const [expanded, setExpanded] = useState(false);
@@ -121,7 +136,6 @@ export function QuickAddProductSheet({
     await onSubmit(toQuickAddPayload(s, currency));
   };
 
-  const priceLabel = s.models ? `Je vends à (prix de départ) · ${currency}` : `Je vends à · ${currency}`;
   const collapsedName = expanded && nameOk;
   const collapsedPrice = expanded && priceOk;
 
@@ -134,11 +148,14 @@ export function QuickAddProductSheet({
       onClose={onClose}
       onShow={() => nameRef.current?.focus()}
       title="Nouveau produit"
+      // fullScreen: KeyboardAvoidingView offset is exactly 0 (the pageSheet offset of 46 is a guess
+      // that left the footer and scroll content disagreeing about where the keyboard starts).
+      presentationStyle="fullScreen"
       contentContainerStyle={{ paddingBottom: 16 }}
       keyboardShouldPersistTaps="handled"
       keyboardDismissMode="on-drag"
       footer={
-        <View style={[styles.footer, { paddingBottom: Math.max(insets.bottom, spacing[5]) }]}>
+        <View style={[styles.footer, { paddingBottom: keyboardUp ? spacing[3] : Math.max(insets.bottom, spacing[5]) }]}>
           <Button label="Ajouter" loadingLabel="Ajout" onPress={submit} loading={saving} fullWidth size="lg" />
         </View>
       }
@@ -216,11 +233,11 @@ export function QuickAddProductSheet({
       ) : (
         <View style={styles.fieldBlock}>
           <View style={styles.labelRow}>
-            <Text style={styles.fieldLabel}>{priceLabel}</Text>
+            <Text style={styles.fieldLabel}>Je vends à</Text>
             <ValidCheck valid={priceOk} color={palette.success} />
           </View>
-          <TextInput
-            ref={priceRef}
+          <MoneyInput currency={currency}
+            inputRef={priceRef}
             style={styles.fieldInput}
             value={s.price}
             onChangeText={v => { setError(null); setS(prev => ({ ...prev, price: formatAmountInput(v, currency) })); }}
@@ -243,12 +260,12 @@ export function QuickAddProductSheet({
                 value={s.qty}
                 onChange={v => setS(prev => ({ ...prev, qty: v }))}
                 inputRef={qtyRef}
+                compact
                 inputStyle={styles.fieldInput}
                 returnKeyType="done"
                 onSubmitEditing={() => Keyboard.dismiss()}
               />
             </View>
-            <Text style={styles.unitTag}>pièces</Text>
           </View>
         </View>
       ) : (
@@ -279,10 +296,10 @@ export function QuickAddProductSheet({
                   placeholder="0"
                   placeholderTextColor={palette.textDisabled}
                 />
-                <TextInput
+                <MoneyInput currency={currency}
                   style={[
                     styles.fieldInput,
-                    { flex: 1.2, minWidth: 110, textAlign: 'right', fontSize: 17 },
+                    { flex: 1.2, minWidth: 120, textAlign: 'right', fontSize: 17 },
                     !v.touched && { color: palette.textSecondary },
                   ]}
                   value={shown}
@@ -325,9 +342,9 @@ export function QuickAddProductSheet({
       {expanded && (
         <ReAnimated.View entering={reduce ? undefined : FadeInDown.duration(200)}>
           <View style={styles.fieldBlock}>
-            <Text style={styles.fieldLabel}>{`Coût · prix d'achat unitaire (${currency})`}</Text>
-            <TextInput
-              ref={purchaseRef}
+            <Text style={styles.fieldLabel}>Prix d'achat</Text>
+            <MoneyInput currency={currency}
+              inputRef={purchaseRef}
               style={styles.fieldInput}
               value={s.purchasePrice}
               onChangeText={v => setS(prev => ({ ...prev, purchasePrice: formatAmountInput(v, currency) }))}
@@ -339,9 +356,9 @@ export function QuickAddProductSheet({
             />
           </View>
           <View style={styles.fieldBlock}>
-            <Text style={styles.fieldLabel}>{`Frais (transport, etc.) · ${currency}`}</Text>
-            <TextInput
-              ref={feesRef}
+            <Text style={styles.fieldLabel}>Frais</Text>
+            <MoneyInput currency={currency}
+              inputRef={feesRef}
               style={styles.fieldInput}
               value={s.fees}
               onChangeText={v => setS(prev => ({ ...prev, fees: formatAmountInput(v, currency) }))}
@@ -392,19 +409,18 @@ function makeStyles(p: Palette) {
   return StyleSheet.create({
     footer: { padding: spacing[5], backgroundColor: p.background },
     formError: { backgroundColor: p.warningLight, borderRadius: 12, padding: spacing[3], marginHorizontal: spacing[4], marginTop: spacing[3] },
-    fieldBlock: { ...card, paddingHorizontal: spacing[4], paddingVertical: spacing[3], gap: spacing[1.5] },
+    fieldBlock: { ...card, paddingHorizontal: spacing[4], paddingVertical: spacing[2.5], gap: 2 },
     labelRow: { flexDirection: 'row', alignItems: 'center', justifyContent: 'space-between' },
     fieldLabel: {
       fontFamily: FF.semibold, fontSize: 11, color: p.textSecondary,
       letterSpacing: 0.6, textTransform: 'uppercase',
     },
-    fieldInput: { fontFamily: FF.semibold, fontSize: 22, color: p.textPrimary, paddingVertical: 0, minHeight: 36 },
+    fieldInput: { fontFamily: FF.semibold, fontSize: 22, color: p.textPrimary, paddingVertical: 0, minHeight: 30 },
     confirmedRow: { ...card, flexDirection: 'row', alignItems: 'center', gap: spacing[3], paddingHorizontal: spacing[4], paddingVertical: spacing[3.5] },
     confirmedLabel: { fontFamily: FF.semibold, fontSize: 11, color: p.textSecondary, letterSpacing: 0.6, textTransform: 'uppercase', width: 96 },
     confirmedValue: { flex: 1, fontFamily: FF.semibold, fontSize: 17, color: p.textPrimary },
     toggleRow: { ...card, flexDirection: 'row', alignItems: 'center', paddingHorizontal: spacing[4], paddingVertical: spacing[2] },
     qtyRow: { flexDirection: 'row', alignItems: 'center', gap: spacing[3] },
-    unitTag: { fontFamily: FF.medium, fontSize: 15, color: p.textSecondary },
     suggestions: { marginTop: spacing[1], gap: 2 },
     suggestionsHint: { fontFamily: FF.medium, fontSize: 12, color: p.textSecondary, marginBottom: 2 },
     suggestionRow: {
