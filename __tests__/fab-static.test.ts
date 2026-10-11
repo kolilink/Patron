@@ -1,4 +1,4 @@
-// The "Produit" (Catalogue) and "Livraison" (Fournisseurs) floating buttons used to
+// The "Produit" (Gérer mode) and "Livraison" (Fournisseurs) floating buttons used to
 // "breathe" (a 4-second scale + opacity loop). They now just sit there.
 import fs from 'fs';
 import path from 'path';
@@ -7,7 +7,7 @@ const read = (p: string) => fs.readFileSync(path.resolve(__dirname, '..', p), 'u
 const code = (s: string) => s.split('\n').filter(l => !l.trim().startsWith('//')).join('\n');
 
 describe.each([
-  ['app/(app)/(tabs)/catalogue.tsx', 'Produit'],
+  ['src/components/products/ProductManager.tsx', 'Produit'],
   ['app/(app)/fournisseurs/index.tsx', 'Livraison'],
 ])('%s', (file, label) => {
   const src = code(read(file));

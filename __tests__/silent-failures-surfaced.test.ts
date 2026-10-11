@@ -51,18 +51,18 @@ describe('Phase 3 — silent failures surfaced on mutating actions', () => {
         expect(src).toMatch(/showFailureAlert\(buildFailure\(\{\s*what: FAILURE_COPY\.memberStakesNotSaved\.what/);
     });
 
-    it('catalogue.tsx adjustStock returns boolean and shows success only on ok', () => {
+    it('stock adjustment (useProductSheets) returns boolean and shows success only on ok', () => {
         const productsSrc = readSource('stores/products.ts');
         expect(productsSrc).toMatch(/adjustStock:\s*\([\s\S]*?\)\s*=>\s*Promise<boolean>;/);
         expect(productsSrc).toMatch(/return true;[\s\S]*?return true;[\s\S]*?return false;/);
 
-        const catalogueSrc = readSource('app/(app)/(tabs)/catalogue.tsx');
+        const catalogueSrc = readSource('src/components/products/useProductSheets.tsx');
         expect(catalogueSrc).toMatch(/const ok = await adjustStock\(adjustTarget\.id,\s*businessId,\s*userId,\s*qty,\s*type,\s*note\);/);
-        expect(catalogueSrc).toMatch(/if\s*\(ok\)\s*\{[\s\S]*?showSuccess\('Stock ajusté ✓'\);[\s\S]*?\}\s*else\s*\{[\s\S]*?toast\.warning\(useProductStore\.getState\(\)\.error/);
+        expect(catalogueSrc).toMatch(/if\s*\(ok\)\s*\{[\s\S]*?toast\.success\('Stock ajusté ✓'\);[\s\S]*?\}\s*else\s*\{[\s\S]*?toast\.warning\(useProductStore\.getState\(\)\.error/);
     });
 
-    it('catalogue.tsx handleSave surfaces failure toast', () => {
-        const src = readSource('app/(app)/(tabs)/catalogue.tsx');
+    it('product add/edit (useProductSheets) surface a failure that speaks', () => {
+        const src = readSource('src/components/products/useProductSheets.tsx');
         expect(src).toMatch(/showFailureAlert\(buildFailure\(\{[\s\S]*?FAILURE_COPY\.productNotSaved\.what/);
     });
 

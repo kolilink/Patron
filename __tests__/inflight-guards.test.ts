@@ -51,6 +51,7 @@ import { useFournisseursStore } from '@/stores/fournisseurs';
 import { useEquipeStore } from '@/stores/equipe';
 
 beforeEach(() => {
+  outbox.length = 0;
   calls.update = 0; calls.delete = 0; calls.rpc = 0;
   gate();
 });
@@ -95,7 +96,9 @@ describe('double-tap → exactly one execution', () => {
     expect(useProductStore.getState().archivingIds).toEqual(['prod-1']); // the row can show "Désactivation…" at once
     release();
     await Promise.all([p1, p2]);
-    expect(calls.update).toBe(1);
+    // Archive is phone-first now: the one execution is ONE outbox write (update_product {archived}).
+    expect(outbox.filter(o => o.operation === 'update_product')).toHaveLength(1);
+    expect(calls.update).toBe(0); // …and no direct network call
     expect(useProductStore.getState().archivingIds).toEqual([]);
   });
 
@@ -106,7 +109,7 @@ describe('double-tap → exactly one execution', () => {
     expect(useProductStore.getState().archivingIds.sort()).toEqual(['prod-1', 'prod-2']);
     release();
     await Promise.all([a, b]);
-    expect(calls.update).toBe(2);
+    expect(outbox.filter(o => o.operation === 'update_product')).toHaveLength(2);
   });
 
   it('supplier deletion', async () => {
@@ -161,7 +164,7 @@ describe('screens wire the guard to the tapped control', () => {
     expect(src).toMatch(/loadingLabel="Enregistrement"/);
   });
   it('archive: the product row shows "Désactivation" and is disabled', () => {
-    const src = read('app/(app)/(tabs)/catalogue.tsx');
+    const src = read('src/components/products/ProductManager.tsx');
     expect(src).toMatch(/word="Désactivation"/);
     expect(src).toMatch(/disabled=\{archiving\}/);
   });

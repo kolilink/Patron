@@ -260,6 +260,7 @@ const updateProduct: Check = (o, p) => {
   uuid(p, o, 'supplier_id', true);
   date(p, o, 'purchase_date', true);
   freeText(p, o, 'category');
+  if (o.archived !== undefined) bool(p, o, 'archived'); // archive / restore (Gérer mode) ride this op
 };
 
 const adjustStockMove: Check = (o, p) => {

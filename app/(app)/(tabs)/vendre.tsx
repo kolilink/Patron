@@ -3,7 +3,7 @@ import { ConfirmSheetHost } from '@/src/components/ui/ConfirmSheet';
 import { appAlert } from '@/src/utils/appAlert';
 import { TopFade } from '@/src/components/ui/TopFade';
 import { useSharedValue } from 'react-native-reanimated';
-import { router, useFocusEffect } from 'expo-router';
+import { router, useFocusEffect, useLocalSearchParams } from 'expo-router';
 import { Animated, Easing, FlatList, InputAccessoryView, Keyboard, KeyboardAvoidingView, Modal, Platform, Pressable, ScrollView, StyleProp, StyleSheet, TextInput, View, ViewStyle } from 'react-native';
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
 import { Screen } from '@/src/components/ui/Screen';
@@ -22,6 +22,9 @@ import { useTheme, radius, spacing, shadow, fontFamily, FLOATING_TAB_BAR_CLEARAN
 import { useAnimateLayoutChange } from '@/src/hooks/useAnimateLayoutChange';
 import { useQuickClients } from '@/src/hooks/useQuickClients';
 import { QuickCaptureSheet } from '@/src/components/QuickCaptureSheet';
+import { ProductManager } from '@/src/components/products/ProductManager';
+import { useProductSheets } from '@/src/components/products/useProductSheets';
+import { needsSalePrice } from '@/src/utils/quickAddProduct';
 import type { Palette } from '@/src/theme';
 import { stepQuantity } from '@/src/utils/quantity';
 import { formatAmount, formatAmountInput, parseAmountInput } from '@/src/utils/format';
@@ -1109,9 +1112,13 @@ interface ProductTileProps {
   cartBulkQty: number;
   /** Only meaningful when product.has_variants — undefined while still loading. */
   variants?: ProductVariant[];
+  /** admin/manager only: long-press opens Gérer on this product (never the only door — the Gérer button is). */
+  onManage?: () => void;
+  /** Just created from the add sheet: brief highlight so she sees where it landed. */
+  pulse?: boolean;
 }
 
-function ProductTile({ product, currency, onAdd, onAddBulk, cartQty, cartBulkQty, variants }: ProductTileProps) {
+function ProductTile({ product, currency, onAdd, onAddBulk, cartQty, cartBulkQty, variants, onManage, pulse }: ProductTileProps) {
   const { palette } = useTheme();
   const styles = useMemo(() => makeStyles(palette), [palette]);
   const totalInCart = cartQty + cartBulkQty;
@@ -1126,17 +1133,31 @@ function ProductTile({ product, currency, onAdd, onAddBulk, cartQty, cartBulkQty
     ? !!(variants && variants.length > 0 && variants.every(v => v.stock_qty <= 0))
     : product.stock_qty - totalInCart <= 0;
   const hasBulk = !!(product.bulk_price && product.bulk_min_qty);
+  const noPrice = needsSalePrice(product);
+
+  // Landing pulse for a product just added from the sheet.
+  const pulseAnim = useRef(new Animated.Value(0)).current;
+  useEffect(() => {
+    if (!pulse) return;
+    pulseAnim.setValue(1);
+    Animated.timing(pulseAnim, { toValue: 0, duration: 1400, useNativeDriver: true }).start();
+  }, [pulse, pulseAnim]);
 
   return (
     <Pressable
-      onPress={outOfStock ? undefined : onAdd}
-      onLongPress={hasBulk && !outOfStock ? onAddBulk : undefined}
+      onPress={outOfStock && !(noPrice && onManage) ? undefined : onAdd}
+      // Bulk-priced products keep long-press = add in bulk (selling comes first); everything else
+      // long-presses into Gérer for admin/manager. ~450ms, haptic on trigger; a scroll that starts
+      // first cancels the press natively.
+      delayLongPress={450}
+      onLongPress={hasBulk && !outOfStock ? onAddBulk : onManage ? () => { haptics.select(); onManage(); } : undefined}
       style={({ pressed }) => [
         styles.tile,
         outOfStock && styles.tileDisabled,
         pressed && !outOfStock && { opacity: 0.75 },
       ]}
     >
+      <Animated.View pointerEvents="none" style={[StyleSheet.absoluteFill, { borderRadius: radius.lg, backgroundColor: palette.primaryLight, opacity: pulseAnim }]} />
       {totalInCart > 0 && (
         <View style={styles.tileBadge}>
           <Text variant="caption" style={{ color: palette.textInverse, fontFamily: fontFamily.bold }}>{totalInCart}</Text>
@@ -1156,9 +1177,14 @@ function ProductTile({ product, currency, onAdd, onAddBulk, cartQty, cartBulkQty
         <Text variant="caption" color="secondary" numberOfLines={1}>Fini</Text>
       ) : null}
       <View style={{ flexDirection: 'row', alignItems: 'center', justifyContent: 'space-between' }}>
-        <Text variant="label" style={[styles.tilePrice, outOfStock && { color: palette.textDisabled }]}>
-          {formatPriceValue(product.sale_price, currency)}
-        </Text>
+        {noPrice ? (
+          // No sale price yet (stored as 0): never shown as a price.
+          <Text variant="label" style={{ color: onManage ? palette.primary : palette.textSecondary }}>Prix à fixer</Text>
+        ) : (
+          <Text variant="label" style={[styles.tilePrice, outOfStock && { color: palette.textDisabled }]}>
+            {formatPriceValue(product.sale_price, currency)}
+          </Text>
+        )}
         {product.has_variants && (
           <Text style={{ color: palette.primary, fontSize: 16 }}>›</Text>
         )}
@@ -1391,6 +1417,31 @@ export default function VendreScreen() {
   const currency = business?.currency ?? 'GNF';
   const role = session?.activeMembership?.role;
   const isVendeur = role === 'vendeur';
+  // Gérer, long-press-to-edit and every "+" are admin/manager only — exactly who could use the old Produits tab.
+  const canManage = role === 'administrateur' || role === 'manager';
+
+  // Add / edit / stock / stats sheets live here so sell mode and Gérer mode share them.
+  const { api: productSheets, sheets: productSheetElements } = useProductSheets();
+  const [gerer, setGerer] = useState(false);
+  const [focusProductId, setFocusProductId] = useState<string | null>(null);
+  const exitGerer = useCallback(() => { setGerer(false); setFocusProductId(null); }, []);
+  // Vendre is a tab and stays mounted: params from other screens (low-stock card, old deep links)
+  // are re-applied on every arrival, then cleared.
+  const { openForm, prefillName, gerer: gererParam, focus: focusParam } = useLocalSearchParams<{ openForm?: string; prefillName?: string; gerer?: string; focus?: string }>();
+  useEffect(() => {
+    if (!canManage) return;
+    if (openForm === '1') {
+      productSheets.openAdd(prefillName ?? undefined);
+      router.setParams({ openForm: undefined, prefillName: undefined });
+    }
+    if (gererParam === '1') {
+      setFocusProductId(focusParam ? String(focusParam) : null);
+      setGerer(true);
+      router.setParams({ gerer: undefined, focus: undefined });
+    }
+  }, [openForm, prefillName, gererParam, focusParam, canManage]);
+  // A non-manager can never be left in Gérer (role change / business switch).
+  useEffect(() => { if (!canManage && gerer) exitGerer(); }, [canManage, gerer, exitGerer]);
 
   const { products: allProducts, vendeurProductScope, vendeurScopeAll, variantsByProduct, loading, offline, offlineSince, fetchProducts, fetchVariants } = useProductStore();
 
@@ -1494,6 +1545,15 @@ export default function VendreScreen() {
       if (!businessId) return;
       products.filter(p => p.has_variants).forEach(p => fetchVariants(p.id, businessId));
     }, [businessId, products, fetchVariants])
+  );
+
+  // Products can be created elsewhere (a confirmed delivery, another device, a sync that just landed):
+  // refresh the list whenever this tab regains focus, as the old Produits tab did. Cache-first and
+  // offline-safe — the store seeds from its local copy and only then asks the network.
+  useFocusEffect(
+    useCallback(() => {
+      if (businessId) void fetchProducts(businessId, userId, membershipId, role);
+    }, [businessId, userId, membershipId, role]),
   );
 
 
@@ -1810,6 +1870,24 @@ export default function VendreScreen() {
     );
   }
 
+  // Gérer mode: the same product list, management view. The cart and checkout stay in the store
+  // untouched and come back when she leaves Gérer.
+  if (gerer && canManage) {
+    return (
+      <Screen tab>
+        <ProductManager sheets={productSheets} onExit={exitGerer} focusProductId={focusProductId} />
+        {productSheetElements}
+      </Screen>
+    );
+  }
+
+  // ONE derived state for every sheet/modal that can sit over the grid: the floating "+" and
+  // "Gérer" hide on it (never over a sheet, never during a transition into one).
+  const anySheetOpen = productSheets.anySheetOpen || variantPickerProduct !== null || showPayment ||
+    showConfirmSheet || showCartSheet || showQuickCapture || receiptOpen !== null;
+  const showFloating = canManage && products.length > 0 && !anySheetOpen;
+  const floatingBottom = FLOATING_TAB_BAR_CLEARANCE + spacing[4] + (cart.length > 0 ? cartPanelHeight + spacing[2] : 0);
+
   return (
     <Screen tab>
       {offline && (
@@ -1830,7 +1908,7 @@ export default function VendreScreen() {
       <View style={styles.header}>
         <Text variant="h3">Vendre</Text>
         {/* Currency declared once here instead of repeated on every tile's
-            price (see formatPriceValue in ProductTile) — mirrors Catalogue. */}
+            price (see formatPriceValue in ProductTile) — same line in Gérer mode. */}
         <View style={styles.headerRight}>
           {cart.length > 0 && (
             <Pressable onPress={() => appAlert('Vider le panier ?', undefined, [
@@ -1853,10 +1931,10 @@ export default function VendreScreen() {
       {products.length === 0 && (offline || isVendeur) && (
         <EmptyState
           icon={offline ? 'cloud-offline-outline' : 'receipt-outline'}
-          title={offline ? 'Catalogue non disponible hors ligne' : 'Point de vente'}
+          title={offline ? 'Produits non disponibles hors ligne' : 'Point de vente'}
           subtitle={offline
             ? 'Ouvrez l\'application en ligne une première fois pour activer le mode hors ligne.'
-            : 'Le catalogue est vide — votre responsable prépare les produits.'}
+            : 'Aucun produit pour le moment — votre responsable les ajoutera.'}
           // Offline with no cached catalog: recording a sale must never be
           // blocked — the quick sale needs no catalog at all.
           actionLabel={offline ? 'Vente rapide' : undefined}
@@ -1864,8 +1942,8 @@ export default function VendreScreen() {
           // The screen's FAB used to ALSO render here, on top of this centered state
           // (a collision on small phones). An empty state's own actions are the one
           // primary action — never a FAB beside them (see EmptyState's doc).
-          linkLabel={offline && !isVendeur ? 'Ajouter un produit' : undefined}
-          onLink={offline && !isVendeur ? () => router.push({ pathname: '/(app)/(tabs)/catalogue', params: { openForm: '1' } }) : undefined}
+          linkLabel={offline && canManage ? 'Ajouter un produit' : undefined}
+          onLink={offline && canManage ? () => productSheets.openAdd() : undefined}
         />
       )}
 
@@ -1881,11 +1959,11 @@ export default function VendreScreen() {
         <EmptyState
           icon="storefront-outline"
           title="Aucun produit pour le moment."
-          subtitle="Pas besoin de catalogue pour vendre."
+          subtitle="Notez une vente tout de suite, ou ajoutez vos produits."
           actionLabel="Vente rapide"
           onAction={() => setShowQuickCapture(true)}
           linkLabel="Ajouter un produit"
-          onLink={() => router.push({ pathname: '/(app)/(tabs)/catalogue', params: { openForm: '1' } })}
+          onLink={() => productSheets.openAdd()}
         />
       )}
 
@@ -1937,9 +2015,13 @@ export default function VendreScreen() {
             cartQty={cartQtyMap[item.id]?.unit ?? 0}
             cartBulkQty={cartQtyMap[item.id]?.bulk ?? 0}
             variants={variantsByProduct[item.id]}
+            pulse={productSheets.pulseId === item.id}
+            onManage={canManage ? () => { setFocusProductId(item.id); setGerer(true); } : undefined}
             onAdd={() => {
               if (item.sale_price <= 0) {
-                appAlert('Prix manquant', 'Ajoutez un prix de vente pour ce produit.');
+                // "Prix à fixer": a manager completes it right here; a seller is told who can.
+                if (canManage) productSheets.openEdit(item);
+                else appAlert('Prix manquant', 'Demandez à votre responsable de fixer le prix de ce produit.');
                 return;
               }
               if (item.has_variants) {
@@ -1964,10 +2046,7 @@ export default function VendreScreen() {
             <NoResultsState
               query={search}
               createLabel={`+ Nouveau produit « ${search.trim()} »`}
-              onCreate={() => router.push({
-                pathname: '/(app)/(tabs)/catalogue',
-                params: { openForm: '1', prefillName: search.trim() },
-              })}
+              onCreate={canManage ? () => productSheets.openAdd(search.trim()) : undefined}
             />
           ) : null
         }
@@ -2174,6 +2253,32 @@ export default function VendreScreen() {
           <View style={{ height: 0 }} />
         </InputAccessoryView>
       )}
+
+      {/* Add / edit / stock / stats sheets (admin/manager only ever open them). */}
+      {canManage && productSheetElements}
+
+      {/* Floating "Gérer" + "+" — admin/manager only, hidden whenever any sheet is open. */}
+      {showFloating && (
+        <View style={[styles.floatingActions, { bottom: floatingBottom }]} pointerEvents="box-none">
+          <Pressable
+            onPress={() => { haptics.select(); setFocusProductId(null); setGerer(true); }}
+            style={({ pressed }) => [styles.gererPill, pressed && { opacity: 0.8 }]}
+            accessibilityRole="button"
+            accessibilityLabel="Gérer les produits"
+          >
+            <Ionicons name="options-outline" size={18} color={palette.textPrimary} />
+            <Text variant="label">Gérer</Text>
+          </Pressable>
+          <Pressable
+            onPress={() => productSheets.openAdd()}
+            style={({ pressed }) => [styles.addFab, pressed && { opacity: 0.82 }]}
+            accessibilityRole="button"
+            accessibilityLabel="Ajouter un produit"
+          >
+            <Ionicons name="add" size={26} color={palette.textInverse} />
+          </Pressable>
+        </View>
+      )}
     </Screen>
   );
 }
@@ -2228,6 +2333,18 @@ function makeStyles(p: Palette) {
     // the Vendre visual-refinement brief's color-hierarchy rule).
     tilePrice: { color: p.textPrimary, fontVariant: ['tabular-nums'] as ['tabular-nums'] },
     headerRight: { flexDirection: 'row', alignItems: 'center', gap: spacing[4] },
+    floatingActions: {
+      position: 'absolute', right: spacing[5], flexDirection: 'row', alignItems: 'center', gap: spacing[3],
+    },
+    gererPill: {
+      flexDirection: 'row', alignItems: 'center', gap: spacing[1.5],
+      paddingHorizontal: spacing[4], height: 44, borderRadius: radius.full,
+      backgroundColor: p.surface, borderWidth: 1, borderColor: p.border, ...shadow.md,
+    },
+    addFab: {
+      width: 52, height: 52, borderRadius: radius.full, alignItems: 'center', justifyContent: 'center',
+      backgroundColor: p.primary, ...shadow.md,
+    },
     tileBadge: {
       position: 'absolute', top: 8, right: 8, backgroundColor: p.primary,
       borderRadius: radius.full, width: 22, height: 22, alignItems: 'center', justifyContent: 'center', zIndex: 10,

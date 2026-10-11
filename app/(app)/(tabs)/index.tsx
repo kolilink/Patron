@@ -1056,7 +1056,7 @@ export default function AccueilScreen() {
                     label="À racheter"
                     value={String(lowStock)}
                     sub="Stock bas"
-                    onPress={isVendeur ? undefined : () => router.push('/(app)/(tabs)/catalogue')}
+                    onPress={isVendeur ? undefined : () => router.push({ pathname: '/(app)/(tabs)/vendre', params: { gerer: '1' } })}
                     tone="warning"
                     icon="leaf-outline"
                   />

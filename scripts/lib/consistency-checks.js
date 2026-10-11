@@ -15,6 +15,9 @@ const SCREEN_EXEMPT = new Set([
   'app/(app)/guest-account.tsx',
   'app/(app)/onboarding/index.tsx',
   'app/(app)/(tabs)/caisse.tsx',
+  // Redirect-only: the Produits tab was merged into Vendre; these forward old links (pushes, deep links).
+  'app/(app)/catalogue/index.tsx',
+  'app/(app)/catalogue/[id].tsx',
 ]);
 
 function grepFiles(pattern, dirs) {

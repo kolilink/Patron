@@ -21,8 +21,8 @@ describe('item 1 — switches fire haptics.toggle with the new value', () => {
     expect(s).toMatch(/setNotifyEverySale\(value\);\s*haptics\.toggle\(value\)/);
     expect(s).toMatch(/savePaymentRemindersPref\(true\)\) \{ haptics\.toggle\(true\)/);
   });
-  it('catalogue variants + partner share-stock switches', () => {
-    expect(read('app/(app)/(tabs)/catalogue.tsx')).toMatch(/onValueChange=\{v => \{\s*haptics\.toggle\(v\);/);
+  it('Modèles (add/edit sheet) + partner share-stock switches', () => {
+    expect(read('src/components/QuickAddProductSheet.tsx')).toMatch(/const onToggleModels = \(on: boolean\) => \{\s*haptics\.toggle\(on\);/);
     expect(read('app/(app)/messages/[room_id].tsx')).toMatch(/onValueChange=\{v => \{ haptics\.toggle\(v\);/);
   });
 });
@@ -54,7 +54,7 @@ describe('item 3 — FailureView files fire error exactly once per failure site'
   }
 
   it('delete handlers fire destructive on commit and error on failure, never both up front', () => {
-    for (const f of ['app/(app)/(tabs)/catalogue.tsx', 'app/(app)/ventes/index.tsx', 'app/(app)/fournisseurs/index.tsx', 'app/(app)/fournisseurs/[id].tsx', 'app/(app)/equipe/index.tsx']) {
+    for (const f of ['src/components/products/ProductManager.tsx', 'app/(app)/ventes/index.tsx', 'app/(app)/fournisseurs/index.tsx', 'app/(app)/fournisseurs/[id].tsx', 'app/(app)/equipe/index.tsx']) {
       const ls = lines(f);
       ls.forEach((l, i) => {
         if (!/haptics\.destructive\(\)/.test(l)) return;

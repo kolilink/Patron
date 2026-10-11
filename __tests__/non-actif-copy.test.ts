@@ -5,7 +5,7 @@ import fs from 'fs';
 import path from 'path';
 
 const read = (p: string) => fs.readFileSync(path.resolve(__dirname, '..', p), 'utf8');
-const cat = read('app/(app)/(tabs)/catalogue.tsx');
+const cat = read('src/components/products/ProductManager.tsx');
 
 describe('wording', () => {
   it('toggle, action, confirmation, in-flight word and row note', () => {
@@ -47,7 +47,7 @@ describe('wording', () => {
 
 describe('the "Non actifs" toggle only exists when something has been deactivated', () => {
   it('rendered only with at least one non-active product', () => {
-    expect(cat).toMatch(/\{!showActivationEmptyState && archivedProducts\.length > 0 && \(\s*<View style=\{styles\.tabRow\}>\s*<ArchiveSwitch/);
+    expect(cat).toMatch(/\{archivedProducts\.length > 0 && \(\s*<View style=\{styles\.tabRow\}>\s*<ArchiveSwitch/);
   });
   it('reactivating the last one while on that tab lands back on Actifs', () => {
     expect(cat).toMatch(/if \(tab === 'archives' && archivedProducts\.length === 0\) setTab\('actifs'\);/);
