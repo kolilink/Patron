@@ -191,8 +191,8 @@ describe('airplane mode: record a sale offline', () => {
 
   it('step 1 — offline: Home, Ventes and Carnet show identical totals right after recording', async () => {
     net.online = false;
-    expect(await useSalesStore.getState().submitCarnetDebt('biz-1', 'user-1', 'Aissatou', DEBT * 100, null)).toBe(true);
-    expect(await useSalesStore.getState().submitQuickSale('biz-1', 'user-1', QUICK * 100, 1)).toBe(true);
+    expect(await useSalesStore.getState().submitCarnetDebt('biz-1', 'user-1', 'Aissatou', DEBT * 100, null)).toMatchObject({ ok: true });
+    expect(await useSalesStore.getState().submitQuickSale('biz-1', 'user-1', QUICK * 100, 1)).toMatchObject({ ok: true });
     await flush(); // the kick()ed drain attempts and fails on the blocked network
     await loadAllScreens();
 

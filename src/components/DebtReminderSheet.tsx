@@ -1,16 +1,13 @@
 import { useMemo, useRef } from 'react';
 import { StyleSheet, useWindowDimensions, View } from 'react-native';
-import { captureRef } from 'react-native-view-shot';
-import * as Sharing from 'expo-sharing';
 import { FormSheet } from '@/src/components/ui/FormSheet';
 import { Button } from '@/src/components/ui/Button';
 import { failAlert } from '@/src/components/ui/FailureView';
 import { useInFlight } from '@/src/hooks/useInFlight';
 import { useTheme, spacing, radius } from '@/src/theme';
 import type { Palette } from '@/src/theme';
-import {
-  DebtReminderReceipt, RECEIPT_ASPECT, RECEIPT_EXPORT_HEIGHT, RECEIPT_EXPORT_WIDTH,
-} from '@/src/components/DebtReminderReceipt';
+import { DebtReminderReceipt, RECEIPT_ASPECT } from '@/src/components/DebtReminderReceipt';
+import { captureAndShareReceipt } from '@/src/components/receiptShare';
 import {
   buildDebtReceiptContent, type DebtReceiptInput,
 } from '@/src/utils/debtReceipt';
@@ -35,17 +32,9 @@ export function DebtReminderSheet({ visible, onClose, input }: Props) {
   const previewWidth = Math.min(windowWidth - spacing[4] * 2, 360);
 
   const handleShare = () => runShare(async () => {
-    if (!receiptRef.current) return;
-    try {
-      const uri = await captureRef(receiptRef, {
-        format: 'png', quality: 1, width: RECEIPT_EXPORT_WIDTH, height: RECEIPT_EXPORT_HEIGHT,
-      });
-      if (!(await Sharing.isAvailableAsync())) { failAlert('receiptNotShared'); return; }
-      await Sharing.shareAsync(uri, { mimeType: 'image/png', UTI: 'public.png', dialogTitle: 'Envoyer le rappel' });
-    } catch {
-      // failure: speaks — capture or share sheet failed: receiptNotShared
-      failAlert('receiptNotShared');
-    }
+    const res = await captureAndShareReceipt(receiptRef, 'Envoyer le rappel');
+    // failure: speaks — capture or share sheet failed: receiptNotShared
+    if (res !== 'shared') failAlert('receiptNotShared');
   });
 
   return (

@@ -5,6 +5,12 @@
 import { formatAmount } from '@/src/utils/format';
 import { formatDate } from '@/src/utils/dates';
 
+// Portrait 4:5 card, exported at 1080×1350. Shared by the view, the capture
+// helper and the tests (kept here so none of them needs to import a component).
+export const RECEIPT_ASPECT = 4 / 5;
+export const RECEIPT_EXPORT_WIDTH = 1080;
+export const RECEIPT_EXPORT_HEIGHT = 1350;
+
 export interface DebtReceiptInput {
   businessName: string;
   clientName: string;
@@ -12,6 +18,31 @@ export interface DebtReceiptInput {
   /** The exact remaining balance (already clamped >= 0 by the caller). */
   totalOwed: number;
   now?: Date;
+}
+
+/** One row of a lined sale receipt. Money fields are finished strings; qty is a plain count. */
+export interface ReceiptLineContent {
+  name: string;
+  qty: number;
+  unitPrice: string;
+  lineTotal: string;
+}
+
+export interface ReceiptTotalsContent {
+  /** Finished strings. `discount` is only set when a reduction exists. */
+  subtotal: string;
+  discount?: string;
+  net: string;
+}
+
+export interface ReceiptPaymentContent {
+  kind: 'paid' | 'credit';
+  /** "Espèces" — paid sales only. */
+  methodLabel?: string;
+  /** Credit with an upfront amount: "Reçu : 5 000 USD". */
+  received?: string;
+  /** Credit: "Reste : 20 000 USD". */
+  remaining?: string;
 }
 
 export interface DebtReceiptContent {
@@ -23,6 +54,26 @@ export interface DebtReceiptContent {
   demande: string;
   close: string;
   footer: string;
+  /**
+   * Absent = the original debt-reminder layout, rendered byte-identically.
+   * 'lined' | 'quick' | 'credit' = the sale-receipt variants (A / B / C), which
+   * read the optional fields below instead of greeting/remainingLine/demande.
+   */
+  variant?: 'lined' | 'quick' | 'credit';
+  /** Variant B/C: the single context line under the business name. */
+  contextLine?: string;
+  /** Variant B: what was sold ("Riz, sac de 5kg × 2"). Absent = no row, no gap. */
+  label?: string;
+  /** Variant B/C: the hero amount ("12 000 USD" / "Crédit : 25 000 USD"). */
+  hero?: string;
+  /** Variant A. */
+  lines?: ReceiptLineContent[];
+  /** Variant A: "+ 3 autres articles" when the sale has more rows than fit the card. */
+  moreLines?: string;
+  totals?: ReceiptTotalsContent;
+  payment?: ReceiptPaymentContent;
+  /** Variant A credit: "Pour Aïcha". */
+  clientName?: string;
 }
 
 /** First word of the name, used for the greeting ("Mariam Diallo" → "Mariam"). */
