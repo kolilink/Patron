@@ -30,7 +30,7 @@ describe('item 1 — switches fire haptics.toggle with the new value', () => {
 describe('item 3 — FailureView files fire error exactly once per failure site', () => {
   const files = [
     'src/components/FounderDashboard.tsx',
-    'app/(app)/(tabs)/vendre.tsx',
+    'src/components/ReceiptPanel.tsx',
     'app/(app)/fournisseurs/[id].tsx',
   ];
   for (const f of files) {

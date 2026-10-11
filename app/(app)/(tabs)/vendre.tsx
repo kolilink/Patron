@@ -5,8 +5,6 @@ import { TopFade } from '@/src/components/ui/TopFade';
 import { useSharedValue } from 'react-native-reanimated';
 import { router, useFocusEffect } from 'expo-router';
 import { Animated, Easing, FlatList, InputAccessoryView, Keyboard, KeyboardAvoidingView, Modal, Platform, Pressable, ScrollView, StyleProp, StyleSheet, TextInput, View, ViewStyle } from 'react-native';
-import { captureRef } from 'react-native-view-shot';
-import * as Sharing from 'expo-sharing';
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
 import { Screen } from '@/src/components/ui/Screen';
 import { FormSheet } from '@/src/components/ui/FormSheet';
@@ -18,7 +16,8 @@ import { Card } from '@/src/components/ui/Card';
 import { Input } from '@/src/components/ui/Input';
 import { Text } from '@/src/components/ui/Text';
 import { PhoneInput } from '@/src/components/ui/PhoneInput';
-import { SaleReceiptView, type ReceiptData, type ReceiptItem } from '@/src/components/ui/SaleReceiptView';
+import { SaleReceiptSheet } from '@/src/components/SaleReceiptSheet';
+import type { ReceiptSource, SaleReceiptSource } from '@/src/utils/saleReceipt';
 import { useTheme, radius, spacing, shadow, fontFamily, FLOATING_TAB_BAR_CLEARANCE, CLIENT_AVATAR_PALETTE, SEARCH_VISIBILITY_THRESHOLD } from '@/src/theme';
 import { useAnimateLayoutChange } from '@/src/hooks/useAnimateLayoutChange';
 import { useQuickClients } from '@/src/hooks/useQuickClients';
@@ -42,7 +41,6 @@ import { haptics } from '@/lib/haptics';
 import { SkeletonList } from '@/src/components/ui/SkeletonPlaceholder';
 import { trackEvent } from '@/lib/analytics';
 import { activationPriming } from '@/stores/activationPriming';
-import { failAlert } from '@/src/components/ui/FailureView';
 
 // Product tiles show the bare number — the currency is declared once above
 // the grid instead of repeated on every card. Reuses formatAmount's own
@@ -1412,9 +1410,12 @@ export default function VendreScreen() {
   const [payStep, setPayStep] = useState<PayStep>('pay');
   const [showConfirmSheet, setShowConfirmSheet] = useState(false);
   const [variantPickerProduct, setVariantPickerProduct] = useState<Product | null>(null);
-  const [lastReceipt, setLastReceipt] = useState<ReceiptData | null>(null);
-  const receiptViewRef = useRef<View>(null);
-  const pendingReceiptRef = useRef<ReceiptData | null>(null);
+  // What the "Reçu" sheet shows for the last cart sale (built from the cart
+  // at checkout, before the outbox even answers). `lastReceipt` drives the
+  // confirm sheet's amounts; `receiptOpen` is the shared receipt sheet.
+  const [lastReceipt, setLastReceipt] = useState<SaleReceiptSource | null>(null);
+  const [receiptOpen, setReceiptOpen] = useState<ReceiptSource | null>(null);
+  const pendingReceiptRef = useRef<SaleReceiptSource | null>(null);
   // Holds the SaveConfirmation banner payload built in handleConfirmPayment —
   // only raised once the full-screen receipt/share sheet closes, see the
   // effect below and the comment at the call site.
@@ -1458,10 +1459,6 @@ export default function VendreScreen() {
   // (VenteRapideCapture), so it needs its own sheet instance here rather
   // than reusing anything already on this screen.
   const [showQuickCapture, setShowQuickCapture] = useState(false);
-  // Guards the confirm sheet's auto-dismiss (below) against racing a
-  // still-in-flight share — captureRef/Sharing.shareAsync need the sheet's
-  // Modal to stay mounted until they finish, not close out from under them.
-  const [sharingReceipt, setSharingReceipt] = useState(false);
   useEffect(() => {
     if (!businessId) return;
     loadDefaultQuickPayMethod(businessId).then(setQuickPayMethod);
@@ -1596,25 +1593,15 @@ export default function VendreScreen() {
   }, [showConfirmSheet]);
 
   // Confirmation sheet: pre-computed breakdown for lastReceipt
-  const confirmNet = lastReceipt ? lastReceipt.total - (lastReceipt.discountAmount ?? 0) : 0;
-  const confirmUpfront = lastReceipt?.amountPaid ?? 0;
+  const confirmGross = lastReceipt ? lastReceipt.lines.reduce((t, l) => t + l.qty * l.unitPrice, 0) : 0;
+  const confirmNet = lastReceipt ? confirmGross - lastReceipt.discount : 0;
+  const confirmUpfront = lastReceipt?.paid ?? 0;
   const confirmRemaining = Math.max(0, confirmNet - confirmUpfront);
-  const confirmIsCredit = lastReceipt
-    ? lastReceipt.payment === null || confirmRemaining > 0.01
-    : false;
+  const confirmIsCredit = lastReceipt ? lastReceipt.isCredit || confirmRemaining > 0.01 : false;
 
-  // Nobody has to actively dismiss "Vente enregistrée" any more, for either
-  // outcome — a plain fully-paid sale still gets the short window (it's the
-  // common, low-stakes case), and credit/partial-payment sales get a longer
-  // one because the SaveConfirmation undo ("Annuler") stays available as the
-  // same safety net the quick-checkout path already relies on instead of a
-  // mandatory second look. Guarded on sharingReceipt so this can never fire
-  // mid-capture/mid-share — see handleShareReceipt.
-  useEffect(() => {
-    if (!showConfirmSheet || sharingReceipt || confirmIsCredit) return;
-    const t = setTimeout(() => closeConfirmSheet(), 2200);
-    return () => clearTimeout(t);
-  }, [showConfirmSheet, confirmIsCredit, sharingReceipt]);
+  // No auto-dismiss any more. A timer closing this sheet 2.2s after a paid sale
+  // raced the share (tap lands as the Modal unmounts → nothing shared); the
+  // sheet now stays until she shares, taps "Ignorer", or dismisses it.
 
   const cartQtyMap = useMemo(() => {
     const map: Record<string, { unit: number; bulk: number }> = {};
@@ -1646,28 +1633,30 @@ export default function VendreScreen() {
 
       // Never inflate the sale total when the customer hands over more than the
       // cart total — the cart total IS the sale total; overage is returned as change.
-      const receiptItems: ReceiptItem[] = cart.map(l => ({
-        name: l.variant_name ? `${l.product.name} · ${l.variant_name}` : l.product.name,
-        qty: l.qty,
-        unit_price: l.unit_price,
-        is_bulk: l.is_bulk,
-      }));
+      const net = total - (discountAmount && discountAmount > 0 ? discountAmount : 0);
       pendingReceiptRef.current = {
+        kind: 'sale',
         businessName: business?.name ?? '',
-        businessPhone: business?.phone ?? null,
         currency,
-        items: receiptItems,
-        total,
-        discountAmount: discountAmount && discountAmount > 0 ? discountAmount : undefined,
-        amountPaid: payment ? payment.amount : undefined,
-        payment: payment ?? null,
-        customerName,
         date: new Date(),
+        key: null, // set once the outbox has the sale (below)
+        pending: true,
+        lines: cart.map(l => ({
+          name: l.variant_name ? `${l.product.name} · ${l.variant_name}` : l.product.name,
+          qty: l.qty,
+          unitPrice: l.unit_price,
+        })),
+        discount: discountAmount && discountAmount > 0 ? discountAmount : 0,
+        // Overage is change handed back, not part of the sale.
+        paid: payment ? Math.min(payment.amount, net) : 0,
+        method: payment?.method ?? null,
+        isCredit: payment === null || payment.amount < net - 0.01,
+        clientName: customerName?.trim() || null,
       };
 
       const ok = await submitSale(businessId, userId, payment, customerName, undefined, discountAmount, clientId, undefined, dueDate ?? null);
       if (ok) {
-        setLastReceipt(pendingReceiptRef.current);
+        setLastReceipt(pendingReceiptRef.current ? { ...pendingReceiptRef.current, key: useSalesStore.getState().lastSaleKey } : null);
         setShowPayment(false);
         setShowCartSheet(false);
         setSearch('');
@@ -1795,28 +1784,16 @@ export default function VendreScreen() {
     </View>
   );
 
-  const handleShareReceipt = async () => {
-    if (!receiptViewRef.current || !lastReceipt) return;
-    // Blocks the confirm sheet's own auto-dismiss (below) for the rest of
-    // this call — that timer firing mid-capture/mid-share would close the
-    // Modal `captureRef`/`Sharing.shareAsync` still need mounted.
-    setSharingReceipt(true);
-    try {
-      const uri = await captureRef(receiptViewRef, { format: 'png', quality: 1 });
-      // Share while modal is still mounted — iOS can present share sheet on top.
-      // Close only after the share sheet is dismissed (shareAsync resolves).
-      await Sharing.shareAsync(uri, { mimeType: 'image/png', UTI: 'public.png', dialogTitle: 'Partager le reçu' });
-      trackEvent('receipt_shared', businessId, userId, {
-        is_credit: confirmIsCredit,
-      });
-      closeConfirmSheet();
-    } catch (shareErr) {
-      // failure: speaks — receipt share failed: receiptNotShared
-      haptics.error();
-      failAlert('receiptNotShared');
-    } finally {
-      setSharingReceipt(false);
-    }
+  // "Partager le reçu": hand off to the shared receipt sheet (preview, optional
+  // pre-send correction, one capture+share helper). The confirm sheet is
+  // dropped first and the receipt sheet opens a beat later — two Modals must
+  // never be presenting at once.
+  const handleShareReceipt = () => {
+    if (!lastReceipt) return;
+    const src = lastReceipt;
+    trackEvent('receipt_opened', businessId, userId, { is_credit: confirmIsCredit });
+    setShowConfirmSheet(false);
+    setTimeout(() => setReceiptOpen(src), 350);
   };
 
   // Gated on mode !== 'credit' — this skeleton is shaped like the product
@@ -2140,19 +2117,6 @@ export default function VendreScreen() {
         statusBarTranslucent
         navigationBarTranslucent
       >
-        {/* Receipt at (0,0) — within modal bounds so GPU composites it; captureRef reads it directly */}
-        {lastReceipt && (
-          <View
-            ref={receiptViewRef}
-            collapsable={false}
-            pointerEvents="none"
-            style={{ position: 'absolute', top: 0, left: 0 }}
-          >
-            <SaleReceiptView data={lastReceipt} />
-          </View>
-        )}
-        {/* Solid white layer hides the receipt from the user */}
-        <View style={[StyleSheet.absoluteFill, { backgroundColor: palette.surface }]} pointerEvents="none" />
         {/* Outer container — box-none so it never consumes touches itself */}
         <View style={styles.sheetOverlay} pointerEvents="box-none">
           {/* Backdrop — sits behind the sheet in z-order (rendered first) */}
@@ -2170,13 +2134,13 @@ export default function VendreScreen() {
               </Text>
               {lastReceipt && (
                 <Text variant="h4" style={{ color: palette.primary, textAlign: 'center' }}>
-                  {formatAmount(confirmNet, lastReceipt.currency)}
+                  {formatAmount(confirmNet, currency)}
                 </Text>
               )}
               {/* Credit with upfront: show what was received vs what remains */}
               {lastReceipt && confirmIsCredit && confirmUpfront > 0.01 && (
                 <Text variant="caption" color="secondary" style={{ textAlign: 'center' }}>
-                  {formatAmount(confirmUpfront, lastReceipt.currency)} reçu · {formatAmount(confirmRemaining, lastReceipt.currency)} restant
+                  {formatAmount(confirmUpfront, currency)} reçu · {formatAmount(confirmRemaining, currency)} restant
                 </Text>
               )}
             </View>
@@ -2189,9 +2153,7 @@ export default function VendreScreen() {
                 <View style={{ flex: 1, gap: 3 }}>
                   <Text variant="label">Partagez le reçu</Text>
                   <Text variant="bodySmall" color="secondary">
-                    {lastReceipt?.payment === null
-                      ? 'Ça donne plus confiance au client 🤗'
-                      : 'Ça donne plus confiance au client 🤗'}
+                    Ça donne plus confiance au client 🤗
                   </Text>
                 </View>
               </View>
@@ -2206,6 +2168,7 @@ export default function VendreScreen() {
         </View>
       <ConfirmSheetHost active={!!(showConfirmSheet)} />
 </Modal>
+      <SaleReceiptSheet source={receiptOpen} onClose={() => setReceiptOpen(null)} />
       {Platform.OS === 'ios' && (
         <InputAccessoryView nativeID={VENDRE_SILENT_ACCESSORY_ID}>
           <View style={{ height: 0 }} />
