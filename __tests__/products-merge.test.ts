@@ -119,7 +119,7 @@ describe('entry-point checklist — every one lands in Vendre, none dangle', () 
     const sheet = read('src/components/QuickAddProductSheet.tsx');
     expect(sheet).toContain("isEdit ? 'Modifier le produit' : 'Nouveau produit'");
     expect(sheet).toContain("isEdit ? 'Enregistrer' : 'Ajouter'");
-    expect(sheet).toMatch(/if \(isEdit\) return; \/\/ edit: the host closes the sheet/);
+    expect(sheet).toMatch(/if \(isEdit \|\| isDelivery\) return; \/\/ edit \/ delivery: the host closes the sheet/);
     const hook = read('src/components/products/useProductSheets.tsx');
     expect(hook).toMatch(/setEditOpen\(false\);\s*return \{ ok: true \}/);
     // stock is a fact + "Ajuster", fournisseur sits in the (collapsed) Plus d'informations

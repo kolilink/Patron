@@ -5,7 +5,7 @@ import { useSyncStore } from '@/stores/sync';
 import { isQueued } from '@/lib/outbox';
 import { generateId } from '@/lib/id';
 import { QuantityStepper } from '@/src/components/ui/QuantityStepper';
-import { Modal, Platform, Pressable, ScrollView, StyleSheet, TextInput, View } from 'react-native';
+import { FlatList, Modal, Platform, Pressable, ScrollView, StyleSheet, TextInput, View } from 'react-native';
 import { SafeAreaView } from 'react-native-safe-area-context';
 import { router, useLocalSearchParams } from 'expo-router';
 import { Ionicons } from '@expo/vector-icons';
@@ -25,6 +25,13 @@ import { toast } from '@/stores/toast';
 import { trackEvent } from '@/lib/analytics';
 import { formatAmountInput, parseAmountInput, formatAmount, amountInputToCents } from '@/src/utils/format';
 import { DatePickerField } from '@/src/components/ui/DatePickerField';
+import { FormSheet } from '@/src/components/ui/FormSheet';
+import { QuickAddProductSheet } from '@/src/components/QuickAddProductSheet';
+import { showFailureAlert } from '@/src/components/ui/FailureView';
+import { buildFailure, failureReason } from '@/src/utils/failure';
+import { FAILURE_COPY } from '@/src/utils/failureCopy';
+import type { QuickAddPayload } from '@/src/utils/quickAddProduct';
+import { isUnlinkedNamedLine, linkedLinePatch } from '@/src/utils/receptionLink';
 import { Input } from '@/src/components/ui/Input';
 import { PhoneInput } from '@/src/components/ui/PhoneInput';
 import { appAlert } from '@/src/utils/appAlert';
@@ -69,7 +76,6 @@ interface DraftLine {
   salePriceTouched: boolean;
   hasVariants: boolean;
   variantSplits: VariantSplit[] | null; // non-null once the linked product's variants are loaded
-  dismissedMatchId: string | null; // "nouveau produit quand même" for this name
 }
 
 interface Draft {
@@ -97,7 +103,7 @@ function emptyLine(): DraftLine {
   return {
     localId: newLocalId(), product_id: null, variant_id: null, name: '', qty: '', unitCost: '',
     salePriceInput: '', salePriceCents: null, salePriceTouched: false,
-    hasVariants: false, variantSplits: null, dismissedMatchId: null,
+    hasVariants: false, variantSplits: null,
   };
 }
 
@@ -130,7 +136,7 @@ async function loadDraft(businessId: string): Promise<Draft | null> {
         salePriceInput: l.salePriceInput ?? '',
         salePriceCents: overridden ? l.salePriceCents : null,
         salePriceTouched: overridden ?? l.salePriceTouched ?? false,
-        hasVariants: l.hasVariants, variantSplits: l.variantSplits, dismissedMatchId: l.dismissedMatchId,
+        hasVariants: l.hasVariants, variantSplits: l.variantSplits,
       };
     });
     return d;
@@ -241,7 +247,7 @@ export default function ReceptionScreen() {
             // v221: unit_cost may be NULL ("Prix inconnu") — pre-fill blank.
             unitCost: l.unit_cost !== null ? String(Math.round(l.unit_cost)) : '',
             salePriceInput: '', salePriceCents: null, salePriceTouched: false,
-            hasVariants: false, variantSplits: null, dismissedMatchId: null,
+            hasVariants: false, variantSplits: null,
           }));
           const d: Draft = {
             businessId, supplierId: commande.supplier_id, supplierName: commande.supplier_name,
@@ -315,6 +321,51 @@ export default function ReceptionScreen() {
     }
   };
 
+  // ── One flow to add a product: the QuickAddProductSheet. A delivery line never creates a product
+  // by itself at confirm — it is linked to an existing one, or to one created through the sheet.
+  const { createProduct, upsertVariants, saving: productSaving } = useProductStore();
+  const [sheetTarget, setSheetTarget] = useState<{ localId: string; name: string; qty: string } | null>(null);
+  const [sheetOpen, setSheetOpen] = useState(false);
+  const [pickerLineId, setPickerLineId] = useState<string | null>(null);
+  const [flagLinkId, setFlagLinkId] = useState<string | null>(null); // "choisissez un produit" flash
+  const openProductSheet = (line: DraftLine) => {
+    setSheetTarget({ localId: line.localId, name: line.name.trim(), qty: line.qty });
+    setSheetOpen(true);
+  };
+
+  /**
+   * Ajouter in the sheet: create the product phone-first (outbox, client id), then link THIS line to it.
+   * The product is created with no stock and no cost — the delivery books both at confirm. The line keeps
+   * its unit cost and takes the sale price from the sheet; with Modèles the line goes through the same
+   * per-model split as an existing variant product.
+   */
+  const createForLine = async (payload: QuickAddPayload): Promise<{ ok: boolean }> => {
+    if (!sheetTarget) return { ok: false };
+    const { localId } = sheetTarget;
+    const productId = generateId();
+    const ok = await createProduct(businessId, userId, { ...payload.data, id: productId });
+    if (!ok) {
+      haptics.error();
+      showFailureAlert(buildFailure({
+        what: FAILURE_COPY.productNotSaved.what,
+        why: failureReason(useProductStore.getState().error) ?? FAILURE_COPY.productNotSaved.why,
+        action: { label: 'Réessayer', onPress: () => { /* everything typed is still in the sheet: tap Ajouter again */ } },
+      }));
+      return { ok: false };
+    }
+    let createdVariants: { id: string; name: string }[] = [];
+    if (payload.hasVariants && payload.variants.length > 0) {
+      const modelsOk = await upsertVariants(businessId, productId, userId, payload.variants);
+      createdVariants = modelsOk ? await fetchVariants(productId, businessId) : [];
+      if (createdVariants.length === 0) {
+        toast.warning('Les modèles n\'ont pas pu être créés (connexion requise). Le produit est créé sans modèles.');
+      }
+    }
+    updateLine(localId, linkedLinePatch({ productId, payload, createdVariants, fallbackQty: sheetTarget.qty, currency }));
+    setSheetOpen(false);
+    return { ok: true };
+  };
+
   const addLine = () => setDraft(d => d ? { ...d, lines: [...d.lines, emptyLine()] } : d);
   const removeLine = (localId: string) =>
     setDraft(d => d ? { ...d, lines: d.lines.length > 1 ? d.lines.filter(l => l.localId !== localId) : d.lines } : d);
@@ -332,10 +383,14 @@ export default function ReceptionScreen() {
   // ── Validation: find the first thing blocking "Tout est bon ✓" ──────────
   // v221: a blank purchase cost is no longer an error — it means "Prix inconnu".
   // Only name and qty (and variant-split arithmetic) block the next step.
-  function firstIssue(): { line: DraftLine; kind: 'name' | 'qty' | 'variant' } | null {
+  function firstIssue(): { line: DraftLine; kind: 'name' | 'unlinked' | 'qty' | 'variant' } | null {
     if (!draft) return null;
     for (const l of draft.lines) {
       if (!l.name.trim()) return { line: l, kind: 'name' };
+    }
+    // A name without a product never reaches the server: it must be linked or created first.
+    for (const l of draft.lines) {
+      if (isUnlinkedNamedLine(l)) return { line: l, kind: 'unlinked' };
     }
     for (const l of draft.lines) {
       if (l.hasVariants && l.variantSplits) {
@@ -352,6 +407,7 @@ export default function ReceptionScreen() {
   const remainingCount = draft
     ? draft.lines.filter(l => {
       if (!l.name.trim()) return true;
+      if (isUnlinkedNamedLine(l)) return true;
       if (l.hasVariants && l.variantSplits) {
         const sum = l.variantSplits.reduce((s, v) => s + (parseQty(v.qty) ?? 0), 0);
         return sum !== parseQty(l.qty);
@@ -372,6 +428,10 @@ export default function ReceptionScreen() {
         setFlagName(true);
         toast.warning('Il manque le nom d\'un produit 👆');
         setTimeout(() => setFlagName(false), 2000);
+      } else if (issue.kind === 'unlinked') {
+        setFlagLinkId(issue.line.localId);
+        toast.warning(`« ${issue.line.name.trim()} » n'est pas encore un produit : choisissez-le ou créez-le 👆`);
+        setTimeout(() => setFlagLinkId(null), 2200);
       } else if (issue.kind === 'variant') {
         toast.warning('La répartition ne correspond pas à la quantité totale');
       } else {
@@ -388,6 +448,16 @@ export default function ReceptionScreen() {
   const [confirming, runConfirm] = useInFlight();
   const handleConfirm = () => runConfirm(async () => {
     if (!draft) return;
+    // A delivery line NEVER becomes a product by itself. If one slipped past the step gate, go back to it.
+    const unlinked = draft.lines.find(isUnlinkedNamedLine);
+    if (unlinked) {
+      haptics.warning();
+      setFlagLinkId(unlinked.localId);
+      toast.warning(`« ${unlinked.name.trim()} » n'est pas encore un produit : choisissez-le ou créez-le 👆`);
+      setStep('quoi');
+      setTimeout(() => setFlagLinkId(null), 2200);
+      return;
+    }
     const rpcLines: ReceptionLine[] = [];
     for (const l of draft.lines) {
       // v221: blank cost → null (unknown), not 0.
@@ -482,6 +552,9 @@ export default function ReceptionScreen() {
           scrollRef={scrollRef}
           lineRefs={lineRefs}
           onUpdateLine={updateLine}
+          flagLinkId={flagLinkId}
+          onCreateProduct={openProductSheet}
+          onPickProduct={line => setPickerLineId(line.localId)}
           onLinkProduct={linkProduct}
           onAddLine={addLine}
           onRemoveLine={removeLine}
@@ -518,6 +591,32 @@ export default function ReceptionScreen() {
           palette={palette}
         />
       )}
+
+      <QuickAddProductSheet
+        visible={sheetOpen}
+        onClose={() => setSheetOpen(false)}
+        businessId={businessId}
+        onSubmit={createForLine}
+        onPickExisting={p => {
+          // The name she typed already belongs to a product: link it instead of creating a duplicate.
+          setSheetOpen(false);
+          if (sheetTarget) linkProduct(sheetTarget.localId, p);
+        }}
+        saving={productSaving}
+        currency={currency}
+        products={products}
+        fournisseurs={fournisseurs}
+        delivery={sheetTarget ? { name: sheetTarget.name, qty: sheetTarget.qty } : null}
+      />
+
+      <ProductPickerSheet
+        visible={pickerLineId !== null}
+        products={products}
+        onSelect={p => { if (pickerLineId) linkProduct(pickerLineId, p); setPickerLineId(null); }}
+        onClose={() => setPickerLineId(null)}
+        styles={styles}
+        palette={palette}
+      />
 
       <SupplierPickerSheet
         visible={showSupplierPicker}
@@ -626,11 +725,12 @@ function SupplierPickerSheet({ visible, fournisseurs, businessId, userId, onSele
 
 function QuoiStep({
   draft, currency, products, variantsByProduct, linesTotal,
-  flagName, scrollRef, lineRefs, onUpdateLine, onLinkProduct, onAddLine, onRemoveLine,
+  flagName, flagLinkId, scrollRef, lineRefs, onUpdateLine, onLinkProduct, onCreateProduct, onPickProduct, onAddLine, onRemoveLine,
   onChangeSupplier, onDone, styles, palette,
 }: {
   draft: Draft; currency: string; products: Product[]; variantsByProduct: Record<string, { id: string; name: string }[]>;
-  linesTotal: number; flagName: boolean;
+  linesTotal: number; flagName: boolean; flagLinkId: string | null;
+  onCreateProduct: (line: DraftLine) => void; onPickProduct: (line: DraftLine) => void;
   scrollRef: React.RefObject<ScrollView | null>; lineRefs: React.MutableRefObject<Record<string, View | null>>;
   onUpdateLine: (id: string, p: Partial<DraftLine>) => void;
   onLinkProduct: (id: string, product: Product) => void; onAddLine: () => void; onRemoveLine: (id: string) => void;
@@ -659,7 +759,9 @@ function QuoiStep({
 
         {draft.lines.map(line => {
           const isNameIssue = flagName && !line.name.trim();
-          const match = !line.product_id && line.name.trim().length > 1 && line.dismissedMatchId !== line.name
+          const isLinkIssue = flagLinkId === line.localId;
+          const unlinked = !line.product_id && line.name.trim().length > 0;
+          const match = !line.product_id && line.name.trim().length > 1
             ? findCatalogueMatch(line.name, products)
             : undefined;
 
@@ -667,7 +769,7 @@ function QuoiStep({
             <View
               key={line.localId}
               ref={r => { lineRefs.current[line.localId] = r; }}
-              style={[styles.lineCard, (isNameIssue) && styles.lineCardWarn]}
+              style={[styles.lineCard, (isNameIssue || isLinkIssue) && styles.lineCardWarn]}
             >
               <View style={{ flexDirection: 'row', alignItems: 'center', gap: spacing[2] }}>
                 <TextInput
@@ -699,8 +801,23 @@ function QuoiStep({
                   <Pressable onPress={() => onLinkProduct(line.localId, match)}>
                     <Text variant="caption" style={{ color: palette.primary, fontFamily: fontFamily.semibold }}>Ajouter au stock</Text>
                   </Pressable>
-                  <Pressable onPress={() => onUpdateLine(line.localId, { dismissedMatchId: line.name })}>
+                  <Pressable onPress={() => onCreateProduct(line)} accessibilityRole="button">
                     <Text variant="caption" color="secondary">Nouveau produit</Text>
+                  </Pressable>
+                </View>
+              )}
+
+              {/* No match, but a name: it is not a product yet. Resolve it here — never silently at confirm. */}
+              {unlinked && !match && (
+                <View style={styles.matchBanner}>
+                  <Text variant="caption" style={{ color: isLinkIssue ? palette.warning : palette.textPrimary, flex: 1 }}>
+                    Pas encore un produit.
+                  </Text>
+                  <Pressable onPress={() => onCreateProduct(line)} accessibilityRole="button" accessibilityLabel={`Créer le produit ${line.name.trim()}`}>
+                    <Text variant="caption" style={{ color: palette.primary, fontFamily: fontFamily.semibold }}>Nouveau produit</Text>
+                  </Pressable>
+                  <Pressable onPress={() => onPickProduct(line)} accessibilityRole="button">
+                    <Text variant="caption" style={{ color: palette.primary, fontFamily: fontFamily.semibold }}>Choisir un produit</Text>
                   </Pressable>
                 </View>
               )}
@@ -788,6 +905,46 @@ function QuoiStep({
         <Button label="Tout est bon ✓" onPress={onDone} fullWidth size="lg" />
       </View>
     </>
+  );
+}
+
+// ─── Product picker ("Choisir un produit" on an unlinked line) ───────────────
+
+function ProductPickerSheet({ visible, products, onSelect, onClose, styles, palette }: {
+  visible: boolean; products: Product[]; onSelect: (p: Product) => void; onClose: () => void;
+  styles: ReturnType<typeof makeStyles>; palette: Palette;
+}) {
+  const [q, setQ] = useState('');
+  useEffect(() => { if (!visible) setQ(''); }, [visible]);
+  const list = useMemo(() => {
+    const n = normalizeName(q);
+    const base = n ? products.filter(p => normalizeName(p.name).includes(n)) : products;
+    return [...base].sort((a, b) => a.name.localeCompare(b.name, 'fr'));
+  }, [products, q]);
+  return (
+    <FormSheet visible={visible} onClose={onClose} title="Choisir un produit" cancelLabel="Fermer" scrollable={false}>
+      <View style={{ paddingHorizontal: spacing[5], paddingVertical: spacing[3] }}>
+        <Input placeholder="Rechercher un produit…" value={q} onChangeText={setQ} />
+      </View>
+      <FlatList
+        data={list}
+        keyExtractor={p => p.id}
+        keyboardShouldPersistTaps="handled"
+        contentContainerStyle={{ paddingHorizontal: spacing[5], paddingBottom: spacing[8], gap: spacing[2] }}
+        renderItem={({ item }) => (
+          <Pressable
+            onPress={() => onSelect(item)}
+            style={({ pressed }) => [styles.pickerRow, pressed && { opacity: 0.65 }]}
+            accessibilityRole="button"
+            accessibilityLabel={`Choisir ${item.name}`}
+          >
+            <Text variant="body" numberOfLines={1} style={{ flex: 1, fontFamily: fontFamily.medium }}>{item.name}</Text>
+            <Ionicons name="chevron-forward" size={16} color={palette.textDisabled} />
+          </Pressable>
+        )}
+        ListEmptyComponent={<Text variant="body" color="secondary" style={{ textAlign: 'center', paddingTop: spacing[6] }}>Aucun produit.</Text>}
+      />
+    </FormSheet>
   );
 }
 
@@ -905,7 +1062,6 @@ function ConfirmeStep({ draft, currency, linesTotal, pending, supplierName, onCh
   draft: Draft; currency: string; linesTotal: number; pending: boolean; supplierName: string; onChangeSupplier: () => void;
   styles: ReturnType<typeof makeStyles>; palette: Palette;
 }) {
-  const newProductCount = draft.lines.filter(l => !l.product_id && l.name.trim()).length;
   const itemCount = draft.lines.reduce((s, l) => {
     if (l.hasVariants && l.variantSplits) return s + l.variantSplits.reduce((ss, v) => ss + (parseQty(v.qty) ?? 0), 0);
     return s + (parseQty(l.qty) ?? 0);
@@ -918,7 +1074,6 @@ function ConfirmeStep({ draft, currency, linesTotal, pending, supplierName, onCh
       </View>
       <Text variant="h2" style={{ textAlign: 'center' }}>{itemCount} produit{itemCount > 1 ? 's' : ''} enregistré{itemCount > 1 ? 's' : ''}</Text>
       <Text variant="body" color="secondary" style={{ textAlign: 'center' }}>
-        {newProductCount > 0 ? `+${newProductCount} produit${newProductCount > 1 ? 's' : ''} · ` : ''}
         stock mis à jour · Total {formatAmount(linesTotal, currency)}
       </Text>
       {pending && (
@@ -990,6 +1145,7 @@ function makeStyles(p: Palette) {
       flexDirection: 'row', alignItems: 'center', gap: spacing[3],
       backgroundColor: p.warningLight, borderRadius: radius.md, padding: spacing[3],
     },
+    pickerRow: { flexDirection: 'row', alignItems: 'center', gap: spacing[3], paddingHorizontal: spacing[4], paddingVertical: spacing[3.5], borderRadius: radius.card, backgroundColor: p.surface },
     addLineRow: { flexDirection: 'row', alignItems: 'center', gap: spacing[2], paddingVertical: spacing[3] },
     checkCard: {
       borderRadius: radius.card, borderWidth: 1, borderColor: p.border,

@@ -17,6 +17,7 @@ import { useReduceMotion } from '@/src/hooks/useReduceMotion';
 import { SilentKeyboardAccessory } from '@/src/components/ui/SilentKeyboardAccessory';
 import { formatAmount, formatAmountInput } from '@/src/utils/format';
 import { newDraftId, removeQuickAddDraft, saveQuickAddDraft, type QuickAddDraft } from '@/lib/quickAddDraft';
+import { isKnownOffline } from '@/lib/connectivity';
 import {
   EMPTY_QUICK_ADD,
   afterAdd,
@@ -58,6 +59,12 @@ interface Props {
   startExpanded?: boolean;
   /** Edit mode: stock is shown as a fact; this opens the entrée/perte sheet. */
   onAdjust?: (product: Product) => void;
+  /**
+   * Delivery mode (opened from a reception line): name and quantity are prefilled from the line,
+   * "Je vends à" starts empty and is REQUIRED, and there is no cost section — the line owns the unit
+   * cost and the reception books both cost and stock at confirm. Closes on Ajouter (no loop, no draft).
+   */
+  delivery?: { name: string; qty: string } | null;
   /** Reopen an "À compléter" draft instead of starting fresh. */
   resumeDraft?: QuickAddDraft | null;
 }
@@ -136,9 +143,12 @@ function ValidCheck({ valid, color }: { valid: boolean; color: string }) {
 
 export function QuickAddProductSheet({
   visible, onClose, onSubmit, onPickExisting, saving, currency, products, fournisseurs, initialName, businessId,
-  editing, initialVariants, startExpanded, onAdjust, resumeDraft,
+  editing, initialVariants, startExpanded, onAdjust, resumeDraft, delivery,
 }: Props) {
   const isEdit = !!editing;
+  const isDelivery = !!delivery && !editing;
+  // Drafts are for the rapid add loop only.
+  const noDraft = isEdit || isDelivery;
   const { palette } = useTheme();
   const styles = useMemo(() => makeStyles(palette), [palette]);
   const insets = useSafeAreaInsets();
@@ -177,6 +187,13 @@ export function QuickAddProductSheet({
       setExpanded(!!startExpanded);
       return;
     }
+    if (delivery) {
+      setS({ ...EMPTY_QUICK_ADD, name: delivery.name, qty: delivery.qty.trim() || '1' });
+      setExpanded(false);
+      // Name and quantity are known; the price is what is missing.
+      const t = setTimeout(() => priceRef.current?.focus(), 340);
+      return () => clearTimeout(t);
+    }
     if (resumeDraft) {
       draftId.current = resumeDraft.id;
       setS(resumeDraft.state);
@@ -187,7 +204,7 @@ export function QuickAddProductSheet({
     setExpanded(false);
     const t = setTimeout(() => nameRef.current?.focus(), 340);
     return () => clearTimeout(t);
-  }, [visible, editing?.id, resumeDraft?.id, initialName]);
+  }, [visible, editing?.id, resumeDraft?.id, initialName, delivery?.name, delivery?.qty]);
 
   // Edit mode: a variant product's models arrive asynchronously after the sheet opens.
   useEffect(() => {
@@ -198,13 +215,13 @@ export function QuickAddProductSheet({
   // "À compléter": keep what is half-filled (debounced) so a swipe-down, Annuler or app kill never loses it.
   // Add mode only; a blank sheet removes its own draft. Never synced, never in the outbox.
   useEffect(() => {
-    if (!visible || isEdit) return;
+    if (!visible || noDraft) return;
     const t = setTimeout(() => { void saveQuickAddDraft(businessId, draftId.current, s).catch(() => {}); }, 400); // failure: silent — draft is best-effort
     return () => clearTimeout(t);
-  }, [s, visible, isEdit, businessId]);
+  }, [s, visible, noDraft, businessId]);
 
   const handleClose = () => {
-    if (!isEdit && !added.current) void saveQuickAddDraft(businessId, draftId.current, sRef.current).catch(() => {}); // failure: silent — draft is best-effort
+    if (!noDraft && !added.current) void saveQuickAddDraft(businessId, draftId.current, sRef.current).catch(() => {}); // failure: silent — draft is best-effort
     onClose();
   };
 
@@ -259,16 +276,20 @@ export function QuickAddProductSheet({
   };
 
   const submit = async () => {
-    if (!canSubmit(s) || submitting.current) return;
+    if (!canSubmit(s) || (isDelivery && !priceValid(s, currency)) || submitting.current) return;
     submitting.current = true;
     setError(null);
     const name = s.name.trim();
-    const payload = toQuickAddPayload(s, currency, editing ? { reorder_level: editing.reorder_level, unit: editing.unit, cost_price: editing.cost_price } : undefined);
+    const payload = toQuickAddPayload(
+      s, currency,
+      editing ? { reorder_level: editing.reorder_level, unit: editing.unit, cost_price: editing.cost_price } : undefined,
+      { delivery: isDelivery },
+    );
     const res = await onSubmit(payload);
     submitting.current = false;
     if (!res.ok) return; // the failure alert is shown by the host; everything typed stays
     haptics.success();
-    if (isEdit) return; // edit: the host closes the sheet and confirms
+    if (isEdit || isDelivery) return; // edit / delivery: the host closes the sheet and confirms
     added.current = true;
     showToast(name);
     resetForNext();
@@ -306,7 +327,7 @@ export function QuickAddProductSheet({
       }
       footer={
         <View style={[styles.footer, { paddingBottom: keyboardUp ? spacing[3] : Math.max(insets.bottom, spacing[5]) }]}>
-          <Button label={isEdit ? 'Enregistrer' : 'Ajouter'} loadingLabel={isEdit ? 'Enregistrement' : 'Ajout'} onPress={submit} loading={saving} disabled={!canSubmit(s)} fullWidth size="lg" />
+          <Button label={isEdit ? 'Enregistrer' : 'Ajouter'} loadingLabel={isEdit ? 'Enregistrement' : 'Ajout'} onPress={submit} loading={saving} disabled={!canSubmit(s) || (isDelivery && !priceValid(s, currency))} fullWidth size="lg" />
         </View>
       }
     >
@@ -362,7 +383,8 @@ export function QuickAddProductSheet({
         </Card>
       )}
 
-      {/* MODÈLES */}
+      {/* MODÈLES — models are saved by an online-only call, so a delivery can't create them offline */}
+      {!(isDelivery && isKnownOffline()) && (
       <Card style={styles.toggleRow}>
         <Text variant="body" color="secondary" style={{ flex: 1, fontFamily: FF.medium }}>Modèles</Text>
         <Switch
@@ -373,6 +395,7 @@ export function QuickAddProductSheet({
           accessibilityLabel="Modèles"
         />
       </Card>
+      )}
 
       {/* JE VENDS À */}
       {collapsedPrice ? (
@@ -506,13 +529,15 @@ export function QuickAddProductSheet({
         </Card>
       )}
 
-      {/* PLUS D'INFORMATIONS */}
+      {/* PLUS D'INFORMATIONS — not in delivery mode: the line already owns the unit cost */}
+      {!isDelivery && (
       <Pressable onPress={toggleExpanded} style={styles.moreBtn} accessibilityRole="button" accessibilityState={{ expanded }}>
         <Text variant="body" style={{ color: palette.primary }}>Plus d'informations</Text>
         <Ionicons name={expanded ? 'chevron-up' : 'chevron-down'} size={16} color={palette.primary} style={{ marginLeft: 6 }} />
       </Pressable>
+      )}
 
-      {expanded && (
+      {expanded && !isDelivery && (
         <ReAnimated.View entering={reduce ? undefined : FadeInDown.duration(200)}>
           <Card style={styles.fieldBlock}>
             <Text style={styles.fieldLabel}>Prix d'achat</Text>

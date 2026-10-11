@@ -177,6 +177,19 @@ export interface QuickAddPayload {
   data: CreateProductData;
   hasVariants: boolean;
   variants: DraftVariant[];
+  /** Delivery mode only: the quantity typed in the sheet (the delivery books the stock, not the create). */
+  deliveryQty?: number;
+  /** Delivery mode with models: each model's name and the quantity typed for it. */
+  deliverySplits?: { name: string; qty: number }[];
+}
+
+export interface PayloadOptions {
+  /**
+   * The sheet was opened from a delivery line. The line owns the quantity and unit cost and the
+   * reception books both at confirm, so the product is created with NO stock and NO cost — creating
+   * with stock too would count it twice.
+   */
+  delivery?: boolean;
 }
 
 /**
@@ -193,7 +206,7 @@ export interface ExistingProduct {
   cost_price: number;
 }
 
-export function toQuickAddPayload(s: QuickAddState, currency: string, existing?: ExistingProduct): QuickAddPayload {
+export function toQuickAddPayload(s: QuickAddState, currency: string, existing?: ExistingProduct, opts: PayloadOptions = {}): QuickAddPayload {
   // Nothing but the name may block, so a model row with no name is simply ignored; if no named
   // row is left the product is created as a plain product with the single quantity.
   const namedRows = s.models ? s.variants.filter(v => v.name.trim()) : [];
@@ -205,25 +218,31 @@ export function toQuickAddPayload(s: QuickAddState, currency: string, existing?:
   const untouchedCost = !!existing && fees === 0 &&
     s.purchasePrice === (existing.cost_price > 0 ? formatAmountInput(String(Math.round(existing.cost_price)), currency) : '');
   const cost = untouchedCost ? existing!.cost_price : pp > 0 || fees > 0 ? perUnitCost(pp, fees, pieces) : 0;
+  const delivery = !!opts.delivery;
   const data: CreateProductData = {
     name: s.name.trim(),
     unit: existing?.unit ?? 'pcs',
-    cost_price: cost,
+    cost_price: delivery ? 0 : cost,
     sale_price: Math.max(parseAmountInput(s.price, currency) || 0, 0),
     reorder_level: existing?.reorder_level ?? 0,
-    initial_stock: s.models ? 0 : singleQty(s),
+    initial_stock: s.models || delivery ? 0 : singleQty(s),
     supplier_id: s.supplierId || null,
   };
   const variants: DraftVariant[] = s.models
     ? s.variants.map(v => ({
         name: v.name.trim(),
         sale_price: Math.max(resolvedVariantPrice(v, s, currency) || 0, 0),
-        cost_price: v.cost ?? cost,
-        stock_qty: variantQty(v),
+        cost_price: delivery ? 0 : v.cost ?? cost,
+        stock_qty: delivery ? 0 : variantQty(v),
         reorder_level: 0,
       }))
     : [];
-  return { data, hasVariants: s.models, variants };
+  const out: QuickAddPayload = { data, hasVariants: s.models, variants };
+  if (delivery) {
+    out.deliveryQty = s.models ? derivedTotalPieces(s.variants) : singleQty(s);
+    if (s.models) out.deliverySplits = s.variants.map(v => ({ name: v.name.trim(), qty: variantQty(v) }));
+  }
+  return out;
 }
 
 // ── Name autocomplete ────────────────────────────────────────────────────────

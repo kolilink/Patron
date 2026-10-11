@@ -46,6 +46,8 @@ export interface ProductStats {
 }
 
 export interface CreateProductData {
+  /** Optional client-generated id: lets a caller (a delivery line) link to the new product before it syncs. */
+  id?: string;
   name: string;
   sku?: string | null;
   category?: string | null;
@@ -347,7 +349,7 @@ export const useProductStore = create<ProductStore>((set, get) => ({
 
   createProduct: async (businessId, userId, data) => {
     set({ saving: true, error: null });
-    const productId = generateId();
+    const productId = data.id ?? generateId();
     const productRow = {
       id: productId,
       business_id: businessId,
