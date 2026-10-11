@@ -80,6 +80,9 @@ export function BusinessDrawer() {
   const dragStartX = useSharedValue(-DRAWER_WIDTH);
   const [modalVisible, setModalVisible] = useState(false);
   const [search, setSearch] = useState('');
+  const unmountIfClosed = () => {
+    if (!useAuthStore.getState().businessDrawerOpen) setModalVisible(false);
+  };
 
   useEffect(() => {
     if (businessDrawerOpen) {
@@ -93,10 +96,11 @@ export function BusinessDrawer() {
         translateX.value = -DRAWER_WIDTH;
         setModalVisible(false);
       } else {
-        translateX.value = withTiming(-DRAWER_WIDTH, { duration: DRAWER_CLOSE_DURATION, easing: DRAWER_EASE }, (finished) => {
-          if (finished) {
-            runOnJS(setModalVisible)(false);
-          }
+        translateX.value = withTiming(-DRAWER_WIDTH, { duration: DRAWER_CLOSE_DURATION, easing: DRAWER_EASE }, () => {
+          // Unmount whether or not the animation "finished": an interrupted close used to leave the
+          // transparent modal mounted with the panel parked at the screen's left edge. runOnJS
+          // re-checks the store, so a close that was interrupted by a re-open keeps the modal.
+          runOnJS(unmountIfClosed)();
         });
       }
     }
@@ -127,8 +131,11 @@ export function BusinessDrawer() {
       }
     });
 
+  // Fully closed = fully invisible. The panel carries a shadow that reaches past its right edge, so
+  // parked at -DRAWER_WIDTH it would otherwise leave a dark rounded strip on the screen's left edge.
   const drawerAnimStyle = useAnimatedStyle(() => ({
     transform: [{ translateX: translateX.value }],
+    opacity: translateX.value <= -DRAWER_WIDTH + 1 ? 0 : 1,
   }));
 
   const backdropAnimStyle = useAnimatedStyle(() => ({

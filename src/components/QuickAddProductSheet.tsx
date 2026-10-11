@@ -65,6 +65,11 @@ interface Props {
    * cost and the reception books both cost and stock at confirm. Closes on Ajouter (no loop, no draft).
    */
   delivery?: { name: string; qty: string } | null;
+  /** Edit mode: the sheet owns archiving and restoring (Gérer rows have no buttons of their own). */
+  onArchive?: (product: Product) => void;
+  onRestore?: (product: Product) => void;
+  /** Edit mode: opens the profitability ("Rentabilité") sheet. */
+  onStats?: (product: Product) => void;
   /** Reopen an "À compléter" draft instead of starting fresh. */
   resumeDraft?: QuickAddDraft | null;
 }
@@ -144,6 +149,7 @@ function ValidCheck({ valid, color }: { valid: boolean; color: string }) {
 export function QuickAddProductSheet({
   visible, onClose, onSubmit, onPickExisting, saving, currency, products, fournisseurs, initialName, businessId,
   editing, initialVariants, startExpanded, onAdjust, resumeDraft, delivery,
+  onArchive, onRestore, onStats,
 }: Props) {
   const isEdit = !!editing;
   const isDelivery = !!delivery && !editing;
@@ -537,6 +543,30 @@ export function QuickAddProductSheet({
       </Pressable>
       )}
 
+      {/* Edit mode: this sheet owns everything about the product — archive / restore / profitability. */}
+      {isEdit && editing && (onStats || onArchive || onRestore) && (
+        <View style={styles.manageBlock}>
+          {onStats && !editing.archived && (
+            <Pressable onPress={() => onStats(editing)} style={styles.manageRow} accessibilityRole="button">
+              <Text variant="body" style={{ color: palette.primary }}>Voir la rentabilité</Text>
+            </Pressable>
+          )}
+          {editing.archived ? (
+            onRestore && (
+              <Pressable onPress={() => onRestore(editing)} style={styles.manageRow} accessibilityRole="button" accessibilityLabel="Restaurer ce produit">
+                <Text variant="body" style={{ color: palette.primary, fontFamily: FF.semibold }}>Restaurer ce produit</Text>
+              </Pressable>
+            )
+          ) : (
+            onArchive && (
+              <Pressable onPress={() => onArchive(editing)} style={styles.manageRow} accessibilityRole="button" accessibilityLabel="Archiver ce produit">
+                <Text variant="body" color="secondary">Archiver ce produit</Text>
+              </Pressable>
+            )
+          )}
+        </View>
+      )}
+
       {expanded && !isDelivery && (
         <ReAnimated.View entering={reduce ? undefined : FadeInDown.duration(200)}>
           <Card style={styles.fieldBlock}>
@@ -642,6 +672,8 @@ function makeStyles(p: Palette) {
     variantRow: { ...card, flexDirection: 'row', alignItems: 'center', gap: spacing[2], paddingHorizontal: spacing[4], paddingVertical: spacing[2.5], marginTop: spacing[2] },
     addVariant: { flexDirection: 'row', alignItems: 'center', paddingHorizontal: spacing[5], paddingVertical: spacing[3] },
     derived: { fontFamily: FF.medium, fontSize: 14, color: p.textSecondary, paddingHorizontal: spacing[5] },
+    manageBlock: { marginTop: spacing[2], paddingBottom: spacing[2] },
+    manageRow: { alignItems: 'center', paddingVertical: spacing[3.5] },
     moreBtn: { flexDirection: 'row', alignItems: 'center', justifyContent: 'center', paddingVertical: spacing[4] },
     costLine: { paddingHorizontal: spacing[5], paddingVertical: spacing[3] },
     costText: { fontFamily: FF.medium, fontSize: 14 },

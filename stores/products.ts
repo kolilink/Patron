@@ -2,7 +2,7 @@ import { create } from 'zustand';
 import { supabase } from '@/lib/supabase';
 import { translateError } from '@/lib/errors';
 import { generateId, generateFallbackName } from '@/lib/id';
-import { saveProductCache, getProductCache, enqueue, getQueueCount, getCacheTimestamp, saveVariantsCache, getVariantsCache, getAllQueueItemsForOverlay } from '@/lib/db';
+import { saveProductCache, getProductCache, enqueue, getQueueCount, getCacheTimestamp, saveVariantsCache, getVariantsCache, getAllQueueItemsForOverlay, saveArchivedProductsCache, getArchivedProductsCache } from '@/lib/db';
 import { applyPendingProductOps, applyPendingArchived, type QueuedProductOp } from '@/lib/pendingProducts';
 import { isKnownOffline } from '@/lib/connectivity';
 import { isNetworkError, withNetworkRetry, reportOfflineFallback } from '@/lib/sync';
@@ -320,6 +320,17 @@ export const useProductStore = create<ProductStore>((set, get) => ({
   },
 
   fetchArchivedProducts: async (businessId) => {
+    // Cache first (the "Archivés" section must render offline): seed from the last server list, then
+    // refresh. A failed refresh keeps what is on screen — offline is not an error here.
+    if (get().archivedProducts.length === 0) {
+      const cached = await getArchivedProductsCache(businessId);
+      if (Array.isArray(cached) && !isStaleBusiness(businessId)) {
+        _baseArchived = { businessId, list: cached as Product[] };
+        let seeded = cached as Product[];
+        try { seeded = applyPendingArchived(seeded, _baseProducts && _baseProducts.businessId === businessId ? _baseProducts.list : [], await readProductOps()); } catch { /* base is fine */ }
+        set({ archivedProducts: seeded });
+      }
+    }
     try {
       const { data, error } = await supabase
         .from('products')
@@ -338,11 +349,14 @@ export const useProductStore = create<ProductStore>((set, get) => ({
         bulk_price: p.bulk_price != null ? p.bulk_price / 100 : null,
       }));
       _baseArchived = { businessId, list: archivedProducts };
+      void saveArchivedProductsCache(businessId, archivedProducts);
       let shown = archivedProducts;
       try { shown = applyPendingArchived(archivedProducts, _baseProducts && _baseProducts.businessId === businessId ? _baseProducts.list : [], await readProductOps()); } catch { /* base is fine */ }
       set({ archivedProducts: shown });
     } catch (err) {
       if (isStaleBusiness(businessId)) return;
+      // Offline: the cached list (seeded above) stays; only a genuine failure with nothing to show is an error.
+      if (isNetworkError(err) && get().archivedProducts.length > 0) return;
       set({ error: translateError(err, "Le chargement n'a pas abouti.") });
     }
   },
@@ -457,7 +471,7 @@ export const useProductStore = create<ProductStore>((set, get) => ({
   },
 
   // Phone-first, like create/edit/adjust: the durable outbox write is the only thing awaited, so
-  // "désactiver" / "réactiver" work offline and the lists move at once (update_product {archived}).
+  // "archiver" / "restaurer" work offline and the lists move at once (update_product {archived}).
   archiveProduct: (id, businessId) =>
     archiveGuard.run(id, async () => {
     set(state => ({ archivingIds: [...state.archivingIds, id] }));
@@ -465,7 +479,7 @@ export const useProductStore = create<ProductStore>((set, get) => ({
       try {
         await enqueue('update_product', { id, archived: true });
       } catch (err) {
-        set({ error: isOutboxValidationError(err) ? null : translateError(err, "Impossible de désactiver le produit") });
+        set({ error: isOutboxValidationError(err) ? null : translateError(err, "Impossible d'archiver le produit") });
         return false;
       }
       try { await rebuildProducts(businessId); } catch (err) { console.error('[archiveProduct] rebuild failed (write already succeeded)', err); }

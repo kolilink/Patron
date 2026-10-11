@@ -126,14 +126,16 @@ describe('entry-point checklist — every one lands in Vendre, none dangle', () 
     expect(sheet).toContain('accessibilityLabel="Ajuster le stock"');
     expect(sheet).toMatch(/Fournisseur<\/Text>/);
   });
-  it('8/9. stock adjust, archive switch, "Produits finis" and the stats sheet live in Gérer mode', () => {
-    const pm = read('src/components/products/ProductManager.tsx');
-    expect(pm).toContain('<ArchiveSwitch');
-    expect(pm).toContain('Produits finis');
-    expect(pm).toContain('sheets.openAdjust(p)');
-    expect(pm).toContain('sheets.openStats(p)');
-    expect(read('src/components/products/useProductSheets.tsx')).toMatch(/<ProductStatsModal/);
-    expect(read('src/components/products/useProductSheets.tsx')).toMatch(/<StockAdjustModal/);
+  it('8/9. stock adjust, archive / restore and the stats sheet are owned by the edit sheet that Gérer rows open', () => {
+    const sheet = read('src/components/QuickAddProductSheet.tsx');
+    const hook = read('src/components/products/useProductSheets.tsx');
+    expect(sheet).toContain('accessibilityLabel="Ajuster le stock"');
+    expect(sheet).toContain('Archiver ce produit');
+    expect(sheet).toContain('Restaurer ce produit');
+    expect(sheet).toContain('Voir la rentabilité');
+    expect(hook).toMatch(/<ProductStatsModal/);
+    expect(hook).toMatch(/<StockAdjustModal/);
+    expect(hook).toMatch(/onArchive=\{handleArchive\}/);
   });
   it('10. the "catalogue" concept is gone from Vendre\'s empty-state copy', () => {
     expect(vendre).not.toContain('Pas besoin de catalogue pour vendre.');
@@ -146,18 +148,17 @@ describe('entry-point checklist — every one lands in Vendre, none dangle', () 
 describe('Gérer mode', () => {
   const vendre = read('app/(app)/(tabs)/vendre.tsx');
   const pm = read('src/components/products/ProductManager.tsx');
-  it('has the specified management surface: Valeur du stock, À compléter (max 3, collapsible, deletable), Prix en {devise}', () => {
+  it('has the specified management surface: Valeur du stock, À compléter (max 3, collapsible, deletable)', () => {
     expect(pm).toContain('Valeur du stock');
     expect(pm).toContain('`À compléter (${drafts.length})`');
     expect(pm).toContain('setDraftsOpen(v => !v)');
     expect(pm).toContain('deleteDraft(d)');
-    expect(pm).toMatch(/Prix en \{currency\}/);
-    expect(vendre).toMatch(/Prix en \{currency\}/); // …and in sell mode
+    expect(vendre).toMatch(/Prix en \{currency\}/); // sell mode keeps its currency line; Gérer rows carry "… gnf" themselves
   });
-  it('per-product affordances: "Prix à fixer" (sale price) and "Prix d\'achat ?" (cost) open the edit sheet', () => {
-    expect(pm).toContain("Prix d'achat ?");
-    expect(pm).toContain('sheets.openEdit(item, { expandCost: true })');
-    expect(pm).toContain('sheets.openEdit(item)');
+  it('per-product affordances: "Prix à fixer" (sale price) and "Prix d\'achat ?" (cost) show on the row, and the row opens the edit sheet', () => {
+    expect(pm).toMatch(/Prix d.{1,2}achat \?/);
+    expect(pm).toContain('Prix à fixer');
+    expect(pm).toMatch(/onPress=\{\(\) => sheets\.openEdit\(item\.product, \{ expandCost:/);
   });
   it('one-time hint, exact copy, dismissible forever', () => {
     expect(pm).toContain('Astuce : restez appuyé sur un produit pour le modifier');
@@ -168,13 +169,14 @@ describe('Gérer mode', () => {
     expect(vendre).toMatch(/accessibilityLabel="Gérer les produits"/);
     expect(vendre).toContain('delayLongPress={450}');
     expect(vendre).toMatch(/onManage \? \(\) => \{ haptics\.select\(\); onManage\(\); \}/);
+    // long-press opens the SAME edit sheet a Gérer row opens — it does not switch mode
+    expect(vendre).toMatch(/onManage=\{canManage \? \(\) => productSheets\.openEdit\(item\) : undefined\}/);
     expect(vendre).toMatch(/hasBulk && !outOfStock \? onAddBulk :/);
   });
   it('floating "+" and "Gérer" hide on ONE derived "any sheet open" state (Vendre and Gérer each)', () => {
     expect(vendre).toMatch(/const anySheetOpen = productSheets\.anySheetOpen \|\| variantPickerProduct !== null \|\| showPayment \|\|\s*\n\s*showConfirmSheet \|\| showCartSheet \|\| showQuickCapture \|\| receiptOpen !== null;/);
     expect(vendre).toContain('const showFloating = canManage && products.length > 0 && !anySheetOpen;');
-    expect(pm).toMatch(/const anySheetOpen = sheets\.anySheetOpen \|\| showActionSheet \|\| showRestoreSheet \|\| showOutOfStockModal;/);
-    expect(pm).toMatch(/tab === 'actifs' && products\.length > 0 && !anySheetOpen/);
+    expect(pm).toMatch(/canEdit && !nothingAtAll && !sheets\.anySheetOpen/);
     expect(read('src/components/products/useProductSheets.tsx')).toMatch(/anySheetOpen: addOpen \|\| editOpen \|\| adjustOpen \|\| statsOpen/);
   });
   it('bulk import has no UI yet (reserved, not built)', () => {
@@ -344,8 +346,8 @@ describe('offline contract: every Gérer action goes through the outbox and show
 
   it('empty + offline is the true empty state: Gérer renders the empty state from the local store, never a loader', () => {
     const pm = read('src/components/products/ProductManager.tsx');
-    expect(pm).toMatch(/\{loading && products\.length === 0 && !offline \? \(\s*\n\s*<SkeletonList/);
-    expect(pm).toMatch(/tab === 'actifs' && products\.length === 0 \? \(\s*\n\s*<EmptyState/);
+    expect(pm).toMatch(/\{loading && nothingAtAll && !offline \? \(\s*\n\s*<SkeletonList/);
+    expect(pm).toMatch(/\) : nothingAtAll \? \(\s*\n\s*<>\s*\n\s*\{header\}\s*\n\s*<EmptyState/);
   });
 });
 

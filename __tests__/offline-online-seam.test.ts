@@ -96,7 +96,7 @@ describe('5. a FAB never sits beside an empty state\'s own actions', () => {
     expect(read('app/(app)/fournisseurs/index.tsx')).toMatch(/\{fournisseurs\.length > 0 && \(\s*\n\s*<View style=\{styles\.fabContainer\}>/);
     expect(read('app/(app)/ventes/index.tsx')).toMatch(/canSell && !selected && sales\.length > 0/);
     expect(read('app/(app)/clients/index.tsx')).toMatch(/allClients\.length > 0 && !isInvestisseur/);
-    expect(read('src/components/products/ProductManager.tsx')).toMatch(/tab === 'actifs' && products\.length > 0 && !anySheetOpen/);
+    expect(read('src/components/products/ProductManager.tsx')).toMatch(/canEdit && !nothingAtAll && !sheets\.anySheetOpen/);
     expect(read('app/(app)/(tabs)/vendre.tsx')).toMatch(/const showFloating = canManage && products\.length > 0 && !anySheetOpen/);
     expect(read('app/(app)/depenses/index.tsx')).toMatch(/\{!isEmpty && \(/);
   });

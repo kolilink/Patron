@@ -163,10 +163,10 @@ describe('screens wire the guard to the tapped control', () => {
     expect(src).toMatch(/saving=\{saving \|\| confirming\}/);
     expect(src).toMatch(/loadingLabel="Enregistrement"/);
   });
-  it('archive: the product row shows "Désactivation" and is disabled', () => {
-    const src = read('src/components/products/ProductManager.tsx');
-    expect(src).toMatch(/word="Désactivation"/);
-    expect(src).toMatch(/disabled=\{archiving\}/);
+  it('archive: only the sheet\'s confirmed "Archiver" fires it, through the keyed in-flight guard', () => {
+    const src = read('src/components/products/useProductSheets.tsx');
+    expect(src).toMatch(/text: 'Archiver', style: 'destructive'/);
+    expect(read('stores/products.ts')).toMatch(/archiveGuard\.run\(id,/);
   });
   it('supplier deletion: the header control shows "Suppression" and is disabled', () => {
     const src = read('app/(app)/fournisseurs/[id].tsx');
