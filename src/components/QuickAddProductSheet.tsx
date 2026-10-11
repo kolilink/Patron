@@ -1,5 +1,5 @@
 import React, { useCallback, useEffect, useMemo, useRef, useState } from 'react';
-import { Animated, Easing, InputAccessoryView, Keyboard, LayoutAnimation, Platform, Pressable, ScrollView, StyleSheet, Switch, TextInput, View } from 'react-native';
+import { Animated, Easing, Keyboard, LayoutAnimation, Platform, Pressable, ScrollView, StyleSheet, Switch, TextInput, View } from 'react-native';
 import ReAnimated, { FadeInDown } from 'react-native-reanimated';
 import { Ionicons } from '@expo/vector-icons';
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
@@ -31,13 +31,6 @@ import {
   type QuickAddPayload,
   type QuickAddState,
 } from '@/src/utils/quickAddProduct';
-
-// iOS number pads have no return key: this bar stands in for "Suivant" and
-// never submits (same pattern as the full form in catalogue.tsx).
-const NEXT_ACCESSORY_ID = 'quick-add-product-next-accessory';
-const SILENT_ACCESSORY_ID = 'quick-add-product-silent-accessory';
-
-type NumField = 'price' | 'qty' | 'purchase' | 'fees';
 
 interface Props {
   visible: boolean;
@@ -82,7 +75,6 @@ export function QuickAddProductSheet({
   const [s, setS] = useState<QuickAddState>(EMPTY_QUICK_ADD);
   const [expanded, setExpanded] = useState(false);
   const [error, setError] = useState<string | null>(null);
-  const [focused, setFocused] = useState<NumField | null>(null);
 
   const scrollRef = useRef<ScrollView>(null);
   const nameRef = useRef<TextInput>(null);
@@ -96,7 +88,6 @@ export function QuickAddProductSheet({
       setS({ ...EMPTY_QUICK_ADD, name: initialName ?? '' });
       setExpanded(false);
       setError(null);
-      setFocused(null);
     }
   }, [visible, initialName]);
 
@@ -123,13 +114,6 @@ export function QuickAddProductSheet({
     setS(prev => setModels(prev, on));
   };
 
-  const next = () => {
-    if (focused === 'price' && !s.models) qtyRef.current?.focus();
-    else if (focused === 'purchase') feesRef.current?.focus();
-    else Keyboard.dismiss();
-  };
-  const accessoryLabel = (focused === 'price' && !s.models) || focused === 'purchase' ? 'Suivant' : 'Terminé';
-
   const submit = async () => {
     const err = validateQuickAdd(s, currency);
     if (err) { setError(err); haptics.error(); return; }
@@ -152,26 +136,11 @@ export function QuickAddProductSheet({
       title="Nouveau produit"
       contentContainerStyle={{ paddingBottom: 16 }}
       keyboardShouldPersistTaps="handled"
+      keyboardDismissMode="on-drag"
       footer={
         <View style={[styles.footer, { paddingBottom: Math.max(insets.bottom, spacing[5]) }]}>
           <Button label="Ajouter" loadingLabel="Ajout" onPress={submit} loading={saving} fullWidth size="lg" />
         </View>
-      }
-      accessory={
-        Platform.OS === 'ios' ? (
-          <>
-            <InputAccessoryView nativeID={NEXT_ACCESSORY_ID}>
-              <View style={styles.accessoryBar}>
-                <Pressable onPress={next} hitSlop={8}>
-                  <Text variant="body" style={{ color: palette.primary, fontFamily: FF.semibold }}>{accessoryLabel}</Text>
-                </Pressable>
-              </View>
-            </InputAccessoryView>
-            <InputAccessoryView nativeID={SILENT_ACCESSORY_ID}>
-              <View style={{ height: 0 }} />
-            </InputAccessoryView>
-          </>
-        ) : undefined
       }
     >
       {error && (
@@ -260,8 +229,6 @@ export function QuickAddProductSheet({
             returnKeyType={s.models ? 'done' : 'next'}
             blurOnSubmit={false}
             onSubmitEditing={() => { if (s.models) Keyboard.dismiss(); else qtyRef.current?.focus(); }}
-            onFocus={() => setFocused('price')}
-            inputAccessoryViewID={Platform.OS === 'ios' ? NEXT_ACCESSORY_ID : undefined}
           />
         </View>
       )}
@@ -279,8 +246,6 @@ export function QuickAddProductSheet({
                 inputStyle={styles.fieldInput}
                 returnKeyType="done"
                 onSubmitEditing={() => Keyboard.dismiss()}
-                onFocus={() => setFocused('qty')}
-                inputAccessoryViewID={NEXT_ACCESSORY_ID}
               />
             </View>
             <Text style={styles.unitTag}>pièces</Text>
@@ -313,7 +278,6 @@ export function QuickAddProductSheet({
                   keyboardType="number-pad"
                   placeholder="0"
                   placeholderTextColor={palette.textDisabled}
-                  inputAccessoryViewID={Platform.OS === 'ios' ? SILENT_ACCESSORY_ID : undefined}
                 />
                 <TextInput
                   style={[
@@ -326,7 +290,6 @@ export function QuickAddProductSheet({
                   keyboardType="decimal-pad"
                   placeholder="0"
                   placeholderTextColor={palette.textDisabled}
-                  inputAccessoryViewID={Platform.OS === 'ios' ? SILENT_ACCESSORY_ID : undefined}
                   accessibilityHint={v.touched ? undefined : 'Prix de départ, modifiable'}
                 />
                 <Pressable
@@ -373,8 +336,6 @@ export function QuickAddProductSheet({
               returnKeyType="next"
               blurOnSubmit={false}
               onSubmitEditing={() => feesRef.current?.focus()}
-              onFocus={() => setFocused('purchase')}
-              inputAccessoryViewID={Platform.OS === 'ios' ? NEXT_ACCESSORY_ID : undefined}
             />
           </View>
           <View style={styles.fieldBlock}>
@@ -386,8 +347,6 @@ export function QuickAddProductSheet({
               onChangeText={v => setS(prev => ({ ...prev, fees: formatAmountInput(v, currency) }))}
               keyboardType="decimal-pad"
               placeholderTextColor={palette.textDisabled}
-              onFocus={() => setFocused('fees')}
-              inputAccessoryViewID={Platform.OS === 'ios' ? NEXT_ACCESSORY_ID : undefined}
             />
           </View>
           {cost && (
@@ -428,36 +387,22 @@ export function QuickAddProductSheet({
 }
 
 function makeStyles(p: Palette) {
+  // Soft rounded card; whitespace (not hairlines) separates groups.
+  const card = { backgroundColor: p.surface, borderRadius: 16, marginHorizontal: spacing[4], marginTop: spacing[3] } as const;
   return StyleSheet.create({
     footer: { padding: spacing[5], backgroundColor: p.background },
-    accessoryBar: {
-      flexDirection: 'row', justifyContent: 'flex-end',
-      paddingHorizontal: spacing[4], paddingVertical: spacing[2.5],
-      backgroundColor: p.surface, borderTopWidth: 1, borderTopColor: p.border,
-    },
-    formError: { backgroundColor: p.warningLight, borderRadius: 12, padding: spacing[3], margin: spacing[5], marginBottom: 0 },
-    fieldBlock: {
-      paddingHorizontal: spacing[5], paddingVertical: spacing[2.5],
-      borderBottomWidth: 1, borderBottomColor: p.border, gap: spacing[1.5],
-    },
+    formError: { backgroundColor: p.warningLight, borderRadius: 12, padding: spacing[3], marginHorizontal: spacing[4], marginTop: spacing[3] },
+    fieldBlock: { ...card, paddingHorizontal: spacing[4], paddingVertical: spacing[3], gap: spacing[1.5] },
     labelRow: { flexDirection: 'row', alignItems: 'center', justifyContent: 'space-between' },
     fieldLabel: {
       fontFamily: FF.semibold, fontSize: 11, color: p.textSecondary,
       letterSpacing: 0.6, textTransform: 'uppercase',
     },
     fieldInput: { fontFamily: FF.semibold, fontSize: 22, color: p.textPrimary, paddingVertical: 0, minHeight: 36 },
-    confirmedRow: {
-      flexDirection: 'row', alignItems: 'center', gap: spacing[3],
-      paddingHorizontal: spacing[5], paddingVertical: spacing[3],
-      borderBottomWidth: 1, borderBottomColor: p.border,
-    },
+    confirmedRow: { ...card, flexDirection: 'row', alignItems: 'center', gap: spacing[3], paddingHorizontal: spacing[4], paddingVertical: spacing[3.5] },
     confirmedLabel: { fontFamily: FF.semibold, fontSize: 11, color: p.textSecondary, letterSpacing: 0.6, textTransform: 'uppercase', width: 96 },
     confirmedValue: { flex: 1, fontFamily: FF.semibold, fontSize: 17, color: p.textPrimary },
-    toggleRow: {
-      flexDirection: 'row', alignItems: 'center',
-      paddingHorizontal: spacing[5], paddingVertical: spacing[2],
-      borderBottomWidth: 1, borderBottomColor: p.border,
-    },
+    toggleRow: { ...card, flexDirection: 'row', alignItems: 'center', paddingHorizontal: spacing[4], paddingVertical: spacing[2] },
     qtyRow: { flexDirection: 'row', alignItems: 'center', gap: spacing[3] },
     unitTag: { fontFamily: FF.medium, fontSize: 15, color: p.textSecondary },
     suggestions: { marginTop: spacing[1], gap: 2 },
@@ -465,18 +410,15 @@ function makeStyles(p: Palette) {
     suggestionRow: {
       flexDirection: 'row', alignItems: 'center', gap: spacing[3],
       paddingVertical: spacing[2], paddingHorizontal: spacing[3],
-      borderRadius: 10, backgroundColor: p.surface,
+      borderRadius: 10, backgroundColor: p.background,
     },
-    variantList: { borderBottomWidth: 1, borderBottomColor: p.border, paddingBottom: spacing[2] },
-    variantHeader: { flexDirection: 'row', alignItems: 'center', gap: spacing[2], paddingHorizontal: spacing[5], paddingTop: spacing[2.5] },
-    variantRow: { flexDirection: 'row', alignItems: 'center', gap: spacing[2], paddingHorizontal: spacing[5], paddingVertical: spacing[1.5] },
-    addVariant: { flexDirection: 'row', alignItems: 'center', paddingHorizontal: spacing[5], paddingVertical: spacing[2.5] },
+    variantList: { marginTop: spacing[3] },
+    variantHeader: { flexDirection: 'row', alignItems: 'center', gap: spacing[2], paddingHorizontal: spacing[7], paddingBottom: spacing[1.5] },
+    variantRow: { ...card, flexDirection: 'row', alignItems: 'center', gap: spacing[2], paddingHorizontal: spacing[4], paddingVertical: spacing[2.5], marginTop: spacing[2] },
+    addVariant: { flexDirection: 'row', alignItems: 'center', paddingHorizontal: spacing[5], paddingVertical: spacing[3] },
     derived: { fontFamily: FF.medium, fontSize: 14, color: p.textSecondary, paddingHorizontal: spacing[5] },
-    moreBtn: {
-      flexDirection: 'row', alignItems: 'center', justifyContent: 'center',
-      paddingVertical: spacing[3], borderBottomWidth: 1, borderBottomColor: p.border,
-    },
-    costLine: { paddingHorizontal: spacing[5], paddingVertical: spacing[2.5], borderBottomWidth: 1, borderBottomColor: p.border },
+    moreBtn: { flexDirection: 'row', alignItems: 'center', justifyContent: 'center', paddingVertical: spacing[4] },
+    costLine: { paddingHorizontal: spacing[5], paddingVertical: spacing[3] },
     costText: { fontFamily: FF.medium, fontSize: 14 },
     chip: {
       paddingHorizontal: spacing[3.5], paddingVertical: spacing[2], borderRadius: 999,
