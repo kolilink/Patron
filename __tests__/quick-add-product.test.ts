@@ -234,27 +234,73 @@ describe('offline create drains with the same UUID', () => {
 // keep the import used so the module graph matches production
 void drainQueue;
 
-describe('polish pass: labels, currency prefix, footer', () => {
-  const src = require('fs').readFileSync(require('path').join(__dirname, '../src/components/QuickAddProductSheet.tsx'), 'utf8');
-  it('labels carry no currency, parenthetical or "unitaire"', () => {
-    expect(src).toContain('>Je vends à<');
-    expect(src).toContain('>Prix d\'achat<');
-    expect(src).toContain('>Frais<');
-    expect(src).not.toMatch(/unitaire|transport, etc|\$\{currency\}`\}<\/Text>|· \$\{currency\}/);
+const sheetSrc = () => require('fs').readFileSync(require('path').join(__dirname, '../src/components/QuickAddProductSheet.tsx'), 'utf8') as string;
+
+describe('sheet chrome', () => {
+  it('no visible keyboard accessory: only the zero-height silent one that suppresses the OS Next/Done pill', () => {
+    const src = sheetSrc();
+    expect(src).not.toMatch(/<InputAccessoryView|Suivant|Terminé/);
+    expect(src).toContain('<SilentKeyboardAccessory');
   });
-  it('every decimal-pad input is a MoneyInput (currency prefix inside the field); no bare money TextInput', () => {
-    const blocks = src.match(/<(TextInput|MoneyInput)\b[\s\S]*?\/>/g) as string[];
-    const decimal = blocks.filter(b => b.includes('decimal-pad'));
-    expect(decimal.length).toBe(4); // price, variant price, purchase, fees
-    decimal.forEach(b => expect(b.startsWith('<MoneyInput')).toBe(true));
+  it('number/decimal pads are linked to the silent accessory', () => {
+    const src = sheetSrc();
+    expect(src).toContain('inputAccessoryViewID={IOS_SILENT}');
+    expect(src).toContain('inputAccessoryViewID={SILENT_ID}');
   });
-  it('quantity row has no unit label', () => {
-    expect(src).not.toContain('pièces</Text>\n            </View>');
-    expect(src).not.toMatch(/>pièces</);
+  it('no hairline row separators', () => {
+    expect(sheetSrc()).not.toMatch(/borderBottomWidth|borderTopWidth/);
+  });
+  it('taps outside a field dismiss the keyboard while fields stay directly tappable', () => {
+    expect(sheetSrc()).toContain('keyboardShouldPersistTaps="handled"');
+  });
+  it('no global LayoutAnimation (it animated the footer + keyboard padding and faded deleted rows over new ones)', () => {
+    const src = sheetSrc();
+    expect(src).not.toMatch(/LayoutAnimation|configureLayoutNext/);
+    expect(src).toContain('LinearTransition');
   });
   it('footer: single button, full-screen presentation, keyboard-aware inset', () => {
+    const src = sheetSrc();
     expect((src.match(/label="Ajouter"/g) || []).length).toBe(1);
     expect(src).toContain('presentationStyle="fullScreen"');
     expect(src).toContain('useKeyboardVisible');
+  });
+  it('state resets after close, not as the sheet opens', () => {
+    const src = sheetSrc();
+    expect(src).toContain('resetPending');
+    expect(src).toMatch(/setTimeout\(\(\) => \{\s*setS\(EMPTY_QUICK_ADD\)/);
+  });
+});
+
+describe('labels, currency suffix, variants', () => {
+  it('labels carry no currency, parenthetical or "unitaire"', () => {
+    const src = sheetSrc();
+    expect(src).toContain('>Je vends à<');
+    expect(src).toContain('>Prix d\'achat<');
+    expect(src).toContain('>Frais<');
+    expect(src).not.toMatch(/unitaire|transport, etc|· \$\{currency\}/);
+  });
+  it('currency is a lowercase suffix that exists only once digits exist; no placeholder on money fields', () => {
+    const src = sheetSrc();
+    expect(src).toContain('currency.toLowerCase()');
+    expect(src).toContain("const has = typeof value === 'string' && value.length > 0");
+    const blocks = src.match(/<MoneyInput\b[\s\S]*?\/>/g) as string[];
+    expect(blocks.length).toBe(4);
+    blocks.forEach(b => expect(b).not.toMatch(/placeholder=/));
+  });
+  it('every decimal-pad input is a MoneyInput; quantities never are', () => {
+    const blocks = sheetSrc().match(/<(TextInput|MoneyInput)\b[\s\S]*?\/>/g) as string[];
+    const decimal = blocks.filter(b => b.includes('decimal-pad'));
+    expect(decimal.length).toBe(4);
+    decimal.forEach(b => expect(b.startsWith('<MoneyInput')).toBe(true));
+    blocks.filter(b => b.includes('number-pad')).forEach(b => expect(b.startsWith('<MoneyInput')).toBe(false));
+  });
+  it('quantity row has no unit; derived total has no unit', () => {
+    const src = sheetSrc();
+    expect(src).not.toMatch(/>pièces</);
+    expect(src).toContain('Total : {totalPieces}');
+    expect(src).not.toMatch(/pièce\{/);
+  });
+  it('variant name placeholder teaches one-model-per-row', () => {
+    expect(sheetSrc()).toContain('placeholder="Ex : S"');
   });
 });
