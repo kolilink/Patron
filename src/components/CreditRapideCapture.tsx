@@ -427,7 +427,7 @@ export function CreditRapideCapture({ businessId, userId, currency, onViewClient
               <Text style={[styles.amountCurrency, { color: palette.textSecondary }]}>{currency}</Text>
             </Animated.View>
             {clientBalance !== null && clientBalance > 0 && (
-              <Text variant="caption" style={{ color: palette.textDisabled, marginTop: spacing[1], textAlign: 'center' }}>
+              <Text variant="caption" style={{ color: palette.textDisabled, marginTop: spacing[1], textAlign: 'center' }} numberOfLines={1} adjustsFontSizeToFit minimumFontScale={0.5}>
                 Solde actuel · {formatAmount(clientBalance, currency)}
               </Text>
             )}

@@ -40,7 +40,7 @@ export const ExpenseRow = memo(function ExpenseRow({ expense, currency, canModif
   const body = (
     <Pressable onPress={onPress} style={styles.row} accessibilityRole="button">
       <View style={{ flex: 1, gap: 2 }}>
-        <Text variant="label" style={[styles.amount, rejected && { color: palette.textSecondary }]}>
+        <Text variant="label" style={[styles.amount, rejected && { color: palette.textSecondary }]} numberOfLines={1} adjustsFontSizeToFit minimumFontScale={0.5}>
           {formatAmount(expense.amount, currency)}
         </Text>
         {subtitle ? <Text variant="caption" color="secondary" numberOfLines={1}>{subtitle}</Text> : null}

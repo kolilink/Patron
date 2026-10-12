@@ -354,7 +354,7 @@ export default function ClientsScreen() {
                 <View style={{ alignItems: 'flex-end', gap: 6 }}>
                   {/* Plain, calm — not red. Color on this row lives entirely
                       on the age caption above, not on the amount. */}
-                  <Text variant="label" style={{ color: palette.textPrimary, fontFamily: fontFamily.bold }}>
+                  <Text variant="label" style={{ color: palette.textPrimary, fontFamily: fontFamily.bold }} numberOfLines={1} adjustsFontSizeToFit minimumFontScale={0.5}>
                     Vous doit {fmt(item.totalCredit, currency)}
                   </Text>
                   {!isInvestisseur && (

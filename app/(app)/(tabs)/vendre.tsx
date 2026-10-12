@@ -191,7 +191,7 @@ function CartRow({ line, currency, onInc, onDec, onRemove, onToggleBulk, onSetQt
       <View style={{ flex: 1 }}>
         <Text variant="label" numberOfLines={1}>{line.product.name}{line.variant_name ? ` · ${line.variant_name}` : ''}</Text>
         <View style={{ flexDirection: 'row', alignItems: 'center', gap: spacing[2] }}>
-          <Text variant="caption" color="secondary">
+          <Text variant="caption" color="secondary" numberOfLines={1} adjustsFontSizeToFit minimumFontScale={0.5}>
             {formatAmount(line.unit_price, currency)} / {line.is_bulk ? 'lot' : line.product.unit}
           </Text>
           {hasBulk && (
@@ -786,7 +786,7 @@ function PaymentModal({
             <Text variant="body">Encaisser une partie</Text>
             <View style={{ flexDirection: 'row', alignItems: 'center', gap: spacing[2] }}>
               {creditUpfront > 0 && (
-                <Text variant="body" color="secondary">{formatAmount(creditUpfront, currency)}</Text>
+                <Text variant="body" color="secondary" numberOfLines={1} adjustsFontSizeToFit minimumFontScale={0.5}>{formatAmount(creditUpfront, currency)}</Text>
               )}
               <Ionicons
                 name={creditUpfront > 0 ? 'chevron-forward' : 'add'}
@@ -833,7 +833,7 @@ function PaymentModal({
             <Text variant="body">Ajouter une réduction</Text>
             <View style={{ flexDirection: 'row', alignItems: 'center', gap: spacing[2] }}>
               {creditDiscount > 0 && (
-                <Text variant="body" color="secondary">{formatAmount(creditDiscount, currency)}</Text>
+                <Text variant="body" color="secondary" numberOfLines={1} adjustsFontSizeToFit minimumFontScale={0.5}>{formatAmount(creditDiscount, currency)}</Text>
               )}
               <Ionicons
                 name={creditDiscount > 0 ? 'chevron-forward' : 'add'}
@@ -898,7 +898,7 @@ function PaymentModal({
               {isOverpay && (
                 <View style={{ flexDirection: 'row', alignItems: 'center', justifyContent: 'space-between' }}>
                   <Text variant="caption" color="secondary">Monnaie à rendre</Text>
-                  <Text variant="label" style={{ color: palette.primary }}>{formatAmount(changeDue, currency)}</Text>
+                  <Text variant="label" style={{ color: palette.primary }} numberOfLines={1} adjustsFontSizeToFit minimumFontScale={0.5}>{formatAmount(changeDue, currency)}</Text>
                 </View>
               )}
 
@@ -911,7 +911,7 @@ function PaymentModal({
                     <View style={{ flex: 1 }}>
                       <Text variant="label" style={{ color: disambig === 'credit' ? palette.primary : palette.textPrimary }}>Un crédit</Text>
                       <Text variant="caption" style={{ color: palette.textSecondary }}>
-                        <Text style={{ color: palette.textPrimary, fontFamily: fontFamily.semibold }}>{formatAmount(shortfall, currency)}</Text>
+                        <Text style={{ color: palette.textPrimary, fontFamily: fontFamily.semibold }} numberOfLines={1} adjustsFontSizeToFit minimumFontScale={0.5}>{formatAmount(shortfall, currency)}</Text>
                         {' '}de moins que le prix
                       </Text>
                     </View>
@@ -1329,7 +1329,7 @@ function VariantPickerSheet({ visible, product, variants, cartQtyByVariant, curr
               >
                 <View style={{ flex: 1 }}>
                   <Text variant="body" style={{ fontFamily: fontFamily.semibold }}>{v.name}</Text>
-                  <Text variant="label" style={{ color: palette.primary }}>
+                  <Text variant="label" style={{ color: palette.primary }} numberOfLines={1} adjustsFontSizeToFit minimumFontScale={0.5}>
                     {formatAmount(v.sale_price, currency)}
                   </Text>
                   <Text variant="caption" color="secondary">
@@ -2230,13 +2230,13 @@ export default function VendreScreen() {
                 {confirmIsCredit ? 'Crédit enregistré' : 'Vente enregistrée'}
               </Text>
               {lastReceipt && (
-                <Text variant="h4" style={{ color: palette.primary, textAlign: 'center' }}>
+                <Text variant="h4" style={{ color: palette.primary, textAlign: 'center' }} numberOfLines={1} adjustsFontSizeToFit minimumFontScale={0.5}>
                   {formatAmount(confirmNet, currency)}
                 </Text>
               )}
               {/* Credit with upfront: show what was received vs what remains */}
               {lastReceipt && confirmIsCredit && confirmUpfront > 0.01 && (
-                <Text variant="caption" color="secondary" style={{ textAlign: 'center' }}>
+                <Text variant="caption" color="secondary" style={{ textAlign: 'center' }} numberOfLines={1} adjustsFontSizeToFit minimumFontScale={0.5}>
                   {formatAmount(confirmUpfront, currency)} reçu · {formatAmount(confirmRemaining, currency)} restant
                 </Text>
               )}

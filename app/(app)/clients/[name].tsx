@@ -264,11 +264,11 @@ function PayModal({
             style={styles.solderBtn}
             onPress={() => setAmountStr(formatAmountInput(String(Math.round(totalOwed)), currency))}
           >
-            <Text variant="label" style={{ color: palette.primary }}>Tout régler : {fmt(totalOwed, currency)}</Text>
+            <Text variant="label" style={{ color: palette.primary }} numberOfLines={1} adjustsFontSizeToFit minimumFontScale={0.5}>Tout régler : {fmt(totalOwed, currency)}</Text>
           </Pressable>
         </View>
         {amount > 0 && (
-          <Text variant="caption" style={{ color: remaining > 0 ? palette.recouvrementPending : palette.recouvrementPaid }}>
+          <Text variant="caption" style={{ color: remaining > 0 ? palette.recouvrementPending : palette.recouvrementPaid }} numberOfLines={1} adjustsFontSizeToFit minimumFontScale={0.5}>
             {remaining > 0
               ? `Il restera ${fmt(remaining, currency)} à régler.`
               : 'Tout sera réglé.'}
@@ -812,13 +812,13 @@ export default function ClientLedgerScreen() {
             {!paymentsResolved && allPayments.length === 0 ? (
               <Text style={styles.bannerAmount}>Chargement…</Text>
             ) : (
-              <Text style={styles.bannerAmount}>{fmt(totalOwed, currency)}</Text>
+              <Text style={styles.bannerAmount} numberOfLines={1} adjustsFontSizeToFit minimumFontScale={0.5}>{fmt(totalOwed, currency)}</Text>
             )}
             <RNText style={[styles.bannerAge, { color: debtAgeColor(debtAge, palette) }]}>
               {formatDebtAge(debtAge)}
             </RNText>
             {totalPaid > 0 && (
-              <RNText style={styles.repaidLine}>
+              <RNText style={styles.repaidLine} numberOfLines={1} adjustsFontSizeToFit minimumFontScale={0.5}>
                 {fmt(totalPaid, currency)} payé sur {fmt(totalSold, currency)}
               </RNText>
             )}
@@ -836,7 +836,7 @@ export default function ClientLedgerScreen() {
           // confirms the last entry settled it.
           <View style={styles.debtCard}>
             <Text style={styles.bannerLabel}>{displayName} vous doit</Text>
-            <Text style={styles.bannerAmount}>{fmt(0, currency)}</Text>
+            <Text style={styles.bannerAmount} numberOfLines={1} adjustsFontSizeToFit minimumFontScale={0.5}>{fmt(0, currency)}</Text>
             <View style={styles.regleRow}>
               <Ionicons name="checkmark-circle" size={16} color={palette.recouvrementPaid} />
               <RNText style={[styles.bannerAge, { color: palette.recouvrementPaid, fontFamily: fontFamily.bold, marginTop: 0, marginBottom: 0 }]}>
@@ -905,16 +905,16 @@ export default function ClientLedgerScreen() {
                     ) : null}
                   </View>
                   <View style={styles.carnetAmountCol}>
-                    <RNText style={[styles.carnetAmount, { color: palette.textPrimary }]}>
+                    <RNText style={[styles.carnetAmount, { color: palette.textPrimary }]} numberOfLines={1} adjustsFontSizeToFit minimumFontScale={0.5}>
                       {fmt(entry.amount, currency)}
                     </RNText>
                     {isSettled ? (
                       <View style={styles.regleTagRow}>
-                        <Text variant="caption" color="secondary">Reste : {fmt(0, currency)}</Text>
+                        <Text variant="caption" color="secondary" numberOfLines={1} adjustsFontSizeToFit minimumFontScale={0.5}>Reste : {fmt(0, currency)}</Text>
                         <Text variant="caption" style={{ color: palette.recouvrementPaid, fontFamily: fontFamily.bold }}> · Réglé ✓</Text>
                       </View>
                     ) : (
-                      <Text variant="caption" color="secondary">Reste : {fmt(entry.reste, currency)}</Text>
+                      <Text variant="caption" color="secondary" numberOfLines={1} adjustsFontSizeToFit minimumFontScale={0.5}>Reste : {fmt(entry.reste, currency)}</Text>
                     )}
                   </View>
                 </Pressable>
@@ -999,14 +999,14 @@ export default function ClientLedgerScreen() {
         {detailEntry && (
           <View style={{ gap: spacing[3] }}>
             <Text variant="label" color="secondary">{entryDateLabel(detailEntry.dateKey)}</Text>
-            <Text variant="h2">{fmt(detailEntry.amount, currency)}</Text>
+            <Text variant="h2" numberOfLines={1} adjustsFontSizeToFit minimumFontScale={0.5}>{fmt(detailEntry.amount, currency)}</Text>
             {detailEntry.saleLabel ? (
               <Text variant="body" color="secondary">{detailEntry.saleLabel}</Text>
             ) : null}
             {detailEntry.method ? (
               <Text variant="body" color="secondary">{methodLabel(detailEntry.method)}</Text>
             ) : null}
-            <Text variant="caption" color="secondary">
+            <Text variant="caption" color="secondary" numberOfLines={1} adjustsFontSizeToFit minimumFontScale={0.5}>
               Reste après cette ligne : {fmt(detailEntry.reste, currency)}
             </Text>
           </View>
@@ -1022,7 +1022,7 @@ export default function ClientLedgerScreen() {
               <Ionicons name="checkmark" size={44} color={palette.textPrimary} />
             </Animated.View>
             <Text style={styles.successHeadline}>{overlayCopy.headline}</Text>
-            <Text style={styles.successSubtitle}>
+            <Text style={styles.successSubtitle} numberOfLines={1} adjustsFontSizeToFit minimumFontScale={0.5}>
               {displayName} vous a payé {fmt(successPayment.amount, currency)}.
             </Text>
             {overlayCopy.reste && (
@@ -1065,8 +1065,8 @@ function makeStyles(p: Palette) {
       paddingVertical: 14, alignItems: 'center', justifyContent: 'center', marginTop: 16,
     },
     bannerBtnText: { fontSize: 16, fontWeight: '600', color: p.textInverse },
-    bannerAge: { fontSize: 12, color: p.textSecondary, textAlign: 'center', marginTop: 4, marginBottom: 8 },
-    repaidLine: { fontSize: 13, color: p.textSecondary, textAlign: 'center', marginBottom: 4 },
+    bannerAge: { fontVariant: ['tabular-nums'], fontSize: 12, color: p.textSecondary, textAlign: 'center', marginTop: 4, marginBottom: 8 },
+    repaidLine: { fontVariant: ['tabular-nums'], fontSize: 13, color: p.textSecondary, textAlign: 'center', marginBottom: 4 },
     // Zero-balance header's "Réglé ✓" sub-line — same slot bannerAge fills
     // for the non-zero case, just an icon+label row instead of plain text.
     regleRow: { flexDirection: 'row', alignItems: 'center', gap: 4, marginTop: 4, marginBottom: 8 },

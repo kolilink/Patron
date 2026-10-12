@@ -647,7 +647,7 @@ export default function RapportsScreen() {
                 balance as a second hero line so "Bénéfice cumulé" isn't read
                 as cash already in hand. */}
             {!yearReportLoading && yearCreditOwed > 0 && (
-              <Text variant="caption" color="secondary">
+              <Text variant="caption" color="secondary" numberOfLines={1} adjustsFontSizeToFit minimumFontScale={0.5}>
                 dont {fmt(yearCreditOwed, currency)} de crédit pas encore payé
               </Text>
             )}

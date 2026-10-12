@@ -74,16 +74,16 @@ function LivraisonDetail({ livraison, fournisseurName, currency, businessId, can
         <ScrollView contentContainerStyle={styles.mpad}>
           <Card style={{ gap: spacing[2] }}>
             <View style={styles.dr}><Text variant="caption" color="secondary">Total</Text>
-              <Text variant="label">{fmt(livraison.total_cost, currency)}</Text></View>
+              <Text variant="label" numberOfLines={1} adjustsFontSizeToFit minimumFontScale={0.5}>{fmt(livraison.total_cost, currency)}</Text></View>
           </Card>
           {livraison.lines?.map(l => (
             <Card key={l.id} style={{ gap: 2 }}>
               <Text variant="body">{l.product_name}</Text>
               <View style={styles.dr}>
-                <Text variant="caption" color="secondary">
+                <Text variant="caption" color="secondary" numberOfLines={1} adjustsFontSizeToFit minimumFontScale={0.5}>
                   ×{l.qty_ordered} · {l.unit_cost !== null ? `${fmt(l.unit_cost, currency)}/u` : 'Prix inconnu'}
                 </Text>
-                <Text variant="label">{l.unit_cost !== null ? fmt(l.qty_ordered * l.unit_cost, currency) : '—'}</Text>
+                <Text variant="label" numberOfLines={1} adjustsFontSizeToFit minimumFontScale={0.5}>{l.unit_cost !== null ? fmt(l.qty_ordered * l.unit_cost, currency) : '—'}</Text>
               </View>
             </Card>
           ))}
@@ -407,7 +407,7 @@ export default function FournisseurProfile() {
             <Card style={styles.debtCard}>
               <View>
                 <Text variant="caption" color="secondary">Montant dû</Text>
-                <Text style={styles.debtAmt}>{fmt(totalOwed, currency)}</Text>
+                <Text style={styles.debtAmt} numberOfLines={1} adjustsFontSizeToFit minimumFontScale={0.5}>{fmt(totalOwed, currency)}</Text>
               </View>
               <Button label="Payer" onPress={() => setShowPay(true)} size="sm" />
             </Card>
@@ -429,7 +429,7 @@ export default function FournisseurProfile() {
                     </Text>
                     {p.note ? <Text variant="caption" color="secondary">{p.note}</Text> : null}
                   </View>
-                  <Text variant="label" style={{ color: palette.textPrimary }}>{fmt(p.amount, currency)}</Text>
+                  <Text variant="label" style={{ color: palette.textPrimary }} numberOfLines={1} adjustsFontSizeToFit minimumFontScale={0.5}>{fmt(p.amount, currency)}</Text>
                 </View>
               ))}
             </View>
@@ -448,7 +448,7 @@ export default function FournisseurProfile() {
                 <Text variant="body">
                   {formatDate(livraison.ordered_at, 'long')}
                 </Text>
-                <Text variant="caption" color="secondary">{fmt(livraison.total_cost, currency)}</Text>
+                <Text variant="caption" color="secondary" numberOfLines={1} adjustsFontSizeToFit minimumFontScale={0.5}>{fmt(livraison.total_cost, currency)}</Text>
               </View>
               <Ionicons name="chevron-forward" size={14} color={palette.textDisabled} style={{ marginLeft: 4 }} />
             </Pressable>
@@ -492,7 +492,7 @@ export default function FournisseurProfile() {
       >
         <Card style={{ padding: spacing[4], gap: spacing[1] }}>
           <Text variant="caption" color="secondary">Solde dû à {fournisseur.name}</Text>
-          <Text style={[styles.debtAmt, { color: palette.textPrimary }]}>{fmt(totalOwed, currency)}</Text>
+          <Text style={[styles.debtAmt, { color: palette.textPrimary }]} numberOfLines={1} adjustsFontSizeToFit minimumFontScale={0.5}>{fmt(totalOwed, currency)}</Text>
         </Card>
         <Input
           label={`Montant payé (${currency})`}

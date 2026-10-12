@@ -165,7 +165,7 @@ export default function CarnetScreen() {
           renderItem={({ item }) => (
             <View style={styles.entryRow}>
               <Text variant="label" style={{ flex: 1 }} numberOfLines={1}>{item.name}</Text>
-              <Text variant="label">
+              <Text variant="label" numberOfLines={1} adjustsFontSizeToFit minimumFontScale={0.5}>
                 {formatAmount(item.amountCents / 100, currency)}
               </Text>
               <Pressable onPress={() => handleRemove(item.id)} hitSlop={10}>
@@ -184,7 +184,7 @@ export default function CarnetScreen() {
         {/* Footer */}
         <View style={[styles.footer, { borderTopColor: palette.border }]}>
           {entries.length > 0 && (
-            <Text variant="caption" color="secondary" style={styles.total}>
+            <Text variant="caption" color="secondary" style={styles.total} numberOfLines={1} adjustsFontSizeToFit minimumFontScale={0.5}>
               {entries.length} personne{entries.length > 1 ? 's' : ''} · {formatAmount(totalCents / 100, currency)}
             </Text>
           )}

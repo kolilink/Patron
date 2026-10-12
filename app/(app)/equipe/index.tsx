@@ -179,7 +179,7 @@ function ProductScopePicker({ visible, onClose, products, selectedIds, onConfirm
               </View>
               <View style={{ flex: 1 }}>
                 <Text variant="body">{item.name}</Text>
-                <Text variant="caption" color="secondary">{formatAmount(item.sale_price, currency)}</Text>
+                <Text variant="caption" color="secondary" numberOfLines={1} adjustsFontSizeToFit minimumFontScale={0.5}>{formatAmount(item.sale_price, currency)}</Text>
               </View>
             </Pressable>
           );
@@ -504,7 +504,7 @@ function MemberDetailSheet({
               return totalInvested > 0 ? (
                 <View style={[styles.scopeRow, { flexDirection: 'column', alignItems: 'flex-start', gap: spacing[1] }]}>
                   <Text variant="caption" color="secondary">Capital investi</Text>
-                  <Text style={{ fontFamily: FF.bold, fontSize: 22, lineHeight: 30, color: palette.primary }}>
+                  <Text style={{ fontFamily: FF.bold, fontSize: 22, lineHeight: 30, color: palette.primary }} numberOfLines={1} adjustsFontSizeToFit minimumFontScale={0.5}>
                     {formatAmount(totalInvested, currency)}
                   </Text>
                 </View>
@@ -513,7 +513,7 @@ function MemberDetailSheet({
 
             <View style={[styles.scopeRow, { flexDirection: 'column', alignItems: 'flex-start', gap: spacing[1] }]}>
               <Text variant="caption" color="secondary">Part des bénéfices accumulée</Text>
-              <Text style={{ fontFamily: FF.bold, fontSize: 22, lineHeight: 30, color: palette.textPrimary }}>
+              <Text style={{ fontFamily: FF.bold, fontSize: 22, lineHeight: 30, color: palette.textPrimary }} numberOfLines={1} adjustsFontSizeToFit minimumFontScale={0.5}>
                 {formatAmount(balance ?? 0, currency)}
               </Text>
             </View>
@@ -526,7 +526,7 @@ function MemberDetailSheet({
                 <View style={[styles.scopeRow, { backgroundColor: palette.warning + '12', borderColor: palette.warning, gap: spacing[3] }]}>
                   <View style={{ flex: 1 }}>
                     <Text variant="label" style={{ color: palette.warning }}>Demande de retrait</Text>
-                    <Text variant="caption" color="secondary">
+                    <Text variant="caption" color="secondary" numberOfLines={1} adjustsFontSizeToFit minimumFontScale={0.5}>
                       {formatAmount(pending.requested_amount, currency)} demandé
                     </Text>
                   </View>
@@ -549,7 +549,7 @@ function MemberDetailSheet({
               <View key={p.id} style={[styles.scopeRow, { flexDirection: 'row', alignItems: 'center', gap: spacing[3] }]}>
                 <Ionicons name="checkmark-circle-outline" size={16} color={palette.success} />
                 <View style={{ flex: 1 }}>
-                  <Text variant="body">{formatAmount(p.paid_amount ?? p.requested_amount, currency)}</Text>
+                  <Text variant="body" numberOfLines={1} adjustsFontSizeToFit minimumFontScale={0.5}>{formatAmount(p.paid_amount ?? p.requested_amount, currency)}</Text>
                   <Text variant="caption" color="secondary">
                     {formatDate(p.paid_at ?? p.requested_at, 'short')}
                   </Text>
@@ -905,7 +905,7 @@ function NewCodeModal({ visible, onClose, onGenerate, saving, hasManager, produc
                         </View>
                         <View style={{ flex: 1 }}>
                           <Text variant="body">{p.name}</Text>
-                          <Text variant="caption" color="secondary">{formatAmount(p.sale_price, currency)}</Text>
+                          <Text variant="caption" color="secondary" numberOfLines={1} adjustsFontSizeToFit minimumFontScale={0.5}>{formatAmount(p.sale_price, currency)}</Text>
                         </View>
                       </Pressable>
                     );

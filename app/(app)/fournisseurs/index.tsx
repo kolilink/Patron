@@ -203,7 +203,7 @@ function FournisseurForm({ visible, editing, products, fournisseurs, businessId,
             key={p.id}
             onPress={() => { configureLayoutNext(LayoutAnimation.Presets.easeInEaseOut); setDropdownOpen(true); }}
             style={styles.prodDropdownItem}>
-            <Text variant="body" numberOfLines={1} style={{ flex: 1 }}>
+            <Text variant="body" style={{ flex: 1 }} numberOfLines={1} adjustsFontSizeToFit minimumFontScale={0.5}>
               {`${p.name} · ${p.sale_price > 0 ? formatAmount(p.sale_price, currency) : 'Prix à fixer'}`}
             </Text>
             <Ionicons name="chevron-forward" size={16} color={palette.textSecondary} />
@@ -592,7 +592,7 @@ export default function FournisseursScreen() {
 
                 <View style={{ flex: 1, gap: 3 }}>
                   <Text variant="label" numberOfLines={1}>{item.name}</Text>
-                  <Text variant="caption" color="secondary" numberOfLines={1}>
+                  <Text variant="caption" color="secondary" numberOfLines={1} adjustsFontSizeToFit minimumFontScale={0.5}>
                     {lastLivraison
                       ? `${formatDate(lastLivraison.ordered_at, 'dayMonth')} · ${fmt(lastLivraison.total_cost, currency)}`
                       : 'Aucune livraison'}
@@ -609,7 +609,7 @@ export default function FournisseursScreen() {
 
                 <View style={{ alignItems: 'flex-end', gap: 4 }}>
                   {owedAmount > 0 && (
-                    <Text variant="label" style={{ color: palette.warning }}>
+                    <Text variant="label" style={{ color: palette.warning }} numberOfLines={1} adjustsFontSizeToFit minimumFontScale={0.5}>
                       − {fmt(owedAmount, currency)}
                     </Text>
                   )}

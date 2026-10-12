@@ -297,7 +297,7 @@ export function ExpenseSheet(props: Props) {
           <ScrollView horizontal showsHorizontalScrollIndicator={false} keyboardShouldPersistTaps="handled" contentContainerStyle={{ gap: spacing[2] }}>
             {templates.map((t, i) => (
               <Pressable key={i} onPress={() => applyTemplate(t)} style={styles.chip} accessibilityRole="button">
-                <Text variant="label" style={{ color: palette.textPrimary }}>{formatAmount(t.amount, currency)}</Text>
+                <Text variant="label" style={{ color: palette.textPrimary }} numberOfLines={1} adjustsFontSizeToFit minimumFontScale={0.5}>{formatAmount(t.amount, currency)}</Text>
                 {(t.product_name || t.note) ? (
                   <Text variant="caption" color="secondary" numberOfLines={1}>{t.product_name ?? t.note}</Text>
                 ) : null}

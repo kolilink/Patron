@@ -445,7 +445,7 @@ export function QuickAddProductSheet({
                   accessibilityLabel={`Ouvrir ${p.name}`}
                 >
                   <Text variant="body" style={{ flex: 1, fontFamily: FF.medium }} numberOfLines={1}>{p.name}</Text>
-                  <Text variant="caption" color="secondary">{formatAmount(p.sale_price, currency)}</Text>
+                  <Text variant="caption" color="secondary" numberOfLines={1} adjustsFontSizeToFit minimumFontScale={0.5}>{formatAmount(p.sale_price, currency)}</Text>
                 </Pressable>
               ))}
             </View>
@@ -670,7 +670,7 @@ export function QuickAddProductSheet({
           </Card>
           {cost && (
             <View style={styles.costLine}>
-              <Text style={[styles.costText, { color: cost.profit != null && cost.profit < 0 ? palette.warning : palette.success }]}>
+              <Text style={[styles.costText, { color: cost.profit != null && cost.profit < 0 ? palette.warning : palette.success }]} numberOfLines={1} adjustsFontSizeToFit minimumFontScale={0.5}>
                 {`Coût réel par pièce : ${formatAmount(cost.unitCost, currency)}`}
                 {cost.profit != null
                   ? cost.profit >= 0
