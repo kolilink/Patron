@@ -16,7 +16,7 @@ import { haptics } from '@/lib/haptics';
 import { useReduceMotion } from '@/src/hooks/useReduceMotion';
 import { SilentKeyboardAccessory } from '@/src/components/ui/SilentKeyboardAccessory';
 import { formatAmount, formatAmountInput } from '@/src/utils/format';
-import { newDraftId, removeQuickAddDraft, saveQuickAddDraft, type QuickAddDraft } from '@/lib/quickAddDraft';
+import { editDraftId, newDraftId, removeQuickAddDraft, saveQuickAddDraft, type QuickAddDraft } from '@/lib/quickAddDraft';
 import { isKnownOffline } from '@/lib/connectivity';
 import {
   EMPTY_QUICK_ADD,
@@ -28,6 +28,7 @@ import {
   computeCostLine,
   derivedTotalPieces,
   nameValid,
+  isEditDirty,
   patchVariant,
   priceValid,
   removeVariant,
@@ -78,6 +79,8 @@ interface Props {
   onStats?: (product: Product) => void;
   /** Reopen an "À compléter" draft instead of starting fresh. */
   resumeDraft?: QuickAddDraft | null;
+  /** Edit mode: restore this saved edit draft (kind 'edit', same product) instead of the stored product. */
+  resumeEditDraft?: QuickAddDraft | null;
 }
 
 // Number pads have no return key on iOS, so the OS injects its own "Next/Done" pill above them
@@ -154,7 +157,7 @@ function ValidCheck({ valid, color }: { valid: boolean; color: string }) {
 
 export function QuickAddProductSheet({
   visible, onClose, onSubmit, onPickExisting, saving, currency, products, fournisseurs, initialName, businessId,
-  editing, initialVariants, startExpanded, onAdjust, resumeDraft, delivery, supplierId,
+  editing, initialVariants, startExpanded, onAdjust, resumeDraft, resumeEditDraft, delivery, supplierId,
   onArchive, onRestore, onStats,
 }: Props) {
   const isEdit = !!editing;
@@ -179,6 +182,8 @@ export function QuickAddProductSheet({
   const draftId = useRef(newDraftId());
   const added = useRef(false);
   const submitting = useRef(false);
+  const editDraftSaved = useRef(false); // this session wrote an edit draft
+  const editSubmitted = useRef(false);
   const toastTimer = useRef<ReturnType<typeof setTimeout> | null>(null);
 
   const scrollRef = useRef<ScrollView>(null);
@@ -196,7 +201,10 @@ export function QuickAddProductSheet({
     added.current = false;
     setError(null);
     if (editing) {
-      setS(editingToState(editing, initialVariants ?? [], currency));
+      const resumeEdit = resumeEditDraft && resumeEditDraft.kind === 'edit' && resumeEditDraft.productId === editing.id ? resumeEditDraft : null;
+      editDraftSaved.current = !!resumeEdit;
+      editSubmitted.current = false;
+      setS(resumeEdit ? resumeEdit.state : editingToState(editing, initialVariants ?? [], currency));
       setExpanded(!!startExpanded);
       return;
     }
@@ -217,7 +225,7 @@ export function QuickAddProductSheet({
     setExpanded(false);
     const t = setTimeout(() => nameRef.current?.focus(), 340);
     return () => clearTimeout(t);
-  }, [visible, editing?.id, resumeDraft?.id, initialName, delivery?.name, delivery?.qty]);
+  }, [visible, editing?.id, resumeEditDraft?.id, resumeDraft?.id, initialName, delivery?.name, delivery?.qty]);
 
   // Edit mode: a variant product's models arrive asynchronously after the sheet opens.
   useEffect(() => {
@@ -233,7 +241,34 @@ export function QuickAddProductSheet({
     return () => clearTimeout(t);
   }, [s, visible, noDraft, supplierCtx, businessId]);
 
+  // Edit drafts: unsaved changes to an existing product land in "À compléter" too (one per product).
+  // A clean sheet saves nothing; reverting every change takes back the draft this session wrote.
+  const editDirty = isEdit && editing ? isEditDirty(s, editingToState(editing, initialVariants ?? [], currency)) : false;
+  const editDirtyRef = useRef(editDirty);
+  editDirtyRef.current = editDirty;
+  useEffect(() => {
+    if (!visible || !isEdit || !editing || editSubmitted.current) return;
+    const productId = editing.id;
+    if (!editDirty) {
+      if (editDraftSaved.current) {
+        editDraftSaved.current = false;
+        void removeQuickAddDraft(businessId, editDraftId(productId)).catch(() => {}); // failure: silent — draft is best-effort
+      }
+      return;
+    }
+    const t = setTimeout(() => {
+      if (editSubmitted.current) return;
+      editDraftSaved.current = true;
+      void saveQuickAddDraft(businessId, editDraftId(productId), s, { productId }).catch(() => {}); // failure: silent — draft is best-effort
+    }, 400);
+    return () => clearTimeout(t);
+  }, [s, visible, isEdit, editing?.id, editDirty, businessId]);
+
   const handleClose = () => {
+    if (isEdit && editing && editDirtyRef.current && !editSubmitted.current) {
+      editDraftSaved.current = true;
+      void saveQuickAddDraft(businessId, editDraftId(editing.id), sRef.current, { productId: editing.id }).catch(() => {}); // failure: silent — draft is best-effort
+    }
     if (!noDraft && !supplierCtx && !added.current) void saveQuickAddDraft(businessId, draftId.current, sRef.current).catch(() => {}); // failure: silent — draft is best-effort
     onClose();
   };
@@ -303,6 +338,11 @@ export function QuickAddProductSheet({
     submitting.current = false;
     if (!res.ok) return; // the failure alert is shown by the host; everything typed stays
     haptics.success();
+    if (isEdit && editing) {
+      editSubmitted.current = true; // no autosave may resurrect it
+      editDraftSaved.current = false;
+      void removeQuickAddDraft(businessId, editDraftId(editing.id)).catch(() => {}); // failure: silent — draft is best-effort
+    }
     if (isEdit || isDelivery) return; // edit / delivery: the host closes the sheet and confirms
     if (supplierCtx) return; // supplier form: the host links the product and closes the sheet
     added.current = true;

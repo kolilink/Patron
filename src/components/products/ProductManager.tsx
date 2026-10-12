@@ -184,7 +184,9 @@ export function ProductManager({ sheets, onExit }: ProductManagerProps) {
             <View key={d.id} style={styles.draftRow}>
               <Pressable style={{ flex: 1 }} onPress={() => sheets.resumeDraft(d)} accessibilityRole="button" accessibilityLabel={`Reprendre ${d.state.name.trim() || 'un produit sans nom'}`}>
                 <Text variant="body" numberOfLines={1} style={{ fontFamily: FF.medium }}>{d.state.name.trim() || 'Sans nom'}</Text>
-                <Text variant="caption" color="secondary">{d.state.price.trim() ? `${d.state.price} ${currency.toLowerCase()}` : 'Prix à fixer'}</Text>
+                <Text variant="caption" color="secondary">
+                  {d.kind === 'edit' ? 'Modifications non enregistrées' : d.state.price.trim() ? `${d.state.price} ${currency.toLowerCase()}` : 'Prix à fixer'}
+                </Text>
               </Pressable>
               <Pressable onPress={() => deleteDraft(d)} hitSlop={12} accessibilityRole="button" accessibilityLabel={`Supprimer le brouillon ${d.state.name.trim()}`.trim()}>
                 <Ionicons name="close-circle" size={20} color={palette.textDisabled} />

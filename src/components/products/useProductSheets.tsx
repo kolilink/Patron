@@ -15,7 +15,7 @@ import { buildFailure, failureReason } from '@/src/utils/failure';
 import { FAILURE_COPY } from '@/src/utils/failureCopy';
 import type { Product, ProductVariant } from '@/src/types';
 import type { QuickAddPayload } from '@/src/utils/quickAddProduct';
-import type { QuickAddDraft } from '@/lib/quickAddDraft';
+import { removeQuickAddDraft, type QuickAddDraft } from '@/lib/quickAddDraft';
 
 /** What Vendre (sell mode) and the Gérer view call to open the product sheets. */
 export interface ProductSheetsApi {
@@ -56,6 +56,7 @@ export function useProductSheets(): { api: ProductSheetsApi; sheets: React.React
   const [addOpen, setAddOpen] = useState(false);
   const [prefill, setPrefill] = useState<string | undefined>(undefined);
   const [resume, setResume] = useState<QuickAddDraft | null>(null);
+  const [resumeEdit, setResumeEdit] = useState<QuickAddDraft | null>(null);
   const [editOpen, setEditOpen] = useState(false);
   const [editTarget, setEditTarget] = useState<Product | null>(null);
   const [editExpand, setEditExpand] = useState(false);
@@ -188,10 +189,24 @@ export function useProductSheets(): { api: ProductSheetsApi; sheets: React.React
 
   const api: ProductSheetsApi = {
     openAdd: name => { setResume(null); setPrefill(name); setAddOpen(true); },
-    openEdit: (p, opts) => { setEditTarget(p); setEditExpand(!!opts?.expandCost); setEditOpen(true); },
+    openEdit: (p, opts) => { setResumeEdit(null); setEditTarget(p); setEditExpand(!!opts?.expandCost); setEditOpen(true); },
     openAdjust: p => { setAdjustTarget(p); setAdjustOpen(true); },
     openStats: p => { setStatsTarget(p); setStatsOpen(true); },
-    resumeDraft: d => { setPrefill(undefined); setResume(d); setAddOpen(true); },
+    resumeDraft: d => {
+      if (d.kind === 'edit') {
+        // Unsaved changes to an existing product: reopen THAT product's edit sheet with the draft restored.
+        const product = products.find(p => p.id === d.productId);
+        if (!product) {
+          // The product is gone (archived elsewhere / deleted): the draft has nothing to apply to.
+          void removeQuickAddDraft(businessId, d.id).catch(() => {}); // failure: silent — local draft only
+          setDraftsVersion(v => v + 1);
+          return;
+        }
+        setResumeEdit(d); setEditTarget(product); setEditExpand(false); setEditOpen(true);
+        return;
+      }
+      setPrefill(undefined); setResume(d); setAddOpen(true);
+    },
     pulseId,
     draftsVersion,
     anySheetOpen: addOpen || editOpen || adjustOpen || statsOpen,
@@ -225,7 +240,7 @@ export function useProductSheets(): { api: ProductSheetsApi; sheets: React.React
       />
       <QuickAddProductSheet
         visible={editOpen}
-        onClose={() => setEditOpen(false)}
+        onClose={() => { setEditOpen(false); setResumeEdit(null); setDraftsVersion(v => v + 1); }}
         businessId={businessId}
         onSubmit={handleEdit}
         onPickExisting={() => {}}
@@ -234,6 +249,7 @@ export function useProductSheets(): { api: ProductSheetsApi; sheets: React.React
         products={products}
         fournisseurs={fournisseurs}
         editing={editTarget}
+        resumeEditDraft={resumeEdit}
         initialVariants={editVariants}
         startExpanded={editExpand}
         onAdjust={p => {
