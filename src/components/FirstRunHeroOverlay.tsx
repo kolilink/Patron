@@ -25,6 +25,7 @@ import { useAuthStore } from '@/stores/auth';
 import { supabase } from '@/lib/supabase';
 import { haptics } from '@/lib/haptics';
 import { trackEvent } from '@/lib/analytics';
+import { ensureClient } from '@/lib/writeFunnel';
 
 interface Props {
   businessId: string;
@@ -153,16 +154,7 @@ export function FirstRunHeroOverlay({ businessId, userId, currency, onDone }: Pr
     // Same best-effort "upsert then submit" shape as CreditRapideCapture's
     // own new-client path — a failure/timeout here must never block the
     // debt itself, submitCarnetDebt already accepts a null client id.
-    let resolvedClientId: string | undefined;
-    try {
-      const { data } = await supabase.from('clients').upsert(
-        { business_id: businessId, name: trimmedName },
-        { onConflict: 'business_id,name' },
-      ).select('id').single();
-      resolvedClientId = data?.id ?? undefined;
-    } catch {
-      resolvedClientId = undefined;
-    }
+    const resolvedClientId: string | undefined = await ensureClient({ businessId, name: trimmedName });
 
     const submitted = await submitCarnetDebt(businessId, userId, trimmedName, amountCents, resolvedClientId ?? null);
     setSaving(false);

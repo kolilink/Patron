@@ -13,6 +13,8 @@
 // except where the SERVER itself rejects zero (quick sale price/qty, record_payment,
 // pay_supplier_debt, adjust_stock_move qty, reception/cart line qty), which we mirror.
 
+import { rowWriteProblems } from '@/lib/rowWritePolicy';
+
 export class OutboxValidationError extends Error {
   /** French sentence for the vendor: what to DO, not just what failed. */
   public readonly userMessage: string;
@@ -357,7 +359,10 @@ const adjustStockLegacy: Check = (o, p) => {
   }
 };
 
+const rowWrite: Check = (o, p) => { for (const x of rowWriteProblems(o)) p.push(x); };
+
 export const OUTBOX_CONTRACTS: Record<string, Check> = {
+  row_write: rowWrite,
   submit_sale: submitSale,
   submit_quick_sale: submitQuickSale,
   submit_carnet_debt: submitCarnetDebt,

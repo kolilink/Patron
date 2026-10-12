@@ -34,6 +34,7 @@ import { formatDebtAge, debtAgeTier } from '@/src/utils/clientReminder';
 import { DebtReminderSheet } from '@/src/components/DebtReminderSheet';
 import type { DebtReceiptInput } from '@/src/utils/debtReceipt';
 import { formatDate } from '@/src/utils/dates';
+import { writeRow } from '@/lib/writeFunnel';
 
 // iOS-only: suppresses the OS's auto-injected floating "Done" pill above
 // the numeric keyboard — the payment sheet already has a persistent,
@@ -117,19 +118,26 @@ function EditModal({
   const handleSave = async () => {
     setSaving(true);
     if (record) {
-      const { error } = await supabase
-        .from('clients')
-        .update({ phone: phone.trim() || null, notes: notes.trim() || null, updated_at: new Date().toISOString() })
-        .eq('id', record.id);
-      if (!error) onSaved({ ...record, phone: phone.trim() || null, notes: notes.trim() || null });
-      else appAlert('Pas enregistré. On reprend :)');
+      const next = { ...record, phone: phone.trim() || null, notes: notes.trim() || null };
+      try {
+        await writeRow(
+          { table: 'clients', op: 'update', values: { phone: next.phone, notes: next.notes, updated_at: new Date().toISOString() }, match: { id: record.id } },
+          { applyLocal: () => onSaved(next) },
+        );
+      } catch { // failure: speaks — validation refusal at enqueue
+        appAlert('Pas enregistré. On reprend :)');
+      }
     } else {
-      const { data, error } = await supabase
-        .from('clients')
-        .insert({ business_id: businessId, name: displayName, phone: phone.trim() || null, notes: notes.trim() || null, created_by: userId })
-        .select().single();
-      if (!error && data) onSaved(data as ClientRecord);
-      else appAlert('Pas enregistré. On reprend :)');
+      const id = generateId();
+      const created = { id, business_id: businessId, name: displayName, phone: phone.trim() || null, notes: notes.trim() || null, created_by: userId } as unknown as ClientRecord;
+      try {
+        await writeRow(
+          { table: 'clients', op: 'insert', values: { id, business_id: businessId, name: displayName, phone: created.phone, notes: created.notes, created_by: userId } },
+          { applyLocal: () => onSaved(created) },
+        );
+      } catch { // failure: speaks — validation refusal at enqueue
+        appAlert('Pas enregistré. On reprend :)');
+      }
     }
     setSaving(false);
   };

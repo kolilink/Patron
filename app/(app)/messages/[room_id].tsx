@@ -244,6 +244,7 @@ export default function DmChatScreen() {
     setTimeout(() => flatListRef.current?.scrollToEnd({ animated: true }), 50);
 
     try {
+      // funnel-exempt: chat messages are realtime-ephemeral — chat needs a connection and she knows it
       const { data, error } = await supabase
         .from('chat_messages')
         .insert({ id, room_id, sender_id: userId, sender_name: userName, content })
@@ -358,6 +359,7 @@ export default function DmChatScreen() {
           const { error: uploadErr } = await supabase.storage.from('voice-messages').upload(storagePath, bytes, { contentType: 'audio/mp4', upsert: true });
           if (uploadErr) throw uploadErr;
           const { data: urlData } = supabase.storage.from('voice-messages').getPublicUrl(storagePath);
+          // funnel-exempt: chat messages are realtime-ephemeral (voice)
           const { data, error } = await supabase.from('chat_messages').insert({
             id: messageId, room_id, sender_id: userId, sender_name: userName, content: '',
             message_type: 'voice', voice_url: urlData.publicUrl, voice_duration: Math.round(duration), voice_waveform: waveform,
@@ -404,6 +406,7 @@ export default function DmChatScreen() {
           storagePath: `chat/${room_id}/${messageId}.jpg`,
           upsert: true,
         });
+        // funnel-exempt: chat messages are realtime-ephemeral (image)
         const { data, error } = await supabase.from('chat_messages').insert({
           id: messageId, room_id, sender_id: userId, sender_name: userName, content: '',
           message_type: 'image', image_url: url, image_width: width, image_height: height,

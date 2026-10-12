@@ -291,6 +291,7 @@ export const useChatStore = create<ChatStore>((set, get) => ({
           reply_to_sender_name: replyTo.senderName,
         } : {}),
       };
+      // funnel-exempt: chat messages are realtime-ephemeral — chat needs a connection and she knows it
       const { data, error } = await supabase
         .from('chat_messages')
         .insert(insertRow)
@@ -362,6 +363,7 @@ export const useChatStore = create<ChatStore>((set, get) => ({
       const voiceUrl = urlData.publicUrl;
 
       // Insert message row
+      // funnel-exempt: chat messages are realtime-ephemeral — chat needs a connection and she knows it
       const { data, error: insertErr } = await supabase
         .from('chat_messages')
         .insert({
@@ -419,6 +421,7 @@ export const useChatStore = create<ChatStore>((set, get) => ({
         upsert: true,
       });
 
+      // funnel-exempt: chat messages are realtime-ephemeral — chat needs a connection and she knows it
       const { data, error: insertErr } = await supabase
         .from('chat_messages')
         .insert({
@@ -468,6 +471,7 @@ export const useChatStore = create<ChatStore>((set, get) => ({
       ),
     }));
     try {
+      // funnel-exempt: chat messages are realtime-ephemeral — chat needs a connection and she knows it
       const { error } = await supabase
         .from('chat_messages')
         .update({ content: newContent })

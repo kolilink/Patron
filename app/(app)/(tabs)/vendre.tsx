@@ -45,6 +45,7 @@ import { haptics } from '@/lib/haptics';
 import { SkeletonList } from '@/src/components/ui/SkeletonPlaceholder';
 import { trackEvent } from '@/lib/analytics';
 import { activationPriming } from '@/stores/activationPriming';
+import { ensureClient } from '@/lib/writeFunnel';
 
 // Product tiles show the bare number — the currency is declared once above
 // the grid instead of repeated on every card. Reuses formatAmount's own
@@ -411,11 +412,8 @@ function PaymentModal({
     if (!newClientName.trim()) return;
     const name = newClientName.trim();
     const phone = newClientPhone || null;
-    const { data } = await supabase.from('clients').upsert(
-      { business_id: businessId, name, phone },
-      { onConflict: 'business_id,name' },
-    ).select('id').single();
-    handleSelectClient(name, phone, data?.id ?? undefined);
+    const clientId = await ensureClient({ businessId, name, phone });
+    handleSelectClient(name, phone, clientId);
   };
 
   // "Qui" phase — recognition before recall (useQuickClients ranks by
@@ -487,11 +485,8 @@ function PaymentModal({
     if (!creditNewName.trim()) return;
     const name = creditNewName.trim();
     const phone = creditNewPhone || null;
-    const { data } = await supabase.from('clients').upsert(
-      { business_id: businessId, name, phone },
-      { onConflict: 'business_id,name' },
-    ).select('id').single();
-    handleCreditSelectClient(name, phone, data?.id ?? undefined);
+    const clientId = await ensureClient({ businessId, name, phone });
+    handleCreditSelectClient(name, phone, clientId);
   };
 
   // Back button is phase-aware — "Retour" from a fresh "Choisir le client"

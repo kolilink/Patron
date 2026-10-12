@@ -77,6 +77,7 @@ export async function registerDeviceToken(
 // so the next background push shows a stale, too-high number.
 export async function resetUnreadBadge(userId: string): Promise<void> {
   try {
+    // funnel-exempt: notification read marker (badge counter reset) — local-only UI state mirrored to the server
     await supabase.from('profiles').update({ unread_notification_count: 0 }).eq('id', userId);
   } catch {
     // Best-effort — a failed reset just means the next push's badge number is briefly stale

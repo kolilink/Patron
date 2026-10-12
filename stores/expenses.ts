@@ -4,9 +4,10 @@ import { translateError } from '@/lib/errors';
 import { isOutboxValidationError } from '@/lib/outboxValidation';
 import { generateId } from '@/lib/id';
 import {
-  enqueue, getQueueCount, saveExpenseCache, getExpenseCache, getCacheTimestamp,
+  getQueueCount, saveExpenseCache, getExpenseCache, getCacheTimestamp,
   getAllQueueItemsForOverlay, cancelPendingQueueItems,
 } from '@/lib/db';
+import { enqueue } from '@/lib/writeFunnel';
 import { isNetworkError, withTimeout, withNetworkRetry, reportOfflineFallback } from '@/lib/sync';
 import { applyExpenseOverlay, EXPENSE_QUEUE_OPS, type QueuedExpenseOp } from '@/lib/expenseOverlay';
 import { useSyncStore } from '@/stores/sync';

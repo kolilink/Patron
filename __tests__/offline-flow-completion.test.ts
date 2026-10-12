@@ -271,10 +271,10 @@ describe('gap 5 — Crédit rapide: the client row is not on the critical path',
   const src = read('src/components/CreditRapideCapture.tsx');
   it('the debt is enqueued BEFORE any clients upsert, and the upsert is never awaited by the save', () => {
     const submit = src.indexOf('await submitCarnetDebt(');
-    const upsert = src.indexOf("from('clients').upsert(");
+    const upsert = src.indexOf("ensureClient({ businessId, name: trimmedName })");
     expect(submit).toBeGreaterThan(-1);
     expect(upsert).toBeGreaterThan(submit);
-    expect(src.slice(upsert - 200, upsert)).toMatch(/void \(async \(\) => \{/);
+    expect(src.slice(upsert - 40, upsert)).toMatch(/void /); // never awaited by the save
   });
   it('offline, the drain links the debt to a client by name (so skipping the upsert loses nothing)', () => {
     expect(read('lib/sync.ts')).toMatch(/onConflict: 'business_id,name'/);
