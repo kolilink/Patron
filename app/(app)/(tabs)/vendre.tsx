@@ -25,6 +25,7 @@ import { QuickCaptureSheet } from '@/src/components/QuickCaptureSheet';
 import { ProductManager } from '@/src/components/products/ProductManager';
 import { useProductSheets } from '@/src/components/products/useProductSheets';
 import { needsSalePrice } from '@/src/utils/quickAddProduct';
+import { FAB_PILL_HEIGHT, FAB_PILL_HIT_SLOP, FAB_PLUS_SIZE, FAB_CLUSTER_GAP, gridBottomPadding } from '@/src/utils/fabCluster';
 import type { Palette } from '@/src/theme';
 import { stepQuantity } from '@/src/utils/quantity';
 import { formatAmount, formatAmountInput, parseAmountInput } from '@/src/utils/format';
@@ -2018,7 +2019,16 @@ export default function VendreScreen() {
         // on direct device feedback that the full amount read as a big
         // empty gap, not a small gap. Only the margin is halved, never
         // cartPanelHeight itself, so this can't reintroduce the overlap.
-        contentContainerStyle={[styles.tileList, cart.length > 0 && { paddingBottom: cartPanelHeight + (FLOATING_TAB_BAR_CLEARANCE + spacing[4] + spacing[2]) / 2 }]}
+        contentContainerStyle={[
+          styles.tileList,
+          cart.length > 0 && { paddingBottom: cartPanelHeight + (FLOATING_TAB_BAR_CLEARANCE + spacing[4] + spacing[2]) / 2 },
+          // The floating cluster sits over the grid: let the last row scroll clear above it (padding is keyed
+          // on the role, not on a sheet being open, so the list never jumps when a sheet opens).
+          canManage && { paddingBottom: Math.max(
+            cart.length > 0 ? cartPanelHeight + (FLOATING_TAB_BAR_CLEARANCE + spacing[4] + spacing[2]) / 2 : spacing[6] + FLOATING_TAB_BAR_CLEARANCE,
+            gridBottomPadding(FLOATING_TAB_BAR_CLEARANCE + spacing[4] + (cart.length > 0 ? cartPanelHeight + spacing[2] : 0)),
+          ) },
+        ]}
         showsVerticalScrollIndicator={false}
         renderItem={({ item }) => (
           <ProductTile
@@ -2270,18 +2280,10 @@ export default function VendreScreen() {
       {/* Add / edit / stock / stats sheets (admin/manager only ever open them). */}
       {canManage && productSheetElements}
 
-      {/* Floating "Gérer" + "+" — admin/manager only, hidden whenever any sheet is open. */}
+      {/* Floating cluster — admin/manager only, hidden whenever any sheet is open. One vertical column,
+          right-aligned: the purple "+" on top, the slimmer "Gérer" pill directly beneath it. */}
       {showFloating && (
         <View style={[styles.floatingActions, { bottom: floatingBottom }]} pointerEvents="box-none">
-          <Pressable
-            onPress={() => { haptics.select(); setGerer(true); }}
-            style={({ pressed }) => [styles.gererPill, pressed && { opacity: 0.8 }]}
-            accessibilityRole="button"
-            accessibilityLabel="Gérer les produits"
-          >
-            <Ionicons name="options-outline" size={18} color={palette.textPrimary} />
-            <Text variant="label">Gérer</Text>
-          </Pressable>
           <Pressable
             onPress={() => productSheets.openAdd()}
             style={({ pressed }) => [styles.addFab, pressed && { opacity: 0.82 }]}
@@ -2289,6 +2291,16 @@ export default function VendreScreen() {
             accessibilityLabel="Ajouter un produit"
           >
             <Ionicons name="add" size={26} color={palette.textInverse} />
+          </Pressable>
+          <Pressable
+            onPress={() => { haptics.select(); setGerer(true); }}
+            hitSlop={{ top: FAB_PILL_HIT_SLOP, bottom: FAB_PILL_HIT_SLOP, left: FAB_PILL_HIT_SLOP, right: FAB_PILL_HIT_SLOP }}
+            style={({ pressed }) => [styles.gererPill, pressed && { opacity: 0.8 }]}
+            accessibilityRole="button"
+            accessibilityLabel="Gérer les produits"
+          >
+            <Ionicons name="options-outline" size={16} color={palette.textSecondary} />
+            <Text variant="caption" style={{ fontFamily: fontFamily.medium }}>Gérer</Text>
           </Pressable>
         </View>
       )}
@@ -2346,16 +2358,20 @@ function makeStyles(p: Palette) {
     // the Vendre visual-refinement brief's color-hierarchy rule).
     tilePrice: { color: p.textPrimary, fontVariant: ['tabular-nums'] as ['tabular-nums'] },
     headerRight: { flexDirection: 'row', alignItems: 'center', gap: spacing[4] },
+    // One vertical column, right-aligned: "+" on top, "Gérer" directly beneath. Its BOTTOM edge sits where
+    // the old row sat (above the tab bar / cart panel); the "+" rises by the pill's height + the gap so the
+    // pill never reaches into the tab bar.
     floatingActions: {
-      position: 'absolute', right: spacing[5], flexDirection: 'row', alignItems: 'center', gap: spacing[3],
+      position: 'absolute', right: spacing[5], flexDirection: 'column', alignItems: 'flex-end', gap: FAB_CLUSTER_GAP,
     },
+    // Subordinate companion: slimmer (36 visible, 48 touch via hitSlop) and a step down in weight than the old pill.
     gererPill: {
       flexDirection: 'row', alignItems: 'center', gap: spacing[1.5],
-      paddingHorizontal: spacing[4], height: 44, borderRadius: radius.full,
-      backgroundColor: p.surface, borderWidth: 1, borderColor: p.border, ...shadow.md,
+      paddingHorizontal: spacing[3.5], height: FAB_PILL_HEIGHT, borderRadius: radius.full,
+      backgroundColor: p.surface, borderWidth: 1, borderColor: p.border, ...shadow.sm,
     },
     addFab: {
-      width: 52, height: 52, borderRadius: radius.full, alignItems: 'center', justifyContent: 'center',
+      width: FAB_PLUS_SIZE, height: FAB_PLUS_SIZE, borderRadius: radius.full, alignItems: 'center', justifyContent: 'center',
       backgroundColor: p.primary, ...shadow.md,
     },
     tileBadge: {
