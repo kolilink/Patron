@@ -47,7 +47,7 @@ import { toast } from '@/stores/toast';
 import { buildInviteLink, buildInviteMessage } from '@/stores/inviter';
 import { FAILURE_COPY } from '@/src/utils/failureCopy';
 import { todayIso, localTimeZone } from '@/src/utils/dates';
-import { homeComparison } from '@/src/utils/dashboardNarrative';
+import { homeComparison, businessAgeDays } from '@/src/utils/dashboardNarrative';
 import { getKpiSnapshot, setKpiSnapshot } from '@/src/utils/kpiSnapshot';
 
 
@@ -748,7 +748,7 @@ export default function AccueilScreen() {
   // or equal). "Bienvenue" / "Première vente enregistrée ✓" are one-time
   // acknowledgments, untouched. See src/utils/dashboardNarrative.ts.
   const showMonthLine = monthRevenue > lastMonthRevenue;
-  const comparison = homeComparison({ hasEverSold, isFirstSaleToday, isEvening, delta, monthRevenue, lastMonthRevenue });
+  const comparison = homeComparison({ hasEverSold, businessAgeDays: businessAgeDays(business?.created_at), isFirstSaleToday, isEvening, delta, monthRevenue, lastMonthRevenue });
   const showDeltaPill = comparison.kind === 'pill';
   const comparisonText =
     comparison.kind === 'welcome' ? 'Bienvenue sur Patron'
