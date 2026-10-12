@@ -27,9 +27,10 @@ type IoniconName = React.ComponentProps<typeof Ionicons>['name'];
 // The Produits tab is gone (merged into Vendre's Gérer mode): 3 tabs now. Same order/icons as before — outline inactive → filled
 // active (spec §4). Keyed by route name so the visible-set filter below can
 // resolve any subset (investisseur sees fewer tabs).
-const TAB_DEFS: Record<string, { label: string; outline: IoniconName; filled: IoniconName }> = {
-  index: { label: 'Accueil', outline: 'home-outline', filled: 'home' },
-  vendre: { label: 'Vendre', outline: 'cart-outline', filled: 'cart' },
+const TAB_DEFS: Record<string, { label: string; outline: IoniconName; filled: IoniconName; glyph?: 'home' }> = {
+  // Ionicons' house has a chimney + door; the home tab draws a plain pentagon instead (FloatingTabBar HomeGlyph).
+  index: { label: 'Accueil', outline: 'home-outline', filled: 'home', glyph: 'home' },
+  vendre: { label: 'Vendre', outline: 'cash-outline', filled: 'cash' },
   plus: { label: 'Moi', outline: 'person-outline', filled: 'person' },
 };
 
@@ -50,6 +51,7 @@ function CustomTabBar({ state, descriptors, navigation, insets }: BottomTabBarPr
       label: def?.label ?? route.name,
       outline: def?.outline ?? 'ellipse-outline',
       filled: def?.filled ?? 'ellipse',
+      glyph: def?.glyph,
     };
   });
 
