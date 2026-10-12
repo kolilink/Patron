@@ -1,9 +1,8 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { appAlert } from '@/src/utils/appAlert';
 import { AnimatedRowCell, AnimatedRow } from '@/src/components/ui/AnimatedRow';
-import { useReduceMotion } from '@/src/hooks/useReduceMotion';
 import { configureLayoutNext } from '@/src/hooks/useAnimateLayoutChange';
-import { Animated, Easing, FlatList, InputAccessoryView, LayoutAnimation, Platform, Pressable, ScrollView, StyleSheet, TextInput, UIManager, View } from 'react-native';
+import { FlatList, InputAccessoryView, LayoutAnimation, Platform, Pressable, ScrollView, StyleSheet, UIManager, View } from 'react-native';
 import { Ionicons } from '@expo/vector-icons';
 import { Screen } from '@/src/components/ui/Screen';
 import { FormSheet } from '@/src/components/ui/FormSheet';
@@ -32,6 +31,9 @@ import { FAILURE_COPY } from '@/src/utils/failureCopy';
 import { supplierDeletedConfirmation } from '@/src/utils/saveConfirmationCopy';
 import { failAlert } from '@/src/components/ui/FailureView';
 import { formatDate } from '@/src/utils/dates';
+import { QuickAddProductSheet } from '@/src/components/QuickAddProductSheet';
+import type { QuickAddPayload } from '@/src/utils/quickAddProduct';
+import { generateId } from '@/lib/id';
 
 // iOS-only: number-pad/decimal-pad keyboards have no built-in return key, so
 // the OS auto-injects its own floating "Done" pill above the keyboard when
@@ -65,82 +67,72 @@ function fmtDraftDate(createdAt: number): string {
 interface FournisseurFormData {
   name: string; phone: string; country: string; notes: string; leadDays: string;
   linkedProductIds: string[];
-  newProducts: { name: string; unit: string }[];
 }
 
 // ─── Fournisseur Form ──────────────────────────────────────────────────────────
 
-function FournisseurForm({ visible, editing, products, onClose, onSave, saving }: {
-  visible: boolean; editing: Fournisseur | null; products: Product[];
+function FournisseurForm({ visible, editing, products, fournisseurs, businessId, userId, currency, onClose, onSave, saving }: {
+  visible: boolean; editing: Fournisseur | null; products: Product[]; fournisseurs: Fournisseur[];
+  businessId: string; userId: string; currency: string;
   onClose: () => void; onSave: (d: FournisseurFormData) => Promise<void>; saving: boolean;
 }) {
   const { palette } = useTheme();
   const styles = useMemo(() => makeStyles(palette), [palette]);
+  const { createProduct, saving: productSaving } = useProductStore();
   const [name, setName] = useState('');
   const [phone, setPhone] = useState('');
   const [linkedIds, setLinkedIds] = useState<Set<string>>(new Set());
-  const [localProducts, setLocalProducts] = useState<{ id: string; name: string }[]>([]);
-  const [showCreate, setShowCreate] = useState(false);
-  const [newProductName, setNewProductName] = useState('');
   const [dropdownOpen, setDropdownOpen] = useState(false);
-  const reduceMotion = useReduceMotion();
-  const pulseAnim = useRef(new Animated.Value(1)).current;
+  const [sheetOpen, setSheetOpen] = useState(false);
 
   useEffect(() => {
     if (Platform.OS === 'android') UIManager.setLayoutAnimationEnabledExperimental?.(true);
   }, []);
 
   useEffect(() => {
-    const loop = Animated.loop(
-      Animated.sequence([
-        Animated.delay(3000),
-        Animated.timing(pulseAnim, { toValue: 1.08, duration: 300, easing: Easing.inOut(Easing.ease), useNativeDriver: true }),
-        Animated.timing(pulseAnim, { toValue: 1.0, duration: 300, easing: Easing.inOut(Easing.ease), useNativeDriver: true }),
-      ])
-    );
-    if (visible && !reduceMotion) { pulseAnim.setValue(1); loop.start(); } else pulseAnim.setValue(1);
-    return () => loop.stop();
-  }, [visible, reduceMotion]);
-
-  useEffect(() => {
     if (visible) {
       setName(editing?.name ?? '');
       setPhone(editing?.phone ?? '');
-      setLocalProducts([]);
-      setShowCreate(false);
-      setNewProductName('');
       setDropdownOpen(false);
+      setSheetOpen(false);
       setLinkedIds(
         new Set(editing ? products.filter(p => p.supplier_id === editing.id).map(p => p.id) : []),
       );
     }
-  }, [visible, editing, products]);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [visible, editing]);
 
   const toggleProduct = (id: string) =>
     setLinkedIds(prev => { const s = new Set(prev); s.has(id) ? s.delete(id) : s.add(id); return s; });
 
-  const handleToggleCreate = () => {
-    configureLayoutNext(LayoutAnimation.Presets.easeInEaseOut);
-    if (showCreate) setNewProductName('');
-    setShowCreate(prev => !prev);
+  // The one flow to create a product: QuickAddProductSheet. The id is generated here so it can join
+  // linkedIds at save. A supplier that exists on the server bakes its id into the product; a new
+  // (or still-queued) supplier cannot be referenced yet, so the supplier save links the product.
+  const sheetSupplierId = editing && !editing._pending ? editing.id : null;
+  const createForSupplier = async (payload: QuickAddPayload): Promise<{ ok: boolean }> => {
+    const productId = generateId();
+    const ok = await createProduct(businessId, userId, { ...payload.data, id: productId });
+    if (!ok) {
+      haptics.error();
+      showFailureAlert(buildFailure({
+        what: FAILURE_COPY.productNotSaved.what,
+        err: null,
+        why: useProductStore.getState().error ?? undefined,
+        action: { label: 'Réessayer', onPress: () => {} },
+      }));
+      return { ok: false };
+    }
+    setLinkedIds(prev => new Set([...prev, productId]));
+    setSheetOpen(false);
+    return { ok: true };
   };
 
-  const confirmNew = () => {
-    const trimmed = newProductName.trim();
-    if (!trimmed) return;
-    const tempId = `temp_${Date.now()}`;
-    configureLayoutNext(LayoutAnimation.Presets.easeInEaseOut);
-    setLocalProducts(prev => [...prev, { id: tempId, name: trimmed }]);
-    setLinkedIds(prev => new Set([...prev, tempId]));
-    setNewProductName('');
-    setShowCreate(false);
-  };
-
-  const allProducts = [...products, ...localProducts];
+  const linkedProducts = products.filter(p => linkedIds.has(p.id));
 
   return (
+    <>
     <FormSheet
-      visible={visible}
+      visible={visible && !sheetOpen}
       onClose={onClose}
       title={editing ? 'Modifier fournisseur' : 'Nouveau fournisseur'}
       contentContainerStyle={styles.mpad}
@@ -151,26 +143,12 @@ function FournisseurForm({ visible, editing, products, onClose, onSave, saving }
             loading={saving} fullWidth size="lg"
             onPress={() => {
               if (!name.trim()) { appAlert('Ajoutez un nom :)'); return; }
-
-              // Auto-commit any product name typed but not yet confirmed with the checkmark
-              let finalLocalProducts = localProducts;
-              let finalLinkedIds = linkedIds;
-              if (showCreate && newProductName.trim()) {
-                const trimmed = newProductName.trim();
-                const tempId = `temp_${Date.now()}`;
-                finalLocalProducts = [...localProducts, { id: tempId, name: trimmed }];
-                finalLinkedIds = new Set([...linkedIds, tempId]);
-              }
-
-              const existingIds = [...finalLinkedIds].filter(id => !id.startsWith('temp_'));
-              const newProds = finalLocalProducts.filter(p => finalLinkedIds.has(p.id));
               onSave({
                 name, phone,
                 country: editing?.country ?? '',
                 notes: editing?.notes ?? '',
                 leadDays: editing?.lead_days != null ? String(editing.lead_days) : '',
-                linkedProductIds: existingIds,
-                newProducts: newProds.map(p => ({ name: p.name, unit: 'pcs' })),
+                linkedProductIds: [...linkedIds],
               });
             }}
           />
@@ -183,48 +161,25 @@ function FournisseurForm({ visible, editing, products, onClose, onSave, saving }
       <View style={{ gap: spacing[2] }}>
         <Text variant="label">Produits fournis</Text>
 
-        {/* Selector row */}
-        <View style={{ flexDirection: 'row', alignItems: 'center', justifyContent: 'space-between', width: '100%', gap: 10 }}>
-          {/* Dropdown trigger — flex: 1 */}
-          <Pressable
-            onPress={() => {
-              configureLayoutNext(LayoutAnimation.Presets.easeInEaseOut);
-              if (showCreate) { setShowCreate(false); setNewProductName(''); }
-              setDropdownOpen(prev => !prev);
-            }}
-            style={styles.dropdownTrigger}>
-            <Text variant="body" numberOfLines={1} style={{ flex: 1, color: linkedIds.size > 0 ? palette.textPrimary : palette.textDisabled }}>
-              {linkedIds.size === 0
-                ? 'Sélectionner des produits'
-                : linkedIds.size === 1
-                  ? allProducts.find(p => linkedIds.has(p.id))?.name ?? '1 produit'
-                  : `${linkedIds.size} produits liés`}
-            </Text>
-            <Ionicons name={dropdownOpen ? 'chevron-up' : 'chevron-down'} size={16} color={palette.textSecondary} />
-          </Pressable>
+        <Pressable
+          onPress={() => {
+            configureLayoutNext(LayoutAnimation.Presets.easeInEaseOut);
+            setDropdownOpen(prev => !prev);
+          }}
+          style={styles.dropdownTrigger}>
+          <Text variant="body" numberOfLines={1} style={{ flex: 1, color: palette.textDisabled }}>
+            Sélectionner des produits
+          </Text>
+          <Ionicons name={dropdownOpen ? 'chevron-up' : 'chevron-down'} size={16} color={palette.textSecondary} />
+        </Pressable>
 
-          {/* Pulsing circular + badge — right side, never moves */}
-          <Pressable
-            onPress={() => {
-              configureLayoutNext(LayoutAnimation.Presets.easeInEaseOut);
-              if (dropdownOpen) setDropdownOpen(false);
-              setShowCreate(prev => !prev);
-              if (showCreate) setNewProductName('');
-            }}>
-            <Animated.View style={[styles.addBadge, showCreate && styles.addBadgeActive, { transform: [{ scale: pulseAnim }] }]}>
-              <Text style={[styles.addBadgePlus, showCreate && { color: palette.textInverse }]}>+</Text>
-            </Animated.View>
-          </Pressable>
-        </View>
-
-        {/* Dropdown list — slides in below the row */}
         {dropdownOpen && (
           <ScrollView style={styles.prodDropdown} nestedScrollEnabled keyboardShouldPersistTaps="handled">
-            {allProducts.length === 0 ? (
+            {products.length === 0 ? (
               <View style={{ padding: spacing[3] }}>
-                <Text variant="caption" color="secondary">Utilisez + pour créer votre premier produit.</Text>
+                <Text variant="caption" color="secondary">Aucun produit pour le moment.</Text>
               </View>
-            ) : allProducts.map(p => {
+            ) : products.map(p => {
               const selected = linkedIds.has(p.id);
               return (
                 <Pressable
@@ -243,27 +198,43 @@ function FournisseurForm({ visible, editing, products, onClose, onSave, saving }
           </ScrollView>
         )}
 
-        {/* Slide-in create row — anchored below the + button */}
-        {showCreate && (
-          <View style={styles.newProdRow}>
-            <TextInput
-              style={styles.newProdInput}
-              value={newProductName}
-              onChangeText={setNewProductName}
-              placeholder="Nom du produit"
-              placeholderTextColor={palette.textDisabled}
-              autoFocus
-              returnKeyType="done"
-              onSubmitEditing={confirmNew}
-            />
-            <Pressable onPress={confirmNew} style={styles.confirmBtn}>
-              <Ionicons name="checkmark" size={20}
-                color={newProductName.trim() ? palette.success : palette.textDisabled} />
-            </Pressable>
-          </View>
-        )}
+        {linkedProducts.map(p => (
+          <Pressable
+            key={p.id}
+            onPress={() => { configureLayoutNext(LayoutAnimation.Presets.easeInEaseOut); setDropdownOpen(true); }}
+            style={styles.prodDropdownItem}>
+            <Text variant="body" numberOfLines={1} style={{ flex: 1 }}>
+              {`${p.name} · ${p.sale_price > 0 ? formatAmount(p.sale_price, currency) : 'Prix à fixer'}`}
+            </Text>
+            <Ionicons name="chevron-forward" size={16} color={palette.textSecondary} />
+          </Pressable>
+        ))}
+
+        <Pressable
+          onPress={() => { setDropdownOpen(false); setSheetOpen(true); }}
+          style={styles.outlineBtn}
+          accessibilityRole="button">
+          <Text variant="label" style={{ color: palette.primary }}>+ Nouveau produit</Text>
+        </Pressable>
       </View>
     </FormSheet>
+
+    <QuickAddProductSheet
+      visible={visible && sheetOpen}
+      onClose={() => setSheetOpen(false)}
+      businessId={businessId}
+      onSubmit={createForSupplier}
+      onPickExisting={p => {
+        setLinkedIds(prev => new Set([...prev, p.id]));
+        setSheetOpen(false);
+      }}
+      saving={productSaving}
+      currency={currency}
+      products={products}
+      fournisseurs={fournisseurs}
+      supplierId={sheetSupplierId}
+    />
+    </>
   );
 }
 
@@ -466,7 +437,6 @@ export default function FournisseursScreen() {
       notes: d.notes,
       lead_days: leadDaysNum,
       linkedProductIds: d.linkedProductIds,
-      newProducts: d.newProducts,
       // Editing: unlink products that were deselected. Computed from the local
       // product list (no server fetch — that would fail offline).
       unlinkedProductIds: isEdit
@@ -653,7 +623,8 @@ export default function FournisseursScreen() {
       )}
 
       <FournisseurForm
-        visible={showForm} editing={editF} products={products}
+        visible={showForm} editing={editF} products={products} fournisseurs={fournisseurs}
+        businessId={businessId} userId={userId} currency={currency}
         onClose={() => { setShowForm(false); setEditF(null); }}
         saving={isSaving} onSave={handleSaveFournisseur}
       />
@@ -779,21 +750,6 @@ function makeStyles(p: Palette) {
       shadowColor: p.shadow, shadowOffset: { width: 0, height: 4 }, shadowOpacity: 0.18, shadowRadius: 8, elevation: 8,
     },
     fabExtendedLabel: { fontFamily: fontFamily.semibold, fontSize: 15, color: p.textInverse },
-
-    // Circular pulsing badge — inside the form product row
-    addBadge: { width: 44, height: 44, borderRadius: 22, backgroundColor: p.primaryLight, justifyContent: 'center', alignItems: 'center' },
-    addBadgeActive: { backgroundColor: p.primary },
-    addBadgePlus: { fontSize: 24, color: p.primary, lineHeight: 28 },
-
-    newProdRow: {
-      flexDirection: 'row', alignItems: 'center', gap: spacing[2],
-      borderWidth: 1, borderColor: p.border, borderRadius: radius.md,
-      paddingHorizontal: spacing[3], paddingVertical: spacing[2],
-      backgroundColor: p.surface,
-    },
-    newProdInput: { flex: 1, fontSize: 15, color: p.textPrimary, padding: 0 },
-    confirmBtn: { padding: spacing[1] },
-
     // Success sheet
     successTop: { alignItems: 'center', paddingVertical: spacing[4] },
     successBadge: { width: 64, height: 64, borderRadius: 32, backgroundColor: p.successLight, alignItems: 'center', justifyContent: 'center', marginBottom: spacing[4] },

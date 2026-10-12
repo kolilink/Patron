@@ -131,7 +131,7 @@ beforeEach(() => {
 describe('offline create → drain → same UUID', () => {
     it('writes one create_supplier, shows the pending supplier immediately, and drains the SAME id to upsert_supplier', async () => {
         const id = await useFournisseursStore.getState().createFournisseur('biz-1', 'u1', {
-            name: 'Diallo Import', phone: '+224 620 00 00 00', newProducts: [{ name: 'Riz parfumé', unit: 'sac' }], linkedProductIds: ['p1'],
+            name: 'Diallo Import', phone: '+224 620 00 00 00', linkedProductIds: ['p1'],
         });
         expect(id).toBeTruthy();
 
@@ -222,7 +222,7 @@ describe('offline edit of a pending supplier amends the queued payload', () => {
         expect(mockQueue).toHaveLength(1);
 
         const ok = await useFournisseursStore.getState().updateFournisseur(id!, 'biz-1', 'u1', {
-            name: 'Diallo Import Édité', linkedProductIds: [], newProducts: [], unlinkedProductIds: [],
+            name: 'Diallo Import Édité', linkedProductIds: [], unlinkedProductIds: [],
         });
         expect(ok).toBe(true);
         expect(mockQueue).toHaveLength(1);                     // never a second op

@@ -65,6 +65,12 @@ interface Props {
    * cost and the reception books both cost and stock at confirm. Closes on Ajouter (no loop, no draft).
    */
   delivery?: { name: string; qty: string } | null;
+  /**
+   * Supplier context (opened from the supplier form). `undefined` = none. Otherwise the "Fournisseur"
+   * chips are hidden and the product is born with this supplier: a string bakes it into the product,
+   * `null` means the supplier is not saved yet (the supplier save links the product). Closes on Ajouter.
+   */
+  supplierId?: string | null;
   /** Edit mode: the sheet owns archiving and restoring (Gérer rows have no buttons of their own). */
   onArchive?: (product: Product) => void;
   onRestore?: (product: Product) => void;
@@ -148,12 +154,13 @@ function ValidCheck({ valid, color }: { valid: boolean; color: string }) {
 
 export function QuickAddProductSheet({
   visible, onClose, onSubmit, onPickExisting, saving, currency, products, fournisseurs, initialName, businessId,
-  editing, initialVariants, startExpanded, onAdjust, resumeDraft, delivery,
+  editing, initialVariants, startExpanded, onAdjust, resumeDraft, delivery, supplierId,
   onArchive, onRestore, onStats,
 }: Props) {
   const isEdit = !!editing;
   const isDelivery = !!delivery && !editing;
   // Drafts are for the rapid add loop only.
+  const supplierCtx = supplierId !== undefined && !editing;
   const noDraft = isEdit || isDelivery;
   const { palette } = useTheme();
   const styles = useMemo(() => makeStyles(palette), [palette]);
@@ -221,13 +228,13 @@ export function QuickAddProductSheet({
   // "À compléter": keep what is half-filled (debounced) so a swipe-down, Annuler or app kill never loses it.
   // Add mode only; a blank sheet removes its own draft. Never synced, never in the outbox.
   useEffect(() => {
-    if (!visible || noDraft) return;
+    if (!visible || noDraft || supplierCtx) return;
     const t = setTimeout(() => { void saveQuickAddDraft(businessId, draftId.current, s).catch(() => {}); }, 400); // failure: silent — draft is best-effort
     return () => clearTimeout(t);
-  }, [s, visible, noDraft, businessId]);
+  }, [s, visible, noDraft, supplierCtx, businessId]);
 
   const handleClose = () => {
-    if (!noDraft && !added.current) void saveQuickAddDraft(businessId, draftId.current, sRef.current).catch(() => {}); // failure: silent — draft is best-effort
+    if (!noDraft && !supplierCtx && !added.current) void saveQuickAddDraft(businessId, draftId.current, sRef.current).catch(() => {}); // failure: silent — draft is best-effort
     onClose();
   };
 
@@ -291,11 +298,13 @@ export function QuickAddProductSheet({
       editing ? { reorder_level: editing.reorder_level, unit: editing.unit, cost_price: editing.cost_price } : undefined,
       { delivery: isDelivery },
     );
+    if (supplierCtx && supplierId) payload.data.supplier_id = supplierId;
     const res = await onSubmit(payload);
     submitting.current = false;
     if (!res.ok) return; // the failure alert is shown by the host; everything typed stays
     haptics.success();
     if (isEdit || isDelivery) return; // edit / delivery: the host closes the sheet and confirms
+    if (supplierCtx) return; // supplier form: the host links the product and closes the sheet
     added.current = true;
     showToast(name);
     resetForNext();
@@ -608,25 +617,27 @@ export function QuickAddProductSheet({
               </Text>
             </View>
           )}
-          <Card style={styles.fieldBlock}>
-            <Text style={styles.fieldLabel}>Fournisseur</Text>
-            <ScrollView horizontal showsHorizontalScrollIndicator={false} keyboardShouldPersistTaps="handled" contentContainerStyle={{ gap: spacing[2], paddingVertical: spacing[1] }}>
-              {[{ id: '', name: 'Marché' }, ...fournisseurs.map(f => ({ id: f.id, name: f.name }))].map(opt => {
-                const active = s.supplierId === opt.id;
-                return (
-                  <Pressable
-                    key={opt.id || 'marche'}
-                    onPress={() => { haptics.select(); setS(prev => ({ ...prev, supplierId: opt.id })); }}
-                    style={[styles.chip, active && styles.chipActive]}
-                    accessibilityRole="button"
-                    accessibilityState={{ selected: active }}
-                  >
-                    <Text variant="label" style={{ color: active ? palette.textInverse : palette.textPrimary }}>{opt.name}</Text>
-                  </Pressable>
-                );
-              })}
-            </ScrollView>
-          </Card>
+          {!supplierCtx && (
+            <Card style={styles.fieldBlock}>
+              <Text style={styles.fieldLabel}>Fournisseur</Text>
+              <ScrollView horizontal showsHorizontalScrollIndicator={false} keyboardShouldPersistTaps="handled" contentContainerStyle={{ gap: spacing[2], paddingVertical: spacing[1] }}>
+                {[{ id: '', name: 'Marché' }, ...fournisseurs.map(f => ({ id: f.id, name: f.name }))].map(opt => {
+                  const active = s.supplierId === opt.id;
+                  return (
+                    <Pressable
+                      key={opt.id || 'marche'}
+                      onPress={() => { haptics.select(); setS(prev => ({ ...prev, supplierId: opt.id })); }}
+                      style={[styles.chip, active && styles.chipActive]}
+                      accessibilityRole="button"
+                      accessibilityState={{ selected: active }}
+                    >
+                      <Text variant="label" style={{ color: active ? palette.textInverse : palette.textPrimary }}>{opt.name}</Text>
+                    </Pressable>
+                  );
+                })}
+              </ScrollView>
+            </Card>
+          )}
         </ReAnimated.View>
       )}
       </Animated.View>
