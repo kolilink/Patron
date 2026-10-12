@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
+import { useEffect, useMemo, useRef, useState } from 'react';
 import { appAlert } from '@/src/utils/appAlert';
 import { AnimatedRowCell, AnimatedRow } from '@/src/components/ui/AnimatedRow';
 import { configureLayoutNext } from '@/src/hooks/useAnimateLayoutChange';
@@ -8,8 +8,7 @@ import { Screen } from '@/src/components/ui/Screen';
 import { FormSheet } from '@/src/components/ui/FormSheet';
 import { OfflineNotice } from '@/src/components/ui/OfflineNotice';
 import { SkeletonList } from '@/src/components/ui/SkeletonPlaceholder';
-import { router, useFocusEffect } from 'expo-router';
-import { peekReceptionDraft } from './reception';
+import { router } from 'expo-router';
 import { Button } from '@/src/components/ui/Button';
 import { Input } from '@/src/components/ui/Input';
 import { Text } from '@/src/components/ui/Text';
@@ -59,10 +58,6 @@ function debtAgeDays(iso: string): number {
 function fmtDebtAge(iso: string): string {
   if (debtAgeDays(iso) === 0) return "Aujourd'hui";
   return `Enregistrée le ${formatDate(iso, 'dayMonth')}`;
-}
-
-function fmtDraftDate(createdAt: number): string {
-  return formatDate(createdAt, 'dayMonth');
 }
 
 interface FournisseurFormData {
@@ -349,12 +344,6 @@ export default function FournisseursScreen() {
   } = useFournisseursStore();
 
   const [isSaving, setIsSaving] = useState(false);
-  const [draftPeek, setDraftPeek] = useState<{ lineCount: number; createdAt: number } | null>(null);
-  useFocusEffect(
-    useCallback(() => {
-      if (businessId) peekReceptionDraft(businessId).then(setDraftPeek);
-    }, [businessId]),
-  );
   const [showForm, setShowForm] = useState(false);
   const [editF, setEditF] = useState<Fournisseur | null>(null);
   const [showSuccessSheet, setShowSuccessSheet] = useState(false);
@@ -505,23 +494,6 @@ export default function FournisseursScreen() {
             {totalDebtsCount > 0 ? `  ·  ${totalDebtsCount} avec une dette en cours` : ''}
           </Text>
         </View>
-      )}
-
-      {/* She is interrupted constantly at the market — this is what lets her
-          pick a livraison draft back up exactly where she left it, instead
-          of retyping everything. No supplier name shown — it's often not
-          chosen yet at draft time (skippable, picked last on Confirmé). */}
-      {draftPeek && (
-        <Pressable
-          onPress={() => router.push('/(app)/fournisseurs/reception')}
-          style={styles.draftBanner}
-        >
-          <Ionicons name="document-text-outline" size={18} color={palette.warning} />
-          <Text variant="caption" style={{ color: palette.textPrimary, flex: 1 }}>
-            Brouillon — {draftPeek.lineCount} produit{draftPeek.lineCount > 1 ? 's' : ''} · {fmtDraftDate(draftPeek.createdAt)}
-          </Text>
-          <Ionicons name="chevron-forward" size={16} color={palette.textSecondary} />
-        </Pressable>
       )}
 
       {loading && fournisseurs.length === 0 ? (
@@ -706,12 +678,6 @@ function makeStyles(p: Palette) {
     reorderBadgeText: { fontFamily: fontFamily.bold, fontSize: 10, color: p.textInverse },
     summaryBar: {
       paddingHorizontal: spacing[5], paddingTop: spacing[3], paddingBottom: spacing[1],
-    },
-    draftBanner: {
-      flexDirection: 'row', alignItems: 'center', gap: spacing[2],
-      marginHorizontal: spacing[5], marginTop: spacing[3],
-      padding: spacing[3], borderRadius: radius.md,
-      backgroundColor: p.warningLight, borderWidth: 1, borderColor: p.warning,
     },
     empty: { flex: 1, alignItems: 'center', justifyContent: 'center', paddingHorizontal: spacing[4] },
     center: { textAlign: 'center', marginTop: spacing[10] },

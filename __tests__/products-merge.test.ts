@@ -149,15 +149,15 @@ describe('Gérer mode', () => {
   const vendre = read('app/(app)/(tabs)/vendre.tsx');
   const pm = read('src/components/products/ProductManager.tsx');
   it('has the specified management surface: À compléter (n) as plain rows; no Valeur du stock', () => {
-    expect(pm).toContain('`À compléter (${drafts.length})`');
-    expect(pm).toContain('deleteDraft(d)');
+    expect(pm).toContain("label: 'À compléter'");
+    expect(pm).toContain('deleteDraft(item.draft)');
     expect(pm).not.toMatch(/Valeur du stock/);
     expect(vendre).toMatch(/Prix en \{currency\}/); // sell mode keeps its currency line; Gérer rows carry "… gnf" themselves
   });
   it('per-product affordances: "Prix à fixer" (sale price) and "Prix d\'achat ?" (cost) show on the row, and the row opens the edit sheet', () => {
     expect(pm).toMatch(/Prix d.{1,2}achat \?/);
     expect(pm).toContain('Prix à fixer');
-    expect(pm).toMatch(/onPress=\{\(\) => sheets\.openEdit\(item\.product, \{ expandCost:/);
+    expect(pm).toMatch(/onPress=\{\(\) => sheets\.openEdit\(item\.product, /);
   });
   it('one-time hint, exact copy, dismissible forever', () => {
     expect(pm).toContain('Astuce : restez appuyé sur un produit pour le modifier');

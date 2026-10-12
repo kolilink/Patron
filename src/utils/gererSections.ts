@@ -49,3 +49,10 @@ export function buildGererSections(args: {
 
   return { sections, archives, total: products.length + archived.length };
 }
+
+export type GererAccordionId = 'drafts' | 'produits' | 'archives';
+
+/** Next open section when a header is tapped: accordion (one at a time); tapping the open one collapses all. */
+export function nextOpenSection(current: GererAccordionId | null, tapped: GererAccordionId): GererAccordionId | null {
+  return current === tapped ? null : tapped;
+}

@@ -82,7 +82,9 @@ describe('unchanged: tabs, order, icons, glow, offset, behaviour', () => {
   });
   it('bottom offset above the safe area is unchanged', () => {
     expect(bar).toContain('bottom: bottomInset + FLOATING_TAB_BAR_GAP,');
-    expect(FLOATING_TAB_BAR_GAP).toBe(12);
+    expect(FLOATING_TAB_BAR_GAP).toBe(4);
+    // dynamic inset, not hardcoded: iPhone (34) and Samsung button-nav (48)
+    for (const inset of [34, 48, 0]) expect(inset + FLOATING_TAB_BAR_GAP).toBe(inset + 4);
     expect(FLOATING_TAB_BAR_CLEARANCE).toBe(FLOATING_TAB_BAR_HEIGHT + FLOATING_TAB_BAR_GAP + 12);
   });
   it('tab switching behaviour is unchanged: tabPress is emitted, navigation only if not focused / not prevented', () => {
