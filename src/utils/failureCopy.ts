@@ -11,6 +11,8 @@ export const FAILURE_COPY = {
   paymentNotRecorded: { what: "Le paiement n'a pas été enregistré.", why: SAFE_DATA_WHY },
   saleNotRecorded: { what: "La vente n'a pas été enregistrée." },
   productNotSaved: { what: "Le produit n'a pas été enregistré.", why: SAFE_DATA_WHY },
+  // The product itself was saved (outbox); only the online-only Modèles call could not run.
+  productSavedModelsNot: { what: 'Produit enregistré. Modèles non enregistrés — connexion requise.' },
   stockNotAdjusted: { what: "Le stock n'a pas été modifié." },
   // People & places
   supplierNotCreated: { what: "Le fournisseur n'a pas été créé.", why: SAFE_DATA_WHY },

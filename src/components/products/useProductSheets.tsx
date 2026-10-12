@@ -5,6 +5,7 @@ import { failAlert, showFailureAlert } from '@/src/components/ui/FailureView';
 import { appAlert } from '@/src/utils/appAlert';
 import { useSaveConfirmationStore } from '@/stores/saveConfirmation';
 import { archivedConfirmation } from '@/src/utils/saveConfirmationCopy';
+import { isKnownOffline } from '@/lib/connectivity';
 import { haptics } from '@/lib/haptics';
 import { toast } from '@/stores/toast';
 import { useAuthStore } from '@/stores/auth';
@@ -83,6 +84,14 @@ export function useProductSheets(): { api: ProductSheetsApi; sheets: React.React
     else void fetchVariants(editTarget.id, businessId).then(setEditVariants);
   }, [editTarget?.id, businessId]);
 
+  const modelsNotSavedAlert = () => {
+    haptics.error();
+    showFailureAlert(buildFailure({
+      what: FAILURE_COPY.productSavedModelsNot.what,
+      action: { label: 'OK', onPress: () => {} },
+    }));
+  };
+
   const handleAdd = useCallback(
     async ({ data, hasVariants, variants }: QuickAddPayload): Promise<{ ok: boolean }> => {
       const ok = await createProduct(businessId, userId, data);
@@ -98,7 +107,9 @@ export function useProductSheets(): { api: ProductSheetsApi; sheets: React.React
       const nameLower = data.name.trim().toLowerCase();
       const created = useProductStore.getState().products.find(p => p.name.trim().toLowerCase() === nameLower) ?? null;
       if (created && hasVariants && variants.length > 0) {
-        await upsertVariants(businessId, created.id, userId, variants);
+        // Online-only call. Never assume it ran: the product is already queued, so say exactly that.
+        const variantsOk = isKnownOffline() ? false : await upsertVariants(businessId, created.id, userId, variants);
+        if (!variantsOk) modelsNotSavedAlert();
       }
       if (created) setPulseId(created.id);
       addedCount.current += 1;
@@ -114,8 +125,7 @@ export function useProductSheets(): { api: ProductSheetsApi; sheets: React.React
       // The models RPC is online-only: touch it ONLY when models are involved (set now, or being
       // switched off), so editing a plain product offline goes through the outbox and just works.
       const touchesModels = hasVariants || !!editTarget.has_variants;
-      const variantsOk = ok ? (touchesModels ? await upsertVariants(businessId, editTarget.id, userId, hasVariants ? variants : []) : true) : false;
-      if (!ok || !variantsOk) {
+      if (!ok) {
         haptics.error();
         showFailureAlert(buildFailure({
           what: FAILURE_COPY.productNotSaved.what,
@@ -123,6 +133,15 @@ export function useProductSheets(): { api: ProductSheetsApi; sheets: React.React
           action: { label: 'Réessayer', onPress: () => { /* the sheet kept everything typed: tap Enregistrer again */ } },
         }));
         return { ok: false };
+      }
+      if (touchesModels) {
+        const variantsOk = isKnownOffline() ? false : await upsertVariants(businessId, editTarget.id, userId, hasVariants ? variants : []);
+        if (!variantsOk) {
+          // The product edit is queued; only the online-only models call did not run.
+          modelsNotSavedAlert();
+          setEditOpen(false);
+          return { ok: true };
+        }
       }
       toast.success('Produit mis à jour ✓');
       setEditOpen(false);

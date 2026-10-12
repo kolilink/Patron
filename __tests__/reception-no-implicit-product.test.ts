@@ -154,6 +154,7 @@ describe('sheet in delivery mode', () => {
     expect(sheet).toContain('if (isEdit || isDelivery) return;');
   });
   it('Modèles are offered only when online (the models call is online-only)', () => {
-    expect(sheet).toContain('{!(isDelivery && isKnownOffline()) && (');
+    // offline: the toggle is never offered in add / delivery (the guard now covers every add flow)
+    expect(sheet).toContain(') : !offline && (');
   });
 });

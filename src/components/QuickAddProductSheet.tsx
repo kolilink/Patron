@@ -17,7 +17,7 @@ import { useReduceMotion } from '@/src/hooks/useReduceMotion';
 import { SilentKeyboardAccessory } from '@/src/components/ui/SilentKeyboardAccessory';
 import { formatAmount, formatAmountInput } from '@/src/utils/format';
 import { editDraftId, newDraftId, removeQuickAddDraft, saveQuickAddDraft, type QuickAddDraft } from '@/lib/quickAddDraft';
-import { isKnownOffline } from '@/lib/connectivity';
+import { isKnownOffline, useConnectivityStore } from '@/lib/connectivity';
 import {
   EMPTY_QUICK_ADD,
   afterAdd,
@@ -163,6 +163,8 @@ export function QuickAddProductSheet({
   const isEdit = !!editing;
   const isDelivery = !!delivery && !editing;
   // Drafts are for the rapid add loop only.
+  // Models are saved by an online-only call: while offline they can't be created or changed.
+  const offline = useConnectivityStore(() => isKnownOffline());
   const supplierCtx = supplierId !== undefined && !editing;
   const noDraft = isEdit || isDelivery;
   const { palette } = useTheme();
@@ -290,6 +292,12 @@ export function QuickAddProductSheet({
     haptics.toggle(next);
     if (next) setTimeout(() => scrollRef.current?.scrollToEnd({ animated: !reduce }), 120);
   };
+
+  // Going offline with Modèles already on (toggle, resumed draft): models can't be saved, so switch them off
+  // instead of letting the add succeed with them silently dropped.
+  useEffect(() => {
+    if (offline && !isEdit && s.models) setS(prev => setModels(prev, false));
+  }, [offline, isEdit, s.models]);
 
   const onToggleModels = (on: boolean) => {
     haptics.toggle(on);
@@ -438,8 +446,14 @@ export function QuickAddProductSheet({
         </Card>
       )}
 
-      {/* MODÈLES — models are saved by an online-only call, so a delivery can't create them offline */}
-      {!(isDelivery && isKnownOffline()) && (
+      {/* MODÈLES — saved by an online-only call. Offline: never offered when adding (nothing is silently
+          dropped); when editing, the section is disabled with an honest note. */}
+      {offline && isEdit ? (
+        <Card style={styles.toggleRow}>
+          <Text variant="body" color="secondary" style={{ flex: 1, fontFamily: FF.medium }}>Modèles : connexion requise</Text>
+          <Switch value={s.models} disabled trackColor={{ false: palette.border, true: palette.primary }} thumbColor={palette.surface} accessibilityLabel="Modèles" />
+        </Card>
+      ) : !offline && (
       <Card style={styles.toggleRow}>
         <Text variant="body" color="secondary" style={{ flex: 1, fontFamily: FF.medium }}>Modèles</Text>
         <Switch
@@ -514,6 +528,7 @@ export function QuickAddProductSheet({
           </View>
         </Card>
       ) : (
+        <View pointerEvents={offline ? 'none' : 'auto'} style={offline ? { opacity: 0.5 } : undefined}>
         <Card style={styles.variantList}>
           <View style={styles.variantHeader}>
             <Text style={[styles.fieldLabel, { flex: 1.3 }]}>Modèle</Text>
@@ -582,6 +597,7 @@ export function QuickAddProductSheet({
           </Pressable>
           <Text style={styles.derived}>Total : {totalPieces}</Text>
         </Card>
+        </View>
       )}
 
       {/* PLUS D'INFORMATIONS — not in delivery mode: the line already owns the unit cost */}

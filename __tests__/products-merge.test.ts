@@ -284,7 +284,7 @@ describe('edit mode of the shared sheet', () => {
   it('plain-product edits never touch the online-only models RPC (so they work offline)', () => {
     const hook = read('src/components/products/useProductSheets.tsx');
     expect(hook).toMatch(/const touchesModels = hasVariants \|\| !!editTarget\.has_variants;/);
-    expect(hook).toMatch(/touchesModels \? await upsertVariants\(/);
+    expect(hook).toMatch(/if \(touchesModels\) \{/);
   });
 });
 
