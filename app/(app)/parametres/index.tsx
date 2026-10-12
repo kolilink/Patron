@@ -34,6 +34,7 @@ import { NO_CONNECTION_WHY, serverSentence } from '@/src/utils/failure';
 import { failAlert } from '@/src/components/ui/FailureView';
 import { SuccessionSheet } from '@/src/components/SuccessionSheet';
 import { planLeave, successionBlockers } from '@/src/utils/succession';
+import { writeRow } from '@/lib/writeFunnel';
 
 // Must match the list in creer.tsx — all currencies we support
 
@@ -146,15 +147,17 @@ export default function ParametresScreen() {
   const handleToggleNotifyEverySale = async (value: boolean) => {
     setNotifyEverySale(value);
     haptics.toggle(value);
-    const { error } = await supabase.from('profiles').update({ notify_on_every_sale: value }).eq('id', userId);
-    if (error) {
+    try {
+      await writeRow(
+        { table: 'profiles', op: 'update', values: { notify_on_every_sale: value }, match: { id: userId } },
+        { applyLocal: () => useAuthStore.setState(state =>
+          state.session ? { session: { ...state.session, user: { ...state.session.user, notify_on_every_sale: value } } } : {}) },
+      );
+    } catch {
+      // failure: speaks — the write was refused before it could be queued
       setNotifyEverySale(!value);
       failAlert('settingNotChanged', { why: NO_CONNECTION_WHY, label: 'Réessayer', onPress: () => { void handleToggleNotifyEverySale(value); } });
-      return;
     }
-    useAuthStore.setState(state =>
-      state.session ? { session: { ...state.session, user: { ...state.session.user, notify_on_every_sale: value } } } : {},
-    );
   };
 
   // "Rappels de paiement" — gated by TWO independent things, and the switch
@@ -177,16 +180,19 @@ export default function ParametresScreen() {
   useFocusEffect(useCallback(() => { void refreshPaymentReminderPerm(); }, [refreshPaymentReminderPerm]));
   const savePaymentRemindersPref = async (value: boolean): Promise<boolean> => {
     setPaymentRemindersPref(value);
-    const { error } = await supabase.from('profiles').update({ debt_reminders_enabled: value }).eq('id', userId);
-    if (error) {
+    try {
+      await writeRow(
+        { table: 'profiles', op: 'update', values: { debt_reminders_enabled: value }, match: { id: userId } },
+        { applyLocal: () => useAuthStore.setState(state =>
+          state.session ? { session: { ...state.session, user: { ...state.session.user, debt_reminders_enabled: value } } } : {}) },
+      );
+      return true;
+    } catch {
+      // failure: speaks — the write was refused before it could be queued
       setPaymentRemindersPref(!value);
       failAlert('settingNotChanged', { why: NO_CONNECTION_WHY, label: 'Réessayer', onPress: () => { void handleTogglePaymentReminders(value); } });
       return false;
     }
-    useAuthStore.setState(state =>
-      state.session ? { session: { ...state.session, user: { ...state.session.user, debt_reminders_enabled: value } } } : {},
-    );
-    return true;
   };
   const handleTogglePaymentReminders = async (value: boolean) => {
     if (!value) {
@@ -230,10 +236,7 @@ export default function ParametresScreen() {
   // Silently backfill business phone from user profile if not yet set
   useEffect(() => {
     if (!isAdmin || !business?.id || business.phone || !session?.user.phone) return;
-    supabase.from('businesses')
-      .update({ phone: session.user.phone })
-      .eq('id', business.id)
-      .then(() => { });
+    void writeRow({ table: 'businesses', op: 'update', values: { phone: session.user.phone }, match: { id: business.id } }).catch(() => { });
   }, [business?.id]);
 
   const isDirty = (isAdmin
@@ -296,38 +299,44 @@ export default function ParametresScreen() {
       const trimmedPhone = bizPhone.trim() || null;
       // Never change currency after first sale — UI + API guard
       const patch = hasSales ? { name: trimmedBiz, phone: trimmedPhone } : { name: trimmedBiz, phone: trimmedPhone, currency };
-      const { error } = await supabase.from('businesses')
-        .update(patch)
-        .eq('id', business?.id ?? '');
-      if (!error) {
-        useAuthStore.setState(state => {
-          if (!state.session?.activeBusiness) return state;
-          const updated: Business = { ...state.session.activeBusiness, name: trimmedBiz, phone: trimmedPhone, ...(hasSales ? {} : { currency }) };
-          return {
-            session: {
-              ...state.session,
-              activeBusiness: updated,
-              memberships: state.session.memberships.map(m =>
-                m.business_id === business?.id ? { ...m, business: updated } : m,
-              ),
-            },
-          };
-        });
+      try {
+        await writeRow(
+          { table: 'businesses', op: 'update', values: patch, match: { id: business?.id ?? '' } },
+          { applyLocal: () => useAuthStore.setState(state => {
+            if (!state.session?.activeBusiness) return state;
+            const updated: Business = { ...state.session.activeBusiness, name: trimmedBiz, phone: trimmedPhone, ...(hasSales ? {} : { currency }) };
+            return {
+              session: {
+                ...state.session,
+                activeBusiness: updated,
+                memberships: state.session.memberships.map(m =>
+                  m.business_id === business?.id ? { ...m, business: updated } : m,
+                ),
+              },
+            };
+          }) },
+        );
+        return null;
+      } catch (e) { // failure: speaks — saveAll shows "Pas tout enregistré"
+        return e;
       }
-      return error;
+      
     };
 
     const saveProfile = async () => {
-      const { error } = await supabase.from('profiles')
-        .update({ name: trimmedUser })
-        .eq('id', userId);
-      if (!error) {
-        useAuthStore.setState(state => {
-          if (!state.session) return state;
-          return { session: { ...state.session, user: { ...state.session.user, name: trimmedUser } } };
-        });
+      try {
+        await writeRow(
+          { table: 'profiles', op: 'update', values: { name: trimmedUser }, match: { id: userId } },
+          { applyLocal: () => useAuthStore.setState(state => {
+            if (!state.session) return state;
+            return { session: { ...state.session, user: { ...state.session.user, name: trimmedUser } } };
+          }) },
+        );
+        return null;
+      } catch (e) { // failure: speaks — saveAll shows "Pas tout enregistré"
+        return e;
       }
-      return error;
+      
     };
 
     const errors = await Promise.all(isAdmin ? [saveBiz(), saveProfile()] : [saveProfile()]);

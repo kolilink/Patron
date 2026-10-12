@@ -35,6 +35,7 @@ export type SyncResult = {
 
 let _running = false;
 
+import { executeRowWrite } from '@/lib/rowWriteExec';
 import { isNetworkError, extractErrorMessage } from '@/lib/networkError';
 // Re-exported: callers keep importing isNetworkError from here.
 export { isNetworkError };
@@ -304,6 +305,9 @@ async function notifyQueuedExpenseSynced(payload: Record<string, unknown>): Prom
 
 async function executeOp(operation: string, payload: Record<string, unknown>): Promise<void> {
   switch (operation) {
+    case 'row_write':
+      await executeRowWrite(supabase, payload);
+      break;
     case 'submit_sale': {
       const { data: saleId, error } = await supabase.rpc('submit_sale', payload);
       if (error) throw error;

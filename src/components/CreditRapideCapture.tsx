@@ -19,6 +19,7 @@ import { trackEvent } from '@/lib/analytics';
 import { useAuthStore } from '@/stores/auth';
 import { ReceiptLink } from '@/src/components/ReceiptLink';
 import { creditReceiptFromSubmit, type CreditReceiptSource } from '@/src/utils/saleReceipt';
+import { ensureClient } from '@/lib/writeFunnel';
 
 // ── Crédit rapide — the shared entry logic for both places this exists:
 // Accueil's "+" (QuickCaptureSheet) and Vendre's own Crédit tab. Previously
@@ -293,21 +294,10 @@ export function CreditRapideCapture({ businessId, userId, currency, onViewClient
       setError('Impossible d\'enregistrer. Vérifiez votre connexion et réessayez.');
       return;
     }
-    if (!clientId && !isKnownOffline()) {
-      // Best-effort, AFTER the debt is safe: gives the new name a clients row so
-      // the picker shows it now. Never awaited by anything the vendor waits on.
-      void (async () => {
-        try {
-          await withTimeout(
-            supabase.from('clients').upsert(
-              { business_id: businessId, name: trimmedName },
-              { onConflict: 'business_id,name' },
-            ).select('id').single(),
-            CLIENT_LINK_CAP_MS,
-          );
-          setRefreshKey(k => k + 1);
-        } catch { /* the drain links the debt to the client by name */ }
-      })();
+    if (!clientId) {
+      // AFTER the debt is safe: gives the new name a clients row (queued durably, offline or not) so the
+      // picker shows it. Never awaited by anything the vendor waits on.
+      void ensureClient({ businessId, name: trimmedName }).then(() => setRefreshKey(k => k + 1));
     }
     const wasQueued = useSalesStore.getState().lastCarnetDebtQueued;
     trackEvent('quick_capture_submitted', businessId, userId, { mode: 'credit', queued: wasQueued });

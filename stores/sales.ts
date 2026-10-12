@@ -1,6 +1,7 @@
 import { create } from 'zustand';
 import { localDateISO } from '@/src/utils/dates';
-import { enqueue, getQueueCount, saveProductCache, getProductCache, getKV, setKV, saveVariantsCache, getVariantsCache } from '@/lib/db';
+import { enqueue } from '@/lib/writeFunnel';
+import { getQueueCount, saveProductCache, getProductCache, getKV, setKV, saveVariantsCache, getVariantsCache } from '@/lib/db';
 import { generateId } from '@/lib/id';
 import { useSyncStore } from '@/stores/sync';
 import { useVentesStore } from '@/stores/ventes';

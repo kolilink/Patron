@@ -50,6 +50,7 @@ const valid: Record<string, () => Record<string, any>> = {
     p_lines: [{ product_id: PROD, variant_id: null, name: 'Riz', qty: 10, unit_cost_cents: 40000, sale_price_cents: null }],
     p_transport_cost_cents: 0, p_margin_percent: null, p_received_date: null, p_idempotency_key: KEY,
   }),
+  row_write: () => ({ p_idempotency_key: KEY, table: 'profiles', op: 'update', values: { notify_on_every_sale: false }, match: { id: USER } }),
   adjust_stock: () => ({
     stockMove: { id: U(12), business_id: BIZ, product_id: PROD, type: 'perte', qty: 3, ref_type: null, note: null },
     productUpdate: { id: PROD, stock_qty: 7 },
@@ -195,6 +196,14 @@ const bad: Record<string, Mut[]> = {
     ['bad supplier', p => { p.p_supplier_id = 'm'; }],
     ['missing key', p => { delete p.p_idempotency_key; }],
     ['bad received date', p => { p.p_received_date = '2026-02-31'; }],
+  ],
+  row_write: [
+    ['money table refused', p => { p.table = 'sale_orders'; }],
+    ['unknown column', p => { p.values = { is_admin: true }; }],
+    ['op not allowed', p => { p.op = 'delete'; }],
+    ['missing match', p => { delete p.match; }],
+    ['missing key', p => { delete p.p_idempotency_key; }],
+    ['empty values', p => { p.values = {}; }],
   ],
   adjust_stock: [
     ['missing stockMove', p => { delete p.stockMove; }],

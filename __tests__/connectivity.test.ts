@@ -102,8 +102,7 @@ describe('wiring (source-level — there is no JSX/native transform in this jest
   it('the optional client upsert in Crédit rapide runs AFTER the durable enqueue, is skipped offline and capped', () => {
     const src = read('src/components/CreditRapideCapture.tsx');
     expect(src.indexOf('await submitCarnetDebt(')).toBeGreaterThan(-1);
-    expect(src.indexOf("from('clients').upsert(")).toBeGreaterThan(src.indexOf('await submitCarnetDebt('));
-    expect(src).toMatch(/!clientId && !isKnownOffline\(\)/);
-    expect(src).toMatch(/CLIENT_LINK_CAP_MS/);
+    expect(src.indexOf("ensureClient({ businessId, name: trimmedName })")).toBeGreaterThan(src.indexOf('await submitCarnetDebt('));
+    expect(src).toMatch(/if \(!clientId\) \{/); // funnel op: queued durably offline too, capped inside ensureClient
   });
 });

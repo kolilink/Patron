@@ -22,6 +22,7 @@ import { useSalesStore } from '@/stores/sales';
 import { generateId } from '@/lib/id';
 import { supabase } from '@/lib/supabase';
 import { haptics } from '@/lib/haptics';
+import { ensureClient } from '@/lib/writeFunnel';
 
 interface CarnetEntry {
   id: string;
@@ -84,18 +85,9 @@ export default function CarnetScreen() {
       // loop or leave `saving` stuck true forever — it's treated the same
       // as a failed submitCarnetDebt call: this one entry counts as failed,
       // the rest of the batch still gets a chance to save.
-      let clientId: string | null = null;
-      try {
-        const { data } = await supabase.from('clients').upsert(
-          { business_id: businessId, name: entry.name },
-          { onConflict: 'business_id,name' },
-        ).select('id').single();
-        clientId = data?.id ?? null;
-      } catch {
-        // failure: control-flow — counts this entry as failed; the batch result tells her how many did not save
-        failed++;
-        continue;
-      }
+      // Device-first: the client upsert is queued durably (never fails offline); the id, when the server
+      // already confirmed it, links the debt — otherwise the drain links it by name.
+      const clientId: string | null = (await ensureClient({ businessId, name: entry.name })) ?? null;
       const submitted = await submitCarnetDebt(businessId, userId, entry.name, entry.amountCents, clientId);
       if (!submitted.ok) failed++;
     }

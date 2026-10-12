@@ -659,6 +659,7 @@ export default function DiscussionsScreen() {
     setPartnerLastRead(null);
 
     const upsertRead = () =>
+      // funnel-exempt: notification read marker — chat read cursor, realtime-ephemeral
       supabase.from('chat_room_reads').upsert(
         { user_id: userId, room_id: boutiqueRoomId, last_read_at: new Date().toISOString() },
         { onConflict: 'user_id,room_id' },
@@ -710,6 +711,7 @@ export default function DiscussionsScreen() {
   // Refresh own read cursor when new boutique messages arrive
   useEffect(() => {
     if (!boutiqueRoomId || !userId || boutiqueMessages.length === 0) return;
+    // funnel-exempt: notification read marker — chat read cursor, realtime-ephemeral
     supabase.from('chat_room_reads').upsert(
       { user_id: userId, room_id: boutiqueRoomId, last_read_at: new Date().toISOString() },
       { onConflict: 'user_id,room_id' },

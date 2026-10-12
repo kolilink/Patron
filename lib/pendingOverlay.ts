@@ -686,6 +686,7 @@ const OP_WORDING: Record<string, OpWording> = {
   adjust_stock_move: W('Stock', 'Ajustement de stock non enregistré', 'cet ajustement'),
   adjust_stock: W('Stock', 'Ajustement de stock non enregistré', 'cet ajustement'),
   pay_supplier_debt: W('Paiement fournisseur', 'Paiement fournisseur non enregistré', 'ce paiement'),
+  row_write: W('Modification', 'Modification non enregistrée', 'cette modification'),
   create_supplier_debt: W('Dette fournisseur', 'Dette fournisseur non enregistrée', 'cette dette'),
 };
 const FALLBACK_WORDING = W('Opération', 'Opération non enregistrée', 'cette opération');

@@ -31,6 +31,7 @@ import { failAlert } from '@/src/components/ui/FailureView';
 import { supplierDeletedConfirmation } from '@/src/utils/saveConfirmationCopy';
 import { toast } from '@/stores/toast';
 import { formatDate } from '@/src/utils/dates';
+import { writeRow } from '@/lib/writeFunnel';
 
 // iOS-only: suppresses the OS's auto-injected floating "Done" pill above
 // number-pad/decimal-pad keyboards — the pay form below already has a
@@ -185,9 +186,10 @@ export default function FournisseurProfile() {
   const linkProduct = async (productId: string) => {
     setLinkingProducts(true);
     try {
-      const { error } = await supabase.from('product_suppliers').insert({ product_id: productId, supplier_id: id });
-      if (!error) setExtraProductIds(prev => new Set([...prev, productId]));
-      else { haptics.error(); failAlert('productNotLinked', { err: error, label: 'Réessayer', onPress: () => { void linkProduct(productId); } }); }
+      await writeRow(
+        { table: 'product_suppliers', op: 'insert', values: { product_id: productId, supplier_id: id } },
+        { applyLocal: () => setExtraProductIds(prev => new Set([...prev, productId])) },
+      );
     } catch (err) {
       // failure: speaks — link product: failAlert + Réessayer
       haptics.error();
@@ -203,10 +205,10 @@ export default function FournisseurProfile() {
 
   const unlinkProduct = async (productId: string) => {
     try {
-      const { error } = await supabase.from('product_suppliers')
-        .delete().eq('product_id', productId).eq('supplier_id', id);
-      if (!error) setExtraProductIds(prev => { const s = new Set(prev); s.delete(productId); return s; });
-      else { haptics.error(); failAlert('productNotUnlinked', { err: error, label: 'Réessayer', onPress: () => { void unlinkProduct(productId); } }); }
+      await writeRow(
+        { table: 'product_suppliers', op: 'delete', match: { product_id: productId, supplier_id: id } },
+        { applyLocal: () => setExtraProductIds(prev => { const s = new Set(prev); s.delete(productId); return s; }) },
+      );
     } catch (err) {
       // failure: speaks — unlink product: failAlert + Réessayer
       haptics.error();
