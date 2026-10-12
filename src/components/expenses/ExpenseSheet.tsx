@@ -369,7 +369,7 @@ function ProductRow({ name, onPress, styles }: { name: string; onPress: () => vo
 function makeStyles(p: Palette) {
   return StyleSheet.create({
     content: { padding: spacing[5], gap: spacing[4] },
-    footer: { padding: spacing[5], gap: spacing[3], backgroundColor: p.background },
+    footer: { padding: spacing[5], gap: spacing[3] }, // no slab
     amountBox: { alignItems: 'center', paddingVertical: spacing[3] },
     detailHead: { alignItems: 'center', gap: spacing[1], paddingVertical: spacing[4] },
     bigAmount: { fontSize: 44, lineHeight: 52, color: p.textPrimary, textAlign: 'center' },

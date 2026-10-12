@@ -689,7 +689,7 @@ function makeStyles(p: Palette) {
     // Soft upward shadow instead of a hard top border — matches
     // catalogue.tsx's product-form footer (see CLAUDE.md); a flat border
     // read as a stray rectangle sitting behind the button.
-    mfooter: { padding: spacing[5], backgroundColor: p.background, ...shadow.md, shadowOffset: { width: 0, height: -2 } },
+    mfooter: { padding: spacing[5] }, // no slab: the button's own fill is the button
 
     // Form — product selector
     dropdownTrigger: {

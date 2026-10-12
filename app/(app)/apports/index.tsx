@@ -792,10 +792,7 @@ function makeStyles(p: Palette) {
       borderBottomWidth: 1, borderBottomColor: p.border,
     },
     formContent: { padding: spacing[5], gap: spacing[4] },
-    modalFooter: {
-      padding: spacing[5], borderTopWidth: 1, borderTopColor: p.border,
-      backgroundColor: p.surface,
-    },
+    modalFooter: { padding: spacing[5] }, // no slab
     // View mode (read-only entry + image) — Ive-clean: hero amount, quiet
     // micro-labels, generous rhythm.
     viewWrap: { gap: spacing[7] },

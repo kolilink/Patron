@@ -8,6 +8,7 @@ import { InputAccessoryView, Linking, Modal, Platform, Pressable, ScrollView, St
 import { Ionicons } from '@expo/vector-icons';
 import { SafeAreaView } from 'react-native-safe-area-context';
 import { Screen } from '@/src/components/ui/Screen';
+import { CtaFade } from '@/src/components/ui/CtaFade';
 import { FormSheet } from '@/src/components/ui/FormSheet';
 import { router, useLocalSearchParams } from 'expo-router';
 import { Button } from '@/src/components/ui/Button';
@@ -459,14 +460,14 @@ export default function FournisseurProfile() {
 
       </ScrollView>
 
-      {/* ── Pinned CTA ── */}
-      <View style={[styles.footer, { paddingBottom: Math.max(insets.bottom, spacing[4]) + spacing[2] }]}>
+      {/* ── Pinned CTA ── sticky CTA: "Nouvelle livraison" must stay visible while reviewing a long supplier history (fade, no slab) */}
+      <CtaFade style={[styles.footer, { paddingBottom: Math.max(insets.bottom, spacing[4]) + spacing[2] }]}>
         <Button
           label="Nouvelle livraison"
           onPress={() => router.push({ pathname: '/(app)/fournisseurs/reception', params: { supplierId: fournisseur.id } })}
           fullWidth size="lg"
         />
-      </View>
+      </CtaFade>
 
       {/* ── Modals ── */}
       <FormSheet
@@ -574,9 +575,7 @@ function makeStyles(p: Palette) {
     // Footer
     footer: {
       position: 'absolute', bottom: 0, left: 0, right: 0,
-      padding: spacing[5], paddingBottom: spacing[8],
-      backgroundColor: p.background,
-      borderTopWidth: StyleSheet.hairlineWidth, borderTopColor: p.border,
+      padding: spacing[5], paddingBottom: spacing[8], // no slab: transparent, CtaFade supplies the fade
     },
 
     // Shared modal styles
@@ -587,7 +586,7 @@ function makeStyles(p: Palette) {
     // product-form footer (see CLAUDE.md), which replaced the same harder-edged
     // bordered-panel look for the identical reason: it read as a stray
     // rectangle sitting behind the button rather than part of the sheet.
-    mfooter: { padding: spacing[5], backgroundColor: p.background, ...shadow.md, shadowOffset: { width: 0, height: -2 } },
+    mfooter: { padding: spacing[5] }, // no slab: the button's own fill is the button
 
     dr: { flexDirection: 'row', justifyContent: 'space-between', alignItems: 'center' },
   });

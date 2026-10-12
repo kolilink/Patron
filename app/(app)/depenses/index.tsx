@@ -376,9 +376,6 @@ function makeStyles(p: Palette) {
       backgroundColor: p.surface,
     },
     modalContent: { padding: spacing[5], gap: spacing[4] },
-    modalFooter: {
-      padding: spacing[5], borderTopWidth: 1, borderTopColor: p.border,
-      backgroundColor: p.surface,
-    },
+    modalFooter: { padding: spacing[5] }, // no slab
   });
 }

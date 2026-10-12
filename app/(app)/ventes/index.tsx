@@ -1622,10 +1622,7 @@ function makeStyles(p: Palette) {
       borderBottomWidth: 1, borderBottomColor: p.border,
     },
     sheetContent: { padding: spacing[5], gap: spacing[4] },
-    sheetFooter: {
-      padding: spacing[5], borderTopWidth: 1, borderTopColor: p.border,
-      backgroundColor: p.surface,
-    },
+    sheetFooter: { padding: spacing[5] }, // no slab
     contextCard: { gap: spacing[1] },
     amountRow: { flexDirection: 'row', gap: spacing[3], alignItems: 'center' },
     amountInput: {

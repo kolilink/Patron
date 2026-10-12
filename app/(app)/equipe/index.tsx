@@ -1358,7 +1358,7 @@ function makeStyles(p: Palette) {
     modalSafe: { flex: 1, backgroundColor: p.background },
     mhdr: { flexDirection: 'row', alignItems: 'center', justifyContent: 'space-between', padding: spacing[5], borderBottomWidth: 1, borderBottomColor: p.border },
     mpad: { padding: spacing[5], gap: spacing[4] },
-    mfooter: { padding: spacing[5], borderTopWidth: 1, borderTopColor: p.border },
+    mfooter: { padding: spacing[5] }, // no slab
     revealBody: { flex: 1, alignItems: 'center', justifyContent: 'center', padding: spacing[6], gap: spacing[8] },
     revealCodeBlock: { alignItems: 'center', gap: spacing[3] },
     revealCode: { fontFamily: FF.bold, fontSize: 36, lineHeight: 48, color: p.textPrimary, textAlign: 'center', width: '100%' },

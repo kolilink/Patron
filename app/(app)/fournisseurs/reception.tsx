@@ -899,11 +899,11 @@ function QuoiStep({
             <Text variant="label" numberOfLines={1} adjustsFontSizeToFit minimumFontScale={0.5}>{formatAmount(linesTotal, currency)}</Text>
           </View>
         </View>
+        {/* CTA ends the form: in the content flow, one spacing below the last element (no dead gap) */}
+        <View style={styles.footer}>
+          <Button label="Tout est bon ✓" onPress={onDone} fullWidth size="lg" />
+        </View>
       </ScrollView>
-
-      <View style={styles.footer}>
-        <Button label="Tout est bon ✓" onPress={onDone} fullWidth size="lg" />
-      </View>
     </>
   );
 }
@@ -1047,11 +1047,11 @@ function RecapStep({
             maxToday
           />
         </View>
+        {/* CTA ends the form: in the content flow, one spacing below the last element (no dead gap) */}
+        <View style={styles.footer}>
+          <Button label="Confirmer la livraison" loadingLabel="Enregistrement" onPress={onConfirm} loading={saving} fullWidth size="lg" />
+        </View>
       </ScrollView>
-
-      <View style={styles.footer}>
-        <Button label="Confirmer la livraison" loadingLabel="Enregistrement" onPress={onConfirm} loading={saving} fullWidth size="lg" />
-      </View>
     </>
   );
 }
@@ -1105,7 +1105,7 @@ function makeStyles(p: Palette) {
       paddingHorizontal: spacing[5], paddingVertical: spacing[3],
     },
     pad: { padding: spacing[5], paddingBottom: spacing[10], gap: spacing[3] },
-    footer: { padding: spacing[5], borderTopWidth: 1, borderTopColor: p.border, backgroundColor: p.surface },
+    footer: { padding: spacing[5] }, // no slab
 
     // Supplier picker sheet
     pickerSafe: { flex: 1, backgroundColor: p.background },

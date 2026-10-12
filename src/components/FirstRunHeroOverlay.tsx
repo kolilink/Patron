@@ -337,14 +337,14 @@ function makeStyles(p: Palette) {
     // scrollContent comment) but flex: 1 + the trailing payoffSpacer instead
     // of a single top-to-bottom gap — that's what lets the button block
     // settle in the lower third instead of following the text immediately.
-    payoffContent: { flex: 1, paddingHorizontal: spacing[6], paddingTop: spacing[8], paddingBottom: spacing[8] },
+    payoffContent: { paddingHorizontal: spacing[6], paddingTop: spacing[8], paddingBottom: spacing[8] },
     titleBlock: { gap: spacing[3] },
     payoffHeader: { gap: spacing[3] },
     // Sits below payoffHeader with its own larger top margin — the debt
     // line and the running total are two different weights of information
     // (what just happened vs. a quieter cumulative fact), not one paragraph.
     totalLine: { marginTop: spacing[6] },
-    payoffSpacer: { flex: 1 },
+    payoffSpacer: { height: spacing[8] }, // fixed gap: the CTA ends the content (no dead gap pushing it to the bottom)
     // No hardcoded color here — every caller passes its own `color` prop
     // ("secondary" for both subtitles, the default "primary" for the ink
     // debt line) and relies on it actually taking effect. A hardcoded color
