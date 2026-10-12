@@ -11,7 +11,7 @@ import { InputAccessoryView, Platform, View } from 'react-native';
 export function SilentKeyboardAccessory({ nativeID }: { nativeID: string }) {
   if (Platform.OS !== 'ios') return null;
   return (
-    <InputAccessoryView nativeID={nativeID}>
+    <InputAccessoryView nativeID={nativeID} backgroundColor="transparent">
       <View style={{ height: 0 }} />
     </InputAccessoryView>
   );

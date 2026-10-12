@@ -225,10 +225,7 @@ export function ProductStatsModal({ visible, product, onClose, businessId, curre
 function makeStyles(p: Palette) {
   return StyleSheet.create({
     modalContent: { padding: spacing[5], gap: spacing[4] },
-    modalFooter: {
-      padding: spacing[5], backgroundColor: p.background,
-      ...shadow.md, shadowOffset: { width: 0, height: -2 },
-    },
+    modalFooter: { padding: spacing[5] }, // no slab
     statsRow: {
       flexDirection: 'row' as const,
       justifyContent: 'space-between' as const,

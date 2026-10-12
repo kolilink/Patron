@@ -179,10 +179,9 @@ export default function CarnetScreen() {
             </Text>
           }
           ItemSeparatorComponent={() => <View style={{ height: 1, backgroundColor: palette.border }} />}
-        />
-
-        {/* Footer */}
-        <View style={[styles.footer, { borderTopColor: palette.border }]}>
+          // CTA ends the list (end-of-flow), no dead gap below a short list
+          ListFooterComponent={
+        <View style={styles.footer}>
           {entries.length > 0 && (
             <Text variant="caption" color="secondary" style={styles.total} numberOfLines={1} adjustsFontSizeToFit minimumFontScale={0.5}>
               {entries.length} personne{entries.length > 1 ? 's' : ''} · {formatAmount(totalCents / 100, currency)}
@@ -201,6 +200,9 @@ export default function CarnetScreen() {
             size="lg"
           />
         </View>
+          }
+        />
+
       </KeyboardAvoidingView>
       {Platform.OS === 'ios' && (
         <InputAccessoryView nativeID={CARNET_SILENT_ACCESSORY_ID}>
@@ -238,7 +240,7 @@ function makeStyles(p: Palette) {
     },
     divider: { height: 1, backgroundColor: 'rgba(0,0,0,0.1)', marginHorizontal: spacing[5] },
     list: { paddingBottom: spacing[4] },
-    emptyList: { flex: 1, alignItems: 'center', justifyContent: 'center', padding: spacing[8] },
+    emptyList: { alignItems: 'center', justifyContent: 'center', padding: spacing[8] },
     entryRow: {
       flexDirection: 'row', alignItems: 'center', gap: spacing[3],
       paddingHorizontal: spacing[5], paddingVertical: spacing[3],
@@ -246,7 +248,7 @@ function makeStyles(p: Palette) {
     },
     footer: {
       paddingHorizontal: spacing[5], paddingBottom: spacing[4], paddingTop: spacing[3],
-      borderTopWidth: 1, gap: spacing[2],
+      gap: spacing[2],
     },
     total: { textAlign: 'center' },
   });

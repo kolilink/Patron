@@ -2094,6 +2094,7 @@ export default function VendreScreen() {
         const lastLine = cart[cart.length - 1];
         const otherLinesCount = cart.length - 1;
         return (
+          // sticky CTA: floating checkout card — "Encaisser" must stay reachable while browsing the product grid underneath (inset card with its own content, not a band behind a button)
           <View style={[styles.cartPanel, { bottom: tabClearance + spacing[4] }]} onLayout={e => setCartPanelHeight(e.nativeEvent.layout.height)}>
             <Pressable onPress={() => setShowCartSheet(true)} style={styles.cartSummaryRow} hitSlop={4}>
               <Text variant="label" numberOfLines={1} style={{ flex: 1 }}>
@@ -2135,9 +2136,12 @@ export default function VendreScreen() {
             <Text variant="body" color="danger">Vider</Text>
           </Pressable>
         }
+        // sticky CTA: checkout must stay visible while the user reviews a long itemized cart (fade, no slab)
+        footerMode="sticky"
+        stickyReason="Checkout stays visible while reviewing a long itemized cart"
         footer={
           <View style={styles.cartSheetFooter}>
-            {renderCheckoutFooter({ borderTopWidth: 0, paddingBottom: Math.max(insets.bottom, spacing[5]) })}
+            {renderCheckoutFooter({ borderTopWidth: 0, paddingBottom: spacing[3] })}
           </View>
         }
       >
@@ -2413,10 +2417,7 @@ function makeStyles(p: Palette) {
     // supplies it, including the insets.bottom-aware bottom edge, since this
     // View renders as a sibling of the sheet's SafeAreaView rather than
     // inside it.
-    cartSheetFooter: {
-      backgroundColor: p.background,
-      ...shadow.md, shadowOffset: { width: 0, height: -2 },
-    },
+    cartSheetFooter: {}, // no slab (CtaFade supplies the fade above it)
     sheetOverlay: { flex: 1, justifyContent: 'flex-end' },
     sheet: { backgroundColor: p.surface, borderTopLeftRadius: 24, borderTopRightRadius: 24, overflow: 'hidden' },
     sheetHead: {
@@ -2499,9 +2500,7 @@ function makeStyles(p: Palette) {
       borderBottomWidth: 1, borderBottomColor: p.border, backgroundColor: p.surface,
     },
     modalCancel: { minWidth: 64 },
-    modalFooter: {
-      padding: spacing[5], borderTopWidth: 1, borderTopColor: p.border, backgroundColor: p.surface,
-    },
+    modalFooter: { padding: spacing[5] }, // no slab
 
     totalSection: {
       paddingHorizontal: spacing[5], paddingTop: spacing[5], paddingBottom: spacing[5],

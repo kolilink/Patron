@@ -1,6 +1,7 @@
-import React, { forwardRef, useMemo, type ReactNode } from 'react';
+import React, { forwardRef, useEffect, useMemo, useState, type ReactNode } from 'react';
 import { ConfirmSheetHost } from '@/src/components/ui/ConfirmSheet';
 import {
+  Keyboard,
   KeyboardAvoidingView,
   Modal,
   Platform,
@@ -13,6 +14,7 @@ import {
 } from 'react-native';
 import { SafeAreaView, useSafeAreaInsets, type Edge } from 'react-native-safe-area-context';
 import { Text } from './Text';
+import { CtaFade } from './CtaFade';
 import { useTheme, spacing } from '@/src/theme';
 import type { Palette } from '@/src/theme';
 
@@ -29,8 +31,14 @@ interface FormSheetProps {
    * 'fullScreen' covers the presenting screen entirely (no app chrome peeking
    * above the sheet); the sheet styles leave it visible. */
   presentationStyle?: 'pageSheet' | 'formSheet' | 'fullScreen';
-  /** Rendered below the scroll content, still inside the KeyboardAvoidingView (e.g. a submit button). */
+  /** The primary CTA. By default it ENDS THE FORM: rendered inside the scroll content, one spacing below the last
+   * element (no dead gap). While the keyboard is open it docks above the keyboard (thumb is already there).
+   * It never gets a background — the button's own fill is the button. */
   footer?: ReactNode;
+  /** 'flow' (default) = end-of-flow. 'sticky' = pinned at the bottom with a fade (no slab); requires `stickyReason`. */
+  footerMode?: 'flow' | 'sticky';
+  /** One-line reason a CTA must stay visible while the user reviews long scrolling content (e.g. cart checkout). */
+  stickyReason?: string;
   /** Rendered after everything else (e.g. an iOS InputAccessoryView). */
   accessory?: ReactNode;
   contentContainerStyle?: ScrollViewProps['contentContainerStyle'];
@@ -74,6 +82,8 @@ export const FormSheet = forwardRef<ScrollView, FormSheetProps>(function FormShe
     headerRight,
     presentationStyle = 'pageSheet',
     footer,
+    footerMode = 'flow',
+    stickyReason,
     accessory,
     contentContainerStyle,
     keyboardShouldPersistTaps = 'handled',
@@ -105,6 +115,17 @@ export const FormSheet = forwardRef<ScrollView, FormSheetProps>(function FormShe
   // the ROOT provider's insets are already correct when the sheet opens; apply
   // them explicitly as padding and leave only 'bottom' to the native view.
   const rootInsets = useSafeAreaInsets();
+  if (__DEV__ && footerMode === 'sticky' && !stickyReason) console.warn('FormSheet: footerMode="sticky" needs a stickyReason');
+
+  // Keyboard open → the CTA docks right above it; otherwise it ends the form.
+  const [keyboardOpen, setKeyboardOpen] = useState(false);
+  useEffect(() => {
+    const show = Keyboard.addListener(Platform.OS === 'ios' ? 'keyboardWillShow' : 'keyboardDidShow', () => setKeyboardOpen(true));
+    const hide = Keyboard.addListener(Platform.OS === 'ios' ? 'keyboardWillHide' : 'keyboardDidHide', () => setKeyboardOpen(false));
+    return () => { show.remove(); hide.remove(); };
+  }, []);
+  const flowFooter = !!footer && scrollable && footerMode === 'flow' && !keyboardOpen;
+  const dockedFooter = !!footer && !flowFooter;
   const explicitTopInset = Platform.OS === 'ios' && presentationStyle === 'fullScreen' ? rootInsets.top : 0;
   const edges: Edge[] = explicitTopInset > 0
     ? ['bottom']
@@ -146,13 +167,20 @@ export const FormSheet = forwardRef<ScrollView, FormSheetProps>(function FormShe
               keyboardDismissMode={keyboardDismissMode}
             >
               {children}
+              {flowFooter ? footer : null}
             </ScrollView>
           ) : (
             children
           )}
         </SafeAreaView>
 
-        {footer}
+        {dockedFooter ? (
+          footerMode === 'sticky' && !keyboardOpen ? (
+            <CtaFade style={{ paddingBottom: rootInsets.bottom }}>{footer}</CtaFade>
+          ) : (
+            <View style={{ paddingBottom: keyboardOpen ? 0 : rootInsets.bottom }}>{footer}</View>
+          )
+        ) : null}
         {accessory}
         <ConfirmSheetHost active={visible} />
       </KeyboardAvoidingView>

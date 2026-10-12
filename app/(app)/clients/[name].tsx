@@ -1096,7 +1096,7 @@ function makeStyles(p: Palette) {
     // Modals
     modalSafe: { flex: 1, backgroundColor: p.background },
     pad: { padding: spacing[5], gap: spacing[4], paddingBottom: spacing[10] },
-    footer: { padding: spacing[5], backgroundColor: p.background },
+    footer: { padding: spacing[5] }, // no slab: the button's own fill is the button
 
     amountRow: { flexDirection: 'row', gap: spacing[3], alignItems: 'center' },
     amountInput: {
