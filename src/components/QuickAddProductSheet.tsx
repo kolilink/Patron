@@ -43,7 +43,7 @@ interface Props {
   visible: boolean;
   onClose: () => void;
   /** Add: createProduct via the outbox (sheet stays open). Edit: updateProduct (host closes the sheet on ok). */
-  onSubmit: (payload: QuickAddPayload) => Promise<{ ok: boolean }>;
+  onSubmit: (payload: QuickAddPayload) => Promise<{ ok: boolean; modelsPending?: boolean }>;
   /** She tapped an existing product in the suggestions: open it, don't duplicate it. */
   onPickExisting: (product: Product) => void;
   saving: boolean;
@@ -347,9 +347,16 @@ export function QuickAddProductSheet({
     if (!res.ok) return; // the failure alert is shown by the host; everything typed stays
     haptics.success();
     if (isEdit && editing) {
-      editSubmitted.current = true; // no autosave may resurrect it
-      editDraftSaved.current = false;
-      void removeQuickAddDraft(businessId, editDraftId(editing.id)).catch(() => {}); // failure: silent — draft is best-effort
+      editSubmitted.current = true; // no autosave may touch it from here on
+      if (res.modelsPending) {
+        // The product edit went through but the online-only models change did not: keep the edit draft,
+        // re-saved with exactly what is on screen, so the unsaved model changes are never lost.
+        editDraftSaved.current = true;
+        void saveQuickAddDraft(businessId, editDraftId(editing.id), sRef.current, { productId: editing.id }).catch(() => {}); // failure: silent — draft is best-effort
+      } else {
+        editDraftSaved.current = false;
+        void removeQuickAddDraft(businessId, editDraftId(editing.id)).catch(() => {}); // failure: silent — draft is best-effort
+      }
     }
     if (isEdit || isDelivery) return; // edit / delivery: the host closes the sheet and confirms
     if (supplierCtx) return; // supplier form: the host links the product and closes the sheet

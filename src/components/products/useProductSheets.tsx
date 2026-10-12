@@ -119,7 +119,7 @@ export function useProductSheets(): { api: ProductSheetsApi; sheets: React.React
   );
 
   const handleEdit = useCallback(
-    async ({ data, hasVariants, variants }: QuickAddPayload): Promise<{ ok: boolean }> => {
+    async ({ data, hasVariants, variants }: QuickAddPayload): Promise<{ ok: boolean; modelsPending?: boolean }> => {
       if (!editTarget) return { ok: false };
       const ok = await updateProduct(businessId, userId, editTarget.id, data);
       // The models RPC is online-only: touch it ONLY when models are involved (set now, or being
@@ -140,7 +140,9 @@ export function useProductSheets(): { api: ProductSheetsApi; sheets: React.React
           // The product edit is queued; only the online-only models call did not run.
           modelsNotSavedAlert();
           setEditOpen(false);
-          return { ok: true };
+          // The product edit is saved, the models change is NOT: the sheet must keep its edit draft so
+          // those unsaved model changes survive (it would otherwise delete the draft on success).
+          return { ok: true, modelsPending: true };
         }
       }
       toast.success('Produit mis à jour ✓');
