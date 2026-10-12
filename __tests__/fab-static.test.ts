@@ -16,7 +16,7 @@ describe.each([
     expect(src).not.toMatch(/toValue: 1\.06/);
   });
   it(`the "${label}" button is a plain View with no animated transform`, () => {
-    expect(src).toMatch(/<View style=\{styles\.fabContainer\}>/);
+    expect(src).toMatch(/<View style=\{\[styles\.fabContainer, /);
     expect(src).not.toMatch(/<Animated\.View style=\{\[styles\.fabContainer/);
   });
   it('the button itself and its position are unchanged', () => {
@@ -29,7 +29,7 @@ describe("Gérer mode's floating +", () => {
   const src = code(read('src/components/products/ProductManager.tsx'));
   it('is a plain View + Pressable: no breathing animation, no animated transform', () => {
     expect(src).not.toMatch(/fabScale|fabOpacity|fabReduceMotion|toValue: 1\.06/);
-    expect(src).toMatch(/<View style=\{styles\.fabContainer\}>/);
+    expect(src).toMatch(/<View style=\{\[styles\.fabContainer, /);
     expect(src).toMatch(/fabContainer: \{ position: 'absolute'/);
   });
 });

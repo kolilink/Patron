@@ -7,7 +7,7 @@ import { NoResultsState } from '@/src/components/ui/NoResultsState';
 import { OfflineNotice } from '@/src/components/ui/OfflineNotice';
 import { SkeletonList } from '@/src/components/ui/SkeletonPlaceholder';
 import { Text } from '@/src/components/ui/Text';
-import { useTheme, radius, spacing, fontFamily as FF, FLOATING_TAB_BAR_CLEARANCE, SEARCH_VISIBILITY_THRESHOLD } from '@/src/theme';
+import { useTheme, radius, spacing, fontFamily as FF, FLOATING_TAB_BAR_CLEARANCE, floatingTabBarClearance, SEARCH_VISIBILITY_THRESHOLD } from '@/src/theme';
 import type { Palette } from '@/src/theme';
 import type { Product, ProductVariant } from '@/src/types';
 import { useAuthStore } from '@/stores/auth';
@@ -19,6 +19,7 @@ import { formatAmountValue } from '@/src/utils/format';
 import { needsPurchasePrice, needsSalePrice } from '@/src/utils/quickAddProduct';
 import { buildGererSections, productPieces, type GererSection } from '@/src/utils/gererSections';
 import type { ProductSheetsApi } from '@/src/components/products/useProductSheets';
+import { useSafeAreaInsets } from 'react-native-safe-area-context';
 
 // Gérer mode: plain rows. À compléter (pending drafts, only when there are some) · ONE "Produits" list ·
 // a quiet "Archivés (n)" link at the bottom. No cards, no tabs, no switches, no per-row buttons: tapping a row opens the add/edit sheet, which owns edit, "Ajuster",
@@ -104,6 +105,8 @@ function DraftRow({ draft, currency, onResume, onDelete }: { draft: QuickAddDraf
 }
 
 export function ProductManager({ sheets, onExit }: ProductManagerProps) {
+  const insets = useSafeAreaInsets();
+  const tabClearance = floatingTabBarClearance(insets.bottom); // live inset, not the bare constant
   const { palette } = useTheme();
   const styles = useMemo(() => makeStyles(palette), [palette]);
   const session = useAuthStore(s => s.session);
@@ -295,7 +298,7 @@ export function ProductManager({ sheets, onExit }: ProductManagerProps) {
               ))}
             </>
           ) : null}
-          contentContainerStyle={{ paddingBottom: FLOATING_TAB_BAR_CLEARANCE + spacing[16] }}
+          contentContainerStyle={{ paddingBottom: tabClearance + spacing[16] }}
           showsVerticalScrollIndicator={false}
           keyboardShouldPersistTaps="handled"
           refreshControl={<RefreshControl refreshing={refreshing} onRefresh={onRefresh} tintColor={palette.primary} colors={[palette.primary]} />}
@@ -304,7 +307,7 @@ export function ProductManager({ sheets, onExit }: ProductManagerProps) {
 
       {/* Floating "+" — hidden whenever any sheet is open (single derived state). */}
       {canEdit && !nothingAtAll && !sheets.anySheetOpen && (
-        <View style={styles.fabContainer}>
+        <View style={[styles.fabContainer, { bottom: tabClearance + spacing[4] }]}>
           <Pressable hitSlop={12}
             onPress={() => sheets.openAdd()}
             style={({ pressed }) => [styles.fab, pressed && { opacity: 0.82 }]}

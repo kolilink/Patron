@@ -34,6 +34,7 @@ import { formatDate } from '@/src/utils/dates';
 import { QuickAddProductSheet } from '@/src/components/QuickAddProductSheet';
 import type { QuickAddPayload } from '@/src/utils/quickAddProduct';
 import { generateId } from '@/lib/id';
+import { useSafeAreaInsets } from 'react-native-safe-area-context';
 
 // iOS-only: number-pad/decimal-pad keyboards have no built-in return key, so
 // the OS auto-injects its own floating "Done" pill above the keyboard when
@@ -332,6 +333,7 @@ function DebtModal({ visible, fournisseur, currency, saving, onClose, onSave }: 
 // ─── Main Screen ──────────────────────────────────────────────────────────────
 
 export default function FournisseursScreen() {
+  const insets = useSafeAreaInsets();
   const { palette } = useTheme();
   const styles = useMemo(() => makeStyles(palette), [palette]);
   const session = useAuthStore(s => s.session);
@@ -657,7 +659,7 @@ export default function FournisseursScreen() {
       />
 
       {fournisseurs.length > 0 && (
-        <View style={styles.fabContainer}>
+        <View style={[styles.fabContainer, { bottom: insets.bottom + spacing[6] }]}>
           <Pressable
             onPress={() => router.push('/(app)/fournisseurs/reception')}
             style={({ pressed }) => [styles.fabExtended, pressed && { opacity: 0.82 }]}

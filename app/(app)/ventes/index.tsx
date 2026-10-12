@@ -3,7 +3,7 @@ import { ConfirmSheetHost } from '@/src/components/ui/ConfirmSheet';
 import { appAlert } from '@/src/utils/appAlert';
 import { AnimatedRowCell, AnimatedRow } from '@/src/components/ui/AnimatedRow';
 import { Animated, Easing, FlatList, InputAccessoryView, Modal, Platform, Pressable, RefreshControl, ScrollView, StyleSheet, TextInput, View } from 'react-native';
-import { SafeAreaView } from 'react-native-safe-area-context';
+import { SafeAreaView, useSafeAreaInsets } from 'react-native-safe-area-context';
 import { Screen } from '@/src/components/ui/Screen';
 import { FormSheet } from '@/src/components/ui/FormSheet';
 import { Ionicons } from '@expo/vector-icons';
@@ -1088,6 +1088,7 @@ function FilterSheet({ visible, availableProducts, loadingProducts, selectedProd
 // ─── Main screen ───────────────────────────────────────────────────────────────
 
 export default function VentesScreen() {
+  const insets = useSafeAreaInsets();
   const { palette } = useTheme();
   const styles = useMemo(() => makeStyles(palette), [palette]);
   const session = useAuthStore(s => s.session);
@@ -1516,7 +1517,7 @@ export default function VentesScreen() {
       />
 
       {canSell && !selected && sales.length > 0 && (
-        <Animated.View style={[styles.fabContainer, { transform: [{ scale: fabScale }], opacity: fabOpacity }]}>
+        <Animated.View style={[styles.fabContainer, { bottom: insets.bottom + spacing[6], transform: [{ scale: fabScale }], opacity: fabOpacity }]}>
           <Pressable
             onPress={() => router.push('/(app)/(tabs)/vendre')}
             style={({ pressed }) => [styles.fabExtended, pressed && { opacity: 0.82 }]}

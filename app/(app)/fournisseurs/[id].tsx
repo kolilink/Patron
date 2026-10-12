@@ -32,6 +32,7 @@ import { supplierDeletedConfirmation } from '@/src/utils/saveConfirmationCopy';
 import { toast } from '@/stores/toast';
 import { formatDate } from '@/src/utils/dates';
 import { writeRow } from '@/lib/writeFunnel';
+import { useSafeAreaInsets } from 'react-native-safe-area-context';
 
 // iOS-only: suppresses the OS's auto-injected floating "Done" pill above
 // number-pad/decimal-pad keyboards — the pay form below already has a
@@ -116,6 +117,7 @@ function LivraisonDetail({ livraison, fournisseurName, currency, businessId, can
 // ── Profile screen ────────────────────────────────────────────────────────────
 
 export default function FournisseurProfile() {
+  const insets = useSafeAreaInsets();
   const { palette } = useTheme();
   const styles = useMemo(() => makeStyles(palette), [palette]);
   const { id } = useLocalSearchParams<{ id: string }>();
@@ -458,7 +460,7 @@ export default function FournisseurProfile() {
       </ScrollView>
 
       {/* ── Pinned CTA ── */}
-      <View style={styles.footer}>
+      <View style={[styles.footer, { paddingBottom: Math.max(insets.bottom, spacing[4]) + spacing[2] }]}>
         <Button
           label="Nouvelle livraison"
           onPress={() => router.push({ pathname: '/(app)/fournisseurs/reception', params: { supplierId: fournisseur.id } })}

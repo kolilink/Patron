@@ -26,7 +26,7 @@ export function ImageMessageBubble({ msg, imageStyle }: { msg: ImageMessageLike;
   // statusBarTranslucent (below) draws the viewer Modal behind the status
   // bar on Android — nudge the close button down by the real inset so it
   // doesn't end up under/near the status bar or a camera cutout.
-  const closeTop = Platform.OS === 'android' ? styles.closeBtn.top + insets.top : styles.closeBtn.top;
+  const closeTop = insets.top + 12; // live inset on every phone (notch, Dynamic Island, punch-hole), never a fixed 56
   if (!msg.image_url) return null;
 
   // Dimensions are known up front (captured at upload time) so the bubble

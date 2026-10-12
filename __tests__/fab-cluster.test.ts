@@ -55,7 +55,7 @@ describe('layout: one vertical column, "+" on top, "Gérer" beneath, right-align
     expect(cluster.indexOf('styles.gererPill')).toBeGreaterThan(cluster.indexOf('styles.addFab'));
   });
   it('the cluster\'s bottom edge keeps the old anchor above the tab bar / cart panel', () => {
-    expect(vendre).toContain('const floatingBottom = FLOATING_TAB_BAR_CLEARANCE + spacing[4] + (cart.length > 0 ? cartPanelHeight + spacing[2] : 0);');
+    expect(vendre).toContain('const floatingBottom = tabClearance + spacing[4] + (cart.length > 0 ? cartPanelHeight + spacing[2] : 0);');
     expect(cluster).toContain('{ bottom: floatingBottom }');
   });
 });

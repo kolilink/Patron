@@ -18,7 +18,7 @@ import { Text } from '@/src/components/ui/Text';
 import { PhoneInput } from '@/src/components/ui/PhoneInput';
 import { SaleReceiptSheet } from '@/src/components/SaleReceiptSheet';
 import type { ReceiptSource, SaleReceiptSource } from '@/src/utils/saleReceipt';
-import { useTheme, radius, spacing, shadow, fontFamily, FLOATING_TAB_BAR_CLEARANCE, CLIENT_AVATAR_PALETTE, SEARCH_VISIBILITY_THRESHOLD } from '@/src/theme';
+import { useTheme, radius, spacing, shadow, fontFamily, FLOATING_TAB_BAR_CLEARANCE, floatingTabBarClearance, CLIENT_AVATAR_PALETTE, SEARCH_VISIBILITY_THRESHOLD } from '@/src/theme';
 import { useAnimateLayoutChange } from '@/src/hooks/useAnimateLayoutChange';
 import { useQuickClients } from '@/src/hooks/useQuickClients';
 import { QuickCaptureSheet } from '@/src/components/QuickCaptureSheet';
@@ -1215,6 +1215,7 @@ interface VariantPickerSheetProps {
 }
 
 function VariantPickerSheet({ visible, product, variants, cartQtyByVariant, currency, onClose, onPickMany }: VariantPickerSheetProps) {
+  const insets = useSafeAreaInsets();
   const { palette } = useTheme();
   const styles = useMemo(() => makeStyles(palette), [palette]);
   const translateY = useRef(new Animated.Value(400)).current;
@@ -1294,7 +1295,7 @@ function VariantPickerSheet({ visible, product, variants, cartQtyByVariant, curr
       <Pressable style={StyleSheet.absoluteFill} onPress={onClose}>
         <View style={{ flex: 1, backgroundColor: 'rgba(0,0,0,0.45)' }} />
       </Pressable>
-      <Animated.View style={[styles.variantSheet, { transform: [{ translateY }] }]}>
+      <Animated.View style={[styles.variantSheet, { paddingBottom: Math.max(insets.bottom, spacing[4]) + spacing[6], transform: [{ translateY }] }]}>
         <View style={styles.variantSheetHandle} />
         <View style={{ marginBottom: spacing[4] }}>
           <Text variant="h4">{product.name}</Text>
@@ -1406,6 +1407,8 @@ export default function VendreScreen() {
   const { palette } = useTheme();
   const styles = useMemo(() => makeStyles(palette), [palette]);
   const insets = useSafeAreaInsets();
+  // The floating tab bar sits at insets.bottom + GAP: clear the LIVE inset (3-button Android nav, gesture nav, home indicator), never the bare constant.
+  const tabClearance = floatingTabBarClearance(insets.bottom);
   const session = useAuthStore(s => s.session);
   const business = session?.activeBusiness;
   const userId = session?.user.id ?? '';
@@ -1894,7 +1897,7 @@ export default function VendreScreen() {
   const anySheetOpen = productSheets.anySheetOpen || variantPickerProduct !== null || showPayment ||
     showConfirmSheet || showCartSheet || showQuickCapture || receiptOpen !== null;
   const showFloating = canManage && products.length > 0 && !anySheetOpen;
-  const floatingBottom = FLOATING_TAB_BAR_CLEARANCE + spacing[4] + (cart.length > 0 ? cartPanelHeight + spacing[2] : 0);
+  const floatingBottom = tabClearance + spacing[4] + (cart.length > 0 ? cartPanelHeight + spacing[2] : 0);
 
   return (
     <Screen tab>
@@ -2007,7 +2010,7 @@ export default function VendreScreen() {
         numColumns={2}
         columnWrapperStyle={styles.tileRow}
         // The panel doesn't start at the true screen bottom — it floats
-        // FLOATING_TAB_BAR_CLEARANCE + spacing[4] above it (to clear the
+        // tabClearance + spacing[4] above it (to clear the
         // tab bar). cartPanelHeight is the real, load-bearing part (matches
         // the panel's own measured height so nothing overlaps); the rest
         // is margin on top of that, not more overlap-prevention — halved
@@ -2016,12 +2019,13 @@ export default function VendreScreen() {
         // cartPanelHeight itself, so this can't reintroduce the overlap.
         contentContainerStyle={[
           styles.tileList,
-          cart.length > 0 && { paddingBottom: cartPanelHeight + (FLOATING_TAB_BAR_CLEARANCE + spacing[4] + spacing[2]) / 2 },
+          { paddingBottom: spacing[6] + tabClearance },
+          cart.length > 0 && { paddingBottom: cartPanelHeight + (tabClearance + spacing[4] + spacing[2]) / 2 },
           // The floating cluster sits over the grid: let the last row scroll clear above it (padding is keyed
           // on the role, not on a sheet being open, so the list never jumps when a sheet opens).
           canManage && { paddingBottom: Math.max(
-            cart.length > 0 ? cartPanelHeight + (FLOATING_TAB_BAR_CLEARANCE + spacing[4] + spacing[2]) / 2 : spacing[6] + FLOATING_TAB_BAR_CLEARANCE,
-            gridBottomPadding(FLOATING_TAB_BAR_CLEARANCE + spacing[4] + (cart.length > 0 ? cartPanelHeight + spacing[2] : 0)),
+            cart.length > 0 ? cartPanelHeight + (tabClearance + spacing[4] + spacing[2]) / 2 : spacing[6] + tabClearance,
+            gridBottomPadding(tabClearance + spacing[4] + (cart.length > 0 ? cartPanelHeight + spacing[2] : 0)),
           ) },
         ]}
         showsVerticalScrollIndicator={false}
@@ -2090,7 +2094,7 @@ export default function VendreScreen() {
         const lastLine = cart[cart.length - 1];
         const otherLinesCount = cart.length - 1;
         return (
-          <View style={styles.cartPanel} onLayout={e => setCartPanelHeight(e.nativeEvent.layout.height)}>
+          <View style={[styles.cartPanel, { bottom: tabClearance + spacing[4] }]} onLayout={e => setCartPanelHeight(e.nativeEvent.layout.height)}>
             <Pressable onPress={() => setShowCartSheet(true)} style={styles.cartSummaryRow} hitSlop={4}>
               <Text variant="label" numberOfLines={1} style={{ flex: 1 }}>
                 {lastLine.qty} {lastLine.product.name}{lastLine.variant_name ? ` · ${lastLine.variant_name}` : ''}

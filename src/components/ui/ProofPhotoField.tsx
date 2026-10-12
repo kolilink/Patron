@@ -42,7 +42,7 @@ export function ProofPhotoField({ existingUrl, existingWidth, existingHeight, va
   // statusBarTranslucent (below) draws the viewer Modal behind the status
   // bar on Android — nudge the close button down by the real inset so it
   // doesn't end up under/near the status bar or a camera cutout.
-  const closeTop = Platform.OS === 'android' ? styles.close.top + insets.top : styles.close.top;
+  const closeTop = insets.top + 12; // live inset on every phone (notch, Dynamic Island, punch-hole), never a fixed 56
 
   const pick = async () => {
     if (picking) return;

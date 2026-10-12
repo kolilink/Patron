@@ -23,7 +23,7 @@ describe('Part 1 — no infinite animation loop on any FAB screen', () => {
   });
   it('the dépenses FAB is a plain View (it was the last one still breathing)', () => {
     const src = read('app/(app)/depenses/index.tsx');
-    expect(src).toMatch(/<View style=\{styles\.fabContainer\}>/);
+    expect(src).toMatch(/<View style=\{\[styles\.fabContainer, /);
     expect(src).not.toMatch(/<Animated\.View style=\{\[styles\.fabContainer/);
     expect(src).not.toMatch(/\bAnimated\b/);
   });

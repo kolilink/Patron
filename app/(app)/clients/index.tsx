@@ -17,6 +17,7 @@ import { OfflineNotice } from '@/src/components/ui/OfflineNotice';
 import { SkeletonList } from '@/src/components/ui/SkeletonPlaceholder';
 import { formatDebtAge, debtAgeTier } from '@/src/utils/clientReminder';
 import { formatAmount } from '@/src/utils/format';
+import { useSafeAreaInsets } from 'react-native-safe-area-context';
 
 function fmt(n: number, cur: string) { return formatAmount(n, cur); }
 
@@ -74,6 +75,7 @@ function avatarColor(name: string): string {
 }
 
 export default function ClientsScreen() {
+  const insets = useSafeAreaInsets();
   const { palette } = useTheme();
   const styles = useMemo(() => makeStyles(palette), [palette]);
   const session = useAuthStore(s => s.session);
@@ -389,7 +391,7 @@ export default function ClientsScreen() {
           list and wants to log a new debtor without leaving it. Hidden
           while the list is empty, same as every other screen's FAB. */}
       {allClients.length > 0 && !isInvestisseur && (
-        <View style={styles.fabContainer}>
+        <View style={[styles.fabContainer, { bottom: insets.bottom + spacing[6] }]}>
           <Pressable
             onPress={() => {
               useAuthStore.setState({ requestQuickCapture: 'credit', requestQuickCaptureClientName: null });
