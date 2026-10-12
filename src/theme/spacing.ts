@@ -45,7 +45,7 @@ export const radius = {
 // bar growing around a *fixed* circle rather than both growing together.
 // (64-48)/2 = 8px clearance per side, same ratio the 52/36 pairing had.
 export const FLOATING_TAB_BAR_HEIGHT = 64;
-export const FLOATING_TAB_BAR_GAP = 12; // gap between the pill's bottom edge and the safe-area inset
+export const FLOATING_TAB_BAR_GAP = 4; // gap between the pill's bottom edge and the safe-area inset
 export const FLOATING_TAB_BAR_CLEARANCE = FLOATING_TAB_BAR_HEIGHT + FLOATING_TAB_BAR_GAP + 12; // + a little breathing room above the pill
 
 // The island stretches to the content cards' edges: margin-based (never a fixed width), so it fits every

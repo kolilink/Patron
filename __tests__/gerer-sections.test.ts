@@ -1,3 +1,4 @@
+import { nextOpenSection } from '@/src/utils/gererSections';
 // Gérer mode is plain rows — À compléter (pending drafts) · ONE "Produits" list · a quiet "Archivés (n)" link — whose rows open
 // the add/edit sheet. Pure sectioning and the offline store behaviour are tested for real; the screen
 // structure is pinned at source level (this repo has no component-render harness).
@@ -104,26 +105,37 @@ describe('Gérer screen structure', () => {
   it('"Valeur du stock" is gone from the screen', () => {
     expect(pm).not.toMatch(/Valeur du stock|valueLine|stockValue/);
   });
-  it('À compléter renders only when n > 0, as PLAIN rows with the (n) count — no card, no collapse', () => {
-    expect(pm).toMatch(/\{drafts\.length > 0 && \(/);
-    expect(pm).toContain('`À compléter (${drafts.length})`');
-    expect(pm).not.toMatch(/draftsCard|draftsHead|setDraftsOpen/);
+  it('every section starts collapsed: À compléter / Produits / Archivés are accordion headers (label + count + chevron)', () => {
+    expect(pm).toContain("useState<GererAccordionId | null>(null)");
+    expect(pm).toMatch(/if \(drafts\.length > 0\) \{/);
+    expect(pm).toContain("label: 'À compléter'");
+    expect(pm).toContain("label: 'Produits'");
+    expect(pm).toContain("label: 'Archivés'");
+    expect(pm).toContain('`${item.label} (${item.count})`');
+    expect(pm).toMatch(/openSection === item\.id \? 'chevron-up' : 'chevron-down'/);
+    // rows only exist in the data when their section is the open one
+    expect(pm).toContain("if (openSection === 'drafts')");
+    expect(pm).toContain("if (openSection === 'produits')");
+    expect(pm).toContain("if (openSection === 'archives')");
+    expect(pm).not.toMatch(/draftsCard|draftsHead|setDraftsOpen|archivesOpen|ListFooterComponent/);
     const row = pm.slice(pm.indexOf('function DraftRow'), pm.indexOf('export function ProductManager'));
-    expect(row).toContain('style={styles.row}');                       // the same row style as a product row
+    expect(row).toContain('style={styles.row}');
     expect(row).toContain('name="close-circle"');                     // × deletes
     expect(row).toContain('onPress={onResume}');                      // tap resumes
+    expect(pm).toContain('onDelete={() => deleteDraft(item.draft)}');
   });
-  it('one "Produits" list: no EN VENTE / PRODUITS FINIS / ARCHIVÉS sections, no counts in headers', () => {
+  it('accordion: one open at a time, tapping the open header collapses all', () => {
+    expect(nextOpenSection(null, 'produits')).toBe('produits');
+    expect(nextOpenSection('produits', 'archives')).toBe('archives');
+    expect(nextOpenSection('archives', 'archives')).toBeNull();
+    expect(nextOpenSection('drafts', 'produits')).toBe('produits');
+    expect(pm).toMatch(/setOpenSection\(cur => nextOpenSection\(cur, item\.id\)\)/);
+  });
+  it('no EN VENTE / PRODUITS FINIS / ARCHIVÉS uppercase sections', () => {
     expect(pm).not.toMatch(/EN VENTE|PRODUITS FINIS|ARCHIVÉS/);
-    expect(pm).toContain('<Text style={styles.sectionHeader}>{item.section.label}</Text>');
   });
-  it('"Archivés (n)" is a quiet link at the bottom, collapsed by default, tap toggles; its rows open the edit sheet', () => {
-    expect(pm).toContain("const [archivesOpen, setArchivesOpen] = useState(false)");
-    expect(pm).toContain('`Archivés (${archives.length})`');
-    expect(pm).toMatch(/ListFooterComponent=\{archives\.length > 0 \? \(/);
-    expect(pm).toMatch(/setArchivesOpen\(v => !v\)/);
-    expect(pm).toMatch(/\{archivesOpen && archives\.map\(/);
-    expect(pm).toMatch(/onPress=\{\(\) => sheets\.openEdit\(p\)\}/);   // → edit sheet, which has Restaurer
+  it('archived rows open the edit sheet (which has Restaurer)', () => {
+    expect(pm).toMatch(/item\.archived \? undefined/);
   });
   it('rows show "12 pcs · 1 500 gnf" and a chevron; tapping opens the add/edit sheet (no per-row buttons)', () => {
     expect(pm).toContain("{pcs !== null ? `${pcs} pcs` : 'Modèles'}");
