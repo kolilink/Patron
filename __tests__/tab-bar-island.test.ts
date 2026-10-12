@@ -71,7 +71,7 @@ describe('unchanged: tabs, order, icons, glow, offset, behaviour', () => {
     const defs = layout.slice(layout.indexOf('const TAB_DEFS'), layout.indexOf('function CustomTabBar'));
     expect(defs.match(/^\s{2}(index|vendre|plus):/gm)?.map(s => s.trim().replace(':', ''))).toEqual(['index', 'vendre', 'plus']);
     expect(defs).toContain("outline: 'home-outline', filled: 'home'");
-    expect(defs).toContain("outline: 'cart-outline', filled: 'cart'");
+    expect(defs).toContain("outline: 'cash-outline', filled: 'cash'");
     expect(defs).toContain("outline: 'person-outline', filled: 'person'");
   });
   it('active-tab glow (the indicator pill) and its glide are untouched', () => {

@@ -2,6 +2,7 @@ import { useCallback, useEffect, useState } from 'react';
 import { Keyboard, Platform, Pressable, Text, View } from 'react-native';
 import { BlurView } from 'expo-blur';
 import { Ionicons } from '@expo/vector-icons';
+import Svg, { Path } from 'react-native-svg';
 import Animated, {
     Easing,
     Extrapolation,
@@ -49,6 +50,8 @@ export interface FloatingTabItem {
     outline: IoniconName;
     /** Glyph when active (filled variant). */
     filled: IoniconName;
+    /** Draw a custom glyph instead of the Ionicons names (still outline/filled by focus). */
+    glyph?: 'home';
 }
 
 export interface FloatingTabBarProps {
@@ -87,6 +90,16 @@ function isAndroidBelow13(): boolean {
     return Number.isFinite(v) && v < 13;
 }
 
+/** Plain house: one pentagon (square body + triangular roof). No chimney, no door, no inner lines. Stroke weight matches Ionicons' outline set. */
+export const HOME_GLYPH_PATH = 'M12 3 L21 11 V21 H3 V11 Z';
+function HomeGlyph({ focused, color, size }: { focused: boolean; color: string; size: number }) {
+    return (
+        <Svg width={size} height={size} viewBox="0 0 24 24">
+            <Path d={HOME_GLYPH_PATH} fill={focused ? color : 'none'} stroke={color} strokeWidth={1.9} strokeLinejoin="round" strokeLinecap="round" />
+        </Svg>
+    );
+}
+
 /** Icon: filled when this tab is the active one, outline otherwise. Driven by the
  *  synchronous `focused` prop (not the animated glide value), so the icon tells
  *  the truth on the first frame — no crossfade lag behind the screen. */
@@ -97,7 +110,9 @@ function TabGlyph({
     inactiveColor,
     activeColor,
     size,
+    glyph,
 }: {
+    glyph?: 'home';
     focused: boolean;
     outline: IoniconName;
     filled: IoniconName;
@@ -107,11 +122,15 @@ function TabGlyph({
 }) {
     return (
         <View style={{ width: size, height: size, alignItems: 'center', justifyContent: 'center' }}>
-            <Ionicons
-                name={focused ? filled : outline}
-                size={size}
-                color={focused ? activeColor : inactiveColor}
-            />
+            {glyph === 'home' ? (
+                <HomeGlyph focused={focused} color={focused ? activeColor : inactiveColor} size={size} />
+            ) : (
+                <Ionicons
+                    name={focused ? filled : outline}
+                    size={size}
+                    color={focused ? activeColor : inactiveColor}
+                />
+            )}
         </View>
     );
 }
@@ -349,6 +368,7 @@ export function FloatingTabBar({
                                         focused={focused}
                                         outline={item.outline}
                                         filled={item.filled}
+                                        glyph={item.glyph}
                                         inactiveColor={palette.tabBarInactive}
                                         activeColor={palette.textPrimary}
                                         size={ICON_SIZE}
