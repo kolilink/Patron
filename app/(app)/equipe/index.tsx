@@ -450,7 +450,7 @@ function MemberDetailSheet({
             <Pressable onPress={handleSaveName} style={[styles.nameEditBtn, { backgroundColor: palette.primary }]}>
               <Text variant="label" style={{ color: palette.textInverse }}>OK</Text>
             </Pressable>
-            <Pressable onPress={() => setEditingName(false)} accessibilityLabel="Fermer" accessibilityRole="button">
+            <Pressable hitSlop={12} onPress={() => setEditingName(false)} accessibilityLabel="Fermer" accessibilityRole="button">
               <Ionicons name="close" size={20} color={palette.textSecondary} />
             </Pressable>
           </View>

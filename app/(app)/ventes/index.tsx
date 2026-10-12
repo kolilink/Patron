@@ -640,7 +640,7 @@ function DetailModal({ sale, currency, businessName, singleVendor, role, onClose
         cancelLabel="Fermer"
         contentContainerStyle={styles.pad}
         headerRight={showMenuButton ? (
-          <Pressable onPress={showMenu} style={{ minWidth: 40, alignItems: 'flex-end' }}>
+          <Pressable hitSlop={8} onPress={showMenu} style={{ minWidth: 40, alignItems: 'flex-end' }}>
             <Text variant="body" color="secondary">⋯</Text>
           </Pressable>
         ) : (
@@ -1329,7 +1329,7 @@ export default function VentesScreen() {
       <View style={styles.header}>
         <Pressable onPress={() => router.back()}><Text variant="body" color="secondary">‹ Retour</Text></Pressable>
         <Text variant="h4">Ventes</Text>
-        <Pressable
+        <Pressable hitSlop={12}
           onPress={openFilterSheet}
           style={styles.filterIconBtn}
           accessibilityLabel="Filtrer les ventes"

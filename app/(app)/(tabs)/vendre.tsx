@@ -221,7 +221,7 @@ function CartRow({ line, currency, onInc, onDec, onRemove, onToggleBulk, onSetQt
             inputAccessoryViewID={Platform.OS === 'ios' ? VENDRE_SILENT_ACCESSORY_ID : undefined}
           />
         ) : (
-          <Pressable onPress={startEdit} style={styles.qtyNumPress}>
+          <Pressable hitSlop={8} onPress={startEdit} style={styles.qtyNumPress}>
             <Text variant="label" style={styles.qtyNum}>{line.qty}</Text>
           </Pressable>
         )}
@@ -1359,7 +1359,7 @@ function VariantPickerSheet({ visible, product, variants, cartQtyByVariant, curr
                       inputAccessoryViewID={Platform.OS === 'ios' ? VARIANT_SHEET_SILENT_ACCESSORY_ID : undefined}
                     />
                   ) : (
-                    <Pressable
+                    <Pressable hitSlop={8}
                       onPress={() => !outOfStock && startEdit(v.id, qty)}
                       style={styles.qtyNumPress}
                     >
@@ -2279,7 +2279,7 @@ export default function VendreScreen() {
           right-aligned: the purple "+" on top, the slimmer "Gérer" pill directly beneath it. */}
       {showFloating && (
         <View style={[styles.floatingActions, { bottom: floatingBottom }]} pointerEvents="box-none">
-          <Pressable
+          <Pressable hitSlop={12}
             onPress={() => productSheets.openAdd()}
             style={({ pressed }) => [styles.addFab, pressed && { opacity: 0.82 }]}
             accessibilityRole="button"

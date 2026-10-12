@@ -569,7 +569,7 @@ export default function DmChatScreen() {
             <View style={{ flex: 1 }}>
               <LiveWaveformBars samples={recAmplitudes} />
             </View>
-            <Pressable onPress={() => stopRecording(true)} style={styles.sendBtn}>
+            <Pressable hitSlop={8} onPress={() => stopRecording(true)} style={styles.sendBtn}>
               <Ionicons name="arrow-forward" size={20} color={palette.textInverse} />
             </Pressable>
           </View>
@@ -588,7 +588,7 @@ export default function DmChatScreen() {
               maxLength={1000}
             />
             {text.trim() ? (
-              <Pressable
+              <Pressable hitSlop={8}
                 onPress={handleSend}
                 disabled={sending}
                 style={({ pressed }) => [styles.sendBtn, sending && { opacity: 0.4 }, pressed && { opacity: 0.75 }]}
@@ -596,7 +596,7 @@ export default function DmChatScreen() {
                 <Ionicons name="arrow-forward" size={20} color={palette.textInverse} />
               </Pressable>
             ) : (
-              <Pressable
+              <Pressable hitSlop={8}
                 onPress={startRecording}
                 style={({ pressed }) => [styles.sendBtn, styles.micBtn, pressed && { opacity: 0.75 }]}
               >

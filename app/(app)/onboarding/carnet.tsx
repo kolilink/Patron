@@ -144,7 +144,7 @@ export default function CarnetScreen() {
             onSubmitEditing={handleAdd}
             inputAccessoryViewID={Platform.OS === 'ios' ? CARNET_SILENT_ACCESSORY_ID : undefined}
           />
-          <Pressable
+          <Pressable hitSlop={4}
             style={[styles.addBtn, { backgroundColor: canAdd ? palette.primary : palette.border }]}
             onPress={handleAdd}
             disabled={!canAdd}

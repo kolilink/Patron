@@ -75,7 +75,7 @@ export function ProofPhotoField({ existingUrl, existingWidth, existingHeight, va
           />
         </Pressable>
         <Modal visible={viewerOpen} transparent animationType="fade" onRequestClose={() => setViewerOpen(false)} statusBarTranslucent navigationBarTranslucent>
-          <Pressable style={styles.backdrop} onPress={() => setViewerOpen(false)}>
+          <Pressable hitSlop={12} style={styles.backdrop} onPress={() => setViewerOpen(false)}>
             <Image source={{ uri: existingUrl }} style={styles.full} contentFit="contain" />
             <Pressable style={[styles.close, { top: closeTop }]} onPress={() => setViewerOpen(false)} hitSlop={12} accessibilityLabel="Fermer" accessibilityRole="button">
               <Ionicons name="close" size={26} color={colors.neutral[0]} />

@@ -139,7 +139,7 @@ function makeStyles(p: Palette) {
     ghost: { backgroundColor: 'transparent' },
     danger: { backgroundColor: p.danger },
 
-    size_sm: { paddingHorizontal: spacing[3], paddingVertical: spacing[2], minHeight: 44 },
+    size_sm: { paddingHorizontal: spacing[3], paddingVertical: spacing[2], minHeight: 48 },
     size_md: { paddingHorizontal: spacing[5], paddingVertical: spacing[3], minHeight: 48 },
     size_lg: { paddingHorizontal: spacing[6], paddingVertical: spacing[4], minHeight: 56 },
   });

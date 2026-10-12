@@ -507,7 +507,7 @@ export default function PostDetailScreen() {
                 maxLength={500}
               />
               {!!text.trim() && (
-                <Pressable
+                <Pressable hitSlop={8}
                   onPress={handleSend}
                   style={({ pressed }) => [styles.sendBtn, pressed && { opacity: 0.75 }]}
                 >

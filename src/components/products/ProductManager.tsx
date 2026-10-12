@@ -305,7 +305,7 @@ export function ProductManager({ sheets, onExit }: ProductManagerProps) {
       {/* Floating "+" — hidden whenever any sheet is open (single derived state). */}
       {canEdit && !nothingAtAll && !sheets.anySheetOpen && (
         <View style={styles.fabContainer}>
-          <Pressable
+          <Pressable hitSlop={12}
             onPress={() => sheets.openAdd()}
             style={({ pressed }) => [styles.fab, pressed && { opacity: 0.82 }]}
             accessibilityLabel="Ajouter un produit"

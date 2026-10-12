@@ -309,7 +309,7 @@ export default function FournisseurProfile() {
         <Pressable onPress={() => router.back()} style={styles.headerBtn}>
           <Text variant="body" color="secondary">‹ Retour</Text>
         </Pressable>
-        <Pressable
+        <Pressable hitSlop={12}
           disabled={deleting}
           onPress={() => appAlert(fournisseur?.name ?? 'Fournisseur', undefined, [
             { text: 'Supprimer', style: 'destructive', onPress: handleDelete },

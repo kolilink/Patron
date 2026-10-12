@@ -250,7 +250,7 @@ export default function SupportScreen() {
             maxLength={1000}
           />
           {text.trim().length > 0 && (
-            <Pressable
+            <Pressable hitSlop={4}
               onPress={handleSend}
               disabled={sending}
               style={({ pressed }) => [styles.sendBtn, pressed && { opacity: 0.6 }]}

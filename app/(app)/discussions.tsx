@@ -1138,7 +1138,7 @@ export default function DiscussionsScreen() {
                 ))}
               </ScrollView>
               {canPost && (
-                <Pressable
+                <Pressable hitSlop={4}
                   onPress={openComposer}
                   style={({ pressed }) => [styles.composeBtn, pressed && { opacity: 0.65 }]}
                   accessibilityLabel="Nouveau post"
@@ -1292,7 +1292,7 @@ export default function DiscussionsScreen() {
                   </View>
 
                   {/* Send */}
-                  <Pressable
+                  <Pressable hitSlop={8}
                     onPress={() => stopRecording(true)}
                     style={[styles.sendBtn, { backgroundColor: palette.success }]}
                   >
@@ -1319,7 +1319,7 @@ export default function DiscussionsScreen() {
                     returnKeyType="default"
                   />
                   {(!!text.trim() || !!editingMsg) ? (
-                    <Pressable
+                    <Pressable hitSlop={8}
                       onPress={handleSend}
                       disabled={sending}
                       style={({ pressed }) => [styles.sendBtn, pressed && { opacity: 0.75 }]}
@@ -1328,7 +1328,7 @@ export default function DiscussionsScreen() {
                     </Pressable>
                   ) : (
                     /* Mic button — only when nothing typed */
-                    <Pressable
+                    <Pressable hitSlop={8}
                       onPress={startRecording}
                       style={({ pressed }) => [styles.sendBtn, styles.micBtn, pressed && { opacity: 0.75 }]}
                     >
