@@ -15,13 +15,13 @@ import { useProductStore } from '@/stores/products';
 import { haptics } from '@/lib/haptics';
 import { getKV, setKV } from '@/lib/db';
 import { listQuickAddDrafts, removeQuickAddDraft, type QuickAddDraft } from '@/lib/quickAddDraft';
-import { formatAmount, formatAmountValue } from '@/src/utils/format';
+import { formatAmountValue } from '@/src/utils/format';
 import { needsPurchasePrice, needsSalePrice } from '@/src/utils/quickAddProduct';
 import { buildGererSections, productPieces, type GererSection } from '@/src/utils/gererSections';
 import type { ProductSheetsApi } from '@/src/components/products/useProductSheets';
 
-// Gérer mode: ONE sections list — À compléter · EN VENTE · PRODUITS FINIS · ARCHIVÉS. No tabs, no
-// switches, no per-row buttons: tapping a row opens the add/edit sheet, which owns edit, "Ajuster",
+// Gérer mode: plain rows. À compléter (pending drafts, only when there are some) · ONE "Produits" list ·
+// a quiet "Archivés (n)" link at the bottom. No cards, no tabs, no switches, no per-row buttons: tapping a row opens the add/edit sheet, which owns edit, "Ajuster",
 // archiver / restaurer. Everything renders from the local product store (cache + queued ops), so it
 // works offline and every change shows at once.
 
@@ -83,6 +83,26 @@ type Item =
   | { kind: 'header'; key: string; section: GererSection }
   | { kind: 'row'; key: string; product: Product; archived: boolean };
 
+/** A pending draft, in the same visual language as a product row (name + subtext), × deletes it. */
+function DraftRow({ draft, currency, onResume, onDelete }: { draft: QuickAddDraft; currency: string; onResume: () => void; onDelete: () => void }) {
+  const { palette } = useTheme();
+  const styles = useMemo(() => makeStyles(palette), [palette]);
+  const name = draft.state.name.trim() || 'Sans nom'; // defence only: nameless add drafts are never persisted
+  return (
+    <View style={styles.row}>
+      <Pressable style={{ flex: 1, gap: 2 }} onPress={onResume} accessibilityRole="button" accessibilityLabel={`Reprendre ${name}`}>
+        <Text variant="body" numberOfLines={1} style={{ fontFamily: FF.medium }}>{name}</Text>
+        <Text variant="caption" color="secondary" numberOfLines={1}>
+          {draft.kind === 'edit' ? 'Modifications non enregistrées' : draft.state.price.trim() ? `${draft.state.price} ${currency.toLowerCase()}` : 'Prix à fixer'}
+        </Text>
+      </Pressable>
+      <Pressable onPress={onDelete} hitSlop={12} accessibilityRole="button" accessibilityLabel={`Supprimer le brouillon ${name}`}>
+        <Ionicons name="close-circle" size={20} color={palette.textDisabled} />
+      </Pressable>
+    </View>
+  );
+}
+
 export function ProductManager({ sheets, onExit }: ProductManagerProps) {
   const { palette } = useTheme();
   const styles = useMemo(() => makeStyles(palette), [palette]);
@@ -102,7 +122,7 @@ export function ProductManager({ sheets, onExit }: ProductManagerProps) {
 
   // "À compléter": half-filled products kept by the quick-add sheet (max 3, local only).
   const [drafts, setDrafts] = useState<QuickAddDraft[]>([]);
-  const [draftsOpen, setDraftsOpen] = useState(true);
+  const [archivesOpen, setArchivesOpen] = useState(false); // "Archivés (n)" starts collapsed
   useEffect(() => {
     if (!businessId) return;
     void listQuickAddDrafts(businessId).then(setDrafts).catch(() => setDrafts([])); // failure: silent — no drafts shown
@@ -145,14 +165,14 @@ export function ProductManager({ sheets, onExit }: ProductManagerProps) {
     setRefreshing(false);
   }, [businessId, userId]);
 
-  const { sections, stockValue, total } = useMemo(
-    () => buildGererSections({ products, archived: archivedProducts, variantsByProduct, query: search }),
-    [products, archivedProducts, variantsByProduct, search],
+  const { sections, archives, total } = useMemo(
+    () => buildGererSections({ products, archived: archivedProducts, query: search }),
+    [products, archivedProducts, search],
   );
 
   const data = useMemo<Item[]>(() => sections.flatMap<Item>(sec => [
     { kind: 'header', key: `h-${sec.key}`, section: sec },
-    ...sec.products.map<Item>(p => ({ kind: 'row', key: `${sec.key}-${p.id}`, product: p, archived: sec.key === 'archives' })),
+    ...sec.products.map<Item>(p => ({ kind: 'row', key: `${sec.key}-${p.id}`, product: p, archived: false })),
   ]), [sections]);
 
   const searchVisible = total >= SEARCH_VISIBILITY_THRESHOLD;
@@ -172,28 +192,17 @@ export function ProductManager({ sheets, onExit }: ProductManagerProps) {
         </View>
       )}
 
-      {/* À compléter (n): only when something is waiting. Max 3, collapsible, each deletable. */}
+      {/* À compléter (n): plain rows, only when something is waiting. Max 3, newest first. */}
       {drafts.length > 0 && (
-        <View style={styles.draftsCard}>
-          <Pressable onPress={() => setDraftsOpen(v => !v)} style={styles.draftsHead} accessibilityRole="button" accessibilityState={{ expanded: draftsOpen }}>
-            <Text style={styles.sectionLabel}>{`À compléter (${drafts.length})`}</Text>
-            <View style={{ flex: 1 }} />
-            <Ionicons name={draftsOpen ? 'chevron-up' : 'chevron-down'} size={16} color={palette.textSecondary} />
-          </Pressable>
-          {draftsOpen && drafts.map(d => (
-            <View key={d.id} style={styles.draftRow}>
-              <Pressable style={{ flex: 1 }} onPress={() => sheets.resumeDraft(d)} accessibilityRole="button" accessibilityLabel={`Reprendre ${d.state.name.trim() || 'un produit sans nom'}`}>
-                <Text variant="body" numberOfLines={1} style={{ fontFamily: FF.medium }}>{d.state.name.trim() || 'Sans nom'}</Text>
-                <Text variant="caption" color="secondary">
-                  {d.kind === 'edit' ? 'Modifications non enregistrées' : d.state.price.trim() ? `${d.state.price} ${currency.toLowerCase()}` : 'Prix à fixer'}
-                </Text>
-              </Pressable>
-              <Pressable onPress={() => deleteDraft(d)} hitSlop={12} accessibilityRole="button" accessibilityLabel={`Supprimer le brouillon ${d.state.name.trim()}`.trim()}>
-                <Ionicons name="close-circle" size={20} color={palette.textDisabled} />
-              </Pressable>
-            </View>
+        <>
+          <Text style={styles.sectionHeader}>{`À compléter (${drafts.length})`}</Text>
+          {drafts.map((d, i) => (
+            <React.Fragment key={d.id}>
+              {i > 0 && <View style={styles.separator} />}
+              <DraftRow draft={d} currency={currency} onResume={() => sheets.resumeDraft(d)} onDelete={() => deleteDraft(d)} />
+            </React.Fragment>
           ))}
-        </View>
+        </>
       )}
 
       {searchVisible && (
@@ -210,7 +219,7 @@ export function ProductManager({ sheets, onExit }: ProductManagerProps) {
         <OfflineNotice offlineSince={offlineSince} onRetry={() => fetchProducts(businessId, userId, session?.activeMembership?.id, session?.activeMembership?.role)} />
       )}
 
-      {/* Header: "< Vendre" · Gérer · Terminé. Valeur du stock is a quiet line under it. */}
+      {/* Header: "< Vendre" · Gérer · Terminé. */}
       <View style={styles.header}>
         <Pressable onPress={onExit} style={styles.headerSide} hitSlop={10} accessibilityRole="button" accessibilityLabel="Retour à Vendre">
           <Ionicons name="chevron-back" size={18} color={palette.primary} />
@@ -221,11 +230,6 @@ export function ProductManager({ sheets, onExit }: ProductManagerProps) {
           <Text variant="body" style={{ color: palette.primary, fontFamily: FF.semibold }}>Terminé</Text>
         </Pressable>
       </View>
-      {canEdit && products.length > 0 && (
-        <Text variant="caption" color="secondary" style={styles.valueLine}>
-          {`Valeur du stock : ${formatAmount(stockValue, currency).replace(currency, currency.toLowerCase())}`}
-        </Text>
-      )}
 
       {loading && nothingAtAll && !offline ? (
         <SkeletonList count={8} />
@@ -247,7 +251,7 @@ export function ProductManager({ sheets, onExit }: ProductManagerProps) {
           keyExtractor={i => i.key}
           ListHeaderComponent={header}
           renderItem={({ item }) => item.kind === 'header' ? (
-            <Text style={styles.sectionHeader}>{`${item.section.label} · ${item.section.products.length}`}</Text>
+            <Text style={styles.sectionHeader}>{item.section.label}</Text>
           ) : (
             <ManagerRow
               product={item.product}
@@ -261,7 +265,36 @@ export function ProductManager({ sheets, onExit }: ProductManagerProps) {
             />
           )}
           ItemSeparatorComponent={() => <View style={styles.separator} />}
-          ListEmptyComponent={search.trim() ? <NoResultsState query={search} createLabel={`+ Nouveau produit « ${search.trim()} »`} onCreate={() => sheets.openAdd(search.trim())} /> : null}
+          ListEmptyComponent={
+            search.trim() && archives.length === 0
+              ? <NoResultsState query={search} createLabel={`+ Nouveau produit « ${search.trim()} »`} onCreate={() => sheets.openAdd(search.trim())} />
+              : products.length === 0
+                ? <Text variant="caption" color="secondary" style={{ textAlign: 'center', paddingTop: spacing[6] }}>Aucun produit pour le moment.</Text>
+                : null
+          }
+          // Archived products stay out of the way: a muted link at the bottom, collapsed until tapped.
+          ListFooterComponent={archives.length > 0 ? (
+            <>
+              <Pressable onPress={() => { haptics.select(); setArchivesOpen(v => !v); }} style={styles.archivesLink} accessibilityRole="button" accessibilityState={{ expanded: archivesOpen }}>
+                <Text variant="caption" color="secondary">{`Archivés (${archives.length})`}</Text>
+                <Ionicons name={archivesOpen ? 'chevron-up' : 'chevron-down'} size={14} color={palette.textDisabled} />
+              </Pressable>
+              {archivesOpen && archives.map((p, i) => (
+                <React.Fragment key={p.id}>
+                  {i > 0 && <View style={styles.separator} />}
+                  <ManagerRow
+                    product={p}
+                    variants={variantsByProduct[p.id]}
+                    currency={currency}
+                    archived
+                    canEdit={canEdit}
+                    pulse={false}
+                    onPress={() => sheets.openEdit(p)}
+                  />
+                </React.Fragment>
+              ))}
+            </>
+          ) : null}
           contentContainerStyle={{ paddingBottom: FLOATING_TAB_BAR_CLEARANCE + spacing[16] }}
           showsVerticalScrollIndicator={false}
           keyboardShouldPersistTaps="handled"
@@ -294,19 +327,14 @@ function makeStyles(p: Palette) {
     },
     headerSide: { flex: 1, flexDirection: 'row', alignItems: 'center', gap: 2 },
     headerTitle: { textAlign: 'center' },
-    valueLine: { textAlign: 'center', paddingBottom: spacing[3] },
+    archivesLink: {
+      flexDirection: 'row', alignItems: 'center', justifyContent: 'center', gap: spacing[1],
+      paddingVertical: spacing[5],
+    },
     hintBanner: {
       flexDirection: 'row', alignItems: 'center', gap: spacing[2],
       marginHorizontal: spacing[4], marginBottom: spacing[3], paddingHorizontal: spacing[4], paddingVertical: spacing[2.5],
       borderRadius: radius.card, backgroundColor: p.surface,
-    },
-    draftsCard: {
-      marginHorizontal: spacing[4], marginBottom: spacing[3], borderRadius: radius.card, backgroundColor: p.surface, overflow: 'hidden',
-    },
-    draftsHead: { flexDirection: 'row', alignItems: 'center', paddingHorizontal: spacing[4], paddingVertical: spacing[3] },
-    draftRow: { flexDirection: 'row', alignItems: 'center', gap: spacing[3], paddingHorizontal: spacing[4], paddingVertical: spacing[2.5] },
-    sectionLabel: {
-      fontFamily: FF.semibold, fontSize: 11, color: p.textSecondary, letterSpacing: 0.6, textTransform: 'uppercase',
     },
     sectionHeader: {
       fontFamily: FF.semibold, fontSize: 11, color: p.textSecondary, letterSpacing: 0.6, textTransform: 'uppercase',

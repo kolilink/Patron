@@ -287,6 +287,15 @@ export function isBlankDraft(s: QuickAddState): boolean {
 }
 
 /**
+ * An ADD draft is only worth keeping if it can be resumed into something: it needs a name. A nameless
+ * sheet (a price typed, nothing else) is not a draft — it has no row to show and nothing to tap.
+ * Edit drafts are exempt: they always belong to a named product.
+ */
+export function isResumableAddDraft(s: QuickAddState): boolean {
+  return !isBlankDraft(s) && s.name.trim().length > 0;
+}
+
+/**
  * Edit mode: has anything the sheet lets her change moved away from the saved product?
  * Quantity is excluded — in edit the stock is shown as a fact and only changes through "Ajuster".
  */

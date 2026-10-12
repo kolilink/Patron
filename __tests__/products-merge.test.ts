@@ -148,11 +148,10 @@ describe('entry-point checklist — every one lands in Vendre, none dangle', () 
 describe('Gérer mode', () => {
   const vendre = read('app/(app)/(tabs)/vendre.tsx');
   const pm = read('src/components/products/ProductManager.tsx');
-  it('has the specified management surface: Valeur du stock, À compléter (max 3, collapsible, deletable)', () => {
-    expect(pm).toContain('Valeur du stock');
+  it('has the specified management surface: À compléter (n) as plain rows; no Valeur du stock', () => {
     expect(pm).toContain('`À compléter (${drafts.length})`');
-    expect(pm).toContain('setDraftsOpen(v => !v)');
     expect(pm).toContain('deleteDraft(d)');
+    expect(pm).not.toMatch(/Valeur du stock/);
     expect(vendre).toMatch(/Prix en \{currency\}/); // sell mode keeps its currency line; Gérer rows carry "… gnf" themselves
   });
   it('per-product affordances: "Prix à fixer" (sale price) and "Prix d\'achat ?" (cost) show on the row, and the row opens the edit sheet', () => {

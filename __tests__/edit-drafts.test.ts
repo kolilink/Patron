@@ -110,6 +110,6 @@ describe('wiring (source-level: no component-render harness in this repo)', () =
     expect(sheet).toMatch(/setS\(resumeEdit \? resumeEdit\.state : editingToState\(/);
   });
   it('"À compléter" shows the product name + "Modifications non enregistrées" for edit drafts', () => {
-    expect(manager).toContain("d.kind === 'edit' ? 'Modifications non enregistrées'");
+    expect(manager).toContain("draft.kind === 'edit' ? 'Modifications non enregistrées'");
   });
 });
