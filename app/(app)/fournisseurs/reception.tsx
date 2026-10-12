@@ -874,7 +874,7 @@ function QuoiStep({
               )}
 
               {parseQty(line.qty) && parseAmountInput(line.unitCost, currency) > 0 && !line.hasVariants && (
-                <Text variant="caption" color="secondary">
+                <Text variant="caption" color="secondary" numberOfLines={1} adjustsFontSizeToFit minimumFontScale={0.5}>
                   Total : {formatAmount(parseQty(line.qty)! * parseAmountInput(line.unitCost, currency), currency)}
                 </Text>
               )}
@@ -896,7 +896,7 @@ function QuoiStep({
         <View style={styles.checkCard}>
           <View style={styles.checkRow}>
             <Text variant="label">Total</Text>
-            <Text variant="label">{formatAmount(linesTotal, currency)}</Text>
+            <Text variant="label" numberOfLines={1} adjustsFontSizeToFit minimumFontScale={0.5}>{formatAmount(linesTotal, currency)}</Text>
           </View>
         </View>
       </ScrollView>
@@ -1021,7 +1021,7 @@ function RecapStep({
         <View style={styles.checkCard}>
           <View style={styles.checkRow}>
             <Text variant="label">Total</Text>
-            <Text variant="label">{formatAmount(linesTotal, currency)}</Text>
+            <Text variant="label" numberOfLines={1} adjustsFontSizeToFit minimumFontScale={0.5}>{formatAmount(linesTotal, currency)}</Text>
           </View>
         </View>
 
@@ -1073,7 +1073,7 @@ function ConfirmeStep({ draft, currency, linesTotal, pending, supplierName, onCh
         <Ionicons name="checkmark" size={36} color={palette.textInverse} />
       </View>
       <Text variant="h2" style={{ textAlign: 'center' }}>{itemCount} produit{itemCount > 1 ? 's' : ''} enregistré{itemCount > 1 ? 's' : ''}</Text>
-      <Text variant="body" color="secondary" style={{ textAlign: 'center' }}>
+      <Text variant="body" color="secondary" style={{ textAlign: 'center' }} numberOfLines={1} adjustsFontSizeToFit minimumFontScale={0.5}>
         stock mis à jour · Total {formatAmount(linesTotal, currency)}
       </Text>
       {pending && (

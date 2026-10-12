@@ -228,7 +228,7 @@ function ApportFormModal({ visible, mode, editing, businessId, currency, saving,
               <Text style={styles.viewMicroLabel}>{(editing?.amount ?? 0) < 0 ? 'Montant retiré' : 'Montant apporté'}</Text>
               {/* Same direction encoding as the list row — signed and
                     colored, never a neutral unsigned amount. */}
-              <Text style={[styles.viewAmount, { color: (editing?.amount ?? 0) < 0 ? palette.apportsAmber : palette.apportsGreen }]}>
+              <Text style={[styles.viewAmount, { color: (editing?.amount ?? 0) < 0 ? palette.apportsAmber : palette.apportsGreen }]} numberOfLines={1} adjustsFontSizeToFit minimumFontScale={0.5}>
                 {(editing?.amount ?? 0) < 0 ? '− ' : '+ '}{formatAmount(Math.abs(editing?.amount ?? 0), currency)}
               </Text>
             </View>
@@ -580,7 +580,7 @@ export default function AportsScreen() {
                 {displayTotal}
               </Text>
               {filterMemberId && (
-                <Text variant="caption" style={{ color: palette.apportsSecondary }}>
+                <Text variant="caption" style={{ color: palette.apportsSecondary }} numberOfLines={1} adjustsFontSizeToFit minimumFontScale={0.5}>
                   sur {formatAmount(total, currency)} au total
                 </Text>
               )}

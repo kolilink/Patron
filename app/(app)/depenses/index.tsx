@@ -22,12 +22,14 @@ import { haptics } from '@/lib/haptics';
 import { formatAmount } from '@/src/utils/format';
 import { groupByMonthAndDay } from '@/src/utils/expenseUtils';
 import { expenseSubtitle } from '@/src/components/expenses/ExpenseRow';
+import { useSafeAreaInsets } from 'react-native-safe-area-context';
 
 // ─── Main Screen ──────────────────────────────────────────────────────────────
 
 type Sheet = { mode: SheetMode; id: string | null } | null;
 
 export default function DepensesScreen() {
+  const insets = useSafeAreaInsets();
   const { palette } = useTheme();
   const styles = useMemo(() => makeStyles(palette), [palette]);
   const session = useAuthStore(s => s.session);
@@ -242,7 +244,7 @@ export default function DepensesScreen() {
       />
 
       {!isEmpty && (
-        <View style={styles.fabContainer}>
+        <View style={[styles.fabContainer, { bottom: insets.bottom + spacing[6] }]}>
           <Pressable
             onPress={handleAdd}
             style={({ pressed }) => [styles.fabExtended, pressed && { opacity: 0.82 }]}
@@ -256,7 +258,7 @@ export default function DepensesScreen() {
       )}
 
       {photoChip && !undoBar ? (
-        <View style={styles.chipWrap} pointerEvents="box-none">
+        <View style={[styles.chipWrap, { bottom: insets.bottom + spacing[6] }]} pointerEvents="box-none">
           <ReceiptPhotoChip
             expenseId={photoChip}
             businessId={businessId}

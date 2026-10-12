@@ -187,27 +187,27 @@ export function ProductStatsModal({ visible, product, onClose, businessId, curre
         <Card style={{ gap: 0 }}>
           <View style={styles.statsRow}>
             <Text variant="body" color="secondary">Encaissé</Text>
-            <Text variant="body" style={{ fontFamily: 'System', fontWeight: '600' }}>
+            <Text variant="body" style={{ fontFamily: 'System', fontWeight: '600' }} numberOfLines={1} adjustsFontSizeToFit minimumFontScale={0.5}>
               {formatAmount(stats.revenue, currency)}
             </Text>
           </View>
           <View style={[styles.statsRow, styles.statsRowBorder]}>
             <Text variant="body" color="secondary">Coût d'achat</Text>
-            <Text variant="body" style={{ fontFamily: 'System', fontWeight: '600' }}>
+            <Text variant="body" style={{ fontFamily: 'System', fontWeight: '600' }} numberOfLines={1} adjustsFontSizeToFit minimumFontScale={0.5}>
               {formatAmount(stats.capital, currency)}
             </Text>
           </View>
           {stats.linkedExpenses > 0 && (
             <View style={[styles.statsRow, styles.statsRowBorder]}>
               <Text variant="body" color="secondary">Dépenses liées</Text>
-              <Text variant="body" style={{ fontFamily: 'System', fontWeight: '600' }}>
+              <Text variant="body" style={{ fontFamily: 'System', fontWeight: '600' }} numberOfLines={1} adjustsFontSizeToFit minimumFontScale={0.5}>
                 {formatAmount(stats.linkedExpenses, currency)}
               </Text>
             </View>
           )}
           <View style={[styles.statsRow, styles.statsRowBorder]}>
             <Text variant="body">Bénéfice</Text>
-            <Text variant="body" style={{ fontFamily: 'System', fontWeight: '700', color: profitColor }}>
+            <Text variant="body" style={{ fontFamily: 'System', fontWeight: '700', color: profitColor }} numberOfLines={1} adjustsFontSizeToFit minimumFontScale={0.5}>
               {stats.profit == null ? '—' : formatSignedAmount(stats.profit, currency)}
             </Text>
           </View>

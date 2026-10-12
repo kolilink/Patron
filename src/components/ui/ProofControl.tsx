@@ -2,7 +2,7 @@ import { appAlert } from '@/src/utils/appAlert';
 import { ConfirmSheetHost } from '@/src/components/ui/ConfirmSheet';
 import { useState } from 'react';
 import { failureLine } from '@/src/utils/failure';
-import { ActivityIndicator, Modal, Platform, Pressable, StyleSheet, View } from 'react-native';
+import { Modal, Platform, Pressable, StyleSheet, View } from 'react-native';
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
 import { Image } from 'expo-image';
 import * as ImagePicker from 'expo-image-picker';
@@ -14,6 +14,7 @@ import { attachTransactionProof, deleteTransactionProof, type ProofKind } from '
 import { toast } from '@/stores/toast';
 import { haptics } from '@/lib/haptics';
 import { useAuthStore } from '@/stores/auth';
+import { LoadingStatus } from '@/src/components/ui/LoadingStatus';
 
 const DELETE_WINDOW_MS = 24 * 60 * 60 * 1000;
 
@@ -61,7 +62,7 @@ export function ProofControl({
   // statusBarTranslucent (below) draws the viewer Modal behind the status
   // bar on Android — nudge the close button down by the real inset so it
   // doesn't end up under/near the status bar or a camera cutout.
-  const closeTop = Platform.OS === 'android' ? styles.closeBtn.top + insets.top : styles.closeBtn.top;
+  const closeTop = insets.top + 12; // live inset on every phone (notch, Dynamic Island, punch-hole), never a fixed 56
 
   const hasProof = !!imageUrl;
   const canDelete = hasProof
@@ -132,7 +133,7 @@ export function ProofControl({
 
   const viewer = hasProof ? (
     <Modal visible={viewerOpen} transparent animationType="fade" onRequestClose={() => setViewerOpen(false)} statusBarTranslucent navigationBarTranslucent>
-      <Pressable style={styles.backdrop} onPress={() => setViewerOpen(false)}>
+      <Pressable hitSlop={12} style={styles.backdrop} onPress={() => setViewerOpen(false)}>
         <Image source={{ uri: imageUrl! }} style={styles.fullImage} contentFit="contain" />
         <Pressable style={[styles.closeBtn, { top: closeTop }]} onPress={() => setViewerOpen(false)} hitSlop={12} accessibilityLabel="Fermer" accessibilityRole="button">
           <Ionicons name="close" size={26} color={colors.neutral[0]} />
@@ -143,12 +144,10 @@ export function ProofControl({
             onPress={(e) => { e.stopPropagation(); if (!deleting) handleDelete(); }}
             disabled={deleting}
           >
+            {!deleting && <Ionicons name="trash-outline" size={18} color={colors.danger[500]} />}
             {deleting
-              ? <ActivityIndicator size="small" color={colors.neutral[0]} />
-              : <Ionicons name="trash-outline" size={18} color={colors.danger[500]} />}
-            <Text variant="label" style={{ color: colors.danger[500] }}>
-              {deleting ? 'Suppression…' : 'Supprimer'}
-            </Text>
+              ? <LoadingStatus word="Suppression" variant="label" color={colors.danger[500]} />
+              : <Text variant="label" style={{ color: colors.danger[500] }}>Supprimer</Text>}
           </Pressable>
         )}
       </Pressable>
@@ -179,7 +178,7 @@ export function ProofControl({
     return (
       <Pressable onPress={handleAttach} hitSlop={10} style={styles.iconBtn} disabled={uploading} accessibilityLabel="Ajouter une preuve" accessibilityRole="button">
         {uploading
-          ? <ActivityIndicator size="small" color={palette.textSecondary} />
+          ? <LoadingStatus word="Envoi" variant="caption" dotSize={3} color={palette.textSecondary} />
           : <Ionicons name="camera-outline" size={20} color={palette.textSecondary} />}
       </Pressable>
     );
@@ -217,9 +216,11 @@ export function ProofControl({
   return (
     <Pressable onPress={handleAttach} style={[styles.rowBtn, { borderColor: palette.border }]} disabled={uploading}>
       {uploading
-        ? <ActivityIndicator size="small" color={palette.textSecondary} />
-        : <Ionicons name="camera-outline" size={16} color={palette.textSecondary} />}
-      <Text variant="label" color="secondary">{uploading ? 'Envoi…' : 'Ajouter une image'}</Text>
+        ? <LoadingStatus word="Envoi" variant="label" color={palette.textSecondary} />
+        : (<>
+            <Ionicons name="camera-outline" size={16} color={palette.textSecondary} />
+            <Text variant="label" color="secondary">Ajouter une image</Text>
+          </>)}
     </Pressable>
   );
 }

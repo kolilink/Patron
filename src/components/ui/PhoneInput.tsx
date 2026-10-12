@@ -104,6 +104,7 @@ export function PhoneInput({ onChange, label, autoFocus, resetKey, strict = true
   useEffect(() => { if ((resetKey ?? 0) > 0) setLocalNumber(''); }, [resetKey]);
 
   useEffect(() => {
+    // motion-means: text caret — this field has focus and is waiting for typing
     const anim = Animated.loop(
       Animated.sequence([
         Animated.timing(blink, { toValue: 0, duration: 530, useNativeDriver: true }),

@@ -1,5 +1,5 @@
 import React, { useCallback, useEffect, useMemo, useRef, useState } from 'react';
-import { ActivityIndicator, Animated, FlatList, InteractionManager, Keyboard, KeyboardAvoidingView, Modal, Platform, Pressable, StyleSheet, TextInput, View } from 'react-native';
+import { Animated, FlatList, InteractionManager, Keyboard, KeyboardAvoidingView, Modal, Platform, Pressable, StyleSheet, TextInput, View } from 'react-native';
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
 import * as FileSystem from 'expo-file-system/legacy';
 import { Screen } from '@/src/components/ui/Screen';
@@ -24,6 +24,7 @@ import { haptics } from '@/lib/haptics';
 import type { GroupedItem } from '@/src/lib/chatGrouping';
 import type { AlphaMessage } from '@/src/types';
 import { FAILURE_COPY } from '@/src/utils/failureCopy';
+import { LoadingStatus } from '@/src/components/ui/LoadingStatus';
 
 // buildGroupedItems clusters by `sender_id` — Alpha only has two "senders"
 // (the user and the assistant), so `role` doubles as the grouping key.
@@ -137,6 +138,7 @@ export default function AlphaScreen() {
 
   useEffect(() => {
     if (!recorder.isRecording) { pulseAnim.setValue(1); return; }
+    // motion-means: recording indicator — the mic is live
     const loop = Animated.loop(
       Animated.sequence([
         Animated.timing(pulseAnim, { toValue: 0.3, duration: 600, useNativeDriver: true }),
@@ -457,8 +459,8 @@ export default function AlphaScreen() {
                     editable={!offline && !isTranscribing}
                   />
                   {isTranscribing ? (
-                    <View style={[styles.pillIconBtn, styles.pillSendBtn]}>
-                      <ActivityIndicator color={palette.textInverse} size="small" />
+                    <View style={styles.pillIconBtn}>
+                      <LoadingStatus word="Écoute" variant="caption" dotSize={3} color={palette.textSecondary} />
                     </View>
                   ) : text.trim().length > 0 ? (
                     <Pressable

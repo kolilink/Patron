@@ -97,6 +97,7 @@ function ValueSkeleton() {
   const pulse = useRef(new Animated.Value(0.3)).current;
   useEffect(() => {
     if (reduceMotion) { pulse.setValue(0.5); return; }
+    // motion-means: skeleton pulse — the value is loading
     const loop = Animated.loop(
       Animated.sequence([
         Animated.timing(pulse, { toValue: 0.7, duration: 900, useNativeDriver: true, easing: Easing.inOut(Easing.ease) }),
@@ -646,7 +647,7 @@ export default function RapportsScreen() {
                 balance as a second hero line so "Bénéfice cumulé" isn't read
                 as cash already in hand. */}
             {!yearReportLoading && yearCreditOwed > 0 && (
-              <Text variant="caption" color="secondary">
+              <Text variant="caption" color="secondary" numberOfLines={1} adjustsFontSizeToFit minimumFontScale={0.5}>
                 dont {fmt(yearCreditOwed, currency)} de crédit pas encore payé
               </Text>
             )}

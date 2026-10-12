@@ -26,7 +26,7 @@ export function ImageMessageBubble({ msg, imageStyle }: { msg: ImageMessageLike;
   // statusBarTranslucent (below) draws the viewer Modal behind the status
   // bar on Android — nudge the close button down by the real inset so it
   // doesn't end up under/near the status bar or a camera cutout.
-  const closeTop = Platform.OS === 'android' ? styles.closeBtn.top + insets.top : styles.closeBtn.top;
+  const closeTop = insets.top + 12; // live inset on every phone (notch, Dynamic Island, punch-hole), never a fixed 56
   if (!msg.image_url) return null;
 
   // Dimensions are known up front (captured at upload time) so the bubble
@@ -52,7 +52,7 @@ export function ImageMessageBubble({ msg, imageStyle }: { msg: ImageMessageLike;
       </Pressable>
 
       <Modal visible={viewerOpen} transparent animationType="fade" onRequestClose={() => setViewerOpen(false)} statusBarTranslucent navigationBarTranslucent>
-        <Pressable style={styles.backdrop} onPress={() => setViewerOpen(false)}>
+        <Pressable hitSlop={12} style={styles.backdrop} onPress={() => setViewerOpen(false)}>
           <Image source={{ uri: msg.image_url }} style={styles.fullImage} contentFit="contain" />
           <Pressable style={[styles.closeBtn, { top: closeTop }]} onPress={() => setViewerOpen(false)} hitSlop={12} accessibilityLabel="Fermer" accessibilityRole="button">
             <Ionicons name="close" size={26} color={colors.neutral[0]} />

@@ -245,7 +245,7 @@ export function VoiceMessageBubble({ msg, isOwn }: {
           progress={progress}
           isOwn={isOwn}
         />
-        <Text style={[styles.timer, isOwn ? styles.timerOwn : styles.timerOther]}>
+        <Text style={[styles.timer, isOwn ? styles.timerOwn : styles.timerOther]} numberOfLines={1} adjustsFontSizeToFit minimumFontScale={0.5}>
           {playing ? fmt(remaining) : fmt(totalSecs)}
         </Text>
       </Pressable>

@@ -6,6 +6,8 @@ import { typography } from '../../theme';
 type Variant = keyof typeof typography;
 type Color = 'primary' | 'secondary' | 'disabled' | 'inverse' | 'success' | 'warning' | 'danger' | 'brand';
 
+const TABULAR = { fontVariant: ['tabular-nums'] as ['tabular-nums'] };
+
 interface TextProps extends RNTextProps {
   variant?: Variant;
   color?: Color;
@@ -39,7 +41,8 @@ export function Text({
     <RNText
       allowFontScaling={allowFontScaling}
       maxFontSizeMultiplier={maxFontSizeMultiplier}
-      style={[typography[variant], { color: colorMap[color] }, style]}
+      // Every number aligns in columns: tabular figures on ALL variants (only digits are affected), so money can never be a ragged raw Text.
+      style={[TABULAR, typography[variant], { color: colorMap[color] }, style]}
       {...props}
     />
   );

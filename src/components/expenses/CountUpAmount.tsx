@@ -41,5 +41,5 @@ export function CountUpAmount({ value, currency, variant = 'label', style }: {
     return () => { if (raf.current !== null) cancelAnimationFrame(raf.current); };
   }, [value, reduce]);
 
-  return <Text variant={variant} style={style}>{formatAmount(shown, currency)}</Text>;
+  return <Text variant={variant} style={style} numberOfLines={1} adjustsFontSizeToFit minimumFontScale={0.5}>{formatAmount(shown, currency)}</Text>;
 }

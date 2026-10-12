@@ -288,12 +288,12 @@ export function FirstRunHeroOverlay({ businessId, userId, currency, onDone }: Pr
                     Noté <Text variant="h2" style={{ color: palette.primary }}>✓</Text>
                   </Text>
                   {lastEntry && (
-                    <Text variant="body" style={styles.sub}>
+                    <Text variant="body" style={styles.sub} numberOfLines={1} adjustsFontSizeToFit minimumFontScale={0.5}>
                       {lastEntry.name} vous doit {formatAmount(lastEntry.amountCents / 100, currency)}.
                     </Text>
                   )}
                 </View>
-                <Text variant="body" color="secondary" style={[styles.sub, styles.totalLine]}>
+                <Text variant="body" color="secondary" style={[styles.sub, styles.totalLine]} numberOfLines={1} adjustsFontSizeToFit minimumFontScale={0.5}>
                   Total à recevoir : {formatAmount(totalCents / 100, currency)}
                 </Text>
 

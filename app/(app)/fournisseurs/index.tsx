@@ -34,6 +34,7 @@ import { formatDate } from '@/src/utils/dates';
 import { QuickAddProductSheet } from '@/src/components/QuickAddProductSheet';
 import type { QuickAddPayload } from '@/src/utils/quickAddProduct';
 import { generateId } from '@/lib/id';
+import { useSafeAreaInsets } from 'react-native-safe-area-context';
 
 // iOS-only: number-pad/decimal-pad keyboards have no built-in return key, so
 // the OS auto-injects its own floating "Done" pill above the keyboard when
@@ -203,7 +204,7 @@ function FournisseurForm({ visible, editing, products, fournisseurs, businessId,
             key={p.id}
             onPress={() => { configureLayoutNext(LayoutAnimation.Presets.easeInEaseOut); setDropdownOpen(true); }}
             style={styles.prodDropdownItem}>
-            <Text variant="body" numberOfLines={1} style={{ flex: 1 }}>
+            <Text variant="body" style={{ flex: 1 }} numberOfLines={1} adjustsFontSizeToFit minimumFontScale={0.5}>
               {`${p.name} · ${p.sale_price > 0 ? formatAmount(p.sale_price, currency) : 'Prix à fixer'}`}
             </Text>
             <Ionicons name="chevron-forward" size={16} color={palette.textSecondary} />
@@ -332,6 +333,7 @@ function DebtModal({ visible, fournisseur, currency, saving, onClose, onSave }: 
 // ─── Main Screen ──────────────────────────────────────────────────────────────
 
 export default function FournisseursScreen() {
+  const insets = useSafeAreaInsets();
   const { palette } = useTheme();
   const styles = useMemo(() => makeStyles(palette), [palette]);
   const session = useAuthStore(s => s.session);
@@ -592,7 +594,7 @@ export default function FournisseursScreen() {
 
                 <View style={{ flex: 1, gap: 3 }}>
                   <Text variant="label" numberOfLines={1}>{item.name}</Text>
-                  <Text variant="caption" color="secondary" numberOfLines={1}>
+                  <Text variant="caption" color="secondary" numberOfLines={1} adjustsFontSizeToFit minimumFontScale={0.5}>
                     {lastLivraison
                       ? `${formatDate(lastLivraison.ordered_at, 'dayMonth')} · ${fmt(lastLivraison.total_cost, currency)}`
                       : 'Aucune livraison'}
@@ -609,7 +611,7 @@ export default function FournisseursScreen() {
 
                 <View style={{ alignItems: 'flex-end', gap: 4 }}>
                   {owedAmount > 0 && (
-                    <Text variant="label" style={{ color: palette.warning }}>
+                    <Text variant="label" style={{ color: palette.warning }} numberOfLines={1} adjustsFontSizeToFit minimumFontScale={0.5}>
                       − {fmt(owedAmount, currency)}
                     </Text>
                   )}
@@ -657,7 +659,7 @@ export default function FournisseursScreen() {
       />
 
       {fournisseurs.length > 0 && (
-        <View style={styles.fabContainer}>
+        <View style={[styles.fabContainer, { bottom: insets.bottom + spacing[6] }]}>
           <Pressable
             onPress={() => router.push('/(app)/fournisseurs/reception')}
             style={({ pressed }) => [styles.fabExtended, pressed && { opacity: 0.82 }]}

@@ -23,17 +23,17 @@ describe('Part 1 — no infinite animation loop on any FAB screen', () => {
   });
   it('the dépenses FAB is a plain View (it was the last one still breathing)', () => {
     const src = read('app/(app)/depenses/index.tsx');
-    expect(src).toMatch(/<View style=\{styles\.fabContainer\}>/);
+    expect(src).toMatch(/<View style=\{\[styles\.fabContainer, /);
     expect(src).not.toMatch(/<Animated\.View style=\{\[styles\.fabContainer/);
     expect(src).not.toMatch(/\bAnimated\b/);
   });
   it('the old catalogue screen (a former offender) no longer exists', () => {
     expect(fs.existsSync(path.resolve(__dirname, '../app/(app)/(tabs)/catalogue.tsx'))).toBe(false);
   });
-  it('animations that carry MEANING are untouched: voice-recording pulse dots and the équipe attention pulse', () => {
+  it('animations that carry MEANING are untouched: voice-recording pulse dots (the équipe CTA pulse was a decorative loop and is gone)', () => {
     expect(read('app/(app)/discussions.tsx')).toMatch(/RNAnimated\.loop\(/);
     expect(read('app/(app)/messages/[room_id].tsx')).toMatch(/RNAnimated\.loop\(/);
-    expect(read('app/(app)/equipe/index.tsx')).toMatch(/Animated\.loop\(/);
+    expect(read('app/(app)/equipe/index.tsx')).not.toMatch(/Animated\.loop\(/);
   });
   it('loading skeleton shimmers are not FABs and are left alone', () => {
     expect(read('app/(app)/ventes/index.tsx')).toMatch(/function SkeletonLine/);

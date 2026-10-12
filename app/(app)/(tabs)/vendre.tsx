@@ -18,7 +18,7 @@ import { Text } from '@/src/components/ui/Text';
 import { PhoneInput } from '@/src/components/ui/PhoneInput';
 import { SaleReceiptSheet } from '@/src/components/SaleReceiptSheet';
 import type { ReceiptSource, SaleReceiptSource } from '@/src/utils/saleReceipt';
-import { useTheme, radius, spacing, shadow, fontFamily, FLOATING_TAB_BAR_CLEARANCE, CLIENT_AVATAR_PALETTE, SEARCH_VISIBILITY_THRESHOLD } from '@/src/theme';
+import { useTheme, radius, spacing, shadow, fontFamily, FLOATING_TAB_BAR_CLEARANCE, floatingTabBarClearance, CLIENT_AVATAR_PALETTE, SEARCH_VISIBILITY_THRESHOLD } from '@/src/theme';
 import { useAnimateLayoutChange } from '@/src/hooks/useAnimateLayoutChange';
 import { useQuickClients } from '@/src/hooks/useQuickClients';
 import { QuickCaptureSheet } from '@/src/components/QuickCaptureSheet';
@@ -191,7 +191,7 @@ function CartRow({ line, currency, onInc, onDec, onRemove, onToggleBulk, onSetQt
       <View style={{ flex: 1 }}>
         <Text variant="label" numberOfLines={1}>{line.product.name}{line.variant_name ? ` · ${line.variant_name}` : ''}</Text>
         <View style={{ flexDirection: 'row', alignItems: 'center', gap: spacing[2] }}>
-          <Text variant="caption" color="secondary">
+          <Text variant="caption" color="secondary" numberOfLines={1} adjustsFontSizeToFit minimumFontScale={0.5}>
             {formatAmount(line.unit_price, currency)} / {line.is_bulk ? 'lot' : line.product.unit}
           </Text>
           {hasBulk && (
@@ -221,7 +221,7 @@ function CartRow({ line, currency, onInc, onDec, onRemove, onToggleBulk, onSetQt
             inputAccessoryViewID={Platform.OS === 'ios' ? VENDRE_SILENT_ACCESSORY_ID : undefined}
           />
         ) : (
-          <Pressable onPress={startEdit} style={styles.qtyNumPress}>
+          <Pressable hitSlop={8} onPress={startEdit} style={styles.qtyNumPress}>
             <Text variant="label" style={styles.qtyNum}>{line.qty}</Text>
           </Pressable>
         )}
@@ -786,7 +786,7 @@ function PaymentModal({
             <Text variant="body">Encaisser une partie</Text>
             <View style={{ flexDirection: 'row', alignItems: 'center', gap: spacing[2] }}>
               {creditUpfront > 0 && (
-                <Text variant="body" color="secondary">{formatAmount(creditUpfront, currency)}</Text>
+                <Text variant="body" color="secondary" numberOfLines={1} adjustsFontSizeToFit minimumFontScale={0.5}>{formatAmount(creditUpfront, currency)}</Text>
               )}
               <Ionicons
                 name={creditUpfront > 0 ? 'chevron-forward' : 'add'}
@@ -833,7 +833,7 @@ function PaymentModal({
             <Text variant="body">Ajouter une réduction</Text>
             <View style={{ flexDirection: 'row', alignItems: 'center', gap: spacing[2] }}>
               {creditDiscount > 0 && (
-                <Text variant="body" color="secondary">{formatAmount(creditDiscount, currency)}</Text>
+                <Text variant="body" color="secondary" numberOfLines={1} adjustsFontSizeToFit minimumFontScale={0.5}>{formatAmount(creditDiscount, currency)}</Text>
               )}
               <Ionicons
                 name={creditDiscount > 0 ? 'chevron-forward' : 'add'}
@@ -898,7 +898,7 @@ function PaymentModal({
               {isOverpay && (
                 <View style={{ flexDirection: 'row', alignItems: 'center', justifyContent: 'space-between' }}>
                   <Text variant="caption" color="secondary">Monnaie à rendre</Text>
-                  <Text variant="label" style={{ color: palette.primary }}>{formatAmount(changeDue, currency)}</Text>
+                  <Text variant="label" style={{ color: palette.primary }} numberOfLines={1} adjustsFontSizeToFit minimumFontScale={0.5}>{formatAmount(changeDue, currency)}</Text>
                 </View>
               )}
 
@@ -911,7 +911,7 @@ function PaymentModal({
                     <View style={{ flex: 1 }}>
                       <Text variant="label" style={{ color: disambig === 'credit' ? palette.primary : palette.textPrimary }}>Un crédit</Text>
                       <Text variant="caption" style={{ color: palette.textSecondary }}>
-                        <Text style={{ color: palette.textPrimary, fontFamily: fontFamily.semibold }}>{formatAmount(shortfall, currency)}</Text>
+                        <Text style={{ color: palette.textPrimary, fontFamily: fontFamily.semibold }} numberOfLines={1} adjustsFontSizeToFit minimumFontScale={0.5}>{formatAmount(shortfall, currency)}</Text>
                         {' '}de moins que le prix
                       </Text>
                     </View>
@@ -1215,6 +1215,7 @@ interface VariantPickerSheetProps {
 }
 
 function VariantPickerSheet({ visible, product, variants, cartQtyByVariant, currency, onClose, onPickMany }: VariantPickerSheetProps) {
+  const insets = useSafeAreaInsets();
   const { palette } = useTheme();
   const styles = useMemo(() => makeStyles(palette), [palette]);
   const translateY = useRef(new Animated.Value(400)).current;
@@ -1294,7 +1295,7 @@ function VariantPickerSheet({ visible, product, variants, cartQtyByVariant, curr
       <Pressable style={StyleSheet.absoluteFill} onPress={onClose}>
         <View style={{ flex: 1, backgroundColor: 'rgba(0,0,0,0.45)' }} />
       </Pressable>
-      <Animated.View style={[styles.variantSheet, { transform: [{ translateY }] }]}>
+      <Animated.View style={[styles.variantSheet, { paddingBottom: Math.max(insets.bottom, spacing[4]) + spacing[6], transform: [{ translateY }] }]}>
         <View style={styles.variantSheetHandle} />
         <View style={{ marginBottom: spacing[4] }}>
           <Text variant="h4">{product.name}</Text>
@@ -1329,7 +1330,7 @@ function VariantPickerSheet({ visible, product, variants, cartQtyByVariant, curr
               >
                 <View style={{ flex: 1 }}>
                   <Text variant="body" style={{ fontFamily: fontFamily.semibold }}>{v.name}</Text>
-                  <Text variant="label" style={{ color: palette.primary }}>
+                  <Text variant="label" style={{ color: palette.primary }} numberOfLines={1} adjustsFontSizeToFit minimumFontScale={0.5}>
                     {formatAmount(v.sale_price, currency)}
                   </Text>
                   <Text variant="caption" color="secondary">
@@ -1359,7 +1360,7 @@ function VariantPickerSheet({ visible, product, variants, cartQtyByVariant, curr
                       inputAccessoryViewID={Platform.OS === 'ios' ? VARIANT_SHEET_SILENT_ACCESSORY_ID : undefined}
                     />
                   ) : (
-                    <Pressable
+                    <Pressable hitSlop={8}
                       onPress={() => !outOfStock && startEdit(v.id, qty)}
                       style={styles.qtyNumPress}
                     >
@@ -1406,6 +1407,8 @@ export default function VendreScreen() {
   const { palette } = useTheme();
   const styles = useMemo(() => makeStyles(palette), [palette]);
   const insets = useSafeAreaInsets();
+  // The floating tab bar sits at insets.bottom + GAP: clear the LIVE inset (3-button Android nav, gesture nav, home indicator), never the bare constant.
+  const tabClearance = floatingTabBarClearance(insets.bottom);
   const session = useAuthStore(s => s.session);
   const business = session?.activeBusiness;
   const userId = session?.user.id ?? '';
@@ -1894,7 +1897,7 @@ export default function VendreScreen() {
   const anySheetOpen = productSheets.anySheetOpen || variantPickerProduct !== null || showPayment ||
     showConfirmSheet || showCartSheet || showQuickCapture || receiptOpen !== null;
   const showFloating = canManage && products.length > 0 && !anySheetOpen;
-  const floatingBottom = FLOATING_TAB_BAR_CLEARANCE + spacing[4] + (cart.length > 0 ? cartPanelHeight + spacing[2] : 0);
+  const floatingBottom = tabClearance + spacing[4] + (cart.length > 0 ? cartPanelHeight + spacing[2] : 0);
 
   return (
     <Screen tab>
@@ -2007,7 +2010,7 @@ export default function VendreScreen() {
         numColumns={2}
         columnWrapperStyle={styles.tileRow}
         // The panel doesn't start at the true screen bottom — it floats
-        // FLOATING_TAB_BAR_CLEARANCE + spacing[4] above it (to clear the
+        // tabClearance + spacing[4] above it (to clear the
         // tab bar). cartPanelHeight is the real, load-bearing part (matches
         // the panel's own measured height so nothing overlaps); the rest
         // is margin on top of that, not more overlap-prevention — halved
@@ -2016,12 +2019,13 @@ export default function VendreScreen() {
         // cartPanelHeight itself, so this can't reintroduce the overlap.
         contentContainerStyle={[
           styles.tileList,
-          cart.length > 0 && { paddingBottom: cartPanelHeight + (FLOATING_TAB_BAR_CLEARANCE + spacing[4] + spacing[2]) / 2 },
+          { paddingBottom: spacing[6] + tabClearance },
+          cart.length > 0 && { paddingBottom: cartPanelHeight + (tabClearance + spacing[4] + spacing[2]) / 2 },
           // The floating cluster sits over the grid: let the last row scroll clear above it (padding is keyed
           // on the role, not on a sheet being open, so the list never jumps when a sheet opens).
           canManage && { paddingBottom: Math.max(
-            cart.length > 0 ? cartPanelHeight + (FLOATING_TAB_BAR_CLEARANCE + spacing[4] + spacing[2]) / 2 : spacing[6] + FLOATING_TAB_BAR_CLEARANCE,
-            gridBottomPadding(FLOATING_TAB_BAR_CLEARANCE + spacing[4] + (cart.length > 0 ? cartPanelHeight + spacing[2] : 0)),
+            cart.length > 0 ? cartPanelHeight + (tabClearance + spacing[4] + spacing[2]) / 2 : spacing[6] + tabClearance,
+            gridBottomPadding(tabClearance + spacing[4] + (cart.length > 0 ? cartPanelHeight + spacing[2] : 0)),
           ) },
         ]}
         showsVerticalScrollIndicator={false}
@@ -2090,7 +2094,7 @@ export default function VendreScreen() {
         const lastLine = cart[cart.length - 1];
         const otherLinesCount = cart.length - 1;
         return (
-          <View style={styles.cartPanel} onLayout={e => setCartPanelHeight(e.nativeEvent.layout.height)}>
+          <View style={[styles.cartPanel, { bottom: tabClearance + spacing[4] }]} onLayout={e => setCartPanelHeight(e.nativeEvent.layout.height)}>
             <Pressable onPress={() => setShowCartSheet(true)} style={styles.cartSummaryRow} hitSlop={4}>
               <Text variant="label" numberOfLines={1} style={{ flex: 1 }}>
                 {lastLine.qty} {lastLine.product.name}{lastLine.variant_name ? ` · ${lastLine.variant_name}` : ''}
@@ -2230,13 +2234,13 @@ export default function VendreScreen() {
                 {confirmIsCredit ? 'Crédit enregistré' : 'Vente enregistrée'}
               </Text>
               {lastReceipt && (
-                <Text variant="h4" style={{ color: palette.primary, textAlign: 'center' }}>
+                <Text variant="h4" style={{ color: palette.primary, textAlign: 'center' }} numberOfLines={1} adjustsFontSizeToFit minimumFontScale={0.5}>
                   {formatAmount(confirmNet, currency)}
                 </Text>
               )}
               {/* Credit with upfront: show what was received vs what remains */}
               {lastReceipt && confirmIsCredit && confirmUpfront > 0.01 && (
-                <Text variant="caption" color="secondary" style={{ textAlign: 'center' }}>
+                <Text variant="caption" color="secondary" style={{ textAlign: 'center' }} numberOfLines={1} adjustsFontSizeToFit minimumFontScale={0.5}>
                   {formatAmount(confirmUpfront, currency)} reçu · {formatAmount(confirmRemaining, currency)} restant
                 </Text>
               )}
@@ -2279,7 +2283,7 @@ export default function VendreScreen() {
           right-aligned: the purple "+" on top, the slimmer "Gérer" pill directly beneath it. */}
       {showFloating && (
         <View style={[styles.floatingActions, { bottom: floatingBottom }]} pointerEvents="box-none">
-          <Pressable
+          <Pressable hitSlop={12}
             onPress={() => productSheets.openAdd()}
             style={({ pressed }) => [styles.addFab, pressed && { opacity: 0.82 }]}
             accessibilityRole="button"

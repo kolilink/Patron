@@ -214,6 +214,7 @@ export default function DmChatScreen() {
   // ─── Pulsing dot animation while recording ─────────────────────────────────
   useEffect(() => {
     if (!isRecording) { pulseAnim.setValue(1); return; }
+    // motion-means: recording indicator — the mic is live
     const loop = RNAnimated.loop(RNAnimated.sequence([
       RNAnimated.timing(pulseAnim, { toValue: 0.3, duration: 600, useNativeDriver: true }),
       RNAnimated.timing(pulseAnim, { toValue: 1, duration: 600, useNativeDriver: true }),
@@ -568,7 +569,7 @@ export default function DmChatScreen() {
             <View style={{ flex: 1 }}>
               <LiveWaveformBars samples={recAmplitudes} />
             </View>
-            <Pressable onPress={() => stopRecording(true)} style={styles.sendBtn}>
+            <Pressable hitSlop={8} onPress={() => stopRecording(true)} style={styles.sendBtn}>
               <Ionicons name="arrow-forward" size={20} color={palette.textInverse} />
             </Pressable>
           </View>
@@ -587,7 +588,7 @@ export default function DmChatScreen() {
               maxLength={1000}
             />
             {text.trim() ? (
-              <Pressable
+              <Pressable hitSlop={8}
                 onPress={handleSend}
                 disabled={sending}
                 style={({ pressed }) => [styles.sendBtn, sending && { opacity: 0.4 }, pressed && { opacity: 0.75 }]}
@@ -595,7 +596,7 @@ export default function DmChatScreen() {
                 <Ionicons name="arrow-forward" size={20} color={palette.textInverse} />
               </Pressable>
             ) : (
-              <Pressable
+              <Pressable hitSlop={8}
                 onPress={startRecording}
                 style={({ pressed }) => [styles.sendBtn, styles.micBtn, pressed && { opacity: 0.75 }]}
               >

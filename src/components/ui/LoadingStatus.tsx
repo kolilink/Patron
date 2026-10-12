@@ -21,6 +21,7 @@ function Dot({ index, color, size }: { index: number; color: string; size: numbe
   useEffect(() => {
     // transform-only + native driver: runs on the UI thread, so the dots keep
     // moving while the JS thread is busy — a frozen dot would read as "stuck".
+    // motion-means: loading feedback — the dots say "working on it"
     const loop = Animated.loop(
       Animated.sequence([
         Animated.delay(dotDelay(index)),

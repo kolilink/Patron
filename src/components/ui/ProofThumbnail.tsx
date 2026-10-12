@@ -24,7 +24,7 @@ export function ProofThumbnail({
   // for the previous non-translucent Modal, where Android itself already
   // kept content clear of the status bar. Nudge it down by the real inset
   // so it doesn't end up under/near the status bar or a camera cutout.
-  const closeTop = Platform.OS === 'android' ? styles.close.top + insets.top : styles.close.top;
+  const closeTop = insets.top + 12; // live inset on every phone (notch, Dynamic Island, punch-hole), never a fixed 56
   return (
     <>
       <Pressable onPress={() => setOpen(true)} hitSlop={8}>
@@ -36,7 +36,7 @@ export function ProofThumbnail({
       </Pressable>
 
       <Modal visible={open} transparent animationType="fade" onRequestClose={() => setOpen(false)} statusBarTranslucent navigationBarTranslucent>
-        <Pressable style={styles.backdrop} onPress={() => setOpen(false)}>
+        <Pressable hitSlop={12} style={styles.backdrop} onPress={() => setOpen(false)}>
           <Image source={{ uri: url }} style={styles.full} contentFit="contain" />
           <Pressable style={[styles.close, { top: closeTop }]} onPress={() => setOpen(false)} hitSlop={12} accessibilityLabel="Fermer" accessibilityRole="button">
             <Ionicons name="close" size={26} color={colors.neutral[0]} />

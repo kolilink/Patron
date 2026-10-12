@@ -2,8 +2,8 @@ import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { ConfirmSheetHost } from '@/src/components/ui/ConfirmSheet';
 import { appAlert } from '@/src/utils/appAlert';
 import { AnimatedRowCell, AnimatedRow } from '@/src/components/ui/AnimatedRow';
-import { ActivityIndicator, Animated, Easing, FlatList, InputAccessoryView, Modal, Platform, Pressable, RefreshControl, ScrollView, StyleSheet, TextInput, View } from 'react-native';
-import { SafeAreaView } from 'react-native-safe-area-context';
+import { Animated, Easing, FlatList, InputAccessoryView, Modal, Platform, Pressable, RefreshControl, ScrollView, StyleSheet, TextInput, View } from 'react-native';
+import { SafeAreaView, useSafeAreaInsets } from 'react-native-safe-area-context';
 import { Screen } from '@/src/components/ui/Screen';
 import { FormSheet } from '@/src/components/ui/FormSheet';
 import { Ionicons } from '@expo/vector-icons';
@@ -30,6 +30,7 @@ import { failAlert } from '@/src/components/ui/FailureView';
 import { saleCancelledConfirmation } from '@/src/utils/saveConfirmationCopy';
 import { toast } from '@/stores/toast';
 import { formatDate, localDateISO } from '@/src/utils/dates';
+import { LoadingStatus } from '@/src/components/ui/LoadingStatus';
 
 // iOS-only: suppresses the OS's auto-injected floating "Done" pill above
 // the numeric keyboard — PaymentSheet already has a persistent, always-
@@ -48,6 +49,7 @@ function SkeletonLine({ width = '100%', height = 14 }: { width?: string | number
   const { palette } = useTheme();
   const pulse = useRef(new Animated.Value(0.4)).current;
   useEffect(() => {
+    // motion-means: skeleton pulse — the detail is loading
     Animated.loop(
       Animated.sequence([
         Animated.timing(pulse, { toValue: 1, duration: 700, useNativeDriver: true, easing: Easing.inOut(Easing.ease) }),
@@ -301,7 +303,7 @@ function PaymentSheet({ visible, sale, currency, onClose, onConfirm, saving }: P
       {/* Debt context card */}
       <Card style={[styles.contextCard, { borderLeftColor: palette.warning, borderLeftWidth: 3 }]}>
         <Text variant="caption" color="secondary">{clientName} vous doit</Text>
-        <Text variant="amountLarge" style={{ color: palette.textPrimary }}>{fmt(remaining, currency)}</Text>
+        <Text variant="amountLarge" style={{ color: palette.textPrimary }} numberOfLines={1} adjustsFontSizeToFit minimumFontScale={0.5}>{fmt(remaining, currency)}</Text>
       </Card>
 
       {/* Amount */}
@@ -321,7 +323,7 @@ function PaymentSheet({ visible, sale, currency, onClose, onConfirm, saving }: P
             style={styles.solderBtn}
             onPress={() => setAmountStr(formatAmountInput(String(Math.round(remaining)), currency))}
           >
-            <Text variant="label" style={{ color: palette.primary }}>Tout régler : {fmt(remaining, currency)}</Text>
+            <Text variant="label" style={{ color: palette.primary }} numberOfLines={1} adjustsFontSizeToFit minimumFontScale={0.5}>Tout régler : {fmt(remaining, currency)}</Text>
           </Pressable>
         </View>
       </View>
@@ -638,7 +640,7 @@ function DetailModal({ sale, currency, businessName, singleVendor, role, onClose
         cancelLabel="Fermer"
         contentContainerStyle={styles.pad}
         headerRight={showMenuButton ? (
-          <Pressable onPress={showMenu} style={{ minWidth: 40, alignItems: 'flex-end' }}>
+          <Pressable hitSlop={8} onPress={showMenu} style={{ minWidth: 40, alignItems: 'flex-end' }}>
             <Text variant="body" color="secondary">⋯</Text>
           </Pressable>
         ) : (
@@ -670,7 +672,7 @@ function DetailModal({ sale, currency, businessName, singleVendor, role, onClose
               {fmt(displayState === 'partiel' ? remaining : sale.total_amount - discount, currency)}
             </Text>
             {displayState === 'partiel' && (
-              <Text variant="caption" color="secondary">
+              <Text variant="caption" color="secondary" numberOfLines={1} adjustsFontSizeToFit minimumFontScale={0.5}>
                 sur {fmt(sale.total_amount - discount, currency)}
               </Text>
             )}
@@ -745,7 +747,7 @@ function DetailModal({ sale, currency, businessName, singleVendor, role, onClose
                     <View key={l.id} style={styles.lineRow}>
                       <Text variant="body" style={{ flex: 1 }}>{l.product_name}{l.variant_name ? ` · ${l.variant_name}` : ''}</Text>
                       <Text variant="caption" color="secondary">×{l.qty}</Text>
-                      <Text variant="label">{fmt(l.unit_price * l.qty, currency)}</Text>
+                      <Text variant="label" numberOfLines={1} adjustsFontSizeToFit minimumFontScale={0.5}>{fmt(l.unit_price * l.qty, currency)}</Text>
                     </View>
                   ))}
                   {discount > 0 && (
@@ -753,7 +755,7 @@ function DetailModal({ sale, currency, businessName, singleVendor, role, onClose
                       <View style={styles.divider} />
                       <View style={styles.lineRow}>
                         <Text variant="body" style={{ flex: 1, color: palette.warning }}>Rabais accordé</Text>
-                        <Text variant="label" style={{ color: palette.textPrimary }}>− {fmt(discount, currency)}</Text>
+                        <Text variant="label" style={{ color: palette.textPrimary }} numberOfLines={1} adjustsFontSizeToFit minimumFontScale={0.5}>− {fmt(discount, currency)}</Text>
                       </View>
                     </>
                   )}
@@ -784,7 +786,7 @@ function DetailModal({ sale, currency, businessName, singleVendor, role, onClose
                     <View key={i} style={styles.lineRow}>
                       <Text variant="body" style={{ flex: 1 }}>{methodLabel(p.method)}</Text>
                       <Text variant="caption" color="secondary">{fmtDate(p.date)}</Text>
-                      <Text variant="label">{fmt(p.amount, currency)}</Text>
+                      <Text variant="label" numberOfLines={1} adjustsFontSizeToFit minimumFontScale={0.5}>{fmt(p.amount, currency)}</Text>
                     </View>
                   ))}
                 </View>
@@ -801,11 +803,11 @@ function DetailModal({ sale, currency, businessName, singleVendor, role, onClose
                     <>
                       <View style={styles.row}>
                         <Text variant="caption" color="secondary">Coût d'achat</Text>
-                        <Text variant="label">{fmt(totalCost, currency)}</Text>
+                        <Text variant="label" numberOfLines={1} adjustsFontSizeToFit minimumFontScale={0.5}>{fmt(totalCost, currency)}</Text>
                       </View>
                       <View style={[styles.row, { paddingTop: spacing[1], borderTopWidth: 1, borderTopColor: palette.border }]}>
                         <Text variant="label">Bénéfice net</Text>
-                        <Text variant="label" style={{ color: palette.textPrimary }}>
+                        <Text variant="label" style={{ color: palette.textPrimary }} numberOfLines={1} adjustsFontSizeToFit minimumFontScale={0.5}>
                           {formatSignedAmount(totalProfit, currency)} ({formatMargin(totalProfit, effectiveRevenue)})
                         </Text>
                       </View>
@@ -860,7 +862,7 @@ function DetailModal({ sale, currency, businessName, singleVendor, role, onClose
                       keyboardType="numeric"
                       placeholderTextColor={palette.textDisabled}
                     />
-                    <Text variant="caption" color="secondary">
+                    <Text variant="caption" color="secondary" numberOfLines={1} adjustsFontSizeToFit minimumFontScale={0.5}>
                       Total : {fmt(parseAmountInput(editLinePrices[l.id] ?? '', currency) * l.qty, currency)}
                     </Text>
                   </View>
@@ -1086,6 +1088,7 @@ function FilterSheet({ visible, availableProducts, loadingProducts, selectedProd
 // ─── Main screen ───────────────────────────────────────────────────────────────
 
 export default function VentesScreen() {
+  const insets = useSafeAreaInsets();
   const { palette } = useTheme();
   const styles = useMemo(() => makeStyles(palette), [palette]);
   const session = useAuthStore(s => s.session);
@@ -1327,7 +1330,7 @@ export default function VentesScreen() {
       <View style={styles.header}>
         <Pressable onPress={() => router.back()}><Text variant="body" color="secondary">‹ Retour</Text></Pressable>
         <Text variant="h4">Ventes</Text>
-        <Pressable
+        <Pressable hitSlop={12}
           onPress={openFilterSheet}
           style={styles.filterIconBtn}
           accessibilityLabel="Filtrer les ventes"
@@ -1412,7 +1415,9 @@ export default function VentesScreen() {
           onEndReachedThreshold={0.5}
           ListFooterComponent={() => (
             loadingMore ? (
-              <ActivityIndicator style={{ marginVertical: spacing[5] }} color={palette.primary} />
+              <View style={{ marginVertical: spacing[5], alignItems: 'center' }}>
+                <LoadingStatus word="Chargement" variant="caption" color={palette.textSecondary} />
+              </View>
             ) : null
           )}
           renderItem={({ item }) => {
@@ -1425,7 +1430,7 @@ export default function VentesScreen() {
                 >
                   <View style={{ flex: 1 }}>
                     <Text variant="label" style={styles.dayLabel}>{item.label}</Text>
-                    <Text variant="caption" color="secondary">
+                    <Text variant="caption" color="secondary" numberOfLines={1} adjustsFontSizeToFit minimumFontScale={0.5}>
                       {item.count === 1
                         ? `${item.soloName ? `${item.soloName} · ` : ''}${fmt(item.total, currency)}`
                         : `${item.count} ventes · ${fmt(item.total, currency)}`}
@@ -1512,7 +1517,7 @@ export default function VentesScreen() {
       />
 
       {canSell && !selected && sales.length > 0 && (
-        <Animated.View style={[styles.fabContainer, { transform: [{ scale: fabScale }], opacity: fabOpacity }]}>
+        <Animated.View style={[styles.fabContainer, { bottom: insets.bottom + spacing[6], transform: [{ scale: fabScale }], opacity: fabOpacity }]}>
           <Pressable
             onPress={() => router.push('/(app)/(tabs)/vendre')}
             style={({ pressed }) => [styles.fabExtended, pressed && { opacity: 0.82 }]}

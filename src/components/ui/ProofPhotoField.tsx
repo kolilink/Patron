@@ -1,5 +1,5 @@
 import { useState } from 'react';
-import { ActivityIndicator, Modal, Platform, Pressable, StyleSheet, View } from 'react-native';
+import { Modal, Platform, Pressable, StyleSheet, View } from 'react-native';
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
 import { Image } from 'expo-image';
 import * as ImagePicker from 'expo-image-picker';
@@ -8,6 +8,7 @@ import { Text } from '@/src/components/ui/Text';
 import { useTheme, spacing, radius, colors } from '@/src/theme';
 import type { Palette } from '@/src/theme';
 import { toast } from '@/stores/toast';
+import { LoadingStatus } from '@/src/components/ui/LoadingStatus';
 
 export type PickedImage = { uri: string; width: number; height: number };
 
@@ -41,7 +42,7 @@ export function ProofPhotoField({ existingUrl, existingWidth, existingHeight, va
   // statusBarTranslucent (below) draws the viewer Modal behind the status
   // bar on Android — nudge the close button down by the real inset so it
   // doesn't end up under/near the status bar or a camera cutout.
-  const closeTop = Platform.OS === 'android' ? styles.close.top + insets.top : styles.close.top;
+  const closeTop = insets.top + 12; // live inset on every phone (notch, Dynamic Island, punch-hole), never a fixed 56
 
   const pick = async () => {
     if (picking) return;
@@ -74,7 +75,7 @@ export function ProofPhotoField({ existingUrl, existingWidth, existingHeight, va
           />
         </Pressable>
         <Modal visible={viewerOpen} transparent animationType="fade" onRequestClose={() => setViewerOpen(false)} statusBarTranslucent navigationBarTranslucent>
-          <Pressable style={styles.backdrop} onPress={() => setViewerOpen(false)}>
+          <Pressable hitSlop={12} style={styles.backdrop} onPress={() => setViewerOpen(false)}>
             <Image source={{ uri: existingUrl }} style={styles.full} contentFit="contain" />
             <Pressable style={[styles.close, { top: closeTop }]} onPress={() => setViewerOpen(false)} hitSlop={12} accessibilityLabel="Fermer" accessibilityRole="button">
               <Ionicons name="close" size={26} color={colors.neutral[0]} />
@@ -123,9 +124,11 @@ export function ProofPhotoField({ existingUrl, existingWidth, existingHeight, va
       <Text variant="label">Photo <Text variant="caption" color="secondary">(optionnel)</Text></Text>
       <Pressable onPress={pick} style={styles.well} disabled={picking}>
         {picking
-          ? <ActivityIndicator size="small" color={palette.textSecondary} />
-          : <Ionicons name="image-outline" size={22} color={palette.textSecondary} />}
-        <Text variant="body" color="secondary">Ajouter une image</Text>
+          ? <LoadingStatus word="Chargement" variant="body" color={palette.textSecondary} />
+          : (<>
+              <Ionicons name="image-outline" size={22} color={palette.textSecondary} />
+              <Text variant="body" color="secondary">Ajouter une image</Text>
+            </>)}
       </Pressable>
     </View>
   );
