@@ -16,7 +16,14 @@ export interface QuickAddDraft {
   id: string;
   savedAt: number;
   state: QuickAddState;
+  /** 'edit' = unsaved changes to an existing product (one per product); absent/'add' = a new product. */
+  kind?: 'add' | 'edit';
+  /** Edit drafts only: the product being edited. */
+  productId?: string;
 }
+
+/** Edit drafts are upserted by product, so the id is derived from it. */
+export const editDraftId = (productId: string) => `edit-${productId}`;
 
 const keyFor = (businessId: string) => `quick_add_drafts_${businessId}`;
 // Single-draft key written by the previous build: migrated once, then emptied.
@@ -40,7 +47,12 @@ function parseList(raw: string | null): QuickAddDraft[] {
   try { parsed = JSON.parse(raw); } catch { return []; } // corrupt = no drafts
   if (!Array.isArray(parsed)) return [];
   return parsed
-    .filter((d): d is QuickAddDraft => !!d && typeof d.id === 'string' && typeof d.savedAt === 'number' && isState(d.state) && !isBlankDraft(d.state))
+    .filter((d): d is QuickAddDraft => {
+      if (!d || typeof d.id !== 'string' || typeof d.savedAt !== 'number' || !isState(d.state)) return false;
+      // An edit draft is a diff against a saved product: it is never "blank".
+      if (d.kind === 'edit') return typeof d.productId === 'string';
+      return !isBlankDraft(d.state);
+    })
     .sort((a, b) => b.savedAt - a.savedAt)
     .slice(0, MAX_DRAFTS);
 }
@@ -68,10 +80,13 @@ export async function listQuickAddDrafts(businessId: string): Promise<QuickAddDr
 }
 
 /** Upsert by id. A blank state removes the draft; the 4th draft pushes the oldest out. */
-export async function saveQuickAddDraft(businessId: string, id: string, state: QuickAddState): Promise<void> {
+export async function saveQuickAddDraft(
+  businessId: string, id: string, state: QuickAddState, edit?: { productId: string },
+): Promise<void> {
   if (!businessId) return;
   const rest = (await listQuickAddDrafts(businessId)).filter(d => d.id !== id);
-  const next = isBlankDraft(state) ? rest : [{ id, savedAt: Date.now(), state }, ...rest].slice(0, MAX_DRAFTS);
+  const draft: QuickAddDraft = edit ? { id, savedAt: Date.now(), state, kind: 'edit', productId: edit.productId } : { id, savedAt: Date.now(), state };
+  const next = !edit && isBlankDraft(state) ? rest : [draft, ...rest].slice(0, MAX_DRAFTS);
   await write(businessId, next);
 }
 

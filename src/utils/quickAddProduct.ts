@@ -286,6 +286,22 @@ export function isBlankDraft(s: QuickAddState): boolean {
   );
 }
 
+/**
+ * Edit mode: has anything the sheet lets her change moved away from the saved product?
+ * Quantity is excluded — in edit the stock is shown as a fact and only changes through "Ajuster".
+ */
+export function isEditDirty(current: QuickAddState, saved: QuickAddState): boolean {
+  const t = (x: string) => x.trim();
+  if (t(current.name) !== t(saved.name) || t(current.price) !== t(saved.price)) return true;
+  if (t(current.purchasePrice) !== t(saved.purchasePrice) || t(current.fees) !== t(saved.fees)) return true;
+  if (current.supplierId !== saved.supplierId || current.models !== saved.models) return true;
+  if (current.variants.length !== saved.variants.length) return true;
+  return current.variants.some((v, i) => {
+    const o = saved.variants[i];
+    return v.key !== o.key || t(v.name) !== t(o.name) || t(v.qty) !== t(o.qty) || t(v.price) !== t(o.price);
+  });
+}
+
 /** Next sheet state after a successful add: everything cleared EXCEPT the quantity (sticky). */
 export function afterAdd(s: QuickAddState): QuickAddState {
   return { ...EMPTY_QUICK_ADD, qty: s.qty };
