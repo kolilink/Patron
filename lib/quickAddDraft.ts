@@ -8,7 +8,7 @@
 // account deletion with every other kv row). A draft is never synced and never touches the outbox.
 
 import { getKV, setKV } from '@/lib/db';
-import { isBlankDraft, type QuickAddState } from '@/src/utils/quickAddProduct';
+import { isBlankDraft, isResumableAddDraft, type QuickAddState } from '@/src/utils/quickAddProduct';
 
 export const MAX_DRAFTS = 3;
 
@@ -51,7 +51,8 @@ function parseList(raw: string | null): QuickAddDraft[] {
       if (!d || typeof d.id !== 'string' || typeof d.savedAt !== 'number' || !isState(d.state)) return false;
       // An edit draft is a diff against a saved product: it is never "blank".
       if (d.kind === 'edit') return typeof d.productId === 'string';
-      return !isBlankDraft(d.state);
+      // Also drops nameless add drafts persisted by older builds: they could never be resumed into anything.
+      return isResumableAddDraft(d.state);
     })
     .sort((a, b) => b.savedAt - a.savedAt)
     .slice(0, MAX_DRAFTS);
@@ -70,7 +71,7 @@ export async function listQuickAddDrafts(businessId: string): Promise<QuickAddDr
     let legacy: unknown = null;
     try { legacy = JSON.parse(legacyRaw); } catch { legacy = null; } // corrupt legacy draft = none
     await setKV(legacyKeyFor(businessId), '');
-    if (isState(legacy) && !isBlankDraft(legacy)) {
+    if (isState(legacy) && isResumableAddDraft(legacy)) {
       const merged = [{ id: newDraftId(), savedAt: Date.now(), state: legacy }, ...list].slice(0, MAX_DRAFTS);
       await write(businessId, merged);
       return merged;
@@ -86,7 +87,8 @@ export async function saveQuickAddDraft(
   if (!businessId) return;
   const rest = (await listQuickAddDrafts(businessId)).filter(d => d.id !== id);
   const draft: QuickAddDraft = edit ? { id, savedAt: Date.now(), state, kind: 'edit', productId: edit.productId } : { id, savedAt: Date.now(), state };
-  const next = !edit && isBlankDraft(state) ? rest : [draft, ...rest].slice(0, MAX_DRAFTS);
+  // A nameless add state is not a draft: the session's draft (if one was written earlier) is REMOVED, not saved.
+  const next = !edit && !isResumableAddDraft(state) ? rest : [draft, ...rest].slice(0, MAX_DRAFTS);
   await write(businessId, next);
 }
 

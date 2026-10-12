@@ -1,4 +1,4 @@
-// Gérer mode is ONE sections list (À compléter · EN VENTE · PRODUITS FINIS · ARCHIVÉS) whose rows open
+// Gérer mode is plain rows — À compléter (pending drafts) · ONE "Produits" list · a quiet "Archivés (n)" link — whose rows open
 // the add/edit sheet. Pure sectioning and the offline store behaviour are tested for real; the screen
 // structure is pinned at source level (this repo has no component-render harness).
 
@@ -39,7 +39,7 @@ jest.mock('@/stores/auth', () => ({
   useAuthStore: { getState: () => ({ session: { activeBusiness: { id: 'b' }, activeMembership: { role: 'administrateur' }, user: { id: 'u' } } }) },
 }));
 
-import { buildGererSections, isOutOfStock, productPieces } from '@/src/utils/gererSections';
+import { buildGererSections, productPieces } from '@/src/utils/gererSections';
 import { useProductStore } from '@/stores/products';
 
 const ROOT = path.resolve(__dirname, '..');
@@ -52,53 +52,44 @@ const prod = (over: any = {}) => ({
 }) as any;
 const variant = (over: any = {}) => ({ id: 'v1', product_id: 'p2', name: 'M', cost_price: 100, sale_price: 200, stock_qty: 3, ...over }) as any;
 
-describe('sections', () => {
-  it('splits into EN VENTE / PRODUITS FINIS / ARCHIVÉS and drops empty sections', () => {
-    const { sections } = buildGererSections({
-      products: [prod({ id: 'a', name: 'Sucre' }), prod({ id: 'b', name: 'Thé', stock_qty: 0 })],
+describe('one "Produits" list + archived on the side', () => {
+  it('every non-archived product is in ONE list (former en-vente + finis), sorted by name; archived are kept apart', () => {
+    const r = buildGererSections({
+      products: [prod({ id: 'c', name: 'Thé', stock_qty: 0 }), prod({ id: 'a', name: 'Sucre' }), prod({ id: 'b', name: 'Riz', stock_qty: 0 })],
       archived: [prod({ id: 'z', name: 'Zinc', archived: true })],
-      variantsByProduct: {},
     });
-    expect(sections.map(s => [s.label, s.products.map(p => p.id)])).toEqual([
-      ['EN VENTE', ['a']], ['PRODUITS FINIS', ['b']], ['ARCHIVÉS', ['z']],
-    ]);
-    const only = buildGererSections({ products: [prod()], archived: [], variantsByProduct: {} });
-    expect(only.sections.map(s => s.label)).toEqual(['EN VENTE']);
-    expect(buildGererSections({ products: [], archived: [], variantsByProduct: {} }).sections).toEqual([]);
+    expect(r.sections).toHaveLength(1);
+    expect(r.sections[0].key).toBe('produits');
+    expect(r.sections[0].products.map(p => p.id)).toEqual(['b', 'a', 'c']);       // Riz, Sucre, Thé — zero-stock rows included, no separate section
+    expect(r.archives.map(p => p.id)).toEqual(['z']);
+    expect(r.total).toBe(4);
   });
-  it('"fini" means 0 pcs; a product with models is fini only once its models are known and all at 0', () => {
-    expect(isOutOfStock(prod({ stock_qty: 0 }))).toBe(true);
-    expect(isOutOfStock(prod({ stock_qty: 1 }))).toBe(false);
-    const parent = prod({ id: 'p2', has_variants: true, stock_qty: 0 });
-    expect(isOutOfStock(parent)).toBe(false);                                          // models not loaded: fail-open
-    expect(isOutOfStock(parent, [variant({ stock_qty: 0 }), variant({ id: 'v2', stock_qty: 0 })])).toBe(true);
-    expect(isOutOfStock(parent, [variant({ stock_qty: 0 }), variant({ id: 'v2', stock_qty: 2 })])).toBe(false);
-    const { sections } = buildGererSections({ products: [parent], archived: [], variantsByProduct: {} });
-    expect(sections.map(s => s.key)).toEqual(['enVente']);
+  it('the section header carries no count and no old section names exist', () => {
+    const r = buildGererSections({ products: [prod()], archived: [] });
+    expect(r.sections[0].label).toBe('Produits');
+    expect(JSON.stringify(r)).not.toMatch(/EN VENTE|PRODUITS FINIS|ARCHIVÉS/);
   });
-  it('pieces: plain stock, or the sum of the models\' stock (null until they load)', () => {
+  it('no products ⇒ no Produits section (the screen shows its empty state / the Archivés link)', () => {
+    expect(buildGererSections({ products: [], archived: [prod({ id: 'z', archived: true })] }).sections).toEqual([]);
+    expect(buildGererSections({ products: [], archived: [] })).toEqual({ sections: [], archives: [], total: 0 });
+  });
+  it('pieces: plain stock, or the sum of the models\' stock (null until they load) — the row shows "0 pcs" itself', () => {
     expect(productPieces(prod({ stock_qty: 12 }))).toBe(12);
+    expect(productPieces(prod({ stock_qty: 0 }))).toBe(0);
     expect(productPieces(prod({ has_variants: true, stock_qty: 0 }))).toBeNull();
     expect(productPieces(prod({ has_variants: true, stock_qty: 0 }), [variant({ stock_qty: 4 }), variant({ id: 'v2', stock_qty: 6 })])).toBe(10);
   });
-  it('rows sort by name within a section; search is accent- and case-insensitive across all sections', () => {
-    const { sections } = buildGererSections({
+  it('search is accent- and case-insensitive over both the list and the archived products', () => {
+    const args = {
       products: [prod({ id: 'b', name: 'Zèbre' }), prod({ id: 'a', name: 'Éponge' })],
       archived: [prod({ id: 'z', name: 'eponge vieille', archived: true })],
-      variantsByProduct: {},
-    });
-    expect(sections[0].products.map(p => p.name)).toEqual(['Éponge', 'Zèbre']);
-    const q = buildGererSections({ products: [prod({ id: 'b', name: 'Zèbre' }), prod({ id: 'a', name: 'Éponge' })], archived: [prod({ id: 'z', name: 'eponge vieille', archived: true })], variantsByProduct: {}, query: 'EPONGE' });
-    expect(q.sections.flatMap(s => s.products.map(p => p.id))).toEqual(['a', 'z']);
+    };
+    const q = buildGererSections({ ...args, query: 'EPONGE' });
+    expect(q.sections[0].products.map(p => p.id)).toEqual(['a']);
+    expect(q.archives.map(p => p.id)).toEqual(['z']);
   });
-  it('Valeur du stock = purchase cost × stock of the ACTIVE products (models per model), not archived ones', () => {
-    const parent = prod({ id: 'p2', has_variants: true, stock_qty: 0, cost_price: 0 });
-    const r = buildGererSections({
-      products: [prod({ id: 'a', cost_price: 500, stock_qty: 12 }), parent],
-      archived: [prod({ id: 'z', cost_price: 9999, stock_qty: 100, archived: true })],
-      variantsByProduct: { p2: [variant({ cost_price: 100, stock_qty: 3 }), variant({ id: 'v2', cost_price: 200, stock_qty: 2 })] },
-    });
-    expect(r.stockValue).toBe(500 * 12 + 100 * 3 + 200 * 2);
+  it('"Valeur du stock" is gone from the data too (it is a report, not a management action)', () => {
+    expect(Object.keys(buildGererSections({ products: [prod()], archived: [] }))).toEqual(['sections', 'archives', 'total']);
   });
 });
 
@@ -110,11 +101,29 @@ describe('Gérer screen structure', () => {
     expect(pm).toContain('accessibilityLabel="Terminer"');
     expect(pm.match(/onPress=\{onExit\}/g)?.length).toBe(2);
   });
-  it('"Valeur du stock" is a quiet line in the header area', () => {
-    expect(pm).toContain('Valeur du stock');
+  it('"Valeur du stock" is gone from the screen', () => {
+    expect(pm).not.toMatch(/Valeur du stock|valueLine|stockValue/);
   });
-  it('À compléter renders only when n > 0', () => {
+  it('À compléter renders only when n > 0, as PLAIN rows with the (n) count — no card, no collapse', () => {
     expect(pm).toMatch(/\{drafts\.length > 0 && \(/);
+    expect(pm).toContain('`À compléter (${drafts.length})`');
+    expect(pm).not.toMatch(/draftsCard|draftsHead|setDraftsOpen/);
+    const row = pm.slice(pm.indexOf('function DraftRow'), pm.indexOf('export function ProductManager'));
+    expect(row).toContain('style={styles.row}');                       // the same row style as a product row
+    expect(row).toContain('name="close-circle"');                     // × deletes
+    expect(row).toContain('onPress={onResume}');                      // tap resumes
+  });
+  it('one "Produits" list: no EN VENTE / PRODUITS FINIS / ARCHIVÉS sections, no counts in headers', () => {
+    expect(pm).not.toMatch(/EN VENTE|PRODUITS FINIS|ARCHIVÉS/);
+    expect(pm).toContain('<Text style={styles.sectionHeader}>{item.section.label}</Text>');
+  });
+  it('"Archivés (n)" is a quiet link at the bottom, collapsed by default, tap toggles; its rows open the edit sheet', () => {
+    expect(pm).toContain("const [archivesOpen, setArchivesOpen] = useState(false)");
+    expect(pm).toContain('`Archivés (${archives.length})`');
+    expect(pm).toMatch(/ListFooterComponent=\{archives\.length > 0 \? \(/);
+    expect(pm).toMatch(/setArchivesOpen\(v => !v\)/);
+    expect(pm).toMatch(/\{archivesOpen && archives\.map\(/);
+    expect(pm).toMatch(/onPress=\{\(\) => sheets\.openEdit\(p\)\}/);   // → edit sheet, which has Restaurer
   });
   it('rows show "12 pcs · 1 500 gnf" and a chevron; tapping opens the add/edit sheet (no per-row buttons)', () => {
     expect(pm).toContain("{pcs !== null ? `${pcs} pcs` : 'Modèles'}");
@@ -144,7 +153,7 @@ describe('Gérer screen structure', () => {
   });
 });
 
-describe('airplane mode: every section renders from the local store, archive/restore show at once', () => {
+describe('airplane mode: the list and the archived link render from the local store, archive/restore show at once', () => {
   beforeEach(() => {
     enqueued.length = 0; netCalls.length = 0; savedArchived.length = 0;
     cachedProducts = [prod({ id: 'a', name: 'Sucre' }), prod({ id: 'b', name: 'Thé', stock_qty: 0 })];
@@ -152,7 +161,7 @@ describe('airplane mode: every section renders from the local store, archive/res
     useProductStore.getState().reset();
   });
 
-  it('ARCHIVÉS comes from the cache when the network is down, and a failed refresh is not an error', async () => {
+  it('Archivés comes from the cache when the network is down, and a failed refresh is not an error', async () => {
     await useProductStore.getState().fetchArchivedProducts('b');
     expect(useProductStore.getState().archivedProducts.map(p => p.id)).toEqual(['z']);
     expect(useProductStore.getState().error).toBeNull();
@@ -166,8 +175,9 @@ describe('airplane mode: every section renders from the local store, archive/res
     let s = useProductStore.getState();
     expect(s.products.map(p => p.id)).toEqual(['b']);
     expect(s.archivedProducts.map(p => p.id).sort()).toEqual(['a', 'z']);
-    const view = buildGererSections({ products: s.products, archived: s.archivedProducts, variantsByProduct: {} });
-    expect(view.sections.map(x => x.label)).toEqual(['PRODUITS FINIS', 'ARCHIVÉS']);
+    const view = buildGererSections({ products: s.products, archived: s.archivedProducts });
+    expect(view.sections[0].products.map(p => p.id)).toEqual(['b']);          // one list…
+    expect(view.archives.map(p => p.id).sort()).toEqual(['a', 'z']);          // …archived on the side
 
     await useProductStore.getState().restoreProduct('z', 'b', 'u');
     s = useProductStore.getState();
