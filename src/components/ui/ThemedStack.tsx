@@ -27,3 +27,12 @@ export function ThemedRootView(props: ViewProps) {
   const { palette } = useTheme();
   return <View {...props} style={[{ flex: 1, backgroundColor: palette.background }, props.style]} />;
 }
+
+/**
+ * A full-screen view painted with the theme background. Rendered while the app is loading in place of
+ * `null` / an empty fragment: a slow phone must show the app's own surface, never a blank (white/black) frame.
+ */
+export function ThemedFill() {
+  const { palette } = useTheme();
+  return <View style={{ flex: 1, backgroundColor: palette.background }} />;
+}
