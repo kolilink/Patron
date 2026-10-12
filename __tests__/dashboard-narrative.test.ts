@@ -3,7 +3,7 @@
 // __tests__/integration/dashboard-revenue-last-month.integration.test.ts.
 import fs from 'fs';
 import path from 'path';
-import { homeComparison, showMonthLine } from '@/src/utils/dashboardNarrative';
+import { homeComparison, showMonthLine, businessAgeDays } from '@/src/utils/dashboardNarrative';
 
 const base = { hasEverSold: true, isFirstSaleToday: false, isEvening: false, delta: 0, monthRevenue: 0, lastMonthRevenue: 0 };
 
@@ -49,5 +49,32 @@ describe('screen wiring', () => {
     // no executable string (comments may still explain the history)
     expect(src.split('\n').filter(l => !l.trim().startsWith('//')).join('\n')).not.toMatch(/Même niveau qu'hier/);
     expect(src).toMatch(/`Ce mois · \$\{monthOrderCount\} vente/);
+  });
+});
+
+describe('welcome lifetime: first paid sale or 7 days', () => {
+  const none = { ...base, hasEverSold: false };
+  it.each([0, 1, 4, 7])('day %i, no paid sale → welcome', d => expect(homeComparison({ ...none, businessAgeDays: d }).kind).toBe('welcome'));
+  it.each([8, 9, 30, 400])('day %i, no paid sale → nothing', d => expect(homeComparison({ ...none, businessAgeDays: d }).kind).toBe('none'));
+  it('a paid sale ends the welcome regardless of age', () => {
+    for (const d of [0, 3, 7, 40]) expect(homeComparison({ ...base, businessAgeDays: d }).kind).not.toBe('welcome');
+  });
+  it('first_sale fires only on the first-sale day', () => {
+    expect(homeComparison({ ...base, businessAgeDays: 2, isFirstSaleToday: true }).kind).toBe('first_sale');
+    expect(homeComparison({ ...base, businessAgeDays: 2, isFirstSaleToday: false }).kind).not.toBe('first_sale');
+  });
+  it('a credit-only business (hasEverSold false) still reads welcome within the window, nothing after', () => {
+    expect(homeComparison({ ...none, businessAgeDays: 3, delta: 500 }).kind).toBe('welcome');
+    expect(homeComparison({ ...none, businessAgeDays: 9 }).kind).toBe('none');
+  });
+  it('businessAgeDays counts whole days from creation', () => {
+    const now = new Date('2026-10-12T12:00:00Z');
+    expect(businessAgeDays('2026-10-12T01:00:00Z', now)).toBe(0);
+    expect(businessAgeDays('2026-10-05T11:00:00Z', now)).toBe(7);
+    expect(businessAgeDays('2026-10-04T11:00:00Z', now)).toBe(8);
+    expect(businessAgeDays(undefined, now)).toBe(0);
+  });
+  it('the screen passes the business age in', () => {
+    expect(fs.readFileSync(path.join(__dirname, '..', 'app/(app)/(tabs)/index.tsx'), 'utf8')).toContain('businessAgeDays: businessAgeDays(business?.created_at)');
   });
 });
