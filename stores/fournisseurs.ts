@@ -89,7 +89,6 @@ export interface SupplierDraft {
   notes?: string;
   lead_days?: number | null;
   linkedProductIds?: string[];
-  newProducts?: { name: string; unit: string }[];
   /** Existing products to unlink from this supplier (edit only; empty on create). */
   unlinkedProductIds?: string[];
 }
@@ -395,7 +394,9 @@ export const useFournisseursStore = create<FournisseursStore>((set, get) => ({
     };
     const payload = {
       p_supplier: supplier,
-      p_new_products: (d.newProducts ?? []).map(np => ({ id: generateId(), name: np.name.trim(), unit: np.unit || 'pcs' })),
+      // Products are created only through QuickAddProductSheet now; the key stays because
+      // the outbox validator and upsert_supplier still require the (empty) array.
+      p_new_products: [] as unknown[],
       p_link_product_ids: d.linkedProductIds ?? [],
       p_unlink_product_ids: [],
     };
@@ -421,22 +422,6 @@ export const useFournisseursStore = create<FournisseursStore>((set, get) => ({
     try {
       const { error } = await supabase.from('suppliers').insert(supplier);
       if (error) { set({ error: translateError(error, 'Impossible de créer le fournisseur'), saving: false }); return null; }
-      for (const np of (d.newProducts ?? [])) {
-        const { error: pErr } = await supabase.from('products').insert({
-          id: generateId(),
-          business_id: businessId,
-          name: np.name.trim(),
-          unit: np.unit || 'pcs',
-          cost_price: 0,
-          sale_price: 0,
-          stock_qty: 0,
-          reorder_level: 0,
-          archived: false,
-          created_by: userId,
-          supplier_id: id,
-        });
-        if (pErr) console.error('[createFournisseur] product insert failed', pErr);
-      }
       if ((d.linkedProductIds?.length ?? 0) > 0) {
         const { error: lErr } = await supabase.from('products').update({ supplier_id: id }).in('id', d.linkedProductIds as string[]);
         if (lErr) console.error('[createFournisseur] link failed', lErr);
@@ -465,7 +450,9 @@ export const useFournisseursStore = create<FournisseursStore>((set, get) => ({
     };
     const payload = {
       p_supplier: supplier,
-      p_new_products: (d.newProducts ?? []).map(np => ({ id: generateId(), name: np.name.trim(), unit: np.unit || 'pcs' })),
+      // Products are created only through QuickAddProductSheet now; the key stays because
+      // the outbox validator and upsert_supplier still require the (empty) array.
+      p_new_products: [] as unknown[],
       p_link_product_ids: d.linkedProductIds ?? [],
       p_unlink_product_ids: d.unlinkedProductIds ?? [],
     };
@@ -501,22 +488,6 @@ export const useFournisseursStore = create<FournisseursStore>((set, get) => ({
         lead_days: supplier.lead_days,
       }).eq('id', id);
       if (error) { set({ error: translateError(error, 'Impossible de modifier le fournisseur'), saving: false }); return false; }
-      for (const np of (d.newProducts ?? [])) {
-        const { error: pErr } = await supabase.from('products').insert({
-          id: generateId(),
-          business_id: businessId,
-          name: np.name.trim(),
-          unit: np.unit || 'pcs',
-          cost_price: 0,
-          sale_price: 0,
-          stock_qty: 0,
-          reorder_level: 0,
-          archived: false,
-          created_by: userId,
-          supplier_id: id,
-        });
-        if (pErr) console.error('[updateFournisseur] product insert failed', pErr);
-      }
       if ((d.unlinkedProductIds?.length ?? 0) > 0) {
         await supabase.from('products').update({ supplier_id: null }).in('id', d.unlinkedProductIds as string[]);
       }

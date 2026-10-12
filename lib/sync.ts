@@ -654,6 +654,16 @@ export async function drainQueue(): Promise<SyncResult> {
           }
         }
 
+        if (op.operation === 'create_supplier' || op.operation === 'update_supplier') {
+          // A supplier save links products created through the sheet: wait for those creates to land first.
+          const links = Array.isArray(payload.p_link_product_ids) ? payload.p_link_product_ids : [];
+          if (links.some(id => typeof id === 'string' && pendingProductKeys.has(id))) {
+            await rescheduleOp(op.id, new Date(Date.now() + 5_000).toISOString(), 'Création du produit encore en attente');
+            result.failed++;
+            continue;
+          }
+        }
+
         await executeOp(op.operation, payload);
         await deleteQueueItem(op.id);
         result.synced++;
