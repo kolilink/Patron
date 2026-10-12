@@ -24,6 +24,7 @@ function useShimmerProgress(): SharedValue<number> {
   useEffect(() => {
     // Reduce motion: shimmer parked off-screen — a plain static placeholder.
     if (reduceMotion) { cancelAnimation(progress); progress.value = -SHIMMER_W; return; }
+    // motion-means: skeleton shimmer — content is loading
     progress.value = withRepeat(
       withTiming(width + SHIMMER_W, { duration: SHIMMER_DURATION, easing: Easing.linear }),
       -1,

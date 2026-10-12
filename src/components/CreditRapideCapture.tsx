@@ -178,19 +178,14 @@ export function CreditRapideCapture({ businessId, userId, currency, onViewClient
     return clients.filter(c => c.name.toLowerCase().includes(q) || (c.phone ?? '').includes(q));
   }, [clients, search]);
 
-  // Amber pulse on the amount box while a name is set but nothing's been
+  // Steady highlight on the amount box while a name is set but nothing's been
   // typed yet — a wordless "this is the next thing to do" nudge, ported
   // from vendre.tsx's own already-shipped credit tab rather than reinvented.
   useEffect(() => {
     const active = phase === 'amount' && (isNew ? name.trim().length > 0 : true) && !amount;
     if (active) {
-      blinkLoopRef.current = Animated.loop(
-        Animated.sequence([
-          Animated.timing(blinkAnim, { toValue: 1, duration: 700, useNativeDriver: false }),
-          Animated.timing(blinkAnim, { toValue: 0, duration: 700, useNativeDriver: false }),
-        ]),
-      );
-      blinkLoopRef.current.start();
+      // Steady highlight (no blinking): the primary border says "type the amount here".
+      Animated.timing(blinkAnim, { toValue: 1, duration: 150, useNativeDriver: false }).start();
     } else {
       blinkLoopRef.current?.stop();
       blinkLoopRef.current = null;

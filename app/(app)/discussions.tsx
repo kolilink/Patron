@@ -525,6 +525,7 @@ export default function DiscussionsScreen() {
   useEffect(() => {
     // Reduce motion: the recording dot stays solid — no pulse.
     if (!isRecording || reduceMotion) { pulseAnim.setValue(1); return; }
+    // motion-means: recording indicator — the mic is live
     const loop = RNAnimated.loop(
       RNAnimated.sequence([
         RNAnimated.timing(pulseAnim, { toValue: 0.3, duration: 600, useNativeDriver: true }),

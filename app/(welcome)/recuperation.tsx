@@ -66,17 +66,7 @@ function MailAppButton({
 }) {
   const opacity = useRef(new Animated.Value(1)).current;
 
-  useEffect(() => {
-    if (!breathing) return;
-    const anim = Animated.loop(
-      Animated.sequence([
-        Animated.timing(opacity, { toValue: 0.5, duration: 900, useNativeDriver: true }),
-        Animated.timing(opacity, { toValue: 1, duration: 900, useNativeDriver: true }),
-      ]),
-    );
-    anim.start();
-    return () => anim.stop();
-  }, [breathing, opacity]);
+  // No breathing loop (motion must mean something); `breathing` is kept only so call sites stay valid.
 
   const IconComp = iconSet === 'mdi' ? MaterialCommunityIcons : Ionicons;
 

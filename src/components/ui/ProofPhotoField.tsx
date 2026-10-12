@@ -1,5 +1,5 @@
 import { useState } from 'react';
-import { ActivityIndicator, Modal, Platform, Pressable, StyleSheet, View } from 'react-native';
+import { Modal, Platform, Pressable, StyleSheet, View } from 'react-native';
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
 import { Image } from 'expo-image';
 import * as ImagePicker from 'expo-image-picker';
@@ -8,6 +8,7 @@ import { Text } from '@/src/components/ui/Text';
 import { useTheme, spacing, radius, colors } from '@/src/theme';
 import type { Palette } from '@/src/theme';
 import { toast } from '@/stores/toast';
+import { LoadingStatus } from '@/src/components/ui/LoadingStatus';
 
 export type PickedImage = { uri: string; width: number; height: number };
 
@@ -123,9 +124,11 @@ export function ProofPhotoField({ existingUrl, existingWidth, existingHeight, va
       <Text variant="label">Photo <Text variant="caption" color="secondary">(optionnel)</Text></Text>
       <Pressable onPress={pick} style={styles.well} disabled={picking}>
         {picking
-          ? <ActivityIndicator size="small" color={palette.textSecondary} />
-          : <Ionicons name="image-outline" size={22} color={palette.textSecondary} />}
-        <Text variant="body" color="secondary">Ajouter une image</Text>
+          ? <LoadingStatus word="Chargement" variant="body" color={palette.textSecondary} />
+          : (<>
+              <Ionicons name="image-outline" size={22} color={palette.textSecondary} />
+              <Text variant="body" color="secondary">Ajouter une image</Text>
+            </>)}
       </Pressable>
     </View>
   );

@@ -2,7 +2,7 @@ import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { ConfirmSheetHost } from '@/src/components/ui/ConfirmSheet';
 import { appAlert } from '@/src/utils/appAlert';
 import { AnimatedRowCell, AnimatedRow } from '@/src/components/ui/AnimatedRow';
-import { ActivityIndicator, Animated, Easing, FlatList, InputAccessoryView, Modal, Platform, Pressable, RefreshControl, ScrollView, StyleSheet, TextInput, View } from 'react-native';
+import { Animated, Easing, FlatList, InputAccessoryView, Modal, Platform, Pressable, RefreshControl, ScrollView, StyleSheet, TextInput, View } from 'react-native';
 import { SafeAreaView } from 'react-native-safe-area-context';
 import { Screen } from '@/src/components/ui/Screen';
 import { FormSheet } from '@/src/components/ui/FormSheet';
@@ -30,6 +30,7 @@ import { failAlert } from '@/src/components/ui/FailureView';
 import { saleCancelledConfirmation } from '@/src/utils/saveConfirmationCopy';
 import { toast } from '@/stores/toast';
 import { formatDate, localDateISO } from '@/src/utils/dates';
+import { LoadingStatus } from '@/src/components/ui/LoadingStatus';
 
 // iOS-only: suppresses the OS's auto-injected floating "Done" pill above
 // the numeric keyboard — PaymentSheet already has a persistent, always-
@@ -48,6 +49,7 @@ function SkeletonLine({ width = '100%', height = 14 }: { width?: string | number
   const { palette } = useTheme();
   const pulse = useRef(new Animated.Value(0.4)).current;
   useEffect(() => {
+    // motion-means: skeleton pulse — the detail is loading
     Animated.loop(
       Animated.sequence([
         Animated.timing(pulse, { toValue: 1, duration: 700, useNativeDriver: true, easing: Easing.inOut(Easing.ease) }),
@@ -1412,7 +1414,9 @@ export default function VentesScreen() {
           onEndReachedThreshold={0.5}
           ListFooterComponent={() => (
             loadingMore ? (
-              <ActivityIndicator style={{ marginVertical: spacing[5] }} color={palette.primary} />
+              <View style={{ marginVertical: spacing[5], alignItems: 'center' }}>
+                <LoadingStatus word="Chargement" variant="caption" color={palette.textSecondary} />
+              </View>
             ) : null
           )}
           renderItem={({ item }) => {

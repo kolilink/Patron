@@ -87,25 +87,8 @@ export function PaywallScreen({ business, onDismiss, inline = false, onPurchased
   // Breathing-CTA animation state — runs for both the full-screen paywall
   // and the inline mid-chat card, since the inline card is the one users
   // actually hit in the real quota-exhaustion flow.
-  const [breathing, setBreathing] = useState(false);
   const breathScale = useRef(new Animated.Value(1)).current;
-
-  useEffect(() => {
-    const startTimer = setTimeout(() => setBreathing(true), BREATHE_START_DELAY_MS);
-    return () => clearTimeout(startTimer);
-  }, []);
-
-  useEffect(() => {
-    if (!breathing) return;
-    const loop = Animated.loop(
-      Animated.sequence([
-        Animated.timing(breathScale, { toValue: 1.04, duration: BREATH_HALF_CYCLE_MS, easing: Easing.inOut(Easing.sin), useNativeDriver: true }),
-        Animated.timing(breathScale, { toValue: 1, duration: BREATH_HALF_CYCLE_MS, easing: Easing.inOut(Easing.sin), useNativeDriver: true }),
-      ]),
-    );
-    loop.start();
-    return () => loop.stop();
-  }, [breathing, breathScale]);
+  // Static: the CTA no longer breathes (decorative loop removed — motion must mean something).
 
   // "Google Play", not "Google Pay" — a different product. Neither label is
   // literally accurate (native IAP subscriptions never touch Apple Pay/

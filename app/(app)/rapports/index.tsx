@@ -97,6 +97,7 @@ function ValueSkeleton() {
   const pulse = useRef(new Animated.Value(0.3)).current;
   useEffect(() => {
     if (reduceMotion) { pulse.setValue(0.5); return; }
+    // motion-means: skeleton pulse — the value is loading
     const loop = Animated.loop(
       Animated.sequence([
         Animated.timing(pulse, { toValue: 0.7, duration: 900, useNativeDriver: true, easing: Easing.inOut(Easing.ease) }),

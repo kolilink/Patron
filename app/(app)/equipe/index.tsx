@@ -784,23 +784,8 @@ function NewCodeModal({ visible, onClose, onGenerate, saving, hasManager, produc
     }
   }, [visible]);
 
-  useEffect(() => {
-    if (hasInteracted && !saving) {
-      pulseRef.current?.stop();
-      pulseRef.current = Animated.loop(
-        Animated.sequence([
-          Animated.timing(pulseAnim, { toValue: 1.04, duration: 1800, useNativeDriver: true, easing: Easing.inOut(Easing.sin) }),
-          Animated.timing(pulseAnim, { toValue: 1, duration: 2400, useNativeDriver: true, easing: Easing.inOut(Easing.sin) }),
-        ]),
-      );
-      pulseRef.current.start();
-    } else {
-      pulseRef.current?.stop();
-      pulseRef.current = null;
-      pulseAnim.setValue(1);
-    }
-    return () => { pulseRef.current?.stop(); };
-  }, [hasInteracted, saving]);
+  // No pulsing CTA (motion must mean something): the button just stays steady once a role is picked.
+  useEffect(() => { pulseAnim.setValue(1); }, [hasInteracted, saving]);
 
   const handleSelectRole = (r: Role) => {
     setRole(r);

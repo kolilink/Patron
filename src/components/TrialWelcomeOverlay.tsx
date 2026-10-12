@@ -34,16 +34,6 @@ export function TrialWelcomeOverlay({ businessName, onStart }: Props) {
       .catch(() => {});
   }, []);
 
-  useEffect(() => {
-    const pulse = Animated.loop(
-      Animated.sequence([
-        Animated.timing(breathAnim, { toValue: 1.04, duration: 900, useNativeDriver: true }),
-        Animated.timing(breathAnim, { toValue: 1,    duration: 900, useNativeDriver: true }),
-      ]),
-    );
-    pulse.start();
-    return () => pulse.stop();
-  }, []);
 
   return (
     <Modal animationType="fade" transparent={false} visible statusBarTranslucent navigationBarTranslucent backdropColor={palette.background}>

@@ -214,6 +214,7 @@ export default function DmChatScreen() {
   // ─── Pulsing dot animation while recording ─────────────────────────────────
   useEffect(() => {
     if (!isRecording) { pulseAnim.setValue(1); return; }
+    // motion-means: recording indicator — the mic is live
     const loop = RNAnimated.loop(RNAnimated.sequence([
       RNAnimated.timing(pulseAnim, { toValue: 0.3, duration: 600, useNativeDriver: true }),
       RNAnimated.timing(pulseAnim, { toValue: 1, duration: 600, useNativeDriver: true }),
