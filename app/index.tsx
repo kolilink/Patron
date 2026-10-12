@@ -1,17 +1,15 @@
-import { View } from 'react-native';
 import { Redirect } from 'expo-router';
 import { useAuthStore } from '@/stores/auth';
-import { useTheme } from '@/src/theme';
+import { ThemedFill } from '@/src/components/ui/ThemedStack';
 
 export default function Index() {
-  const { palette } = useTheme();
   const session = useAuthStore(s => s.session);
   const loading = useAuthStore(s => s.loading);
   const locked = useAuthStore(s => s.locked);
   const removedBusinessesOnLogin = useAuthStore(s => s.removedBusinessesOnLogin);
 
   if (loading) {
-    return <View style={{ flex: 1, backgroundColor: palette.background }} />;
+    return <ThemedFill />;
   }
 
   if (locked) return <Redirect href="/(auth)/verrouille" />;

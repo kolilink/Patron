@@ -4,7 +4,7 @@ import { useConnectivityStore } from '@/lib/connectivity';
 import { resetOutboxBackoff } from '@/lib/db';
 import { OfflineIndicator } from '@/src/components/ui/OfflineIndicator';
 import { appAlert } from '@/src/utils/appAlert';
-import { ThemedStack } from '@/src/components/ui/ThemedStack';
+import { ThemedFill, ThemedStack } from '@/src/components/ui/ThemedStack';
 import { AppState, InteractionManager, Pressable, View } from 'react-native';
 import { trackEvent } from '@/lib/analytics';
 import { flushFunnelOutbox } from '@/lib/funnel';
@@ -442,7 +442,8 @@ export default function AppLayout() {
     />
   ) : null;
 
-  if (loading) return <>{heroOverlay}</>;
+  // Loading: the app's own themed surface (never an empty fragment) plus the already-latched hero Modal.
+  if (loading) return <><ThemedFill />{heroOverlay}</>;
   if (locked) return <Redirect href="/(auth)/verrouille" />;
   if (!session) return <Redirect href="/(welcome)/" />;
 

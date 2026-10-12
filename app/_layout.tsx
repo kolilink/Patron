@@ -36,7 +36,7 @@ import { identifyUser, resetAnalytics, trackEvent, analyticsIsTest, loadDeviceTe
 import { recordInstallIfFirstOpen, recordFunnelStep, flushFunnelOutbox } from '@/lib/funnel';
 import { configurePurchases } from '@/lib/purchases';
 import { withStartupTiming, reportFirstScreenRender, reportFirstInteraction } from '@/lib/startupTiming';
-import { scheduleSplashCeiling, startupReady } from '@/src/utils/startupGate';
+import { createSplashHider, scheduleFontCeiling, scheduleSplashCeiling, startupReady } from '@/src/utils/startupGate';
 
 // Only active when EXPO_PUBLIC_SENTRY_DSN is set (no-op in local dev without it)
 if (process.env.EXPO_PUBLIC_SENTRY_DSN) {
@@ -131,12 +131,21 @@ function RootLayout() {
     }
   }, [session]);
 
-  // Hard ceiling, deliberately NOT gated on fonts (or auth, or db): whatever
-  // never settles, the splash is dismissed after SPLASH_CEILING_MS. hideAsync is
-  // idempotent, so this is harmless when the normal path already hid it.
-  useEffect(() => scheduleSplashCeiling({
-    hide: () => { SplashScreen.hideAsync().catch(() => { /* already hidden */ }); },
+  // The splash lifts exactly once: when init COMPLETES (the normal path, below) or at the safety ceiling.
+  const [splash] = useState(() => createSplashHider(() => SplashScreen.hideAsync()));
+
+  // Font-wait ceiling, deliberately NOT gated on fonts (or auth, or db): if useFonts never settles, startup
+  // carries on with the system font after FONT_WAIT_CEILING_MS. It does not lift the splash.
+  useEffect(() => scheduleFontCeiling({
     onElapsed: () => setCeilingElapsed(true),
+    setTimeoutFn: (cb, ms) => setTimeout(cb, ms),
+    clearTimeoutFn: h => clearTimeout(h as ReturnType<typeof setTimeout>),
+  }), []);
+
+  // Safety net, equally ungated: whatever never settles, the splash is lifted after SPLASH_SAFETY_CEILING_MS.
+  // The once-guard makes it harmless when the normal path already lifted it.
+  useEffect(() => scheduleSplashCeiling({
+    hide: () => { splash.hide(); },
     setTimeoutFn: (cb, ms) => setTimeout(cb, ms),
     clearTimeoutFn: h => clearTimeout(h as ReturnType<typeof setTimeout>),
   }), []);
@@ -153,9 +162,8 @@ function RootLayout() {
 
   useEffect(() => {
     if (!ready) return;
-    // Hard ceiling so a stuck init can never pin the splash forever; the
-    // normal path hides it only after the first screen has painted (below).
-    const timeout = setTimeout(() => SplashScreen.hideAsync(), 2000);
+    // No fixed timeout here any more: the splash lifts when init completes (below), with the safety
+    // ceiling above as the only backstop for an init that never settles.
     // Connectivity first: awaited (capped at ~1.2s) alongside init so the app
     // already knows if it is offline before the first screen paints.
     Promise.all([
@@ -182,12 +190,11 @@ function RootLayout() {
     }).catch(() => {
       /* non-fatal */
     }).finally(() => {
-      clearTimeout(timeout);
       // Hold the splash until the first screen has actually painted — two
       // animation frames after init resolves lets the router commit and the
       // native view draw, so there's no unbranded flash between the splash
       // fade and first paint.
-      requestAnimationFrame(() => requestAnimationFrame(() => SplashScreen.hideAsync()));
+      requestAnimationFrame(() => requestAnimationFrame(() => { splash.hide(); }));
       // A real cold start — one half of PaymentReminderAsker's "fresh
       // session" trigger condition (the other half is a 10+min-backgrounded
       // return, bumped from app/(app)/_layout.tsx's own AppState handler).

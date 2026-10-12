@@ -6,30 +6,59 @@
 // quirk) left fontsLoaded false forever: the fallback was never even scheduled and
 // preventAutoHideAsync() held the splash permanently. Structural, not device-specific.
 
-/** Longest the splash may ever stay up, whatever fonts/auth/db do. */
-export const SPLASH_CEILING_MS = 5000;
+/**
+ * Longest startup waits for FONTS to settle before it carries on with the system font. This only unblocks
+ * init (auth + SQLite); it does NOT lift the splash.
+ */
+export const FONT_WAIT_CEILING_MS = 5000;
+
+/**
+ * Longest the splash may ever stay up. The splash normally lifts when init COMPLETES (plus two painted
+ * frames); this is only the safety net for an init that never settles. It used to be a hard 2s timeout that
+ * lifted the splash onto a half-initialised app — on a slow phone that is a blank screen.
+ */
+export const SPLASH_SAFETY_CEILING_MS = 8000;
 
 /**
  * May startup (auth + SQLite init) proceed? Yes once fonts loaded, once they FAILED
  * (the system font stands in for the custom one — far better than a dead app), or once
- * the ceiling elapsed because useFonts never settled either way.
+ * the font-wait ceiling elapsed because useFonts never settled either way.
  */
 export function startupReady(fontsLoaded: boolean, fontError: unknown, ceilingElapsed: boolean): boolean {
   return fontsLoaded || !!fontError || ceilingElapsed;
 }
 
-export interface SplashCeilingDeps {
-  /** SplashScreen.hideAsync — idempotent, safe to call after the normal path already hid it. */
-  hide: () => void;
-  /** Called when the ceiling elapses (lets startup proceed even if useFonts never settled). */
-  onElapsed: () => void;
+/**
+ * Lifts the splash AT MOST ONCE, whoever asks first (init completing, or the safety ceiling). The native
+ * call is never repeated, and a rejected hide (already hidden) is swallowed.
+ */
+export function createSplashHider(hideAsync: () => Promise<unknown> | void): { hide: () => boolean; readonly hidden: boolean } {
+  let hidden = false;
+  return {
+    hide() {
+      if (hidden) return false;
+      hidden = true;
+      try { void Promise.resolve(hideAsync()).catch(() => { /* already hidden */ }); } catch { /* already hidden */ }
+      return true;
+    },
+    get hidden() { return hidden; },
+  };
+}
+
+export interface CeilingDeps {
   setTimeoutFn: (cb: () => void, ms: number) => unknown;
   clearTimeoutFn: (h: unknown) => void;
   ms?: number;
 }
 
-/** Arms the ungated hard ceiling. Returns a canceller for the effect's cleanup. */
-export function scheduleSplashCeiling(d: SplashCeilingDeps): () => void {
-  const timer = d.setTimeoutFn(() => { d.hide(); d.onElapsed(); }, d.ms ?? SPLASH_CEILING_MS);
+/** Arms the ungated font-wait ceiling (lets startup proceed even if useFonts never settled). Returns a canceller. */
+export function scheduleFontCeiling(d: CeilingDeps & { onElapsed: () => void }): () => void {
+  const timer = d.setTimeoutFn(() => d.onElapsed(), d.ms ?? FONT_WAIT_CEILING_MS);
+  return () => d.clearTimeoutFn(timer);
+}
+
+/** Arms the splash safety ceiling: `hide` (the once-guarded hider) runs if init never completes. Returns a canceller. */
+export function scheduleSplashCeiling(d: CeilingDeps & { hide: () => void }): () => void {
+  const timer = d.setTimeoutFn(() => d.hide(), d.ms ?? SPLASH_SAFETY_CEILING_MS);
   return () => d.clearTimeoutFn(timer);
 }

@@ -1,7 +1,8 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { useCacheHealthStore, failingCacheTables } from '@/lib/cacheHealth';
 import { appAlert } from '@/src/utils/appAlert';
-import { Animated, KeyboardAvoidingView, Linking, Platform, Pressable, ScrollView, Share, StyleSheet, Switch, TextInput, View } from 'react-native';
+import { saveButtonLabel, showUnsavedDot } from '@/src/utils/saveButton';
+import { KeyboardAvoidingView, Linking, Platform, Pressable, ScrollView, Share, StyleSheet, Switch, TextInput, View } from 'react-native';
 import * as Clipboard from 'expo-clipboard';
 import * as Application from 'expo-application';
 import * as Updates from 'expo-updates';
@@ -239,26 +240,6 @@ export default function ParametresScreen() {
     ? (bizName.trim() !== (business?.name ?? '') || bizPhone.trim() !== defaultPhone || (hasSales === false && currency !== (business?.currency ?? 'GNF')))
     : false
   ) || userName.trim() !== (session?.user.name ?? '');
-
-  const breathAnim = useRef(new Animated.Value(1)).current;
-  const loopRef = useRef<Animated.CompositeAnimation | null>(null);
-
-  useEffect(() => {
-    if (isDirty) {
-      loopRef.current = Animated.loop(
-        Animated.sequence([
-          Animated.timing(breathAnim, { toValue: 0.35, duration: 850, useNativeDriver: true }),
-          Animated.timing(breathAnim, { toValue: 1, duration: 850, useNativeDriver: true }),
-        ]),
-      );
-      loopRef.current.start();
-    } else {
-      loopRef.current?.stop();
-      loopRef.current = null;
-      Animated.timing(breathAnim, { toValue: 1, duration: 150, useNativeDriver: true }).start();
-    }
-    return () => { loopRef.current?.stop(); };
-  }, [isDirty]);
 
   const [deleteTarget, setDeleteTarget] = useState<'account' | 'business' | null>(null);
   // Last administrateur of a business that still has a team: pick a successor
@@ -670,13 +651,14 @@ export default function ParametresScreen() {
           <Text variant="body" color="secondary">‹ Retour</Text>
         </Pressable>
         <Text variant="h4">Paramètres</Text>
-        <Animated.View style={{ opacity: breathAnim }}>
-          <Pressable onPress={saveAll} disabled={saving || !isDirty}>
-            <Text variant="label" style={{ color: isDirty ? palette.primary : palette.textDisabled }}>
-              {saving ? 'Enreg…' : 'Enregistrer'}
-            </Text>
-          </Pressable>
-        </Animated.View>
+        {/* Completely steady: no animation anywhere in the header. A small static amber dot right before the text
+            marks unsaved changes — only while dirty and not saving. Colour/copy logic is unchanged. */}
+        <Pressable onPress={saveAll} disabled={saving || !isDirty} style={styles.saveBtn} accessibilityRole="button">
+          {showUnsavedDot(isDirty, saving) && <View style={[styles.saveDot, { backgroundColor: palette.warning }]} accessibilityLabel="Modifications non enregistrées" />}
+          <Text variant="label" style={{ color: isDirty ? palette.primary : palette.textDisabled }}>
+            {saveButtonLabel(saving)}
+          </Text>
+        </Pressable>
       </View>
 
       <KeyboardAvoidingView behavior={Platform.OS === 'ios' ? 'padding' : undefined} style={{ flex: 1, backgroundColor: palette.background }}>
@@ -1127,6 +1109,8 @@ function makeStyles(p: Palette) {
       paddingHorizontal: spacing[5], paddingVertical: spacing[4],
       borderBottomWidth: 1, borderBottomColor: p.border,
     },
+    saveBtn: { flexDirection: 'row', alignItems: 'center', gap: spacing[1.5] },
+    saveDot: { width: 6, height: 6, borderRadius: 3 },
     content: { padding: spacing[5], gap: spacing[4], paddingBottom: spacing[10] },
     section: { gap: spacing[4] },
 

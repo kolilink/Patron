@@ -1,5 +1,5 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
-import { Animated, Easing, Pressable, ScrollView, StyleSheet, View } from 'react-native';
+import { Pressable, ScrollView, StyleSheet, View } from 'react-native';
 import { Ionicons } from '@expo/vector-icons';
 import { Screen } from '@/src/components/ui/Screen';
 import { router } from 'expo-router';
@@ -51,27 +51,6 @@ export default function DepensesScreen() {
   const barSeq = useRef(0);
   // After the undo window closes on a fresh create, offer the receipt photo.
   const pendingPhotoFor = useRef<{ barId: number; expenseId: string } | null>(null);
-
-  const fabScale = useRef(new Animated.Value(1)).current;
-  const fabOpacity = useRef(new Animated.Value(1)).current;
-
-  useEffect(() => {
-    const easing = Easing.inOut(Easing.sin);
-    const loop = Animated.loop(
-      Animated.sequence([
-        Animated.parallel([
-          Animated.timing(fabScale, { toValue: 1.06, duration: 2000, easing, useNativeDriver: true }),
-          Animated.timing(fabOpacity, { toValue: 0.85, duration: 2000, easing, useNativeDriver: true }),
-        ]),
-        Animated.parallel([
-          Animated.timing(fabScale, { toValue: 1, duration: 2000, easing, useNativeDriver: true }),
-          Animated.timing(fabOpacity, { toValue: 1, duration: 2000, easing, useNativeDriver: true }),
-        ]),
-      ])
-    );
-    loop.start();
-    return () => loop.stop();
-  }, []);
 
   useEffect(() => {
     if (businessId) fetchExpenses(businessId);
@@ -263,7 +242,7 @@ export default function DepensesScreen() {
       />
 
       {!isEmpty && (
-        <Animated.View style={[styles.fabContainer, { opacity: fabOpacity, transform: [{ scale: fabScale }] }]}>
+        <View style={styles.fabContainer}>
           <Pressable
             onPress={handleAdd}
             style={({ pressed }) => [styles.fabExtended, pressed && { opacity: 0.82 }]}
@@ -273,7 +252,7 @@ export default function DepensesScreen() {
             <Ionicons name="add" size={20} color={palette.textInverse} />
             <Text style={styles.fabExtendedLabel}>Dépense</Text>
           </Pressable>
-        </Animated.View>
+        </View>
       )}
 
       {photoChip && !undoBar ? (

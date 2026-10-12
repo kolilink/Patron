@@ -8,6 +8,7 @@ const code = (s: string) => s.split('\n').filter(l => !l.trim().startsWith('//')
 
 describe.each([
   ['app/(app)/fournisseurs/index.tsx', 'Livraison'],
+  ['app/(app)/depenses/index.tsx', 'Dépense'],
 ])('%s', (file, label) => {
   const src = code(read(file));
   it('has no breathing animation state or loop for the FAB', () => {
