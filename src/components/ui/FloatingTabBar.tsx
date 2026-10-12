@@ -12,7 +12,7 @@ import Animated, {
     withTiming,
 } from 'react-native-reanimated';
 import { useReduceMotion } from '@/src/hooks/useReduceMotion';
-import { useTheme, FLOATING_TAB_BAR_HEIGHT, FLOATING_TAB_BAR_GAP } from '@/src/theme';
+import { useTheme, FLOATING_TAB_BAR_HEIGHT, FLOATING_TAB_BAR_GAP, FLOATING_TAB_BAR_SIDE_MARGIN, FLOATING_TAB_BAR_RADIUS } from '@/src/theme';
 import { haptics } from '@/lib/haptics';
 
 // ─────────────────────────────────────────────────────────────────────────────
@@ -60,10 +60,8 @@ export interface FloatingTabBarProps {
     /** Safe-area bottom inset to offset the floating bar above the home indicator. */
     bottomInset: number;
     /**
-     * Fixed bar width. When omitted the bar stretches to its container's full
-     * width (the consumer decides whether that container is inset). Pass it to
-     * reproduce the existing content-hugging pill (see `barWidthFor()` in
-     * `(tabs)/_layout.tsx`).
+     * Optional fixed island width. Normally OMITTED: the island is margin-based — it fills the screen minus
+     * FLOATING_TAB_BAR_SIDE_MARGIN on each side, so its edges line up with the content cards on any width.
      */
     width?: number;
     /** Render short visible labels under the icons. Off = icon-only (labels stay
@@ -78,7 +76,7 @@ const PRESS_DURATION_MS = 120; // spec: ≤120–150ms
 const PRESS_SPRING = { stiffness: 300, damping: 14, mass: 0.6 }; // spec: 300 / 12–15
 const SLIDE_DURATION_MS = 120; // pill glide only; icons/labels are instant. A new tap reassigns the shared value, which cancels the in-flight glide (interrupt, never queue).
 const SLIDE_EASING = Easing.bezier(0.77, 0, 0.175, 1); // spec: bezier(0.77,0,0.175,1)
-const ICON_SIZE = 24;
+const ICON_SIZE = 28;
 const LABEL_FONT_SIZE = 11;
 const LABEL_LINE_HEIGHT = 12;
 const MIN_TAP_TARGET = 48; // spec: 48dp min
@@ -272,8 +270,8 @@ export function FloatingTabBar({
             style={[
                 {
                     position: 'absolute',
-                    left: 0,
-                    right: 0,
+                    left: FLOATING_TAB_BAR_SIDE_MARGIN,
+                    right: FLOATING_TAB_BAR_SIDE_MARGIN,
                     bottom: bottomInset + FLOATING_TAB_BAR_GAP,
                     alignItems: 'center',
                 },
@@ -284,7 +282,7 @@ export function FloatingTabBar({
                 onLayout={e => setBarWidth(e.nativeEvent.layout.width)}
                 style={{
                     width: width ?? '100%',
-                    borderRadius: 9999,
+                    borderRadius: FLOATING_TAB_BAR_RADIUS, // half the height: a true stadium
                     overflow: 'hidden',
                     height: FLOATING_TAB_BAR_HEIGHT,
                     backgroundColor: below13 ? palette.tabBarGlass : 'transparent',

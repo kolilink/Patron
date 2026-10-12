@@ -48,6 +48,19 @@ export const FLOATING_TAB_BAR_HEIGHT = 64;
 export const FLOATING_TAB_BAR_GAP = 12; // gap between the pill's bottom edge and the safe-area inset
 export const FLOATING_TAB_BAR_CLEARANCE = FLOATING_TAB_BAR_HEIGHT + FLOATING_TAB_BAR_GAP + 12; // + a little breathing room above the pill
 
+// The island stretches to the content cards' edges: margin-based (never a fixed width), so it fits every
+// screen. Its corners are a true stadium — radius = half the height — never a rounded rectangle.
+export const FLOATING_TAB_BAR_SIDE_MARGIN = 16;
+export const FLOATING_TAB_BAR_RADIUS = FLOATING_TAB_BAR_HEIGHT / 2;
+/** Island width on a screen of the given width: screen − 2 × side margin. */
+export function floatingTabBarIslandWidth(screenWidth: number): number {
+  return Math.max(screenWidth - 2 * FLOATING_TAB_BAR_SIDE_MARGIN, 0);
+}
+/** Width of one tab slot (tabs are distributed evenly across the island). */
+export function floatingTabBarSlotWidth(screenWidth: number, tabCount: number): number {
+  return tabCount > 0 ? floatingTabBarIslandWidth(screenWidth) / tabCount : 0;
+}
+
 // The floating pill renders at `bottom: bottomInset + FLOATING_TAB_BAR_GAP`
 // (see FloatingTabBar.tsx), so its top edge sits at `bottomInset + GAP + HEIGHT`
 // from the screen bottom. `FLOATING_TAB_BAR_CLEARANCE` alone omits that safe-area

@@ -3,4 +3,4 @@ export type { Palette } from './colors';
 export { ThemeProvider, useTheme } from './ThemeContext';
 export type { ColorScheme } from './ThemeContext';
 export { typography, fontFamily } from './typography';
-export { spacing, radius, shadow, FLOATING_TAB_BAR_HEIGHT, FLOATING_TAB_BAR_GAP, FLOATING_TAB_BAR_CLEARANCE, floatingTabBarClearance, SEARCH_VISIBILITY_THRESHOLD } from './spacing';
+export { spacing, radius, shadow, FLOATING_TAB_BAR_HEIGHT, FLOATING_TAB_BAR_GAP, FLOATING_TAB_BAR_CLEARANCE, FLOATING_TAB_BAR_SIDE_MARGIN, FLOATING_TAB_BAR_RADIUS, floatingTabBarClearance, SEARCH_VISIBILITY_THRESHOLD } from './spacing';

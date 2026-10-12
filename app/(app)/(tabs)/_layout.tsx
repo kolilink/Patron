@@ -5,7 +5,7 @@ import type { BottomTabBarProps } from '@react-navigation/bottom-tabs';
 import { Ionicons } from '@expo/vector-icons';
 import { useAuthStore } from '@/stores/auth';
 import { useChatStore } from '@/stores/chat';
-import { spacing, useTheme } from '@/src/theme';
+import { useTheme } from '@/src/theme';
 import { FloatingTabBar, type FloatingTabItem } from '@/src/components/ui/FloatingTabBar';
 import { trackEvent } from '@/lib/analytics';
 
@@ -32,13 +32,6 @@ const TAB_DEFS: Record<string, { label: string; outline: IoniconName; filled: Io
   vendre: { label: 'Vendre', outline: 'cart-outline', filled: 'cart' },
   plus: { label: 'Moi', outline: 'person-outline', filled: 'person' },
 };
-
-// Content-hugging bar width, computed per visible tab count (not hardcoded to
-// 4 — investisseur/vendeur see fewer tabs and the bar hugs whatever shows).
-const TAB_CIRCLE_SIZE = 48;
-function barWidthFor(tabCount: number) {
-  return tabCount * TAB_CIRCLE_SIZE + (tabCount - 1) * spacing[6] + 2 * spacing[4];
-}
 
 function CustomTabBar({ state, descriptors, navigation, insets }: BottomTabBarProps) {
   // Hidden-route detection must read `tabBarItemStyle.display` — expo-router's
@@ -80,7 +73,6 @@ function CustomTabBar({ state, descriptors, navigation, insets }: BottomTabBarPr
       index={activeIndex}
       onSelect={onSelect}
       bottomInset={insets.bottom}
-      width={barWidthFor(visibleRoutes.length)}
     />
   );
 }
