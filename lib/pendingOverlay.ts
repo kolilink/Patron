@@ -660,7 +660,26 @@ export interface RefusedOp {
   queuedAt: string;
   payload: string;      // kept so Réessayer can re-enqueue it unchanged ('' when unreadable)
   idempotencyKey: string | null;
-  retryable: boolean;   // false for an unreadable (corrupt) row: only "Abandonner" makes sense
+  retryable: boolean;   // false when a retry can never succeed (unreadable row, or a validation refusal): no dead "Réessayer"
+  /** For a refused sale: the first product on it, so the notice can offer "Ajuster le stock" / "Voir le produit". */
+  productId?: string | null;
+}
+
+/**
+ * Would sending the very same record again just be refused the same way? Stock is NEVER a refusal reason any
+ * more (a sale is ground truth — submit_sale floors stock and flags the product), so a legacy "Stock insuffisant"
+ * refusal now succeeds on retry. Anything else the server said about a sale (invalid quantity, unknown or
+ * unauthorised product, remise/solde rules) is deterministic: retrying is a dead action.
+ */
+export function isDeadEndRefusal(operation: string, reason: string): boolean {
+  if (operation !== 'submit_sale' && operation !== 'submit_quick_sale') return false;
+  return !/stock insuffisant/i.test(reason);
+}
+
+function firstProductId(payload: Record<string, unknown>): string | null {
+  const cart = Array.isArray(payload.p_cart) ? (payload.p_cart as Array<Record<string, unknown>>) : [];
+  const id = cart.find(l => typeof l.product_id === 'string')?.product_id;
+  return typeof id === 'string' ? id : null;
 }
 
 interface OpWording { label: string; unrecorded: string; thisOne: string }
@@ -704,16 +723,20 @@ export async function loadRefusedOps(currentBusinessId: string | null): Promise<
   const out: RefusedOp[] = [];
   for (const item of ok) {
     if (item.status !== 'failed_permanent') continue;
+    let productId: string | null = null;
     try {
       const payload = JSON.parse(item.payload) as Record<string, unknown>;
       const biz = opBusinessId(payload);
       if (currentBusinessId && biz && biz !== currentBusinessId) continue;
+      productId = firstProductId(payload);
     } catch { continue; }
     const w = OP_WORDING[item.operation] ?? FALLBACK_WORDING;
+    const reasonText = item.last_error ?? 'Refusée par le serveur';
     out.push({
       id: item.id, operation: item.operation, label: w.label, unrecorded: w.unrecorded, thisOne: w.thisOne,
-      reason: item.last_error ?? 'Refusée par le serveur', queuedAt: item.queued_at ?? '',
-      payload: item.payload, idempotencyKey: item.idempotency_key ?? null, retryable: true,
+      reason: reasonText, queuedAt: item.queued_at ?? '',
+      payload: item.payload, idempotencyKey: item.idempotency_key ?? null,
+      retryable: !isDeadEndRefusal(item.operation, reasonText), productId,
     });
   }
   // A row that can no longer be decrypted/parsed can never sync — never invisible either.

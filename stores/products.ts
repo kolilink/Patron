@@ -547,6 +547,10 @@ export const useProductStore = create<ProductStore>((set, get) => ({
       set({ error: isOutboxValidationError(err) ? null : "Impossible d'enregistrer sur cet appareil. Réessayez.", saving: false });
       return false;
     }
+    // Counting the shelf IS the review: a flagged product ("Stock à vérifier") is cleared by any adjustment.
+    if (get().products.find(p => p.id === productId)?.needs_stock_review) {
+      try { await enqueue('update_product', { id: productId, needs_stock_review: false }); } catch (err) { console.error('[adjustStock] flag clear failed (adjustment already queued)', err); }
+    }
     try { await rebuildProducts(businessId); } catch (err) { console.error('[adjustStock] rebuild failed (write already succeeded)', err); }
     void afterProductEnqueue();
     set({ saving: false });

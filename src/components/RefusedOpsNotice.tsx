@@ -1,7 +1,7 @@
 import { appAlert } from '@/src/utils/appAlert';
 import React, { useCallback, useEffect, useMemo, useState } from 'react';
 import { Pressable, StyleSheet, View } from 'react-native';
-import { useFocusEffect } from 'expo-router';
+import { useFocusEffect, useRouter } from 'expo-router';
 import { useTheme, spacing, radius } from '@/src/theme';
 import type { Palette } from '@/src/theme';
 import { Text } from '@/src/components/ui/Text';
@@ -61,6 +61,11 @@ function RefusedRow({ op, onChanged, palette, styles }: {
   op: RefusedOp; onChanged: () => void; palette: Palette; styles: ReturnType<typeof makeStyles>;
 }) {
   const [busy, run] = useInFlight();
+  const router = useRouter();
+  const goToProduct = (adjust: boolean) => {
+    if (!op.productId) return;
+    router.push({ pathname: '/(app)/(tabs)/vendre', params: adjust ? { gerer: '1', focus: op.productId } : { focus: op.productId } });
+  };
   const retry = () => run(async () => {
     // Same payload, same idempotency key: if the first attempt left nothing on
     // the server, this is a clean second try; if it somehow did, the key dedups.
@@ -84,6 +89,9 @@ function RefusedRow({ op, onChanged, palette, styles }: {
       </Text>
       <View style={styles.actions}>
         {op.retryable && <Button label="Réessayer" loadingLabel="Envoi" loading={busy} onPress={retry} size="sm" variant="outline" />}
+        {/* A refusal a retry can never fix offers what she CAN do: look at / recount the product, or let it go. */}
+        {!op.retryable && op.productId && <Button label="Ajuster le stock" onPress={() => goToProduct(true)} disabled={busy} size="sm" variant="outline" />}
+        {!op.retryable && op.productId && <Button label="Voir le produit" onPress={() => goToProduct(false)} disabled={busy} size="sm" variant="ghost" />}
         <Button label="Abandonner" onPress={dismiss} disabled={busy} size="sm" variant="ghost" />
       </View>
     </View>

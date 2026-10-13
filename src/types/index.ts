@@ -121,6 +121,8 @@ export interface Product extends Base {
   bulk_price: number | null;
   bulk_min_qty: number | null;
   has_variants: boolean;
+  /** Set server-side when a sale drained against less stock than it needed (sale recorded, stock floored at 0). Cleared by a stock adjustment. */
+  needs_stock_review?: boolean;
   variants?: ProductVariant[];
 }
 

@@ -1,4 +1,5 @@
 import { useCallback, useEffect, useMemo, useState } from 'react';
+import { withoutRefused } from '@/src/utils/salesTotals';
 import { FlatList, Pressable, RefreshControl, StyleSheet, View } from 'react-native';
 import { Screen } from '@/src/components/ui/Screen';
 import { router, useFocusEffect, useLocalSearchParams } from 'expo-router';
@@ -144,7 +145,7 @@ export default function ClientsScreen() {
 
   const allClients = useMemo<Client[]>(() => {
     const map = new Map<string, Client>();
-    for (const s of sales) {
+    for (const s of withoutRefused(sales)) {
       const rawName = s.customer_name?.trim();
       if (!rawName) continue;
       // Canonical name from the clients table (matches the detail screen's

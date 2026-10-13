@@ -15,7 +15,12 @@ interface TotalsSale {
   created_at: string;
   customer_name?: string | null;
   client_id?: string | null;
+  /** A sale the server refused for good: shown in the list with its notice, but NEVER part of any total or balance. */
+  _failedPermanent?: true;
 }
+
+/** The only sales that exist as far as money is concerned — a refused sale is not a sale (no revenue, no debt). */
+export const withoutRefused = <T extends { _failedPermanent?: true }>(sales: T[]): T[] => sales.filter(s => !s._failedPermanent);
 
 export interface HomeKpisCache {
   revenue_yesterday?: number;
@@ -47,7 +52,8 @@ export function computeLocalKpis(args: {
   variantsByProduct: Record<string, StockRow[]>;
   now?: Date;
 }): HomeKpis {
-  const { cached, sales, products, variantsByProduct } = args;
+  const { cached, products, variantsByProduct } = args;
+  const sales = withoutRefused(args.sales);
   const now = args.now ?? new Date();
   const today = `${now.getFullYear()}-${String(now.getMonth() + 1).padStart(2, '0')}-${String(now.getDate()).padStart(2, '0')}`;
   const todaySales = sales.filter(s => (s.sale_date ?? localDay(s.created_at)) === today && s.status !== 'annule');
@@ -67,7 +73,7 @@ export function computeLocalKpis(args: {
 
 // Ventes list "Tout" summary: non-cancelled count and total.
 export function activeSalesTotals(all: TotalsSale[]): { count: number; total: number } {
-  const active = all.filter(s => s.status !== 'annule');
+  const active = withoutRefused(all).filter(s => s.status !== 'annule');
   return { count: active.length, total: active.reduce((sum, s) => sum + net(s), 0) };
 }
 
@@ -76,7 +82,7 @@ export function selectClientSales<T extends TotalsSale>(
   sales: T[], routeParam: string, isClientId: boolean, displayName: string,
 ): T[] {
   const name = isClientId ? displayName : routeParam;
-  return sales.filter(s =>
+  return withoutRefused(sales).filter(s =>
     s.status !== 'annule' &&
     (isClientId
       ? s.client_id === routeParam || (s.client_id == null && name && s.customer_name === name)
@@ -119,7 +125,8 @@ const localDay = (iso: string) => (iso.includes('T') ? ymd(new Date(iso)) : iso.
 const ymd = (d: Date) => `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, '0')}-${String(d.getDate()).padStart(2, '0')}`;
 
 /** get_dashboard_kpis' sales + debts fields, computed over a sales list (display units). */
-export function salesKpisFromList(sales: TotalsSale[], now: Date = new Date()): SalesKpis {
+export function salesKpisFromList(allSales: TotalsSale[], now: Date = new Date()): SalesKpis {
+  const sales = withoutRefused(allSales);
   const today = ymd(now);
   const y = new Date(now); y.setDate(y.getDate() - 1);
   const yesterday = ymd(y);
