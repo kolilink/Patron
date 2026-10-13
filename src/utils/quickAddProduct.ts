@@ -27,7 +27,7 @@ export interface QuickVariant {
   price: string;
   /** Has the merchant typed into this row's price? false → follows the starting price. */
   touched: boolean;
-  /** Edit mode: an existing model. Its stock is a fact (changed via "Ajuster"), not an input. */
+  /** Edit mode: an existing model. Its stock is a fact (it has a movement history): there is no stepper for a model. */
   locked?: boolean;
   /** Edit mode: the model's own purchase price (display units), kept when saving. */
   cost?: number;
@@ -177,6 +177,12 @@ export interface QuickAddPayload {
   data: CreateProductData;
   hasVariants: boolean;
   variants: DraftVariant[];
+  /**
+   * Edit without models only, and only when the stepper moved it: the ABSOLUTE stock now on screen. It is never
+   * written to stock_qty — the host turns the difference vs. the stored stock into one relative, idempotent
+   * adjust_stock_move (entrée / perte).
+   */
+  stockQty?: number;
   /** Delivery mode only: the quantity typed in the sheet (the delivery books the stock, not the create). */
   deliveryQty?: number;
   /** Delivery mode with models: each model's name and the quantity typed for it. */
@@ -297,11 +303,13 @@ export function isResumableAddDraft(s: QuickAddState): boolean {
 
 /**
  * Edit mode: has anything the sheet lets her change moved away from the saved product?
- * Quantity is excluded — in edit the stock is shown as a fact and only changes through "Ajuster".
+ * Quantity IS included: the inline stock stepper edits it (saved as a relative movement, never an absolute rewrite),
+ * so a stock tweak followed by swiping the sheet away lands in "À compléter" instead of vanishing.
  */
 export function isEditDirty(current: QuickAddState, saved: QuickAddState): boolean {
   const t = (x: string) => x.trim();
   if (t(current.name) !== t(saved.name) || t(current.price) !== t(saved.price)) return true;
+  if (!current.models && t(current.qty) !== t(saved.qty)) return true;
   if (t(current.purchasePrice) !== t(saved.purchasePrice) || t(current.fees) !== t(saved.fees)) return true;
   if (current.supplierId !== saved.supplierId || current.models !== saved.models) return true;
   if (current.variants.length !== saved.variants.length) return true;
@@ -316,7 +324,7 @@ export function afterAdd(s: QuickAddState): QuickAddState {
   return { ...EMPTY_QUICK_ADD, qty: s.qty };
 }
 
-/** Edit mode: the sheet's starting state for a stored product (its stock is shown as a fact, not typed). */
+/** Edit mode: the sheet's starting state for a stored product (its stock is seeded here; the stepper moves it). */
 export function editingToState(p: Product, variants: ProductVariant[], currency: string): QuickAddState {
   const money = (n: number) => (n > 0 ? formatAmountInput(String(Math.round(n)), currency) : '');
   return {
@@ -334,4 +342,20 @@ export function editingToState(p: Product, variants: ProductVariant[], currency:
     fees: '',
     supplierId: p.supplier_id ?? '',
   };
+}
+
+/** The stock stepper's next value: a tap adds `delta`, the displayed stock can never go below 0. */
+export function stepStock(current: string, delta: number): string {
+  const n = parseInt(current || '0', 10);
+  return String(Math.max(0, (Number.isFinite(n) ? n : 0) + delta));
+}
+
+/** Edit without models: has the stepper moved the stock away from what the sheet opened with? */
+export function isStockDirty(current: QuickAddState, saved: QuickAddState): boolean {
+  return !current.models && current.qty !== saved.qty;
+}
+
+/** The movement an edit-save must record: signed difference between the stock now on screen and the stored stock. */
+export function stockDelta(stockQty: number | undefined, storedStock: number): number {
+  return stockQty === undefined ? 0 : stockQty - storedStock;
 }

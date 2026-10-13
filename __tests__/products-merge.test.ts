@@ -122,19 +122,19 @@ describe('entry-point checklist — every one lands in Vendre, none dangle', () 
     expect(sheet).toMatch(/if \(isEdit \|\| isDelivery\) return; \/\/ edit \/ delivery: the host closes the sheet/);
     const hook = read('src/components/products/useProductSheets.tsx');
     expect(hook).toMatch(/setEditOpen\(false\);\s*return \{ ok: true \}/);
-    // stock is a fact + "Ajuster", fournisseur sits in the (collapsed) Plus d'informations
-    expect(sheet).toContain('accessibilityLabel="Ajuster le stock"');
+    // stock is a fact adjusted by the inline stepper, fournisseur sits in the (collapsed) Plus d'informations
+    expect(sheet).toContain('accessibilityLabel="Augmenter le stock"');
+    expect(sheet).toContain('accessibilityLabel="Diminuer le stock"');
     expect(sheet).toMatch(/Fournisseur<\/Text>/);
   });
-  it('8/9. stock adjust, archive / restore and the stats sheet are owned by the edit sheet that Gérer rows open', () => {
+  it('8/9. archive / restore and the stats sheet are owned by the edit sheet that Gérer rows open', () => {
     const sheet = read('src/components/QuickAddProductSheet.tsx');
     const hook = read('src/components/products/useProductSheets.tsx');
-    expect(sheet).toContain('accessibilityLabel="Ajuster le stock"');
     expect(sheet).toContain('Archiver ce produit');
     expect(sheet).toContain('Restaurer ce produit');
     expect(sheet).toContain('Voir la rentabilité');
     expect(hook).toMatch(/<ProductStatsModal/);
-    expect(hook).toMatch(/<StockAdjustModal/);
+    expect(hook).not.toMatch(/StockAdjustModal/);
     expect(hook).toMatch(/onArchive=\{handleArchive\}/);
   });
   it('10. the "catalogue" concept is gone from Vendre\'s empty-state copy', () => {
@@ -176,7 +176,7 @@ describe('Gérer mode', () => {
     expect(vendre).toMatch(/const anySheetOpen = productSheets\.anySheetOpen \|\| variantPickerProduct !== null \|\| showPayment \|\|\s*\n\s*showConfirmSheet \|\| showCartSheet \|\| showQuickCapture \|\| receiptOpen !== null;/);
     expect(vendre).toContain('const showFloating = canManage && products.length > 0 && !anySheetOpen;');
     expect(pm).toMatch(/canEdit && !nothingAtAll && !sheets\.anySheetOpen/);
-    expect(read('src/components/products/useProductSheets.tsx')).toMatch(/anySheetOpen: addOpen \|\| editOpen \|\| adjustOpen \|\| statsOpen/);
+    expect(read('src/components/products/useProductSheets.tsx')).toMatch(/anySheetOpen: addOpen \|\| editOpen \|\| statsOpen/);
   });
   it('bulk import has no UI yet (reserved, not built)', () => {
     expect(pm).not.toMatch(/[Ii]mport(er)? (en masse|CSV|des produits)/);

@@ -18,8 +18,9 @@ describe('isEditDirty', () => {
     expect(isEditDirty({ ...saved, supplierId: 's1' }, saved)).toBe(true);
     expect(isEditDirty({ ...saved, models: true }, saved)).toBe(true);
   });
-  it('quantity alone is not an edit (stock only changes through Ajuster)', () => {
-    expect(isEditDirty({ ...saved, qty: '99' }, saved)).toBe(false);
+  it('a stock tweak IS an edit (the inline stepper) — so swiping the sheet away lands it in À compléter', () => {
+    expect(isEditDirty({ ...saved, qty: '99' }, saved)).toBe(true);
+    expect(isEditDirty({ ...saved, qty: saved.qty }, saved)).toBe(false);
   });
 });
 
@@ -90,7 +91,8 @@ describe('wiring (source-level: no component-render harness in this repo)', () =
   const manager = read('src/components/products/ProductManager.tsx');
 
   it('edit: debounced 400ms autosave keyed by product id, only when dirty', () => {
-    expect(sheet).toMatch(/isEditDirty\(s, editingToState\(editing, initialVariants \?\? \[\], currency\)\)/);
+    expect(sheet).toMatch(/isEditDirty\(s, savedState\)/);
+    expect(sheet).toMatch(/editingToState\(editing, initialVariants \?\? \[\], currency\)/);
     expect(sheet).toMatch(/saveQuickAddDraft\(businessId, editDraftId\(productId\), s, \{ productId \}\)[\s\S]*?\}, 400\)/);
   });
   it('dismiss flushes a dirty edit; a clean dismiss saves nothing', () => {

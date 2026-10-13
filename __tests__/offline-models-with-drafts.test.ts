@@ -87,7 +87,7 @@ describe('saving an edit offline never drops the unsaved model changes', () => {
   const hook = read('src/components/products/useProductSheets.tsx');
   const sheet = read('src/components/QuickAddProductSheet.tsx');
   it('the handler never calls the models RPC offline and says so (exact copy), reporting modelsPending', () => {
-    const edit = hook.slice(hook.indexOf('const handleEdit'), hook.indexOf('const handleAdjust'));
+    const edit = hook.slice(hook.indexOf('const handleEdit'), hook.indexOf('// Archive / restore live in the edit sheet'));
     expect(edit).toContain('isKnownOffline() ? false : await upsertVariants(');
     expect(edit).toContain('modelsNotSavedAlert()');
     expect(edit).toContain('return { ok: true, modelsPending: true }');

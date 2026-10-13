@@ -1,6 +1,6 @@
 import React, { useCallback, useEffect, useRef, useState } from 'react';
 import { QuickAddProductSheet } from '@/src/components/QuickAddProductSheet';
-import { ProductStatsModal, StockAdjustModal } from '@/src/components/products/ProductSubSheets';
+import { ProductStatsModal } from '@/src/components/products/ProductSubSheets';
 import { failAlert, showFailureAlert } from '@/src/components/ui/FailureView';
 import { appAlert } from '@/src/utils/appAlert';
 import { archivedConfirmation } from '@/src/utils/saveConfirmationCopy';
@@ -14,7 +14,7 @@ import { activationPriming } from '@/stores/activationPriming';
 import { buildFailure, failureReason } from '@/src/utils/failure';
 import { FAILURE_COPY } from '@/src/utils/failureCopy';
 import type { Product, ProductVariant } from '@/src/types';
-import type { QuickAddPayload } from '@/src/utils/quickAddProduct';
+import { stockDelta, type QuickAddPayload } from '@/src/utils/quickAddProduct';
 import { removeQuickAddDraft, type QuickAddDraft } from '@/lib/quickAddDraft';
 
 /** What Vendre (sell mode) and the Gérer view call to open the product sheets. */
@@ -22,7 +22,6 @@ export interface ProductSheetsApi {
   openAdd: (prefillName?: string) => void;
   /** `expandCost`: open with "Plus d'informations" already expanded (the "Prix d'achat ?" affordance). */
   openEdit: (product: Product, opts?: { expandCost?: boolean }) => void;
-  openAdjust: (product: Product) => void;
   openStats: (product: Product) => void;
   /** Reopen an "À compléter" draft in the add sheet. */
   resumeDraft: (draft: QuickAddDraft) => void;
@@ -61,8 +60,6 @@ export function useProductSheets(): { api: ProductSheetsApi; sheets: React.React
   const [editTarget, setEditTarget] = useState<Product | null>(null);
   const [editExpand, setEditExpand] = useState(false);
   const [editVariants, setEditVariants] = useState<ProductVariant[]>([]);
-  const [adjustTarget, setAdjustTarget] = useState<Product | null>(null);
-  const [adjustOpen, setAdjustOpen] = useState(false);
   const [statsTarget, setStatsTarget] = useState<Product | null>(null);
   const [statsOpen, setStatsOpen] = useState(false);
   const [pulseId, setPulseId] = useState<string | null>(null);
@@ -92,7 +89,7 @@ export function useProductSheets(): { api: ProductSheetsApi; sheets: React.React
   };
 
   const handleAdd = useCallback(
-    async ({ data, hasVariants, variants }: QuickAddPayload): Promise<{ ok: boolean }> => {
+    async ({ data, hasVariants, variants, stockQty }: QuickAddPayload): Promise<{ ok: boolean }> => {
       const ok = await createProduct(businessId, userId, data);
       if (!ok) {
         haptics.error();
@@ -118,7 +115,7 @@ export function useProductSheets(): { api: ProductSheetsApi; sheets: React.React
   );
 
   const handleEdit = useCallback(
-    async ({ data, hasVariants, variants }: QuickAddPayload): Promise<{ ok: boolean; modelsPending?: boolean }> => {
+    async ({ data, hasVariants, variants, stockQty }: QuickAddPayload): Promise<{ ok: boolean; modelsPending?: boolean }> => {
       if (!editTarget) return { ok: false };
       const ok = await updateProduct(businessId, userId, editTarget.id, data);
       // The models RPC is online-only: touch it ONLY when models are involved (set now, or being
@@ -144,26 +141,23 @@ export function useProductSheets(): { api: ProductSheetsApi; sheets: React.React
           return { ok: true, modelsPending: true };
         }
       }
+      // Stock: the stepper is a friendlier DELTA composer, not a silent rewrite. The on-screen absolute becomes ONE
+      // relative, idempotent movement (adjust_stock_move: the server applies ±qty atomically) — same pipeline the old
+      // "Ajuster le stock" sheet used. A failure here must NOT look like success: the sheet stays open, intact.
+      const delta = stockDelta(stockQty, editTarget.stock_qty);
+      if (delta !== 0) {
+        const stockOk = await adjustStock(editTarget.id, businessId, userId, Math.abs(delta), delta > 0 ? 'entree' : 'perte', '');
+        if (!stockOk) {
+          haptics.error();
+          toast.warning(useProductStore.getState().error ?? "Le stock n'a pas pu être ajusté. Réessayez.");
+          return { ok: false };
+        }
+      }
       toast.success('Produit mis à jour ✓');
       setEditOpen(false);
       return { ok: true };
     },
-    [editTarget, businessId, userId, updateProduct, upsertVariants],
-  );
-
-  const handleAdjust = useCallback(
-    async (qty: number, type: 'entree' | 'perte', note: string) => {
-      if (!adjustTarget) return;
-      const ok = await adjustStock(adjustTarget.id, businessId, userId, qty, type, note);
-      if (ok) {
-        setAdjustOpen(false);
-        toast.success('Stock ajusté ✓');
-      } else {
-        haptics.error();
-        toast.warning(useProductStore.getState().error ?? "Erreur d'ajustement");
-      }
-    },
-    [adjustTarget, businessId, userId, adjustStock],
+    [editTarget, businessId, userId, updateProduct, upsertVariants, adjustStock],
   );
 
   // Archive / restore live in the edit sheet (Gérer rows have no buttons). Both go through the outbox, so
@@ -209,7 +203,6 @@ export function useProductSheets(): { api: ProductSheetsApi; sheets: React.React
   const api: ProductSheetsApi = {
     openAdd: name => { setResume(null); setPrefill(name); setAddOpen(true); },
     openEdit: (p, opts) => { setResumeEdit(null); setEditTarget(p); setEditExpand(!!opts?.expandCost); setEditOpen(true); },
-    openAdjust: p => { setAdjustTarget(p); setAdjustOpen(true); },
     openStats: p => { setStatsTarget(p); setStatsOpen(true); },
     resumeDraft: d => {
       if (d.kind === 'edit') {
@@ -228,7 +221,7 @@ export function useProductSheets(): { api: ProductSheetsApi; sheets: React.React
     },
     pulseId,
     draftsVersion,
-    anySheetOpen: addOpen || editOpen || adjustOpen || statsOpen,
+    anySheetOpen: addOpen || editOpen || statsOpen,
   };
 
   const sheets = (
@@ -271,25 +264,12 @@ export function useProductSheets(): { api: ProductSheetsApi; sheets: React.React
         resumeEditDraft={resumeEdit}
         initialVariants={editVariants}
         startExpanded={editExpand}
-        onAdjust={p => {
-          // One sheet at a time: close the edit sheet, then open the stock adjustment.
-          setEditOpen(false);
-          setTimeout(() => { setAdjustTarget(p); setAdjustOpen(true); }, 350);
-        }}
         onArchive={handleArchive}
         onRestore={p => { void handleRestore(p); }}
         onStats={p => {
           setEditOpen(false);
           setTimeout(() => { setStatsTarget(p); setStatsOpen(true); }, 350);
         }}
-      />
-      <StockAdjustModal
-        visible={adjustOpen}
-        product={adjustTarget}
-        onClose={() => setAdjustOpen(false)}
-        onConfirm={handleAdjust}
-        saving={saving}
-        currency={currency}
       />
       <ProductStatsModal
         visible={statsOpen}

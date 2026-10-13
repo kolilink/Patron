@@ -51,14 +51,14 @@ describe('Phase 3 — silent failures surfaced on mutating actions', () => {
         expect(src).toMatch(/showFailureAlert\(buildFailure\(\{\s*what: FAILURE_COPY\.memberStakesNotSaved\.what/);
     });
 
-    it('stock adjustment (useProductSheets) returns boolean and shows success only on ok', () => {
+    it('stock adjustment (inline stepper save in useProductSheets) returns boolean; a failed movement is never a success', () => {
         const productsSrc = readSource('stores/products.ts');
         expect(productsSrc).toMatch(/adjustStock:\s*\([\s\S]*?\)\s*=>\s*Promise<boolean>;/);
         expect(productsSrc).toMatch(/return true;[\s\S]*?return true;[\s\S]*?return false;/);
 
         const catalogueSrc = readSource('src/components/products/useProductSheets.tsx');
-        expect(catalogueSrc).toMatch(/const ok = await adjustStock\(adjustTarget\.id,\s*businessId,\s*userId,\s*qty,\s*type,\s*note\);/);
-        expect(catalogueSrc).toMatch(/if\s*\(ok\)\s*\{[\s\S]*?toast\.success\('Stock ajusté ✓'\);[\s\S]*?\}\s*else\s*\{[\s\S]*?toast\.warning\(useProductStore\.getState\(\)\.error/);
+        expect(catalogueSrc).toMatch(/const stockOk = await adjustStock\(editTarget\.id,\s*businessId,\s*userId,\s*Math\.abs\(delta\)/);
+        expect(catalogueSrc).toMatch(/if \(!stockOk\) \{[\s\S]*?toast\.warning\(useProductStore\.getState\(\)\.error[\s\S]*?return \{ ok: false \};/);
     });
 
     it('product add/edit (useProductSheets) surface a failure that speaks', () => {
