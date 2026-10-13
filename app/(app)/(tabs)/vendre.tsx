@@ -1,4 +1,5 @@
 import React, { useCallback, useEffect, useMemo, useRef, useState } from 'react';
+import { shouldShowSaleSheet, hasSeenCelebration, markCelebrationSeen } from '@/src/utils/saleSheetPolicy';
 import { lineTotal, cartSum, cartHeaderTitle, lastUsedPayMethod } from '@/src/utils/cartMath';
 import { saleToastSpec } from '@/src/utils/saleToast';
 import { onTabReselect, resolveReselect } from '@/src/utils/tabReselect';
@@ -1726,6 +1727,15 @@ export default function VendreScreen() {
         clientName: customerName?.trim() || null,
       };
 
+      // Decided BEFORE the sale is written (submitSale adds the new sale to the store): only the very first sale ever
+      // keeps the celebration sheet; every later one is confirmed by the pill + haptic alone.
+      const ventes = useVentesStore.getState();
+      const showSheet = shouldShowSaleSheet({
+        skipConfirmSheet,
+        celebrationSeen: await hasSeenCelebration(businessId),
+        salesLoaded: ventes.salesFetchedFor === businessId,
+        priorSales: ventes.sales.filter(v => v.status !== 'annule' && !v._failedPermanent).length,
+      });
       const ok = await submitSale(businessId, userId, payment, customerName, undefined, discountAmount, clientId, undefined, dueDate ?? null);
       if (ok) {
         setLastReceipt(pendingReceiptRef.current ? { ...pendingReceiptRef.current, key: useSalesStore.getState().lastSaleKey } : null);
@@ -1734,7 +1744,7 @@ export default function VendreScreen() {
         setSearch('');
         const { lastSubmitQueued: queued } = useSalesStore.getState();
         if (!queued) fetchProducts(businessId, userId, membershipId, role);
-        if (!skipConfirmSheet) setShowConfirmSheet(true);
+        if (showSheet) { setShowConfirmSheet(true); void markCelebrationSeen(businessId); }
 
         // Reusable named-result confirmation banner (SaveConfirmation) — states
         // "[nom] vous doit" in words and offers Annuler, neither of which the
@@ -1751,6 +1761,8 @@ export default function VendreScreen() {
           netAmount: total - (discountAmount ?? 0),
           isCredit, customerName,
         });
+        // No sheet → the pill is the whole confirmation, raised now. (With the first-sale sheet it waits until the sheet closes.)
+        if (!showSheet) { toast.saved(pendingSaveConfirmationRef.current); pendingSaveConfirmationRef.current = null; }
         // First value moment (or a later one, capped at twice) — offer the
         // notification permission-priming card. Covers both a regular sale
         // and a credit sale (payment === null here).
