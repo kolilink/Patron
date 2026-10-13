@@ -2,7 +2,7 @@ import { useCallback, useEffect, useState } from 'react';
 import { Keyboard, Platform, Pressable, Text, View } from 'react-native';
 import { BlurView } from 'expo-blur';
 import { Ionicons } from '@expo/vector-icons';
-import Svg, { Path } from 'react-native-svg';
+import Svg, { Circle, Defs, Mask, Path, Rect } from 'react-native-svg';
 import Animated, {
     Easing,
     Extrapolation,
@@ -51,7 +51,7 @@ export interface FloatingTabItem {
     /** Glyph when active (filled variant). */
     filled: IoniconName;
     /** Draw a custom glyph instead of the Ionicons names (still outline/filled by focus). */
-    glyph?: 'home';
+    glyph?: 'home' | 'cash';
 }
 
 export interface FloatingTabBarProps {
@@ -90,12 +90,55 @@ function isAndroidBelow13(): boolean {
     return Number.isFinite(v) && v < 13;
 }
 
-/** Plain house: one pentagon (square body + triangular roof). No chimney, no door, no inner lines. Stroke weight matches Ionicons' outline set. */
-export const HOME_GLYPH_PATH = 'M12 3 L21 11 V21 H3 V11 Z';
+/** Skool-style house: a rounded pentagon (soft corners) with a small horizontal door-dash near the bottom centre.
+ *  Outline when inactive; filled when active, where the dash is a true cut-out (SVG mask), not a colour guess. */
+export const HOME_GLYPH_PATH = 'M3.5 10.6 Q3.5 9.6 4.3 9 L11 3.7 Q12 3 13 3.7 L19.7 9 Q20.5 9.6 20.5 10.6 V18 Q20.5 20.5 18 20.5 H6 Q3.5 20.5 3.5 18 Z';
+export const HOME_DOOR_PATH = 'M9.6 16.4 H14.4';
 function HomeGlyph({ focused, color, size }: { focused: boolean; color: string; size: number }) {
     return (
         <Svg width={size} height={size} viewBox="0 0 24 24">
-            <Path d={HOME_GLYPH_PATH} fill={focused ? color : 'none'} stroke={color} strokeWidth={1.9} strokeLinejoin="round" strokeLinecap="round" />
+            {focused ? (
+                <>
+                    <Defs>
+                        <Mask id="homeCut" x="0" y="0" width="24" height="24">
+                            <Rect x="0" y="0" width="24" height="24" fill="white" />
+                            <Path d={HOME_DOOR_PATH} stroke="black" strokeWidth={2.2} strokeLinecap="round" />
+                        </Mask>
+                    </Defs>
+                    <Path d={HOME_GLYPH_PATH} fill={color} stroke={color} strokeWidth={1.9} strokeLinejoin="round" mask="url(#homeCut)" />
+                </>
+            ) : (
+                <>
+                    <Path d={HOME_GLYPH_PATH} fill="none" stroke={color} strokeWidth={1.9} strokeLinejoin="round" />
+                    <Path d={HOME_DOOR_PATH} stroke={color} strokeWidth={1.9} strokeLinecap="round" />
+                </>
+            )}
+        </Svg>
+    );
+}
+
+/** ONE banknote: a single rounded rectangle with a small circle at its centre. No stacked bills, no extra lines. */
+export const NOTE_RECT = { x: 2.5, y: 6, width: 19, height: 12, rx: 3 } as const;
+export const NOTE_CIRCLE = { cx: 12, cy: 12, r: 2.6 } as const;
+function CashGlyph({ focused, color, size }: { focused: boolean; color: string; size: number }) {
+    return (
+        <Svg width={size} height={size} viewBox="0 0 24 24">
+            {focused ? (
+                <>
+                    <Defs>
+                        <Mask id="cashCut" x="0" y="0" width="24" height="24">
+                            <Rect x="0" y="0" width="24" height="24" fill="white" />
+                            <Circle {...NOTE_CIRCLE} fill="black" />
+                        </Mask>
+                    </Defs>
+                    <Rect {...NOTE_RECT} fill={color} stroke={color} strokeWidth={1.9} strokeLinejoin="round" mask="url(#cashCut)" />
+                </>
+            ) : (
+                <>
+                    <Rect {...NOTE_RECT} fill="none" stroke={color} strokeWidth={1.9} strokeLinejoin="round" />
+                    <Circle {...NOTE_CIRCLE} fill="none" stroke={color} strokeWidth={1.9} />
+                </>
+            )}
         </Svg>
     );
 }
@@ -112,7 +155,7 @@ function TabGlyph({
     size,
     glyph,
 }: {
-    glyph?: 'home';
+    glyph?: 'home' | 'cash';
     focused: boolean;
     outline: IoniconName;
     filled: IoniconName;
@@ -124,6 +167,8 @@ function TabGlyph({
         <View style={{ width: size, height: size, alignItems: 'center', justifyContent: 'center' }}>
             {glyph === 'home' ? (
                 <HomeGlyph focused={focused} color={focused ? activeColor : inactiveColor} size={size} />
+            ) : glyph === 'cash' ? (
+                <CashGlyph focused={focused} color={focused ? activeColor : inactiveColor} size={size} />
             ) : (
                 <Ionicons
                     name={focused ? filled : outline}
