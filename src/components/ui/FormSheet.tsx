@@ -17,6 +17,7 @@ import { Text } from './Text';
 import { CtaFade } from './CtaFade';
 import { useTheme, spacing } from '@/src/theme';
 import type { Palette } from '@/src/theme';
+import { footerPlacement } from '@/src/utils/ctaLayout';
 
 interface FormSheetProps {
   visible: boolean;
@@ -124,8 +125,9 @@ export const FormSheet = forwardRef<ScrollView, FormSheetProps>(function FormShe
     const hide = Keyboard.addListener(Platform.OS === 'ios' ? 'keyboardWillHide' : 'keyboardDidHide', () => setKeyboardOpen(false));
     return () => { show.remove(); hide.remove(); };
   }, []);
-  const flowFooter = !!footer && scrollable && footerMode === 'flow' && !keyboardOpen;
-  const dockedFooter = !!footer && !flowFooter;
+  const placement = footerPlacement({ hasFooter: !!footer, mode: footerMode, keyboardOpen, scrollable });
+  const flowFooter = placement === 'flow';
+  const dockedFooter = placement === 'docked';
   const explicitTopInset = Platform.OS === 'ios' && presentationStyle === 'fullScreen' ? rootInsets.top : 0;
   const edges: Edge[] = explicitTopInset > 0
     ? ['bottom']
