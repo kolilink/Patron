@@ -48,7 +48,7 @@ describe('CTA ends the form (no dead gap)', () => {
   it('FormSheet puts the footer inside the scroll content by default and docks it only for sticky or an open keyboard', () => {
     expect(sheet).toContain("footerMode = 'flow'");
     expect(sheet).toMatch(/\{flowFooter \? footer : null\}\s*<\/ScrollView>/);
-    expect(sheet).toContain("footerMode === 'flow' && !keyboardOpen");
+    expect(sheet).toContain('footerPlacement(');
   });
   it('sticky FormSheets always carry a reason', () => {
     expect(sheet).toContain('needs a stickyReason');
@@ -89,7 +89,7 @@ describe('Nouveau produit sheet: no band behind "Ajouter", above the keyboard or
     expect(dock).toContain("position: 'absolute'");
     expect(dock).not.toMatch(/backgroundColor|border|shadow/);
     expect(gs).toContain('<CtaFade>{footer}</CtaFade>');
-    expect(gs).toContain('paddingBottom: footerHeight + spacing[4]');
+    expect(gs).toContain('scrollBottomPadding(placement, footerHeight, spacing[4])');
   });
   it('the sheet footer styles of every FormSheet/GestureSheet caller are fill-free (re-audit)', () => {
     for (const [f, n] of FOOTERS) expect(styleBlock(read(f), n)).not.toMatch(/backgroundColor:\s*(p\.|palette\.)|borderTop|shadow\./);

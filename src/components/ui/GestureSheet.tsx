@@ -1,5 +1,5 @@
 import React, { forwardRef, useCallback, useEffect, useMemo, useRef, useState, type ReactNode } from 'react';
-import { KeyboardAvoidingView, Modal, Platform, Pressable, ScrollView, StyleSheet, View, useWindowDimensions, type ScrollViewProps } from 'react-native';
+import { Keyboard, KeyboardAvoidingView, Modal, Platform, Pressable, ScrollView, StyleSheet, View, useWindowDimensions, type ScrollViewProps } from 'react-native';
 import { Gesture, GestureDetector, GestureHandlerRootView } from 'react-native-gesture-handler';
 import Animated, { Easing, runOnJS, useAnimatedStyle, useSharedValue, withSpring, withTiming } from 'react-native-reanimated';
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
@@ -9,6 +9,7 @@ import { CtaFade } from '@/src/components/ui/CtaFade';
 import { useTheme, spacing, radius } from '@/src/theme';
 import { useReduceMotion } from '@/src/hooks/useReduceMotion';
 import { DISMISS_FRACTION, DISMISS_VELOCITY } from '@/src/utils/sheetGesture';
+import { footerPlacement, scrollBottomPadding, type FooterMode } from '@/src/utils/ctaLayout';
 
 interface Props {
   visible: boolean;
@@ -17,7 +18,12 @@ interface Props {
   title: string;
   cancelLabel?: string;
   headerRight?: ReactNode;
+  /** The primary CTA. Default ('flow'): ends the form inside the scroll content; docks above the keyboard while it is open. */
   footer?: ReactNode;
+  /** 'sticky' = always docked (with a fade, no slab); requires `stickyReason`. */
+  footerMode?: FooterMode;
+  /** One-line reason the CTA must stay visible while the user reviews long scrolling content. */
+  stickyReason?: string;
   /** Rendered after everything else (iOS InputAccessoryView, toasts…). */
   accessory?: ReactNode;
   contentContainerStyle?: ScrollViewProps['contentContainerStyle'];
@@ -38,7 +44,7 @@ interface Props {
  * body-wide pan would fight both. Modal flags mirror FormSheet (Android edge-to-edge keyboard fix).
  */
 export const GestureSheet = forwardRef<ScrollView, Props>(function GestureSheet(
-  { visible, onClose, title, cancelLabel = 'Annuler', headerRight, footer, accessory, contentContainerStyle, keyboardShouldPersistTaps = 'handled', keyboardDismissMode, children },
+  { visible, onClose, title, cancelLabel = 'Annuler', headerRight, footer, footerMode = 'flow', stickyReason, accessory, contentContainerStyle, keyboardShouldPersistTaps = 'handled', keyboardDismissMode, children },
   scrollRef,
 ) {
   const { palette } = useTheme();
@@ -48,7 +54,9 @@ export const GestureSheet = forwardRef<ScrollView, Props>(function GestureSheet(
   const styles = useMemo(() => makeStyles(palette), [palette]);
 
   const [rendered, setRendered] = useState(visible);
-  const [footerHeight, setFooterHeight] = useState(0); // the floating CTA's measured height, reserved as scroll padding
+  const [footerHeight, setFooterHeight] = useState(0); // the DOCKED CTA's measured height, reserved as scroll padding
+  const [keyboardOpen, setKeyboardOpen] = useState(false);
+  if (__DEV__ && footerMode === 'sticky' && !stickyReason) console.warn('GestureSheet: footerMode="sticky" needs a stickyReason');
   const translateY = useSharedValue(screenH);
   const sheetHeight = useSharedValue(screenH);
   const closing = useRef(false);
@@ -57,6 +65,14 @@ export const GestureSheet = forwardRef<ScrollView, Props>(function GestureSheet(
     closing.current = false;
     onClose();
   }, [onClose]);
+
+  useEffect(() => {
+    const show = Keyboard.addListener(Platform.OS === 'ios' ? 'keyboardWillShow' : 'keyboardDidShow', () => setKeyboardOpen(true));
+    const hide = Keyboard.addListener(Platform.OS === 'ios' ? 'keyboardWillHide' : 'keyboardDidHide', () => setKeyboardOpen(false));
+    return () => { show.remove(); hide.remove(); };
+  }, []);
+  const placement = footerPlacement({ hasFooter: !!footer, mode: footerMode, keyboardOpen });
+  const reservedPadding = scrollBottomPadding(placement, footerHeight, spacing[4]);
 
   // Opening: mount off-screen (translateY starts at screenH), then slide up.
   useEffect(() => {
@@ -155,15 +171,17 @@ export const GestureSheet = forwardRef<ScrollView, Props>(function GestureSheet(
             <ScrollView
               ref={scrollRef}
               style={{ flex: 1 }}
-              contentContainerStyle={[contentContainerStyle, footer ? { paddingBottom: footerHeight + spacing[4] } : null]}
+              contentContainerStyle={[contentContainerStyle, reservedPadding != null ? { paddingBottom: reservedPadding } : null]}
               keyboardShouldPersistTaps={keyboardShouldPersistTaps}
               keyboardDismissMode={keyboardDismissMode}
             >
               {children}
+              {placement === 'flow' ? footer : null}
             </ScrollView>
-            {/* No footer container: the CTA floats over the scroll content, which extends behind it. Only a fade
-                (transparent → background) sits above the button — never a band or slab (CLAUDE.md CTA rules). */}
-            {footer ? (
+            {/* Docked only while the keyboard is open or for a sticky CTA. No container: the button floats at the sheet's
+                bottom edge, the scroll content reserves its measured height, and only a fade (transparent → background)
+                sits above it — never a band or slab (CLAUDE.md CTA rules). */}
+            {placement === 'docked' ? (
               <View style={styles.footerDock} pointerEvents="box-none" onLayout={e => setFooterHeight(e.nativeEvent.layout.height)}>
                 <CtaFade>{footer}</CtaFade>
               </View>
