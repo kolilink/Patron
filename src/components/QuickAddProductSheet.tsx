@@ -29,6 +29,8 @@ import {
   derivedTotalPieces,
   nameValid,
   isEditDirty,
+  isStockDirty,
+  stepStock,
   patchVariant,
   priceValid,
   removeVariant,
@@ -60,7 +62,6 @@ interface Props {
   /** Edit mode: open with "Plus d'informations" already expanded (the "Prix d'achat ?" affordance). */
   startExpanded?: boolean;
   /** Edit mode: stock is shown as a fact; this opens the entrée/perte sheet. */
-  onAdjust?: (product: Product) => void;
   /**
    * Delivery mode (opened from a reception line): name and quantity are prefilled from the line,
    * "Je vends à" starts empty and is REQUIRED, and there is no cost section — the line owns the unit
@@ -158,7 +159,7 @@ function ValidCheck({ valid, color }: { valid: boolean; color: string }) {
 
 export function QuickAddProductSheet({
   visible, onClose, onSubmit, onPickExisting, saving, currency, products, fournisseurs, initialName, businessId,
-  editing, initialVariants, startExpanded, onAdjust, resumeDraft, resumeEditDraft, delivery, supplierId,
+  editing, initialVariants, startExpanded, resumeDraft, resumeEditDraft, delivery, supplierId,
   onArchive, onRestore, onStats,
 }: Props) {
   const isEdit = !!editing;
@@ -246,7 +247,13 @@ export function QuickAddProductSheet({
 
   // Edit drafts: unsaved changes to an existing product land in "À compléter" too (one per product).
   // A clean sheet saves nothing; reverting every change takes back the draft this session wrote.
-  const editDirty = isEdit && editing ? isEditDirty(s, editingToState(editing, initialVariants ?? [], currency)) : false;
+  const savedState = useMemo(
+    () => (isEdit && editing ? editingToState(editing, initialVariants ?? [], currency) : null),
+    [isEdit, editing, initialVariants, currency],
+  );
+  const editDirty = savedState ? isEditDirty(s, savedState) : false;
+  // The yellow dot: stock moved (inline stepper) and not saved yet. Stock-scoped only.
+  const stockDirty = savedState ? isStockDirty(s, savedState) : false;
   const editDirtyRef = useRef(editDirty);
   editDirtyRef.current = editDirty;
   useEffect(() => {
@@ -343,6 +350,8 @@ export function QuickAddProductSheet({
       { delivery: isDelivery },
     );
     if (supplierCtx && supplierId) payload.data.supplier_id = supplierId;
+    // Only a stepper-moved stock is sent (an untouched fractional stock must not become a phantom movement).
+    if (isEdit && editing && !s.models && stockDirty) payload.stockQty = parseInt(s.qty, 10) || 0;
     const res = await onSubmit(payload);
     submitting.current = false;
     if (!res.ok) return; // the failure alert is shown by the host; everything typed stays
@@ -398,7 +407,7 @@ export function QuickAddProductSheet({
       }
       footer={
         <View style={[styles.footer, { paddingBottom: keyboardUp ? spacing[3] : Math.max(insets.bottom, spacing[5]) }]}>
-          <Button label={isEdit ? 'Enregistrer' : 'Ajouter'} loadingLabel={isEdit ? 'Enregistrement' : 'Ajout'} onPress={submit} loading={saving} disabled={!canSubmit(s) || (isDelivery && !priceValid(s, currency))} fullWidth size="lg" />
+          <Button label={isEdit ? 'Enregistrer' : 'Ajouter'} loadingLabel={isEdit ? 'Enregistrement' : 'Ajout'} onPress={submit} loading={saving} disabled={!canSubmit(s) || (isDelivery && !priceValid(s, currency))} fullWidth size="lg" icon={isEdit && stockDirty && !saving ? <View accessibilityLabel="Modifications non enregistrées" style={{ width: 8, height: 8, borderRadius: 4, backgroundColor: palette.warning }} /> : undefined} />
         </View>
       }
     >
@@ -503,17 +512,32 @@ export function QuickAddProductSheet({
 
       {/* QUANTITÉ (Modèles OFF) or the model rows (Modèles ON) */}
       {!s.models && isEdit && editing ? (
-        // Edit: the stock is a FACT (it has a movement history); changing it goes through "Ajuster"
-        // (entrée / perte + note) so nothing is silently rewritten here.
+        // Edit: the stock is a FACT (it has a movement history). The stepper only composes a DELTA on screen; Enregistrer
+        // turns it into one relative, idempotent adjust_stock_move (entrée / perte) — never an absolute rewrite.
         <Card style={styles.fieldBlock}>
           <Text style={styles.fieldLabel}>Stock</Text>
           <View style={styles.qtyRow}>
             <Text style={[styles.fieldInput, { flex: 1 }]}>{s.qty}</Text>
-            {onAdjust && (
-              <Pressable onPress={() => onAdjust(editing)} hitSlop={10} accessibilityRole="button" accessibilityLabel="Ajuster le stock">
-                <Text variant="label" style={{ color: palette.primary }}>Ajuster</Text>
+            <View style={styles.stockStepper}>
+              <Pressable
+                onPress={() => { haptics.throttledSelect(); setS(prev => ({ ...prev, qty: stepStock(prev.qty, 1) })); }}
+                hitSlop={4}
+                style={styles.stockStepBtn}
+                accessibilityRole="button"
+                accessibilityLabel="Augmenter le stock"
+              >
+                <Ionicons name="add" size={22} color={palette.primary} />
               </Pressable>
-            )}
+              <Pressable
+                onPress={() => { haptics.throttledSelect(); setS(prev => ({ ...prev, qty: stepStock(prev.qty, -1) })); }}
+                hitSlop={4}
+                style={styles.stockStepBtn}
+                accessibilityRole="button"
+                accessibilityLabel="Diminuer le stock"
+              >
+                <Ionicons name="remove" size={22} color={palette.primary} />
+              </Pressable>
+            </View>
           </View>
         </Card>
       ) : !s.models ? (
@@ -735,6 +759,8 @@ function makeStyles(p: Palette) {
     confirmedValue: { flex: 1, fontFamily: FF.semibold, fontSize: 17, color: p.textPrimary },
     toggleRow: { ...card, flexDirection: 'row', alignItems: 'center', paddingHorizontal: spacing[4], paddingVertical: spacing[2] },
     qtyRow: { flexDirection: 'row', alignItems: 'center', gap: spacing[3] },
+    stockStepper: { alignItems: 'center' },
+    stockStepBtn: { width: 48, height: 44, alignItems: 'center', justifyContent: 'center' },
     suggestions: { marginTop: spacing[1], gap: 2 },
     suggestionsHint: { fontFamily: FF.medium, fontSize: 12, color: p.textSecondary, marginBottom: 2 },
     suggestionRow: {
