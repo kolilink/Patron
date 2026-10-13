@@ -49,6 +49,7 @@ import { FAILURE_COPY } from '@/src/utils/failureCopy';
 import { todayIso, localTimeZone } from '@/src/utils/dates';
 import { homeComparison, businessAgeDays } from '@/src/utils/dashboardNarrative';
 import { getKpiSnapshot, setKpiSnapshot } from '@/src/utils/kpiSnapshot';
+import { Money, MoneyText } from '@/src/components/ui/Money';
 
 
 interface KPIs {
@@ -853,21 +854,16 @@ export default function AccueilScreen() {
               {pendingPayout ? (
                 <Card elevated style={[styles.heroCard, { backgroundColor: palette.warningLight }]}>
                   <Text variant="caption" style={{ color: palette.warning }}>Demande en cours</Text>
-                  <Text variant="amountLarge" style={{ color: palette.textPrimary, fontSize: 44, lineHeight: 56 }} numberOfLines={1} adjustsFontSizeToFit minimumFontScale={0.5}>
-                    {formatAmount(pendingPayout.requested_amount, currency)}
-                  </Text>
+                  <Money variant="amountLarge" style={{ color: palette.textPrimary, fontSize: 44, lineHeight: 56 }} amount={pendingPayout.requested_amount} currency={currency} />
                 </Card>
               ) : (
                 <Card elevated style={styles.heroCard}>
                   <View style={styles.investorHeroRow}>
                     <View style={{ flex: 1, gap: spacing[1] }}>
                       <Text variant="caption" color="secondary">Vos gains</Text>
-                      <Text
+                      <Money
                         variant="amountLarge"
-                        style={{ color: palette.textPrimary, fontSize: 44, lineHeight: 56 }}
-                       numberOfLines={1} adjustsFontSizeToFit minimumFontScale={0.5}>
-                        {formatAmount(balance ?? 0, currency)}
-                      </Text>
+                        style={{ color: palette.textPrimary, fontSize: 44, lineHeight: 56 }} amount={balance ?? 0} currency={currency} />
                     </View>
                     {(balance ?? 0) > 0 && (
                       <Pressable
@@ -909,12 +905,10 @@ export default function AccueilScreen() {
                         <View style={{ alignItems: 'flex-end' }}>
                           {bs && bs.total_revenue > 0 ? (
                             <>
-                              <Text variant="label" style={{ color: palette.textPrimary }} numberOfLines={1} adjustsFontSizeToFit minimumFontScale={0.5}>
-                                {formatAmount(gain, currency)}
-                              </Text>
-                              <Text variant="caption" color="secondary" numberOfLines={1} adjustsFontSizeToFit minimumFontScale={0.5}>
+                              <Money variant="label" style={{ color: palette.textPrimary }} amount={gain} currency={currency} />
+                              <MoneyText variant="caption" color="secondary">
                                 {stake.profit_share}% · {formatAmount(bs.total_revenue, currency)}
-                              </Text>
+                              </MoneyText>
                             </>
                           ) : (
                             <Text variant="caption" color="secondary">{stake.profit_share}% des bénéfices</Text>
@@ -926,9 +920,7 @@ export default function AccueilScreen() {
                   {investorGain > 0 && (
                     <View style={[styles.bsRow, { borderBottomWidth: 0 }]}>
                       <Text variant="body" color="secondary" style={{ flex: 1 }}>Gain estimé ce mois</Text>
-                      <Text variant="label" style={{ color: palette.textPrimary }} numberOfLines={1} adjustsFontSizeToFit minimumFontScale={0.5}>
-                        {formatAmount(investorGain, currency)}
-                      </Text>
+                      <Money variant="label" style={{ color: palette.textPrimary }} amount={investorGain} currency={currency} />
                     </View>
                   )}
                 </View>
@@ -962,9 +954,9 @@ export default function AccueilScreen() {
                   </Text>
                   {hasSoldToday ? (
                     <View style={styles.heroAmountRow}>
-                      <Text variant="amountLarge" color="success" style={styles.heroAmount} numberOfLines={1} adjustsFontSizeToFit minimumFontScale={0.5}>
+                      <MoneyText variant="amountLarge" color="success" style={styles.heroAmount}>
                         {rawOrMask(shownKpis?.revenue_today ?? 0)}
-                      </Text>
+                      </MoneyText>
                       <Text variant="amountLarge" color="success" style={styles.heroCurrency}>
                         {currency}
                       </Text>
@@ -995,7 +987,7 @@ export default function AccueilScreen() {
                   </View>
                 ) : comparisonText ? (
                   <View style={styles.heroComparison}>
-                    <Text variant="caption" color="secondary">{comparisonText}</Text>
+                    <MoneyText variant="caption" color="secondary" fit="full">{comparisonText}</MoneyText>
                   </View>
                 ) : null}
               </Card>
@@ -1026,7 +1018,7 @@ export default function AccueilScreen() {
                       </Text>
                       <Ionicons name="chevron-forward" size={16} color={palette.textSecondary} />
                     </View>
-                    <Text variant="amountLarge" numberOfLines={1} adjustsFontSizeToFit minimumFontScale={0.5}>{amtOrMask(shownKpis?.credit_total ?? 0)}</Text>
+                    <MoneyText variant="amountLarge">{amtOrMask(shownKpis?.credit_total ?? 0)}</MoneyText>
                     {creditAging.agingCount > 0 && (
                       <Text variant="caption" style={{ color: debtAgeColor(creditAging.oldestDays, palette) }}>
                         dont {creditAging.agingCount} depuis {creditAging.oldestDays} jour{creditAging.oldestDays > 1 ? 's' : ''}
@@ -1074,9 +1066,9 @@ export default function AccueilScreen() {
 
               {/* ── Zone 3: Month context — hidden in evening/night (already in comparison) ── */}
               {dayPart !== 'evening' && dayPart !== 'night' && showMonthLine ? (
-                <Text variant="caption" color="secondary" style={styles.monthLine} numberOfLines={1} adjustsFontSizeToFit minimumFontScale={0.5}>
+                <MoneyText variant="caption" color="secondary" style={styles.monthLine}>
                   Ce mois : {amtOrMask(monthRevenue)}
-                </Text>
+                </MoneyText>
               ) : null}
             </>
           )}
@@ -1095,9 +1087,9 @@ export default function AccueilScreen() {
             <Pressable style={[styles.sheetPanel, { backgroundColor: palette.surface }]} onPress={() => { }}>
               <View style={[styles.sheetHandle, { backgroundColor: palette.border }]} />
               <Text variant="h4" style={styles.sheetTitle}>Retirer mes gains</Text>
-              <Text variant="caption" color="secondary" style={styles.sheetBody} numberOfLines={1} adjustsFontSizeToFit minimumFontScale={0.5}>
+              <MoneyText variant="caption" color="secondary" style={styles.sheetBody}>
                 Disponible : {formatAmount(balance ?? 0, currency)}
-              </Text>
+              </MoneyText>
 
               {/* Amount input */}
               <View style={{ width: '100%', gap: spacing[2] }}>

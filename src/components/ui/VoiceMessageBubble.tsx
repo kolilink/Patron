@@ -6,6 +6,7 @@ import { Text } from './Text';
 import { colors, useTheme } from '@/src/theme';
 import { useChatStore } from '@/stores/chat';
 import type { ChatMessage } from '@/src/types';
+import { MoneyText } from '@/src/components/ui/Money';
 
 // expo-av's native module only exists once the app has been rebuilt with this
 // dependency linked in — requiring it eagerly would crash older binaries that
@@ -245,9 +246,9 @@ export function VoiceMessageBubble({ msg, isOwn }: {
           progress={progress}
           isOwn={isOwn}
         />
-        <Text style={[styles.timer, isOwn ? styles.timerOwn : styles.timerOther]} numberOfLines={1} adjustsFontSizeToFit minimumFontScale={0.5}>
+        <MoneyText style={[styles.timer, isOwn ? styles.timerOwn : styles.timerOther]}>
           {playing ? fmt(remaining) : fmt(totalSecs)}
-        </Text>
+        </MoneyText>
       </Pressable>
 
       {/* Speed toggle — only visible during playback */}

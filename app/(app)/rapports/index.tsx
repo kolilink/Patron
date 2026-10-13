@@ -20,6 +20,7 @@ import { useRapportsStore, type PeriodReport } from '@/stores/rapports';
 import { useExpensesStore } from '@/stores/expenses';
 import { formatAmount, formatCount } from '@/src/utils/format';
 import { formatDate, localDateISO } from '@/src/utils/dates';
+import { Money, MoneyText } from '@/src/components/ui/Money';
 
 function fmt(n: number, cur: string) {
   return formatAmount(n, cur);
@@ -606,13 +607,8 @@ export default function RapportsScreen() {
           <Card elevated style={styles.profitHero}>
             <Text style={styles.profitHeroLabel}>Bénéfice cumulé {year}</Text>
             {yearReportLoading ? <ValueSkeleton /> : (
-              <Text
-                style={[styles.profitHeroAmount, { color: yearProfit >= 0 ? palette.success : palette.warning }]}
-                numberOfLines={1}
-                adjustsFontSizeToFit
-              >
-                {fmt(yearProfit, currency)}
-              </Text>
+              <Money
+                style={[styles.profitHeroAmount, { color: yearProfit >= 0 ? palette.success : palette.warning }]} amount={yearProfit} currency={currency} />
             )}
             <View style={styles.profitHeroComparison}>
               {showProfitDeltaPill ? (
@@ -647,9 +643,9 @@ export default function RapportsScreen() {
                 balance as a second hero line so "Bénéfice cumulé" isn't read
                 as cash already in hand. */}
             {!yearReportLoading && yearCreditOwed > 0 && (
-              <Text variant="caption" color="secondary" numberOfLines={1} adjustsFontSizeToFit minimumFontScale={0.5}>
+              <MoneyText variant="caption" color="secondary" fit="full">
                 dont {fmt(yearCreditOwed, currency)} de crédit pas encore payé
-              </Text>
+              </MoneyText>
             )}
           </Card>
         )}

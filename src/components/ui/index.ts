@@ -5,3 +5,4 @@ export { Input } from './Input';
 export { NoResultsState } from './NoResultsState';
 export { Pill } from './Pill';
 export { Text } from './Text';
+export { Money, MoneyText } from './Money';

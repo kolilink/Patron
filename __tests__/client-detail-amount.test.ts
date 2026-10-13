@@ -78,7 +78,7 @@ describe('the carnet screen no longer blanks on a slow payments read', () => {
         // The full page renders around it — the gate is inside the banner, not around the screen.
         expect(banner).toMatch(/Chargement…/);
         // The amount text is rendered inside the same banner's else-branch.
-        expect(banner).toMatch(/fmt\(totalOwed, currency\)/);
+        expect(banner).toMatch(/amount=\{totalOwed\}/);
     });
 
     it('(d) paymentsResolved is set on every terminal path of the payments read', () => {

@@ -1,4 +1,5 @@
 import { useEffect, useRef, useState } from 'react';
+import { MoneyText } from '@/src/components/ui/Money';
 import { useReduceMotion } from '@/src/hooks/useReduceMotion';
 import { Animated, Keyboard, Pressable, View } from 'react-native';
 import { router } from 'expo-router';
@@ -71,7 +72,7 @@ function SessionTicker({ text, reduceMotion }: { text: string; reduceMotion: boo
         ],
       }}
     >
-      <Text variant="caption" color="secondary" style={{ textAlign: 'center' }}>{text}</Text>
+      <MoneyText variant="caption" color="secondary" fit="full" style={{ textAlign: 'center' }}>{text}</MoneyText>
     </Animated.View>
   );
 }

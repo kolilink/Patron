@@ -20,7 +20,7 @@ describe('touch targets', () => {
         const hs = /hitSlop=\{(\d+)\}/.exec(attrs); const slop = hs ? Number(hs[1]) : /hitSlop/.test(attrs) ? 99 : 0;
         const defs = [...attrs.matchAll(/styles\.(\w+)/g)].map(x => new RegExp(`${x[1]}:\\s*\\{([^}]*)\\}`).exec(s)?.[1] ?? '');
         const dims = [...(defs.join(' ') + ' ' + attrs).matchAll(/\b(?:width|height|minWidth|minHeight)\s*:\s*(\d+)/g)].map(x => Number(x[1])).filter(n => n < 48 && n > 4);
-        const iconOnly = /Ionicons|Icon/.test(body) && !/<(?:Text|Button)\b/.test(body);
+        const iconOnly = /Ionicons|Icon/.test(body) && !/<(?:Text|MoneyText|Money|Button)\b/.test(body);
         if ((dims.length && slop < (48 - Math.min(...dims)) / 2) || (iconOnly && !dims.length && slop === 0)) {
           offenders.push(`${f}:${s.slice(0, m.index).split('\n').length}`);
         }

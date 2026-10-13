@@ -19,6 +19,7 @@ import { SkeletonList } from '@/src/components/ui/SkeletonPlaceholder';
 import { formatDebtAge, debtAgeTier } from '@/src/utils/clientReminder';
 import { formatAmount } from '@/src/utils/format';
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
+import { Money, MoneyText } from '@/src/components/ui/Money';
 
 function fmt(n: number, cur: string) { return formatAmount(n, cur); }
 
@@ -231,9 +232,7 @@ export default function ClientsScreen() {
                   receivables, not a loss; color here is reserved for AGE
                   (how overdue), not for the existence of a debt itself. */}
               <Text variant="caption" color="secondary" style={{ textAlign: 'center' }}>On vous doit au total</Text>
-              <Text style={{ color: palette.textPrimary, fontFamily: fontFamily.bold, fontSize: 40, lineHeight: 48, textAlign: 'center', alignSelf: 'stretch' }} numberOfLines={1} adjustsFontSizeToFit minimumFontScale={0.4}>
-                {fmt(totalOwedAmount, currency)}
-              </Text>
+              <Money style={{ color: palette.textPrimary, fontFamily: fontFamily.bold, fontSize: 40, lineHeight: 48, textAlign: 'center', alignSelf: 'stretch' }} amount={totalOwedAmount} currency={currency} />
             </>
           ) : (
             <>
@@ -357,9 +356,9 @@ export default function ClientsScreen() {
                 <View style={{ alignItems: 'flex-end', gap: 6 }}>
                   {/* Plain, calm — not red. Color on this row lives entirely
                       on the age caption above, not on the amount. */}
-                  <Text variant="label" style={{ color: palette.textPrimary, fontFamily: fontFamily.bold }} numberOfLines={1} adjustsFontSizeToFit minimumFontScale={0.5}>
+                  <MoneyText variant="label" style={{ color: palette.textPrimary, fontFamily: fontFamily.bold }}>
                     Vous doit {fmt(item.totalCredit, currency)}
-                  </Text>
+                  </MoneyText>
                   {!isInvestisseur && (
                     <Pressable
                       onPress={() => sendWhatsAppReminder(item)}

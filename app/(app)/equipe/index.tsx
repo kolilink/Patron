@@ -37,6 +37,7 @@ import { FAILURE_COPY } from '@/src/utils/failureCopy';
 import { memberRemovedConfirmation, inviteCodeRevokedConfirmation, stakeRemovedConfirmation, partnerRemovedConfirmation, supplierDeletedConfirmation, saleCancelledConfirmation } from '@/src/utils/saveConfirmationCopy';
 import { failAlert } from '@/src/components/ui/FailureView';
 import { formatDate } from '@/src/utils/dates';
+import { Money, MoneyText } from '@/src/components/ui/Money';
 
 // iOS-only: suppresses the OS's auto-injected floating "Done" pill above
 // the numeric keyboard — the payout sheet's "Confirmer le paiement" button
@@ -179,7 +180,7 @@ function ProductScopePicker({ visible, onClose, products, selectedIds, onConfirm
               </View>
               <View style={{ flex: 1 }}>
                 <Text variant="body">{item.name}</Text>
-                <Text variant="caption" color="secondary" numberOfLines={1} adjustsFontSizeToFit minimumFontScale={0.5}>{formatAmount(item.sale_price, currency)}</Text>
+                <Money variant="caption" color="secondary" amount={item.sale_price} currency={currency} />
               </View>
             </Pressable>
           );
@@ -504,18 +505,14 @@ function MemberDetailSheet({
               return totalInvested > 0 ? (
                 <View style={[styles.scopeRow, { flexDirection: 'column', alignItems: 'flex-start', gap: spacing[1] }]}>
                   <Text variant="caption" color="secondary">Capital investi</Text>
-                  <Text style={{ fontFamily: FF.bold, fontSize: 22, lineHeight: 30, color: palette.primary }} numberOfLines={1} adjustsFontSizeToFit minimumFontScale={0.5}>
-                    {formatAmount(totalInvested, currency)}
-                  </Text>
+                  <Money style={{ fontFamily: FF.bold, fontSize: 22, lineHeight: 30, color: palette.primary }} amount={totalInvested} currency={currency} />
                 </View>
               ) : null;
             })()}
 
             <View style={[styles.scopeRow, { flexDirection: 'column', alignItems: 'flex-start', gap: spacing[1] }]}>
               <Text variant="caption" color="secondary">Part des bénéfices accumulée</Text>
-              <Text style={{ fontFamily: FF.bold, fontSize: 22, lineHeight: 30, color: palette.textPrimary }} numberOfLines={1} adjustsFontSizeToFit minimumFontScale={0.5}>
-                {formatAmount(balance ?? 0, currency)}
-              </Text>
+              <Money style={{ fontFamily: FF.bold, fontSize: 22, lineHeight: 30, color: palette.textPrimary }} amount={balance ?? 0} currency={currency} />
             </View>
 
             {/* Pending payout request */}
@@ -526,9 +523,9 @@ function MemberDetailSheet({
                 <View style={[styles.scopeRow, { backgroundColor: palette.warning + '12', borderColor: palette.warning, gap: spacing[3] }]}>
                   <View style={{ flex: 1 }}>
                     <Text variant="label" style={{ color: palette.warning }}>Demande de retrait</Text>
-                    <Text variant="caption" color="secondary" numberOfLines={1} adjustsFontSizeToFit minimumFontScale={0.5}>
+                    <MoneyText variant="caption" color="secondary">
                       {formatAmount(pending.requested_amount, currency)} demandé
-                    </Text>
+                    </MoneyText>
                   </View>
                   <Pressable
                     onPress={() => {
@@ -549,7 +546,7 @@ function MemberDetailSheet({
               <View key={p.id} style={[styles.scopeRow, { flexDirection: 'row', alignItems: 'center', gap: spacing[3] }]}>
                 <Ionicons name="checkmark-circle-outline" size={16} color={palette.success} />
                 <View style={{ flex: 1 }}>
-                  <Text variant="body" numberOfLines={1} adjustsFontSizeToFit minimumFontScale={0.5}>{formatAmount(p.paid_amount ?? p.requested_amount, currency)}</Text>
+                  <Money variant="body" amount={p.paid_amount ?? p.requested_amount} currency={currency} />
                   <Text variant="caption" color="secondary">
                     {formatDate(p.paid_at ?? p.requested_at, 'short')}
                   </Text>
@@ -905,7 +902,7 @@ function NewCodeModal({ visible, onClose, onGenerate, saving, hasManager, produc
                         </View>
                         <View style={{ flex: 1 }}>
                           <Text variant="body">{p.name}</Text>
-                          <Text variant="caption" color="secondary" numberOfLines={1} adjustsFontSizeToFit minimumFontScale={0.5}>{formatAmount(p.sale_price, currency)}</Text>
+                          <Money variant="caption" color="secondary" amount={p.sale_price} currency={currency} />
                         </View>
                       </Pressable>
                     );

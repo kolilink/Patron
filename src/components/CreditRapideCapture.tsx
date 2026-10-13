@@ -20,6 +20,7 @@ import { useAuthStore } from '@/stores/auth';
 import { ReceiptLink } from '@/src/components/ReceiptLink';
 import { creditReceiptFromSubmit, type CreditReceiptSource } from '@/src/utils/saleReceipt';
 import { ensureClient } from '@/lib/writeFunnel';
+import { MoneyText } from '@/src/components/ui/Money';
 
 // ── Crédit rapide — the shared entry logic for both places this exists:
 // Accueil's "+" (QuickCaptureSheet) and Vendre's own Crédit tab. Previously
@@ -427,9 +428,9 @@ export function CreditRapideCapture({ businessId, userId, currency, onViewClient
               <Text style={[styles.amountCurrency, { color: palette.textSecondary }]}>{currency}</Text>
             </Animated.View>
             {clientBalance !== null && clientBalance > 0 && (
-              <Text variant="caption" style={{ color: palette.textDisabled, marginTop: spacing[1], textAlign: 'center' }} numberOfLines={1} adjustsFontSizeToFit minimumFontScale={0.5}>
+              <MoneyText variant="caption" style={{ color: palette.textDisabled, marginTop: spacing[1], textAlign: 'center' }}>
                 Solde actuel · {formatAmount(clientBalance, currency)}
-              </Text>
+              </MoneyText>
             )}
           </View>
 

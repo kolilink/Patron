@@ -35,6 +35,7 @@ import { DebtReminderSheet } from '@/src/components/DebtReminderSheet';
 import type { DebtReceiptInput } from '@/src/utils/debtReceipt';
 import { formatDate } from '@/src/utils/dates';
 import { writeRow } from '@/lib/writeFunnel';
+import { Money, MoneyText } from '@/src/components/ui/Money';
 
 // iOS-only: suppresses the OS's auto-injected floating "Done" pill above
 // the numeric keyboard — the payment sheet already has a persistent,
@@ -264,15 +265,15 @@ function PayModal({
             style={styles.solderBtn}
             onPress={() => setAmountStr(formatAmountInput(String(Math.round(totalOwed)), currency))}
           >
-            <Text variant="label" style={{ color: palette.primary }} numberOfLines={1} adjustsFontSizeToFit minimumFontScale={0.5}>Tout régler : {fmt(totalOwed, currency)}</Text>
+            <MoneyText variant="label" style={{ color: palette.primary }}>Tout régler : {fmt(totalOwed, currency)}</MoneyText>
           </Pressable>
         </View>
         {amount > 0 && (
-          <Text variant="caption" style={{ color: remaining > 0 ? palette.recouvrementPending : palette.recouvrementPaid }} numberOfLines={1} adjustsFontSizeToFit minimumFontScale={0.5}>
+          <MoneyText variant="caption" style={{ color: remaining > 0 ? palette.recouvrementPending : palette.recouvrementPaid }}>
             {remaining > 0
               ? `Il restera ${fmt(remaining, currency)} à régler.`
               : 'Tout sera réglé.'}
-          </Text>
+          </MoneyText>
         )}
       </View>
 
@@ -812,15 +813,15 @@ export default function ClientLedgerScreen() {
             {!paymentsResolved && allPayments.length === 0 ? (
               <Text style={styles.bannerAmount}>Chargement…</Text>
             ) : (
-              <Text style={styles.bannerAmount} numberOfLines={1} adjustsFontSizeToFit minimumFontScale={0.5}>{fmt(totalOwed, currency)}</Text>
+              <Money style={styles.bannerAmount} amount={totalOwed} currency={currency} />
             )}
             <RNText style={[styles.bannerAge, { color: debtAgeColor(debtAge, palette) }]}>
               {formatDebtAge(debtAge)}
             </RNText>
             {totalPaid > 0 && (
-              <RNText style={styles.repaidLine} numberOfLines={1} adjustsFontSizeToFit minimumFontScale={0.5}>
+              <MoneyText style={styles.repaidLine}>
                 {fmt(totalPaid, currency)} payé sur {fmt(totalSold, currency)}
-              </RNText>
+              </MoneyText>
             )}
             <Pressable
               onPress={() => setShowPayModal(true)}
@@ -836,7 +837,7 @@ export default function ClientLedgerScreen() {
           // confirms the last entry settled it.
           <View style={styles.debtCard}>
             <Text style={styles.bannerLabel}>{displayName} vous doit</Text>
-            <Text style={styles.bannerAmount} numberOfLines={1} adjustsFontSizeToFit minimumFontScale={0.5}>{fmt(0, currency)}</Text>
+            <Money style={styles.bannerAmount} amount={0} currency={currency} />
             <View style={styles.regleRow}>
               <Ionicons name="checkmark-circle" size={16} color={palette.recouvrementPaid} />
               <RNText style={[styles.bannerAge, { color: palette.recouvrementPaid, fontFamily: fontFamily.bold, marginTop: 0, marginBottom: 0 }]}>
@@ -905,16 +906,14 @@ export default function ClientLedgerScreen() {
                     ) : null}
                   </View>
                   <View style={styles.carnetAmountCol}>
-                    <RNText style={[styles.carnetAmount, { color: palette.textPrimary }]} numberOfLines={1} adjustsFontSizeToFit minimumFontScale={0.5}>
-                      {fmt(entry.amount, currency)}
-                    </RNText>
+                    <Money style={[styles.carnetAmount, { color: palette.textPrimary }]} amount={entry.amount} currency={currency} />
                     {isSettled ? (
                       <View style={styles.regleTagRow}>
-                        <Text variant="caption" color="secondary" numberOfLines={1} adjustsFontSizeToFit minimumFontScale={0.5}>Reste : {fmt(0, currency)}</Text>
+                        <MoneyText variant="caption" color="secondary">Reste : {fmt(0, currency)}</MoneyText>
                         <Text variant="caption" style={{ color: palette.recouvrementPaid, fontFamily: fontFamily.bold }}> · Réglé ✓</Text>
                       </View>
                     ) : (
-                      <Text variant="caption" color="secondary" numberOfLines={1} adjustsFontSizeToFit minimumFontScale={0.5}>Reste : {fmt(entry.reste, currency)}</Text>
+                      <MoneyText variant="caption" color="secondary">Reste : {fmt(entry.reste, currency)}</MoneyText>
                     )}
                   </View>
                 </Pressable>
@@ -999,16 +998,16 @@ export default function ClientLedgerScreen() {
         {detailEntry && (
           <View style={{ gap: spacing[3] }}>
             <Text variant="label" color="secondary">{entryDateLabel(detailEntry.dateKey)}</Text>
-            <Text variant="h2" numberOfLines={1} adjustsFontSizeToFit minimumFontScale={0.5}>{fmt(detailEntry.amount, currency)}</Text>
+            <Money variant="h2" amount={detailEntry.amount} currency={currency} />
             {detailEntry.saleLabel ? (
               <Text variant="body" color="secondary">{detailEntry.saleLabel}</Text>
             ) : null}
             {detailEntry.method ? (
               <Text variant="body" color="secondary">{methodLabel(detailEntry.method)}</Text>
             ) : null}
-            <Text variant="caption" color="secondary" numberOfLines={1} adjustsFontSizeToFit minimumFontScale={0.5}>
+            <MoneyText variant="caption" color="secondary">
               Reste après cette ligne : {fmt(detailEntry.reste, currency)}
-            </Text>
+            </MoneyText>
           </View>
         )}
       </FormSheet>
@@ -1022,9 +1021,9 @@ export default function ClientLedgerScreen() {
               <Ionicons name="checkmark" size={44} color={palette.textPrimary} />
             </Animated.View>
             <Text style={styles.successHeadline}>{overlayCopy.headline}</Text>
-            <Text style={styles.successSubtitle} numberOfLines={1} adjustsFontSizeToFit minimumFontScale={0.5}>
+            <MoneyText style={styles.successSubtitle}>
               {displayName} vous a payé {fmt(successPayment.amount, currency)}.
-            </Text>
+            </MoneyText>
             {overlayCopy.reste && (
               <Text style={styles.successReste}>{overlayCopy.reste}</Text>
             )}

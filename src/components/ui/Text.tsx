@@ -4,6 +4,7 @@ import { useTheme } from '../../theme';
 import { typography } from '../../theme';
 
 type Variant = keyof typeof typography;
+export type TextVariant = Variant;
 type Color = 'primary' | 'secondary' | 'disabled' | 'inverse' | 'success' | 'warning' | 'danger' | 'brand';
 
 const TABULAR = { fontVariant: ['tabular-nums'] as ['tabular-nums'] };
@@ -26,6 +27,9 @@ export function Text({
   maxFontSizeMultiplier = 1.3,
   ...props
 }: TextProps) {
+  // A variant that does not exist must be LOUD in dev — a silent fallback to unstyled small text is how a money
+  // figure ends up microscopic. (TypeScript already rejects it at compile time; this catches `as any`/dynamic values.)
+  if (__DEV__ && !typography[variant]) throw new Error(`Text: unknown variant "${String(variant)}"`);
   const { palette } = useTheme();
   const colorMap: Record<Color, string> = {
     primary:   palette.textPrimary,

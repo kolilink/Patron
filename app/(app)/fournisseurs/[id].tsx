@@ -34,6 +34,7 @@ import { toast } from '@/stores/toast';
 import { formatDate } from '@/src/utils/dates';
 import { writeRow } from '@/lib/writeFunnel';
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
+import { Money, MoneyText } from '@/src/components/ui/Money';
 
 // iOS-only: suppresses the OS's auto-injected floating "Done" pill above
 // number-pad/decimal-pad keyboards — the pay form below already has a
@@ -76,16 +77,16 @@ function LivraisonDetail({ livraison, fournisseurName, currency, businessId, can
         <ScrollView contentContainerStyle={styles.mpad}>
           <Card style={{ gap: spacing[2] }}>
             <View style={styles.dr}><Text variant="caption" color="secondary">Total</Text>
-              <Text variant="label" numberOfLines={1} adjustsFontSizeToFit minimumFontScale={0.5}>{fmt(livraison.total_cost, currency)}</Text></View>
+              <Money variant="label" amount={livraison.total_cost} currency={currency} /></View>
           </Card>
           {livraison.lines?.map(l => (
             <Card key={l.id} style={{ gap: 2 }}>
               <Text variant="body">{l.product_name}</Text>
               <View style={styles.dr}>
-                <Text variant="caption" color="secondary" numberOfLines={1} adjustsFontSizeToFit minimumFontScale={0.5}>
+                <MoneyText variant="caption" color="secondary">
                   ×{l.qty_ordered} · {l.unit_cost !== null ? `${fmt(l.unit_cost, currency)}/u` : 'Prix inconnu'}
-                </Text>
-                <Text variant="label" numberOfLines={1} adjustsFontSizeToFit minimumFontScale={0.5}>{l.unit_cost !== null ? fmt(l.qty_ordered * l.unit_cost, currency) : '—'}</Text>
+                </MoneyText>
+                <MoneyText variant="label">{l.unit_cost !== null ? fmt(l.qty_ordered * l.unit_cost, currency) : '—'}</MoneyText>
               </View>
             </Card>
           ))}
@@ -410,7 +411,7 @@ export default function FournisseurProfile() {
             <Card style={styles.debtCard}>
               <View>
                 <Text variant="caption" color="secondary">Montant dû</Text>
-                <Text style={styles.debtAmt} numberOfLines={1} adjustsFontSizeToFit minimumFontScale={0.5}>{fmt(totalOwed, currency)}</Text>
+                <Money style={styles.debtAmt} amount={totalOwed} currency={currency} />
               </View>
               <Button label="Payer" onPress={() => setShowPay(true)} size="sm" />
             </Card>
@@ -432,7 +433,7 @@ export default function FournisseurProfile() {
                     </Text>
                     {p.note ? <Text variant="caption" color="secondary">{p.note}</Text> : null}
                   </View>
-                  <Text variant="label" style={{ color: palette.textPrimary }} numberOfLines={1} adjustsFontSizeToFit minimumFontScale={0.5}>{fmt(p.amount, currency)}</Text>
+                  <Money variant="label" style={{ color: palette.textPrimary }} amount={p.amount} currency={currency} />
                 </View>
               ))}
             </View>
@@ -451,7 +452,7 @@ export default function FournisseurProfile() {
                 <Text variant="body">
                   {formatDate(livraison.ordered_at, 'long')}
                 </Text>
-                <Text variant="caption" color="secondary" numberOfLines={1} adjustsFontSizeToFit minimumFontScale={0.5}>{fmt(livraison.total_cost, currency)}</Text>
+                <Money variant="caption" color="secondary" amount={livraison.total_cost} currency={currency} />
               </View>
               <Ionicons name="chevron-forward" size={14} color={palette.textDisabled} style={{ marginLeft: 4 }} />
             </Pressable>
@@ -495,7 +496,7 @@ export default function FournisseurProfile() {
       >
         <Card style={{ padding: spacing[4], gap: spacing[1] }}>
           <Text variant="caption" color="secondary">Solde dû à {fournisseur.name}</Text>
-          <Text style={[styles.debtAmt, { color: palette.textPrimary }]} numberOfLines={1} adjustsFontSizeToFit minimumFontScale={0.5}>{fmt(totalOwed, currency)}</Text>
+          <Money style={[styles.debtAmt, { color: palette.textPrimary }]} amount={totalOwed} currency={currency} />
         </Card>
         <Input
           label={`Montant payé (${currency})`}

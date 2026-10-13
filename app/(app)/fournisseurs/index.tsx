@@ -34,6 +34,7 @@ import { QuickAddProductSheet } from '@/src/components/QuickAddProductSheet';
 import type { QuickAddPayload } from '@/src/utils/quickAddProduct';
 import { generateId } from '@/lib/id';
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
+import { MoneyText } from '@/src/components/ui/Money';
 
 // iOS-only: number-pad/decimal-pad keyboards have no built-in return key, so
 // the OS auto-injects its own floating "Done" pill above the keyboard when
@@ -199,9 +200,9 @@ function FournisseurForm({ visible, editing, products, fournisseurs, businessId,
             key={p.id}
             onPress={() => { configureLayoutNext(LayoutAnimation.Presets.easeInEaseOut); setDropdownOpen(true); }}
             style={styles.prodDropdownItem}>
-            <Text variant="body" style={{ flex: 1 }} numberOfLines={1} adjustsFontSizeToFit minimumFontScale={0.5}>
+            <MoneyText variant="body" style={{ flex: 1 }}>
               {`${p.name} · ${p.sale_price > 0 ? formatAmount(p.sale_price, currency) : 'Prix à fixer'}`}
-            </Text>
+            </MoneyText>
             <Ionicons name="chevron-forward" size={16} color={palette.textSecondary} />
           </Pressable>
         ))}
@@ -566,11 +567,11 @@ export default function FournisseursScreen() {
 
                 <View style={{ flex: 1, gap: 3 }}>
                   <Text variant="label" numberOfLines={1}>{item.name}</Text>
-                  <Text variant="caption" color="secondary" numberOfLines={1} adjustsFontSizeToFit minimumFontScale={0.5}>
+                  <MoneyText variant="caption" color="secondary">
                     {lastLivraison
                       ? `${formatDate(lastLivraison.ordered_at, 'dayMonth')} · ${fmt(lastLivraison.total_cost, currency)}`
                       : 'Aucune livraison'}
-                  </Text>
+                  </MoneyText>
                   {owedAmount > 0 && oldestDebtDateMap[item.id] ? (
                     <Text
                       variant="caption"
@@ -583,9 +584,9 @@ export default function FournisseursScreen() {
 
                 <View style={{ alignItems: 'flex-end', gap: 4 }}>
                   {owedAmount > 0 && (
-                    <Text variant="label" style={{ color: palette.warning }} numberOfLines={1} adjustsFontSizeToFit minimumFontScale={0.5}>
+                    <MoneyText variant="label" style={{ color: palette.warning }}>
                       − {fmt(owedAmount, currency)}
-                    </Text>
+                    </MoneyText>
                   )}
                 </View>
 
