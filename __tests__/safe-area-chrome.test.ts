@@ -46,6 +46,6 @@ describe('no hardcoded edge margins on floating chrome', () => {
     expect(read('app/(app)/(tabs)/vendre.tsx')).toContain('paddingBottom: Math.max(insets.bottom, spacing[4]) + spacing[6]');
   });
   it('precedent components still read the real insets', () => {
-    for (const f of ['src/components/ui/AppToast.tsx', 'src/components/ui/FormSheet.tsx', 'src/components/ui/SyncStatusLine.tsx']) expect(read(f)).toMatch(/useSafeAreaInsets/);
+    for (const f of ['src/components/ui/Toast.tsx', 'src/components/ui/FormSheet.tsx', 'src/components/ui/SyncStatusLine.tsx']) expect(read(f)).toMatch(/useSafeAreaInsets/);
   });
 });

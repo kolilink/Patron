@@ -1,4 +1,7 @@
 import React, { useCallback, useEffect, useMemo, useRef, useState } from 'react';
+import { lineTotal, cartSum, cartHeaderTitle, lastUsedPayMethod } from '@/src/utils/cartMath';
+import { saleToastSpec } from '@/src/utils/saleToast';
+import { onTabReselect, resolveReselect } from '@/src/utils/tabReselect';
 import { ConfirmSheetHost } from '@/src/components/ui/ConfirmSheet';
 import { appAlert } from '@/src/utils/appAlert';
 import { TopFade } from '@/src/components/ui/TopFade';
@@ -37,7 +40,7 @@ import { OfflineNotice } from '@/src/components/ui/OfflineNotice';
 import type { CartLine, SalePayment } from '@/stores/sales';
 import { useSalesStore } from '@/stores/sales';
 import { useVentesStore } from '@/stores/ventes';
-import { useSaveConfirmationStore } from '@/stores/saveConfirmation';
+import { toast } from '@/stores/toast';
 import { creditSaleConfirmation, cashSaleConfirmation } from '@/src/utils/saveConfirmationCopy';
 import { supabase } from '@/lib/supabase';
 import { getKV, setKV } from '@/lib/db';
@@ -114,13 +117,7 @@ async function loadDefaultQuickPayMethod(businessId: string): Promise<'especes' 
   try {
     const raw = await getKV(quickPayHistoryKey(businessId));
     const history: string[] = raw ? JSON.parse(raw) : [];
-    if (history.length === 0) return 'especes';
-    const counts = new Map<string, number>();
-    for (const m of history) counts.set(m, (counts.get(m) ?? 0) + 1);
-    let best: string = 'especes';
-    let bestCount = 0;
-    for (const [m, c] of counts) if (c > bestCount) { best = m; bestCount = c; }
-    return (best === 'orange' || best === 'mtn') ? best : 'especes';
+    return lastUsedPayMethod(history);
   } catch {
     // failure: silent — preference read: falls back to cash, never worth interrupting a sale
     return 'especes';
@@ -189,10 +186,18 @@ function CartRow({ line, currency, onInc, onDec, onRemove, onToggleBulk, onSetQt
 
   return (
     <View style={styles.cartRow} onLayout={onLayout}>
-      <View style={{ flex: 1 }}>
-        <Text variant="label" numberOfLines={1}>{line.product.name}{line.variant_name ? ` · ${line.variant_name}` : ''}</Text>
-        <View style={{ flexDirection: 'row', alignItems: 'center', gap: spacing[2] }}>
-          <MoneyText variant="caption" color="secondary">
+      {/* Line 1: what it is · what it comes to (bold, right) · remove. She verifies the total, she never computes it. */}
+      <View style={styles.cartRowTop}>
+        <Text variant="label" numberOfLines={1} style={{ flex: 1 }}>{line.product.name}{line.variant_name ? ` · ${line.variant_name}` : ''}</Text>
+        <Money amount={lineTotal(line)} currency={currency} variant="amount" fit="half" testID="cart-line-total" />
+        <Pressable onPress={onRemove} hitSlop={4} style={styles.removeLineBtn} accessibilityRole="button" accessibilityLabel="Retirer cette ligne">
+          <Ionicons name="close" size={20} color={palette.textSecondary} />
+        </Pressable>
+      </View>
+      {/* Line 2: unit price (subdued) · quantity stepper */}
+      <View style={styles.cartRowBottom}>
+        <View style={{ flex: 1, flexDirection: 'row', alignItems: 'center', gap: spacing[2] }}>
+          <MoneyText variant="caption" color="secondary" style={{ flexShrink: 1 }}>
             {formatAmount(line.unit_price, currency)} / {line.is_bulk ? 'lot' : line.product.unit}
           </MoneyText>
           {hasBulk && (
@@ -203,46 +208,42 @@ function CartRow({ line, currency, onInc, onDec, onRemove, onToggleBulk, onSetQt
             </Pressable>
           )}
         </View>
-      </View>
-      <View style={styles.qtyControl}>
-        <Pressable onPress={() => { if (line.qty <= 1) return; haptics.throttledSelect(); onDec(); }} style={[styles.qtyBtn, line.qty <= 1 && { opacity: 0.3 }]} hitSlop={10} accessibilityLabel="Diminuer la quantité" accessibilityState={{ disabled: line.qty <= 1 }}>
-          <Text variant="label" style={{ color: line.qty <= 1 ? palette.textDisabled : palette.textPrimary }}>−</Text>
-        </Pressable>
-        {editing ? (
-          <TextInput
-            ref={inputRef}
-            style={styles.qtyInput}
-            value={inputVal}
-            onChangeText={setInputVal}
-            onBlur={commitEdit}
-            onSubmitEditing={commitEdit}
-            keyboardType="number-pad"
-            selectTextOnFocus
-            returnKeyType="done"
-            inputAccessoryViewID={Platform.OS === 'ios' ? VENDRE_SILENT_ACCESSORY_ID : undefined}
-          />
-        ) : (
-          <Pressable hitSlop={8} onPress={startEdit} style={styles.qtyNumPress}>
-            <Text variant="label" style={styles.qtyNum}>{line.qty}</Text>
+        <View style={styles.qtyControl}>
+          <Pressable onPress={() => { if (line.qty <= 1) return; haptics.throttledSelect(); onDec(); }} style={[styles.qtyBtn, line.qty <= 1 && { opacity: 0.3 }]} hitSlop={10} accessibilityLabel="Diminuer la quantité" accessibilityState={{ disabled: line.qty <= 1 }}>
+            <Text variant="label" style={{ color: line.qty <= 1 ? palette.textDisabled : palette.textPrimary }}>−</Text>
           </Pressable>
-        )}
-        {(() => {
-          const atMax = line.qty >= (line.variant_id ? (line.variant_stock_qty ?? Infinity) : line.product.stock_qty);
-          return (
-            <Pressable
-              onPress={() => { if (atMax) return; haptics.throttledSelect(); onInc(); }}
-              style={[styles.qtyBtn, atMax && { opacity: 0.3 }]}
-              hitSlop={10}
-            >
-              <Text variant="label" style={{ color: atMax ? palette.textDisabled : palette.primary }}>+</Text>
+          {editing ? (
+            <TextInput
+              ref={inputRef}
+              style={styles.qtyInput}
+              value={inputVal}
+              onChangeText={setInputVal}
+              onBlur={commitEdit}
+              onSubmitEditing={commitEdit}
+              keyboardType="number-pad"
+              selectTextOnFocus
+              returnKeyType="done"
+              inputAccessoryViewID={Platform.OS === 'ios' ? VENDRE_SILENT_ACCESSORY_ID : undefined}
+            />
+          ) : (
+            <Pressable hitSlop={8} onPress={startEdit} style={styles.qtyNumPress}>
+              <Text variant="label" style={styles.qtyNum}>{line.qty}</Text>
             </Pressable>
-          );
-        })()}
+          )}
+          {(() => {
+            const atMax = line.qty >= (line.variant_id ? (line.variant_stock_qty ?? Infinity) : line.product.stock_qty);
+            return (
+              <Pressable
+                onPress={() => { if (atMax) return; haptics.throttledSelect(); onInc(); }}
+                style={[styles.qtyBtn, atMax && { opacity: 0.3 }]}
+                hitSlop={10}
+              >
+                <Text variant="label" style={{ color: atMax ? palette.textDisabled : palette.primary }}>+</Text>
+              </Pressable>
+            );
+          })()}
+        </View>
       </View>
-      {/* Explicit delete: a stepper stops at 1 (a 0-quantity line is not a state), so removal is its own control. */}
-      <Pressable onPress={onRemove} hitSlop={10} style={styles.removeLineBtn} accessibilityRole="button" accessibilityLabel="Retirer cette ligne">
-        <Ionicons name="trash-outline" size={18} color={palette.textSecondary} />
-      </Pressable>
     </View>
   );
 }
@@ -1414,6 +1415,17 @@ export default function VendreScreen() {
   // A product to open in the edit sheet as soon as the list has it (old low_stock push links).
   const [pendingEditId, setPendingEditId] = useState<string | null>(null);
   const exitGerer = useCallback(() => setGerer(false), []);
+  // Tapping the active "Vendre" tab icon goes back to the root of this tab: out of Gérer (back to the sell grid),
+  // else scroll the grid to the top. Latest state is read through refs so the subscription is mounted once.
+  const gridRef = useRef<FlatList<Product>>(null);
+  const gridOffsetRef = useRef(0);
+  const gererRef = useRef(false);
+  gererRef.current = gerer;
+  useEffect(() => onTabReselect('vendre', () => {
+    const action = resolveReselect({ inSubview: gererRef.current, scrollOffset: gridOffsetRef.current });
+    if (action === 'leave-subview') exitGerer();
+    else if (action === 'scroll-top') gridRef.current?.scrollToOffset({ offset: 0, animated: true });
+  }), [exitGerer]);
   // Vendre is a tab and stays mounted: params from other screens (low-stock card, old deep links)
   // are re-applied on every arrival, then cleared.
   const { openForm, prefillName, gerer: gererParam, focus: focusParam } = useLocalSearchParams<{ openForm?: string; prefillName?: string; gerer?: string; focus?: string }>();
@@ -1470,7 +1482,7 @@ export default function VendreScreen() {
   // Holds the SaveConfirmation banner payload built in handleConfirmPayment —
   // only raised once the full-screen receipt/share sheet closes, see the
   // effect below and the comment at the call site.
-  const pendingSaveConfirmationRef = useRef<Parameters<ReturnType<typeof useSaveConfirmationStore.getState>['show']>[0] | null>(null);
+  const pendingSaveConfirmationRef = useRef<Parameters<typeof toast.saved>[0] | null>(null);
   const cartScrollRef = useRef<ScrollView>(null);
   const cartRowOffsets = useRef<Record<string, number>>({});
 
@@ -1573,7 +1585,7 @@ export default function VendreScreen() {
     return variants.some(v => v.stock_qty > 0);
   }), [filtered, variantsByProduct]);
 
-  const cartTotal = useMemo(() => cart.reduce((s, l) => s + l.unit_price * l.qty, 0), [cart]);
+  const cartTotal = useMemo(() => cartSum(cart), [cart]);
   const cartCount = useMemo(() => cart.reduce((s, l) => s + l.qty, 0), [cart]);
   // How much of each variant is already reserved in the cart this session —
   // the picker must subtract this from stock_qty so it can never let the
@@ -1646,7 +1658,7 @@ export default function VendreScreen() {
   const prevShowConfirmSheetRef = useRef(false);
   useEffect(() => {
     if (prevShowConfirmSheetRef.current && !showConfirmSheet && pendingSaveConfirmationRef.current) {
-      useSaveConfirmationStore.getState().show(pendingSaveConfirmationRef.current);
+      toast.saved(pendingSaveConfirmationRef.current);
       pendingSaveConfirmationRef.current = null;
     }
     prevShowConfirmSheetRef.current = showConfirmSheet;
@@ -1720,7 +1732,7 @@ export default function VendreScreen() {
         setShowPayment(false);
         setShowCartSheet(false);
         setSearch('');
-        const { lastSubmitQueued: queued, lastSaleId } = useSalesStore.getState();
+        const { lastSubmitQueued: queued } = useSalesStore.getState();
         if (!queued) fetchProducts(businessId, userId, membershipId, role);
         if (!skipConfirmSheet) setShowConfirmSheet(true);
 
@@ -1730,33 +1742,15 @@ export default function VendreScreen() {
         // that full-screen sheet (one calm confirmation, not two stacked) —
         // queued into pendingSaveConfirmationRef and only raised once the
         // sheet is dismissed (share or "Ignorer"), via the effect below.
-        const saleId = lastSaleId;
-        const netAmount = total - (discountAmount ?? 0);
-        const confirmMessage = isCredit && customerName
-          ? creditSaleConfirmation(customerName, netAmount, currency)
-          : cashSaleConfirmation(netAmount, currency);
-        pendingSaveConfirmationRef.current = {
-          message: confirmMessage,
-          tone: 'success',
-          // Undo only for the online-synced path via the existing cancel_sale
-          // RPC (restores stock, marks annulé — see CLAUDE.md). The offline-
-          // queued path has no undo here: dropping it safely also needs
-          // removing the optimistic ventes-store row and the optimistic stock
-          // decrement (stores/sales.ts's two `void (async () => ...)` blocks)
-          // together, atomically — flagged as a follow-up rather than risking
-          // a half-reverted local state.
-          undo: !queued && saleId
-            ? async () => { await useVentesStore.getState().cancelSale(saleId, businessId, userId, 'Annulée depuis la confirmation'); }
-            : undefined,
-          // Post-window correction hand-off: deep-links into this sale's real
-          // detail modal in Ventes (?openSale=<id>, see app/(app)/ventes/
-          // index.tsx) rather than leaving "Modifier" a dead end. Only when
-          // there's a real sale id to open — the offline-queued path's id is
-          // just the idempotency key, not a row Ventes can look up yet.
-          onEdit: !queued && saleId
-            ? () => router.push({ pathname: '/(app)/ventes', params: { openSale: saleId } })
-            : undefined,
-        };
+        // Annuler is a REAL reversal: a cancel_sale outbox op targeting this sale's local id (its idempotency key —
+        // see cancelSale/_sale_key). Stock comes back through the same projector as the sale took it
+        // (normalizeStockOps nets a still-queued sale; a drained one is cancelled server-side).
+        pendingSaveConfirmationRef.current = saleToastSpec({
+          saleKey: useSalesStore.getState().lastSaleKey,
+          businessId, userId, currency,
+          netAmount: total - (discountAmount ?? 0),
+          isCredit, customerName,
+        });
         // First value moment (or a later one, capped at twice) — offer the
         // notification permission-priming card. Covers both a regular sale
         // and a credit sale (payment === null here).
@@ -1910,14 +1904,6 @@ export default function VendreScreen() {
         {/* Currency declared once here instead of repeated on every tile's
             price (see formatPriceValue in ProductTile) — same line in Gérer mode. */}
         <View style={styles.headerRight}>
-          {cart.length > 0 && (
-            <Pressable onPress={() => appAlert('Vider le panier ?', undefined, [
-              { text: 'Annuler', style: 'cancel' },
-              { text: 'Vider', style: 'destructive', onPress: clearCart },
-            ])}>
-              <Text variant="bodySmall" color="danger">Vider</Text>
-            </Pressable>
-          )}
           {products.length > 0 && (
             <Text variant="caption" color="secondary">Prix en {currency}</Text>
           )}
@@ -1992,8 +1978,9 @@ export default function VendreScreen() {
 
       {/* Product grid — only in Vente mode with products */}
       {products.length > 0 && <View style={{ flex: 1 }}><FlatList
+        ref={gridRef}
         data={inStockFiltered}
-        onScroll={e => { scrollY.value = e.nativeEvent.contentOffset.y; }}
+        onScroll={e => { scrollY.value = e.nativeEvent.contentOffset.y; gridOffsetRef.current = e.nativeEvent.contentOffset.y; }}
         scrollEventThrottle={16}
         keyExtractor={p => p.id}
         numColumns={2}
@@ -2110,21 +2097,10 @@ export default function VendreScreen() {
       <FormSheet
         visible={showCartSheet}
         onClose={() => setShowCartSheet(false)}
-        title="Panier"
+        title={cartHeaderTitle(cart.length)}
         cancelLabel="Fermer"
         ref={cartScrollRef}
         keyboardShouldPersistTaps="handled"
-        headerRight={
-          <Pressable
-            onPress={() => appAlert('Vider le panier ?', undefined, [
-              { text: 'Annuler', style: 'cancel' },
-              { text: 'Vider', style: 'destructive', onPress: clearCart },
-            ])}
-            style={{ minWidth: 64, alignItems: 'flex-end' }}
-          >
-            <Text variant="body" color="danger">Vider</Text>
-          </Pressable>
-        }
         // sticky CTA: checkout must stay visible while the user reviews a long itemized cart (fade, no slab)
         footerMode="sticky"
         stickyReason="Checkout stays visible while reviewing a long itemized cart"
@@ -2154,6 +2130,18 @@ export default function VendreScreen() {
             />
           );
         })}
+        {/* Quiet and out of the thumb's way: emptying the cart is rare and a mis-tap here costs a whole sale. */}
+        <Pressable
+          onPress={() => appAlert('Vider le panier ?', undefined, [
+            { text: 'Annuler', style: 'cancel' },
+            { text: 'Vider', style: 'destructive', onPress: clearCart },
+          ])}
+          style={styles.clearCartLink}
+          hitSlop={8}
+          accessibilityRole="button"
+        >
+          <Text variant="caption" color="disabled">Vider le panier</Text>
+        </Pressable>
       </FormSheet>
 
       {/* Vente rapide — reached from the empty-catalog "Vente rapide"
@@ -2434,9 +2422,11 @@ function makeStyles(p: Palette) {
     },
     ignorePressable: { paddingVertical: spacing[2] },
     cartRow: {
-      flexDirection: 'row', alignItems: 'center', paddingHorizontal: spacing[4],
-      paddingVertical: spacing[2], borderBottomWidth: 1, borderBottomColor: p.border, gap: spacing[2],
+      paddingHorizontal: spacing[4], paddingVertical: spacing[2],
+      borderBottomWidth: 1, borderBottomColor: p.border, gap: spacing[1],
     },
+    cartRowTop: { flexDirection: 'row', alignItems: 'center', gap: spacing[2] },
+    cartRowBottom: { flexDirection: 'row', alignItems: 'center', gap: spacing[2] },
     bulkToggle: {
       paddingHorizontal: spacing[2], paddingVertical: 2, borderRadius: radius.sm,
       borderWidth: 1, borderColor: p.border, backgroundColor: p.surface,
@@ -2446,7 +2436,8 @@ function makeStyles(p: Palette) {
       flexDirection: 'row', alignItems: 'center', borderWidth: 1, borderColor: p.border,
       borderRadius: radius.md, overflow: 'hidden',
     },
-    removeLineBtn: { width: 36, height: 36, alignItems: 'center', justifyContent: 'center', marginLeft: spacing[1] },
+    clearCartLink: { alignSelf: 'center', paddingVertical: spacing[4] },
+    removeLineBtn: { width: 48, height: 48, alignItems: 'center', justifyContent: 'center', marginRight: -spacing[2] }, // 48dp target, flush right
     qtyBtn: { width: 32, height: 32, alignItems: 'center', justifyContent: 'center', backgroundColor: p.background },
     qtyNumPress: { minWidth: 36, alignItems: 'center', paddingHorizontal: 4 },
     qtyNum: { minWidth: 36, textAlign: 'center' },

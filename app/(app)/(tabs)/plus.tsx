@@ -1,6 +1,7 @@
 import { Pressable, ScrollView, StyleSheet, View } from 'react-native';
+import { onTabReselect, resolveReselect } from '@/src/utils/tabReselect';
 import { appAlert } from '@/src/utils/appAlert';
-import { Children, cloneElement, isValidElement, useEffect, useMemo, useState } from 'react';
+import { Children, cloneElement, isValidElement, useEffect, useMemo, useRef, useState } from 'react';
 import type { ReactElement, ReactNode } from 'react';
 import { router } from 'expo-router';
 import { Screen } from '@/src/components/ui/Screen';
@@ -70,6 +71,12 @@ function MenuGroup({ children }: { children: ReactNode }) {
 }
 
 export default function PlusScreen() {
+  // Tapping the active "Moi" tab icon scrolls back to the top.
+  const plusScrollRef = useRef<ScrollView>(null);
+  const plusOffsetRef = useRef(0);
+  useEffect(() => onTabReselect('plus', () => {
+    if (resolveReselect({ inSubview: false, scrollOffset: plusOffsetRef.current }) === 'scroll-top') plusScrollRef.current?.scrollTo({ y: 0, animated: true });
+  }), []);
   const { palette, resolvedScheme } = useTheme();
   const styles = useMemo(() => makeStyles(palette), [palette]);
   const session = useAuthStore(s => s.session);
@@ -111,7 +118,7 @@ export default function PlusScreen() {
 
   return (
     <Screen tab>
-      <ScrollView contentContainerStyle={styles.content} showsVerticalScrollIndicator={false}>
+      <ScrollView ref={plusScrollRef} onScroll={e => { plusOffsetRef.current = e.nativeEvent.contentOffset.y; }} scrollEventThrottle={32} contentContainerStyle={styles.content} showsVerticalScrollIndicator={false}>
         {/* User + business */}
         <Card style={styles.profileCard}>
           <View style={styles.profileRow}>

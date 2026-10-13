@@ -837,7 +837,13 @@ export const useVentesStore = create<VentesStore>((set, get) => ({
     // _stock_lines: what this sale put on the shelf, so the stock projector can give it back while the cancel is
     // still queued (never sent to the RPC — executeOp strips it). Unknown lines → no restock (conservative).
     const stockLines = (_cancelledSale?.lines ?? []).map(l => ({ product_id: l.product_id, variant_id: l.variant_id ?? null, qty: l.qty }));
-    const rpcPayload = { p_sale_id: saleId, p_business_id: businessId, p_reason: reason, ...(stockLines.length ? { _stock_lines: stockLines } : {}) };
+    // A sale still in the outbox has no server id yet — its local id IS its idempotency key. `_sale_key` tells the drain
+    // to resolve the real id from that key (the submit_sale ahead of it in the queue has created it by then).
+    const rpcPayload = {
+      p_sale_id: saleId, p_business_id: businessId, p_reason: reason,
+      ...(stockLines.length ? { _stock_lines: stockLines } : {}),
+      ...(_cancelledSale?._pending ? { _sale_key: saleId } : {}),
+    };
     try {
       await enqueue('cancel_sale', rpcPayload);
     } catch (err) {
