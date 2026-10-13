@@ -6,7 +6,6 @@ import { Text } from './Text';
 import { colors, useTheme } from '@/src/theme';
 import { useChatStore } from '@/stores/chat';
 import type { ChatMessage } from '@/src/types';
-import { MoneyText } from '@/src/components/ui/Money';
 
 // expo-av's native module only exists once the app has been rebuilt with this
 // dependency linked in — requiring it eagerly would crash older binaries that
@@ -83,7 +82,7 @@ function WaveformBars({ samples, progress, isOwn }: {
 
 // ─── Duration formatter ───────────────────────────────────────────────────────
 
-function fmt(seconds: number): string {
+function fmtDuration(seconds: number): string {
   const s = Math.max(0, Math.floor(seconds));
   return `${Math.floor(s / 60)}:${String(s % 60).padStart(2, '0')}`;
 }
@@ -246,9 +245,9 @@ export function VoiceMessageBubble({ msg, isOwn }: {
           progress={progress}
           isOwn={isOwn}
         />
-        <MoneyText style={[styles.timer, isOwn ? styles.timerOwn : styles.timerOther]}>
-          {playing ? fmt(remaining) : fmt(totalSecs)}
-        </MoneyText>
+        <Text style={[styles.timer, isOwn ? styles.timerOwn : styles.timerOther]} numberOfLines={1} adjustsFontSizeToFit minimumFontScale={0.5}>
+          {playing ? fmtDuration(remaining) : fmtDuration(totalSecs)}
+        </Text>
       </Pressable>
 
       {/* Speed toggle — only visible during playback */}
