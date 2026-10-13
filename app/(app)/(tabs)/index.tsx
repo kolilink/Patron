@@ -1,4 +1,5 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
+import { onTabReselect, resolveReselect } from '@/src/utils/tabReselect';
 import { RefusedOpsNotice } from '@/src/components/RefusedOpsNotice';
 import { useReduceMotion } from '@/src/hooks/useReduceMotion';
 import { InputAccessoryView, KeyboardAvoidingView, Modal, Platform, Pressable, ScrollView, Share, StyleSheet, TextInput, View } from 'react-native';
@@ -152,6 +153,12 @@ function KpiCard({ label, value, sub, onPress, tone, icon }: {
 }
 
 export default function AccueilScreen() {
+  // Tapping the active "Accueil" tab icon scrolls the home back to the top (the tab has no deeper screen).
+  const homeScrollRef = useRef<ScrollView>(null);
+  const homeOffsetRef = useRef(0);
+  useEffect(() => onTabReselect('index', () => {
+    if (resolveReselect({ inSubview: false, scrollOffset: homeOffsetRef.current }) === 'scroll-top') homeScrollRef.current?.scrollTo({ y: 0, animated: true });
+  }), []);
   const reduceMotion = useReduceMotion();
   const { palette } = useTheme();
   const insets = useSafeAreaInsets();
@@ -776,7 +783,7 @@ export default function AccueilScreen() {
 
         {isOffline && <OfflineNotice offlineSince={null} onRetry={() => loadAll()} />}
 
-        <ScrollView style={{ flex: 1 }} contentContainerStyle={styles.content} showsVerticalScrollIndicator={false}>
+        <ScrollView ref={homeScrollRef} onScroll={e => { homeOffsetRef.current = e.nativeEvent.contentOffset.y; }} scrollEventThrottle={32} style={{ flex: 1 }} contentContainerStyle={styles.content} showsVerticalScrollIndicator={false}>
 
           {/* Header */}
           <View style={styles.header}>

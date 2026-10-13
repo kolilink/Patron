@@ -18,7 +18,7 @@ import { useVentesStore } from '@/stores/ventes';
 import { CreditRapideCapture } from '@/src/components/CreditRapideCapture';
 import { supabase } from '@/lib/supabase';
 import { formatAmountInput, parseAmountInput, formatAmount } from '@/src/utils/format';
-import { useSaveConfirmationStore } from '@/stores/saveConfirmation';
+import { toast } from '@/stores/toast';
 import { repaymentConfirmation } from '@/src/utils/saveConfirmationCopy';
 import { paymentOverlayCopy } from '@/src/utils/paymentOverlayCopy';
 import { saveClientLedgerCache, getClientLedgerCache, getVentesCache } from '@/lib/db';
@@ -743,9 +743,8 @@ export default function ClientLedgerScreen() {
       const idsToVoid = specificSaleId
         ? (result.paymentId ? [result.paymentId] : [])
         : (result.paymentIds ?? []);
-      useSaveConfirmationStore.getState().show({
+      toast.saved({
         message: text,
-        tone: settled ? 'settled' : 'success',
         undo: idsToVoid.length > 0
           ? async () => { await useVentesStore.getState().voidPayments(idsToVoid, businessId, 'Annulée depuis la confirmation'); }
           : undefined,

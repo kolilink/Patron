@@ -365,7 +365,15 @@ async function executeOp(operation: string, payload: Record<string, unknown>): P
       break;
     }
     case 'cancel_sale': {
-      const { _stock_lines: _ignored, ...rpcArgs } = payload as Record<string, unknown>; // local-only stock hint
+      const { _stock_lines: _ignored, _sale_key: saleKey, ...rpcArgs } = payload as Record<string, unknown>; // local-only hints
+      if (typeof saleKey === 'string') {
+        // Cancelling a sale that was still queued when the vendor tapped Annuler: its local id is the idempotency
+        // key, the server's id is different. submit_sale (earlier in the FIFO queue) has created it by now.
+        const { data: row, error: lookupErr } = await supabase.from('sale_orders').select('id').eq('idempotency_key', saleKey).maybeSingle();
+        if (lookupErr) throw lookupErr;
+        if (!row?.id) throw lookupErr ?? new Error('Vente introuvable pour cette annulation');
+        rpcArgs.p_sale_id = row.id;
+      }
       const { error } = await supabase.rpc('cancel_sale', rpcArgs);
       if (error) throw error;
       break;

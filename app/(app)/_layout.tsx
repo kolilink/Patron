@@ -14,8 +14,7 @@ import { BusinessDrawer } from '@/src/components/BusinessDrawer';
 import { FirstRunHeroOverlay } from '@/src/components/FirstRunHeroOverlay';
 import { TrialWelcomeOverlay } from '@/src/components/TrialWelcomeOverlay';
 import { NotificationPrimer } from '@/src/components/NotificationPrimer';
-import { AppToastContainer } from '@/src/components/ui/AppToast';
-import { SaveConfirmation } from '@/src/components/ui/SaveConfirmation';
+import { ToastHost } from '@/src/components/ui/Toast';
 import { NotificationSetup } from '@/src/components/NotificationSetup';
 import { ActivationPrimingSheet } from '@/src/components/ActivationPrimingSheet';
 import { Text } from '@/src/components/ui/Text';
@@ -491,8 +490,7 @@ export default function AppLayout() {
           )}
         </>
       )}
-      <AppToastContainer />
-      <SaveConfirmation />
+      <ToastHost />
       <ActivationPrimingSheet />
     </>
   );

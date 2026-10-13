@@ -8,6 +8,7 @@ import { useChatStore } from '@/stores/chat';
 import { useTheme } from '@/src/theme';
 import { FloatingTabBar, type FloatingTabItem } from '@/src/components/ui/FloatingTabBar';
 import { trackEvent } from '@/lib/analytics';
+import { emitTabReselect } from '@/src/utils/tabReselect';
 
 // ─────────────────────────────────────────────────────────────────────────────
 // Floating tab bar — Material 3 style (see src/components/ui/FloatingTabBar.tsx
@@ -67,6 +68,9 @@ function CustomTabBar({ state, descriptors, navigation, insets }: BottomTabBarPr
     const event = navigation.emit({ type: 'tabPress', target: route.key, canPreventDefault: true });
     if (!focused && !event.defaultPrevented) {
       navigation.navigate(route.name, route.params as never);
+    } else if (focused && !event.defaultPrevented) {
+      // Already here: back to this tab's root (every screen decides what "deeper than root" means for it).
+      emitTabReselect(route.name);
     }
   };
 

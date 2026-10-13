@@ -3,7 +3,6 @@ import { QuickAddProductSheet } from '@/src/components/QuickAddProductSheet';
 import { ProductStatsModal, StockAdjustModal } from '@/src/components/products/ProductSubSheets';
 import { failAlert, showFailureAlert } from '@/src/components/ui/FailureView';
 import { appAlert } from '@/src/utils/appAlert';
-import { useSaveConfirmationStore } from '@/stores/saveConfirmation';
 import { archivedConfirmation } from '@/src/utils/saveConfirmationCopy';
 import { isKnownOffline } from '@/lib/connectivity';
 import { haptics } from '@/lib/haptics';
@@ -190,9 +189,8 @@ export function useProductSheets(): { api: ProductSheetsApi; sheets: React.React
             haptics.destructive();
             setEditOpen(false);
             // Archiving is a flag flip, so it can be undone: Annuler = restoreProduct.
-            useSaveConfirmationStore.getState().show({
+            toast.saved({
               message: archivedConfirmation(p.name),
-              tone: 'success',
               undo: async () => { await restoreProduct(p.id, businessId, userId); },
             });
           },
