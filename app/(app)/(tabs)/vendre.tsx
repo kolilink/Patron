@@ -1916,6 +1916,19 @@ export default function VendreScreen() {
         {/* Currency declared once here instead of repeated on every tile's
             price (see formatPriceValue in ProductTile) — same line in Gérer mode. */}
         <View style={styles.headerRight}>
+          {cart.length > 0 && (
+            <Pressable
+              onPress={() => appAlert('Vider le panier ?', undefined, [
+                { text: 'Annuler', style: 'cancel' },
+                { text: 'Vider', style: 'destructive', onPress: clearCart },
+              ])}
+              hitSlop={12}
+              accessibilityRole="button"
+              accessibilityLabel="Vider le panier"
+            >
+              <Text variant="caption" color="secondary">Vider</Text>
+            </Pressable>
+          )}
           {products.length > 0 && (
             <Text variant="caption" color="secondary">Prix en {currency}</Text>
           )}
@@ -2152,7 +2165,7 @@ export default function VendreScreen() {
           hitSlop={8}
           accessibilityRole="button"
         >
-          <Text variant="caption" color="disabled">Vider le panier</Text>
+          <Text variant="caption" color="secondary">Vider le panier</Text>
         </Pressable>
       </FormSheet>
 

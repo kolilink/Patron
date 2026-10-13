@@ -54,13 +54,21 @@ describe('(b) the remove control is an X, 48dp, and removes exactly its line', (
   });
 });
 
-describe('(c) "Vider" is demoted', () => {
-  it('not in the header, not red, not on the main screen; a small quiet link at the end of the list (still confirmed)', () => {
+describe('(c) "Vider" is subtle, never red, in both places', () => {
+  it('main selling screen: a small quiet "Vider" (secondary, not red) shown only when the cart has items, confirmed before emptying', () => {
+    const header = V.slice(V.indexOf('<View style={styles.headerRight}>'), V.indexOf('Prix en'));
+    expect(header).toContain('cart.length > 0 &&');
+    expect(header).toContain('<Text variant="caption" color="secondary">Vider</Text>');
+    expect(header).toContain("appAlert('Vider le panier ?'");
+    expect(header).toContain('onPress: clearCart');
+  });
+  it('full cart: a quiet readable link at the end of the list (no red, no header button), confirmed too', () => {
     expect(cartSheet).not.toMatch(/headerRight/);
-    expect(V).not.toMatch(/<Text variant="bodySmall" color="danger">Vider<\/Text>/);
-    expect(V).not.toMatch(/<Text variant="body" color="danger">Vider<\/Text>/);
-    expect(cartSheet).toContain('<Text variant="caption" color="disabled">Vider le panier</Text>');
+    expect(cartSheet).toContain('<Text variant="caption" color="secondary">Vider le panier</Text>');
     expect(cartSheet).toContain("appAlert('Vider le panier ?'");
+  });
+  it('never red anywhere', () => {
+    expect(V).not.toMatch(/color="danger">Vider/);
   });
 });
 
