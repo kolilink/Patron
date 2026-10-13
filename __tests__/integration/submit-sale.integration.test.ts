@@ -5,7 +5,7 @@
 // and role/RLS enforcement.
 import { randomUUID } from 'crypto';
 import {
-  createTestUser, createTestBusiness, addMember, createTestProduct, getProductStock,
+  createTestUser, createTestBusiness, addMember, createTestProduct, createTestVariant, getProductStock,
 } from './helpers';
 
 describe('submit_sale (real RPC)', () => {
@@ -40,27 +40,63 @@ describe('submit_sale (real RPC)', () => {
     expect(moves![0].type).toBe('sortie');
   });
 
-  it('rolls back the whole sale when stock is insufficient (regression: v51)', async () => {
+  it('a sale is ground truth: insufficient stock NEVER refuses it — recorded in full, stock floored at 0, product flagged (v245)', async () => {
     const { client, userId } = await createTestUser('admin');
     const businessId = await createTestBusiness(client, 'Boutique Test');
     const productId = await createTestProduct(businessId, userId, { stock_qty: 2, sale_price: 1000, cost_price: 500 });
 
-    const { error } = await client.rpc('submit_sale', {
+    const { data: orderId, error } = await client.rpc('submit_sale', {
       p_business_id: businessId,
       p_seller_id: userId,
+      p_is_credit: true,
+      p_customer_name: 'Test',
       p_cart: [{ product_id: productId, product_name: 'Produit test', qty: 5, unit_price: 1000 }],
       p_total_amount: 5000,
-      p_pay_method: 'especes',
-      p_pay_amount: 5000,
     });
 
-    expect(error).toBeTruthy();
-    expect(error!.message).toMatch(/Stock insuffisant/);
+    expect(error).toBeNull();
+    expect(await getProductStock(productId)).toBe(0); // floored, never negative
+    const { data: prod } = await client.from('products').select('needs_stock_review, stock_review_at').eq('id', productId).single();
+    expect(prod!.needs_stock_review).toBe(true);
+    expect(prod!.stock_review_at).toBeTruthy();
+    // The whole sale exists together: order + line + the real stock movement (what physically left).
+    const { data: orders } = await client.from('sale_orders').select('id, status, total_amount').eq('business_id', businessId);
+    expect(orders).toHaveLength(1);
+    expect(orders![0].status).toBe('credit');
+    const { data: lines } = await client.from('so_lines').select('qty').eq('order_id', orderId as string);
+    expect(lines).toHaveLength(1);
+    const { data: moves } = await client.from('stock_moves').select('qty').eq('ref_id', orderId as string);
+    expect(Number(moves![0].qty)).toBe(5);
+  });
 
-    // Nothing should have been committed: stock unchanged, no order left behind.
-    expect(await getProductStock(productId)).toBe(2);
-    const { data: orders } = await client.from('sale_orders').select('id').eq('business_id', businessId);
-    expect(orders).toHaveLength(0);
+  it('a sale within stock does not flag the product', async () => {
+    const { client, userId } = await createTestUser('admin');
+    const businessId = await createTestBusiness(client, 'Boutique Test');
+    const productId = await createTestProduct(businessId, userId, { stock_qty: 5, sale_price: 1000, cost_price: 500 });
+    const { error } = await client.rpc('submit_sale', {
+      p_business_id: businessId, p_seller_id: userId, p_pay_method: 'especes', p_pay_amount: 5000,
+      p_cart: [{ product_id: productId, product_name: 'x', qty: 5, unit_price: 1000 }], p_total_amount: 5000,
+    });
+    expect(error).toBeNull();
+    expect(await getProductStock(productId)).toBe(0);
+    const { data: prod } = await client.from('products').select('needs_stock_review').eq('id', productId).single();
+    expect(prod!.needs_stock_review).toBe(false);
+  });
+
+  it('a variant oversell also records the sale, floors the variant at 0 and flags the parent product', async () => {
+    const { client, userId } = await createTestUser('admin');
+    const businessId = await createTestBusiness(client, 'Boutique Test');
+    const productId = await createTestProduct(businessId, userId, { stock_qty: 0, sale_price: 1000, cost_price: 500 });
+    const variantId = await createTestVariant(productId, businessId, { stock_qty: 1 });
+    const { error } = await client.rpc('submit_sale', {
+      p_business_id: businessId, p_seller_id: userId, p_pay_method: 'especes', p_pay_amount: 3000,
+      p_cart: [{ product_id: productId, variant_id: variantId, product_name: 'x', variant_name: 'S', qty: 3, unit_price: 1000 }], p_total_amount: 3000,
+    });
+    expect(error).toBeNull();
+    const { data: v } = await client.from('product_variants').select('stock_qty').eq('id', variantId).single();
+    expect(Number(v!.stock_qty)).toBe(0);
+    const { data: prod } = await client.from('products').select('needs_stock_review').eq('id', productId).single();
+    expect(prod!.needs_stock_review).toBe(true);
   });
 
   it('is idempotent — retrying with the same idempotency key returns the same order, no double stock deduction', async () => {

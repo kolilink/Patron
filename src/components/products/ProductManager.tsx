@@ -71,6 +71,7 @@ function ManagerRow({ product, variants, currency, archived, canEdit, pulse, onP
             ? <Text variant="caption" style={{ color: palette.primary }}>Prix à fixer</Text>
             : `${formatAmountValue(product.sale_price, currency)} ${currency.toLowerCase()}`}
           {costMissing ? ' · Prix d\'achat ?' : ''}
+          {product.needs_stock_review ? <Text variant="caption" style={{ color: palette.warning }}>{' · Stock à vérifier'}</Text> : null}
         </Text>
       </View>
       <Ionicons name="chevron-forward" size={16} color={palette.textDisabled} />

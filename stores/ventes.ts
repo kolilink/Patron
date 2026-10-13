@@ -100,6 +100,8 @@ export interface Vente {
   // are safe to treat as the real synced baseline the next time the
   // overlay is rebuilt (see refreshPendingOverlay below).
   _pending?: true;
+  /** Refused for good by the server: shown with its notice, never counted in any total or balance. */
+  _failedPermanent?: true;
 }
 
 interface VentesStore {
