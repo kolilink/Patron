@@ -5,6 +5,7 @@ import Animated, { Easing, runOnJS, useAnimatedStyle, useSharedValue, withSpring
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
 import { ConfirmSheetHost } from '@/src/components/ui/ConfirmSheet';
 import { Text } from '@/src/components/ui/Text';
+import { CtaFade } from '@/src/components/ui/CtaFade';
 import { useTheme, spacing, radius } from '@/src/theme';
 import { useReduceMotion } from '@/src/hooks/useReduceMotion';
 import { DISMISS_FRACTION, DISMISS_VELOCITY } from '@/src/utils/sheetGesture';
@@ -47,6 +48,7 @@ export const GestureSheet = forwardRef<ScrollView, Props>(function GestureSheet(
   const styles = useMemo(() => makeStyles(palette), [palette]);
 
   const [rendered, setRendered] = useState(visible);
+  const [footerHeight, setFooterHeight] = useState(0); // the floating CTA's measured height, reserved as scroll padding
   const translateY = useSharedValue(screenH);
   const sheetHeight = useSharedValue(screenH);
   const closing = useRef(false);
@@ -153,13 +155,19 @@ export const GestureSheet = forwardRef<ScrollView, Props>(function GestureSheet(
             <ScrollView
               ref={scrollRef}
               style={{ flex: 1 }}
-              contentContainerStyle={contentContainerStyle}
+              contentContainerStyle={[contentContainerStyle, footer ? { paddingBottom: footerHeight + spacing[4] } : null]}
               keyboardShouldPersistTaps={keyboardShouldPersistTaps}
               keyboardDismissMode={keyboardDismissMode}
             >
               {children}
             </ScrollView>
-            {footer}
+            {/* No footer container: the CTA floats over the scroll content, which extends behind it. Only a fade
+                (transparent → background) sits above the button — never a band or slab (CLAUDE.md CTA rules). */}
+            {footer ? (
+              <View style={styles.footerDock} pointerEvents="box-none" onLayout={e => setFooterHeight(e.nativeEvent.layout.height)}>
+                <CtaFade>{footer}</CtaFade>
+              </View>
+            ) : null}
             {accessory}
           </Animated.View>
         </KeyboardAvoidingView>
@@ -192,5 +200,7 @@ function makeStyles(p: ReturnType<typeof useTheme>['palette']) {
       backgroundColor: p.surface,
     },
     cancel: { minWidth: 64 },
+    // Transparent, absolutely positioned at the sheet's bottom edge (= the keyboard's top edge while typing).
+    footerDock: { position: 'absolute', left: 0, right: 0, bottom: 0 },
   });
 }
