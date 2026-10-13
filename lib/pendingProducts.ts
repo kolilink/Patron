@@ -6,7 +6,7 @@
 // refetch can't drop a pending change and nothing is ever applied twice.
 //
 // Pure (no imports of native modules) so it is unit-testable.
-import type { Product } from '@/src/types';
+import type { Product, ProductVariant } from '@/src/types';
 
 export interface QueuedProductOp {
   operation: string;
@@ -21,6 +21,21 @@ function fromCentsPatch(patch: Record<string, unknown>): Partial<Product> {
   if (patch.sale_price !== undefined) out.sale_price = num(patch.sale_price) / 100;
   if (patch.bulk_price !== undefined) out.bulk_price = patch.bulk_price != null ? num(patch.bulk_price) / 100 : null;
   return out as Partial<Product>;
+}
+
+/** Units a queued submit_sale takes, summed per product (variant=false) or per variant id (variant=true). */
+function soldQuantities(payload: Record<string, unknown>, variant: boolean): Map<string, number> {
+  const out = new Map<string, number>();
+  const cart = Array.isArray(payload.p_cart) ? (payload.p_cart as Array<Record<string, unknown>>) : [];
+  for (const l of cart) {
+    const hasVariant = typeof l.variant_id === 'string' && l.variant_id.length > 0;
+    if (hasVariant !== variant) continue;
+    const key = (hasVariant ? l.variant_id : l.product_id) as string | undefined;
+    const q = num(l.qty);
+    if (!key || !Number.isFinite(q) || q <= 0) continue;
+    out.set(key, (out.get(key) ?? 0) + q);
+  }
+  return out;
 }
 
 export function applyProductOp(list: Product[], op: QueuedProductOp, now: string = new Date().toISOString(), pool: Product[] = []): Product[] {
@@ -59,6 +74,13 @@ export function applyProductOp(list: Product[], op: QueuedProductOp, now: string
       const qty = Math.abs(num(p.p_qty)) || 0;
       const delta = p.p_type === 'entree' ? qty : -qty;
       return list.map(x => (x.id === id ? { ...x, stock_qty: Math.max(0, x.stock_qty + delta) } : x));
+    }
+    case 'submit_sale': {
+      // A queued sale takes its plain-product lines off the shelf the moment it is written (variant lines
+      // are projected by applyVariantSaleOps). Recomputed from the outbox like every other op — never patched.
+      const sold = soldQuantities(p, false);
+      if (!sold.size) return list;
+      return list.map(x => (sold.has(x.id) ? { ...x, stock_qty: Math.max(0, x.stock_qty - (sold.get(x.id) ?? 0)) } : x));
     }
     case 'adjust_stock': {
       // legacy shape: an absolute quantity
@@ -110,4 +132,15 @@ export function applyPendingArchived(archivedBase: Product[], activeBase: Produc
     }
   }
   return list;
+}
+
+/** One product's variant list under the still-queued sales: each variant line takes its units, clamped at 0. */
+export function applyVariantSaleOps(variants: ProductVariant[], productId: string, ops: QueuedProductOp[]): ProductVariant[] {
+  return ops.reduce((list, op) => {
+    if (op.operation !== 'submit_sale') return list;
+    const cart = Array.isArray(op.payload.p_cart) ? (op.payload.p_cart as Array<Record<string, unknown>>) : [];
+    const sold = soldQuantities({ p_cart: cart.filter(l => l.product_id === productId) }, true);
+    if (!sold.size) return list;
+    return list.map(v => (sold.has(v.id) ? { ...v, stock_qty: Math.max(0, v.stock_qty - (sold.get(v.id) ?? 0)) } : v));
+  }, variants);
 }

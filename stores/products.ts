@@ -4,7 +4,7 @@ import { translateError } from '@/lib/errors';
 import { generateId, generateFallbackName } from '@/lib/id';
 import { saveProductCache, getProductCache, getQueueCount, getCacheTimestamp, saveVariantsCache, getVariantsCache, getAllQueueItemsForOverlay, saveArchivedProductsCache, getArchivedProductsCache } from '@/lib/db';
 import { enqueue } from '@/lib/writeFunnel';
-import { applyPendingProductOps, applyPendingArchived, type QueuedProductOp } from '@/lib/pendingProducts';
+import { applyPendingProductOps, applyPendingArchived, applyVariantSaleOps, type QueuedProductOp } from '@/lib/pendingProducts';
 import { isKnownOffline } from '@/lib/connectivity';
 import { isNetworkError, withNetworkRetry, reportOfflineFallback } from '@/lib/sync';
 import { useSyncStore } from '@/stores/sync';
@@ -136,7 +136,8 @@ async function readProductOps(): Promise<QueuedProductOp[]> {
   const { ok } = await getAllQueueItemsForOverlay();
   const ops: QueuedProductOp[] = [];
   for (const i of ok) {
-    if (i.entity_type !== 'produit' || i.status !== 'pending') continue;
+    // 'vente' rows matter here only for their stock effect (submit_sale); every other sale op is not a product op.
+    if (i.status !== 'pending' || !(i.entity_type === 'produit' || i.operation === 'submit_sale')) continue;
     try { ops.push({ operation: i.operation, payload: JSON.parse(i.payload) as Record<string, unknown> }); } catch { /* skip unreadable */ }
   }
   return ops;
@@ -162,6 +163,29 @@ async function rebuildProducts(businessId: string): Promise<void> {
       useProductStore.setState({ archivedProducts: applyPendingArchived(baseArchivedFor(businessId), base, ops) });
     }
   } catch { /* the active list is already right; the archive view corrects on its next fetch */ }
+}
+
+// The server's variant lists (never overlaid), per product — queued sales are applied on top on every read.
+const _baseVariants = new Map<string, ProductVariant[]>();
+async function overlayVariants(businessId: string, productId: string, base: ProductVariant[]): Promise<ProductVariant[]> {
+  _baseVariants.set(`${businessId}:${productId}`, base);
+  try { return applyVariantSaleOps(base, productId, await readProductOps()); } catch { return base; }
+}
+
+/**
+ * Re-derives product AND variant stock from the base + the outbox. Awaited by submitSale BEFORE the success UI,
+ * so the shelf has already moved when the vendor sees "Vente enregistrée". Throws on failure (caller decides).
+ */
+export async function refreshStockFromOutbox(businessId: string): Promise<void> {
+  await rebuildProducts(businessId);
+  const ops = await readProductOps();
+  const variantsByProduct = { ...useProductStore.getState().variantsByProduct };
+  for (const productId of Object.keys(variantsByProduct)) {
+    const base = _baseVariants.get(`${businessId}:${productId}`) ?? (await getVariantsCache(businessId, productId)) as ProductVariant[] | null;
+    if (!base) continue;
+    variantsByProduct[productId] = applyVariantSaleOps(base, productId, ops);
+  }
+  useProductStore.setState({ variantsByProduct });
 }
 
 async function afterProductEnqueue(): Promise<void> {
@@ -561,8 +585,9 @@ export const useProductStore = create<ProductStore>((set, get) => ({
       if (isNetworkError(error)) {
         const cached = await getVariantsCache(businessId, productId) as ProductVariant[] | null;
         if (cached && cached.length) {
-          set(state => ({ variantsByProduct: { ...state.variantsByProduct, [productId]: cached } }));
-          return cached;
+          const shown = await overlayVariants(businessId, productId, cached);
+          set(state => ({ variantsByProduct: { ...state.variantsByProduct, [productId]: shown } }));
+          return shown;
         }
       }
       return [];
@@ -572,9 +597,10 @@ export const useProductStore = create<ProductStore>((set, get) => ({
       sale_price: v.sale_price / 100,
       cost_price: v.cost_price / 100,
     }));
-    void saveVariantsCache(businessId, productId, variants);
-    set(state => ({ variantsByProduct: { ...state.variantsByProduct, [productId]: variants } }));
-    return variants;
+    void saveVariantsCache(businessId, productId, variants); // BASE only — queued sales are overlaid, never cached
+    const shown = await overlayVariants(businessId, productId, variants);
+    set(state => ({ variantsByProduct: { ...state.variantsByProduct, [productId]: shown } }));
+    return shown;
   },
 
   upsertVariants: async (businessId, productId, userId, variants) => {

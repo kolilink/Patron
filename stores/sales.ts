@@ -1,12 +1,12 @@
 import { create } from 'zustand';
 import { localDateISO } from '@/src/utils/dates';
 import { enqueue } from '@/lib/writeFunnel';
-import { getQueueCount, saveProductCache, getProductCache, getKV, setKV, saveVariantsCache, getVariantsCache } from '@/lib/db';
+import { getQueueCount, getKV, setKV } from '@/lib/db';
 import { generateId } from '@/lib/id';
 import { useSyncStore } from '@/stores/sync';
 import { useVentesStore } from '@/stores/ventes';
 import { useAuthStore } from '@/stores/auth';
-import { useProductStore } from '@/stores/products';
+import { useProductStore, refreshStockFromOutbox } from '@/stores/products';
 import { trackEvent } from '@/lib/analytics';
 import { haptics } from '@/lib/haptics';
 import { useToastStore } from '@/stores/toast';
@@ -112,31 +112,6 @@ async function maybeTrackFirstValue(businessId: string, userId: string, kind: 's
     if (prior <= 1) trackEvent('first_value_action', businessId, userId, { kind });
   } catch {
     // Silently drop — analytics must never affect merchant experience
-  }
-}
-
-// An offline variant sale must leave the remaining variant stock reduced, or
-// the next offline sale could sell the same units again: apply the sold
-// quantities to the in-memory variants and the persisted variant cache (the
-// cache is the only source when the app was cold-started offline).
-export async function decrementVariantStock(
-  businessId: string,
-  cart: { product: { id: string }; qty: number; variant_id?: string }[],
-): Promise<void> {
-  const byProduct = new Map<string, Map<string, number>>();
-  for (const l of cart) {
-    if (!l.variant_id) continue;
-    const m = byProduct.get(l.product.id) ?? new Map<string, number>();
-    m.set(l.variant_id, (m.get(l.variant_id) ?? 0) + l.qty);
-    byProduct.set(l.product.id, m);
-  }
-  for (const [productId, sold] of byProduct) {
-    const inMemory = useProductStore.getState().variantsByProduct[productId];
-    const base = inMemory ?? (await getVariantsCache(businessId, productId) as ProductVariant[] | null);
-    if (!base || !base.length) continue;
-    const next = base.map(v => (sold.has(v.id) ? { ...v, stock_qty: Math.max(0, v.stock_qty - (sold.get(v.id) ?? 0)) } : v));
-    useProductStore.setState(state => ({ variantsByProduct: { ...state.variantsByProduct, [productId]: next } }));
-    await saveVariantsCache(businessId, productId, next);
   }
 }
 
@@ -455,6 +430,15 @@ export const useSalesStore = create<SalesStore>((set, get) => ({
     // insuffisant can't be caught live anymore" consequence this is part
     // of — both are the same underlying tradeoff (Decision A), not two
     // separate issues.
+    // The shelf moves BEFORE the success UI: stock is re-derived from the outbox (which already holds this sale)
+    // and awaited — a vendor-visible effect, never fire-and-forget. The enqueue already succeeded, so a failure
+    // here must not flip the return value; the next product read re-derives the same result from the outbox.
+    try {
+      await refreshStockFromOutbox(businessId);
+    } catch (err) {
+      console.error('[submitSale] stock projection failed (write already succeeded)', err);
+    }
+
     set({ cart: [], submitting: false, lastSubmitQueued: true, lastSaleId: null, lastSaleKey: idempotencyKey });
     haptics.success();
     // A cart sold on credit IS a credit entry (spec: sale_recorded vs credit_recorded).
@@ -468,42 +452,6 @@ export const useSalesStore = create<SalesStore>((set, get) => ({
       total_amount:   totalAmount,
     });
     void maybeTrackFirstValue(businessId, userId, isCredit ? 'credit' : 'sale');
-
-    // Optimistically decrement stock in both the local product cache and the
-    // in-memory Zustand store so the POS reflects updated quantities
-    // immediately — unconditional now (every sale takes this path, not
-    // just a previously-offline one). Orthogonal to the sales pending-
-    // overlay rework below: this is the product store's own best-effort,
-    // session-scoped estimate, not derived from a durable per-product
-    // outbox overlay (that would be real additional scope beyond what
-    // Phase 1 covers — product stock accuracy across a kill+reopen isn't
-    // one of its acceptance criteria, unlike the sales/ledger data this
-    // section is actually responsible for).
-    void (async () => {
-      try {
-        const cached = await getProductCache(businessId);
-        const base = cached ?? useProductStore.getState().products;
-        if (!base.length) return;
-        const updated = base.map(p => {
-          // Plain-product lines only here; variant lines are decremented
-          // against the variant stock cache just below.
-          const line = cartSnapshot.find(l => l.product.id === p.id && !l.variant_id);
-          if (!line) return p;
-          return { ...p, stock_qty: Math.max(0, p.stock_qty - line.qty) };
-        });
-        useProductStore.setState({ products: updated });
-        await saveProductCache(businessId, updated);
-        await decrementVariantStock(businessId, cartSnapshot);
-      } catch (err) {
-        // Best-effort, session-only estimate (see the comment above) — a
-        // failure here must never become an unhandled rejection out of
-        // this fire-and-forget IIFE. Same class of bug as drainQueue's own
-        // missing top-level catch (lib/sync.ts), just a different call
-        // site introduced in this same rework — caught by the real test
-        // suite crashing a worker process, not assumed safe.
-        console.error('[submitSale] optimistic stock decrement failed', err);
-      }
-    })();
 
     // Reflects this sale in the ledger/dashboard instantly, durably —
     // rebuilds from the outbox (which already has this exact item, just
