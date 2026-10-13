@@ -365,7 +365,8 @@ async function executeOp(operation: string, payload: Record<string, unknown>): P
       break;
     }
     case 'cancel_sale': {
-      const { error } = await supabase.rpc('cancel_sale', payload);
+      const { _stock_lines: _ignored, ...rpcArgs } = payload as Record<string, unknown>; // local-only stock hint
+      const { error } = await supabase.rpc('cancel_sale', rpcArgs);
       if (error) throw error;
       break;
     }

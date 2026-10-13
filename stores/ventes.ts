@@ -832,7 +832,10 @@ export const useVentesStore = create<VentesStore>((set, get) => ({
     set({ saving: true, error: null });
     const _cancelledSale = get().sales.find(s => s.id === saleId);
 
-    const rpcPayload = { p_sale_id: saleId, p_business_id: businessId, p_reason: reason };
+    // _stock_lines: what this sale put on the shelf, so the stock projector can give it back while the cancel is
+    // still queued (never sent to the RPC — executeOp strips it). Unknown lines → no restock (conservative).
+    const stockLines = (_cancelledSale?.lines ?? []).map(l => ({ product_id: l.product_id, variant_id: l.variant_id ?? null, qty: l.qty }));
+    const rpcPayload = { p_sale_id: saleId, p_business_id: businessId, p_reason: reason, ...(stockLines.length ? { _stock_lines: stockLines } : {}) };
     try {
       await enqueue('cancel_sale', rpcPayload);
     } catch (err) {
@@ -847,6 +850,12 @@ export const useVentesStore = create<VentesStore>((set, get) => ({
       await get().refreshPendingOverlay();
     } catch (err) {
       console.error('[cancelSale] refreshPendingOverlay failed (write already succeeded)', err);
+    }
+    try {
+      // Stock comes back on the shelf before the confirmation (lazy require: products ↔ ventes would be a cycle).
+      await require('@/stores/products').refreshStockFromOutbox(businessId);
+    } catch (err) {
+      console.error('[cancelSale] stock projection failed (write already succeeded)', err);
     }
     set({ saving: false });
     useSyncStore.getState().kick();
