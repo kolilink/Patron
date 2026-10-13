@@ -75,3 +75,23 @@ describe('CTA ends the form (no dead gap)', () => {
     expect(read('src/components/ui/Button.tsx')).toMatch(/lg:\s*\{[^}]*(minHeight|height):\s*(5\d|6\d)/);
   });
 });
+
+describe('Nouveau produit sheet: no band behind "Ajouter", above the keyboard or not', () => {
+  const gs = read('src/components/ui/GestureSheet.tsx');
+  const qa = read('src/components/QuickAddProductSheet.tsx');
+  it('the QuickAdd footer container is transparent, with its own safe-area bottom padding and the keyboard case', () => {
+    expect(styleBlock(qa, 'footer')).toContain("backgroundColor: 'transparent'");
+    expect(qa).toContain('paddingBottom: keyboardUp ? spacing[3] : Math.max(insets.bottom, spacing[5])');
+    expect(qa).toContain('size="lg"'); // Button lg = 56dp, >= 48
+  });
+  it('GestureSheet renders the footer as a floating dock: absolute, no fill, no border, no shadow — content extends behind it', () => {
+    const dock = gs.slice(gs.indexOf('footerDock:'), gs.indexOf('footerDock:') + 160);
+    expect(dock).toContain("position: 'absolute'");
+    expect(dock).not.toMatch(/backgroundColor|border|shadow/);
+    expect(gs).toContain('<CtaFade>{footer}</CtaFade>');
+    expect(gs).toContain('paddingBottom: footerHeight + spacing[4]');
+  });
+  it('the sheet footer styles of every FormSheet/GestureSheet caller are fill-free (re-audit)', () => {
+    for (const [f, n] of FOOTERS) expect(styleBlock(read(f), n)).not.toMatch(/backgroundColor:\s*(p\.|palette\.)|borderTop|shadow\./);
+  });
+});
