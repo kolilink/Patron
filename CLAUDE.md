@@ -603,6 +603,10 @@ The "part of something extraordinary" touch — deliberately achievement-based r
 
 **Not yet built:** a parallel transaction-*count* milestone track (50th sale, 100th sale, ...) was raised as a natural extension but deliberately scoped out of this pass — real added scope (a second ratchet column, a second ladder, a second detection branch) for a second, separate achievement dimension, not needed to ship the first one.
 
+### Sale stock is projected from the outbox, awaited before the success UI (2026-10-12)
+
+`submitSale` used to decrement stock in a fire-and-forget IIFE (comment: stock accuracy "isn't an acceptance criterion") that also wrote the decremented list INTO the product cache — so offline, the grid kept showing "1 pcs" after selling the last unit, a stale refetch could overwrite it, and the polluted cache would have double-applied after a kill+reopen. Now a queued `submit_sale` is a product op like `adjust_stock_move`: `applyProductOp` (plain lines) and `applyVariantSaleOps` (variant lines) in `lib/pendingProducts.ts` re-derive stock from base + outbox on every read, caches hold the BASE only, and `refreshStockFromOutbox()` (`stores/products.ts`) is AWAITED in `submitSale` before the success state is set. Vendor-visible contract, pinned by `__tests__/sale-stock-sync.test.ts` (asserts the grid at the success instant, not eventually). Known gap: a queued `cancel_sale` does not give stock back until it syncs.
+
 ### Two sales stores — important distinction
 
 There are **two separate stores** for sales:

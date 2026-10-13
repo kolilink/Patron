@@ -35,7 +35,7 @@ jest.mock('@/stores/auth', () => ({
 }));
 
 import { useProductStore } from '@/stores/products';
-import { useSalesStore, decrementVariantStock } from '@/stores/sales';
+import { useSalesStore } from '@/stores/sales';
 
 const product: any = { id: 'p1', name: 'Tee-shirt', has_variants: true, stock_qty: 0, unit: 'pcs', sale_price: 10000 };
 const row = (id: string, name: string, stock: number) => ({ id, product_id: 'p1', business_id: 'biz-1', name, stock_qty: stock, sale_price: 1000000, cost_price: 500000, archived: false });
@@ -81,26 +81,5 @@ describe('offline variant sale is gated like a product sale', () => {
     useSalesStore.getState().addToCartVariant(product, m, 1);
     expect(useSalesStore.getState().cart).toEqual([]);
   });
-
-  it('after an offline sale the remaining stock drops, so the next offline sale is capped by what is left', async () => {
-    await useProductStore.getState().fetchVariants('p1', 'biz-1');
-    mockOnline = false;
-    await decrementVariantStock('biz-1', [{ product: { id: 'p1' }, qty: 2, variant_id: 'v-s' }]);
-    expect(useProductStore.getState().variantsByProduct.p1.find(v => v.id === 'v-s')!.stock_qty).toBe(1);
-    // restart, still offline: the persisted cache carries the reduced stock
-    useProductStore.setState({ variantsByProduct: {} });
-    const [s] = await useProductStore.getState().fetchVariants('p1', 'biz-1');
-    expect(s.stock_qty).toBe(1);
-    useSalesStore.getState().addToCartVariant(product, s, 5);
-    expect(useSalesStore.getState().cart[0].qty).toBe(1);
-  });
-
-  it('decrement never goes negative and ignores plain-product lines', async () => {
-    await useProductStore.getState().fetchVariants('p1', 'biz-1');
-    await decrementVariantStock('biz-1', [
-      { product: { id: 'p1' }, qty: 50, variant_id: 'v-s' },
-      { product: { id: 'p2' }, qty: 4 },
-    ]);
-    expect(useProductStore.getState().variantsByProduct.p1.find(v => v.id === 'v-s')!.stock_qty).toBe(0);
-  });
+  // Stock reduction after a sale is covered, at the vendor-visible level, in sale-stock-sync.test.ts.
 });
