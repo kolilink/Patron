@@ -82,6 +82,13 @@ export function applyProductOp(list: Product[], op: QueuedProductOp, now: string
       if (!sold.size) return list;
       return list.map(x => (sold.has(x.id) ? { ...x, stock_qty: Math.max(0, x.stock_qty - (sold.get(x.id) ?? 0)) } : x));
     }
+    case 'cancel_sale': {
+      // Stock comes back for the lines the cancelled sale carried (captured at enqueue time as _stock_lines;
+      // a sale cancelled while still queued is netted out by normalizeStockOps instead).
+      const back = soldQuantities({ p_cart: p._stock_lines }, false);
+      if (!back.size) return list;
+      return list.map(x => (back.has(x.id) ? { ...x, stock_qty: x.stock_qty + (back.get(x.id) ?? 0) } : x));
+    }
     case 'adjust_stock': {
       // legacy shape: an absolute quantity
       const upd = p.productUpdate as { id?: string; stock_qty?: number } | undefined;
@@ -134,13 +141,32 @@ export function applyPendingArchived(archivedBase: Product[], activeBase: Produc
   return list;
 }
 
+/**
+ * A sale cancelled while STILL queued never reached the server: both ops vanish (net zero), so stock simply
+ * never moved. Cancelling an already-synced sale keeps its cancel_sale op, which restocks via _stock_lines.
+ * Conservative direction: a cancel with no captured lines restores nothing (stock may read low, never high).
+ */
+export function normalizeStockOps(ops: QueuedProductOp[]): QueuedProductOp[] {
+  const cancelled = new Set(ops.filter(o => o.operation === 'cancel_sale').map(o => String(o.payload.p_sale_id ?? '')));
+  const pendingKeys = new Set(ops.filter(o => o.operation === 'submit_sale').map(o => String(o.payload.p_idempotency_key ?? '')));
+  return ops.filter(o => {
+    if (o.operation === 'submit_sale') return !cancelled.has(String(o.payload.p_idempotency_key ?? ''));
+    if (o.operation === 'cancel_sale') return !pendingKeys.has(String(o.payload.p_sale_id ?? ''));
+    return true;
+  });
+}
+
 /** One product's variant list under the still-queued sales: each variant line takes its units, clamped at 0. */
 export function applyVariantSaleOps(variants: ProductVariant[], productId: string, ops: QueuedProductOp[]): ProductVariant[] {
   return ops.reduce((list, op) => {
-    if (op.operation !== 'submit_sale') return list;
-    const cart = Array.isArray(op.payload.p_cart) ? (op.payload.p_cart as Array<Record<string, unknown>>) : [];
-    const sold = soldQuantities({ p_cart: cart.filter(l => l.product_id === productId) }, true);
-    if (!sold.size) return list;
-    return list.map(v => (sold.has(v.id) ? { ...v, stock_qty: Math.max(0, v.stock_qty - (sold.get(v.id) ?? 0)) } : v));
+    const isSale = op.operation === 'submit_sale';
+    if (!isSale && op.operation !== 'cancel_sale') return list;
+    const raw = isSale ? op.payload.p_cart : op.payload._stock_lines;
+    const cart = Array.isArray(raw) ? (raw as Array<Record<string, unknown>>) : [];
+    const qty = soldQuantities({ p_cart: cart.filter(l => l.product_id === productId) }, true);
+    if (!qty.size) return list;
+    return list.map(v => (qty.has(v.id)
+      ? { ...v, stock_qty: isSale ? Math.max(0, v.stock_qty - (qty.get(v.id) ?? 0)) : v.stock_qty + (qty.get(v.id) ?? 0) }
+      : v));
   }, variants);
 }

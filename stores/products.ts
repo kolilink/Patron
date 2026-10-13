@@ -4,7 +4,7 @@ import { translateError } from '@/lib/errors';
 import { generateId, generateFallbackName } from '@/lib/id';
 import { saveProductCache, getProductCache, getQueueCount, getCacheTimestamp, saveVariantsCache, getVariantsCache, getAllQueueItemsForOverlay, saveArchivedProductsCache, getArchivedProductsCache } from '@/lib/db';
 import { enqueue } from '@/lib/writeFunnel';
-import { applyPendingProductOps, applyPendingArchived, applyVariantSaleOps, type QueuedProductOp } from '@/lib/pendingProducts';
+import { applyPendingProductOps, applyPendingArchived, applyVariantSaleOps, normalizeStockOps, type QueuedProductOp } from '@/lib/pendingProducts';
 import { isKnownOffline } from '@/lib/connectivity';
 import { isNetworkError, withNetworkRetry, reportOfflineFallback } from '@/lib/sync';
 import { useSyncStore } from '@/stores/sync';
@@ -136,11 +136,11 @@ async function readProductOps(): Promise<QueuedProductOp[]> {
   const { ok } = await getAllQueueItemsForOverlay();
   const ops: QueuedProductOp[] = [];
   for (const i of ok) {
-    // 'vente' rows matter here only for their stock effect (submit_sale); every other sale op is not a product op.
-    if (i.status !== 'pending' || !(i.entity_type === 'produit' || i.operation === 'submit_sale')) continue;
+    // sale rows matter here only for their stock effect (submit_sale / cancel_sale); other sale ops are not product ops.
+    if (i.status !== 'pending' || !(i.entity_type === 'produit' || i.operation === 'submit_sale' || i.operation === 'cancel_sale')) continue;
     try { ops.push({ operation: i.operation, payload: JSON.parse(i.payload) as Record<string, unknown> }); } catch { /* skip unreadable */ }
   }
-  return ops;
+  return normalizeStockOps(ops);
 }
 
 async function overlayOnBase(businessId: string, base: Product[]): Promise<Product[]> {

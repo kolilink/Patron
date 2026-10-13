@@ -190,6 +190,51 @@ describe('consistency over time', () => {
   });
 });
 
+describe('cancelling a sale gives the stock back', () => {
+  it('cancelled while still queued: net zero, the shelf is back at once (nothing ever reached the server)', async () => {
+    online = false;
+    await sell('riz', 1);
+    expect(stockOf('riz')).toBe(0);
+    const key = JSON.parse(outbox[0].payload).p_idempotency_key;
+    await useVentesStore.getState().cancelSale(key, BIZ, 'u1', 'erreur');
+    expect(stockOf('riz')).toBe(1);
+    await coldStart();
+    await useProductStore.getState().fetchProducts(BIZ, 'u1', undefined, 'administrateur');
+    expect(stockOf('riz')).toBe(1); // survives kill + reopen
+  });
+
+  it('synced sale cancelled offline: lines captured at enqueue restock it, variants too', async () => {
+    serverProducts = [prow('riz', 0), prow('huile', 10), prow('tee', 0, { has_variants: true })];
+    serverVariants = [vrow('v-s', 1), vrow('v-m', 5)];
+    await useProductStore.getState().fetchProducts(BIZ, 'u1', undefined, 'administrateur');
+    await useProductStore.getState().fetchVariants('tee', BIZ);
+    useVentesStore.setState({ sales: [{ id: 's-synced', business_id: BIZ, seller_id: 'u1', status: 'paye', total_amount: 800, lines: [
+      { id: 'l1', product_id: 'riz', product_name: 'riz', qty: 1, unit_price: 800, is_bulk: false, cost_price: 500 },
+      { id: 'l2', product_id: 'tee', variant_id: 'v-s', product_name: 'tee', qty: 2, unit_price: 800, is_bulk: false, cost_price: 500 },
+    ] } as any] });
+    online = false;
+    const seen: unknown[] = [];
+    await useVentesStore.getState().cancelSale('s-synced', BIZ, 'u1', 'erreur');
+    seen.push(stockOf('riz'), variantStockOf('v-s'));
+    expect(seen).toEqual([1, 3]);
+    expect(JSON.stringify(outbox[0].payload)).toContain('_stock_lines');
+  });
+
+  it('lines unknown → conservative: nothing restored (stock may read low, never high)', async () => {
+    serverProducts = [prow('riz', 0), prow('huile', 10), prow('tee', 0, { has_variants: true })];
+    await useProductStore.getState().fetchProducts(BIZ, 'u1', undefined, 'administrateur');
+    useVentesStore.setState({ sales: [{ id: 's-x', business_id: BIZ, seller_id: 'u1', status: 'paye', total_amount: 800 } as any] });
+    online = false;
+    await useVentesStore.getState().cancelSale('s-x', BIZ, 'u1', 'erreur');
+    expect(stockOf('riz')).toBe(0);
+  });
+
+  it('the drain strips the local-only hint before calling the RPC', () => {
+    const sync = require('fs').readFileSync(require('path').join(__dirname, '..', 'lib/sync.ts'), 'utf8');
+    expect(sync).toContain('_stock_lines: _ignored');
+  });
+});
+
 describe('structure: no fire-and-forget stock write left in submitSale', () => {
   const src = require('fs').readFileSync(require('path').join(__dirname, '..', 'stores/sales.ts'), 'utf8');
   it('the stock projection is awaited before the success state is set; the ad-hoc IIFE and decrementVariantStock are gone', () => {
