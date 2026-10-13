@@ -31,6 +31,7 @@ import { saleCancelledConfirmation } from '@/src/utils/saveConfirmationCopy';
 import { toast } from '@/stores/toast';
 import { formatDate, localDateISO } from '@/src/utils/dates';
 import { LoadingStatus } from '@/src/components/ui/LoadingStatus';
+import { Money, MoneyText } from '@/src/components/ui/Money';
 
 // iOS-only: suppresses the OS's auto-injected floating "Done" pill above
 // the numeric keyboard — PaymentSheet already has a persistent, always-
@@ -303,7 +304,7 @@ function PaymentSheet({ visible, sale, currency, onClose, onConfirm, saving }: P
       {/* Debt context card */}
       <Card style={[styles.contextCard, { borderLeftColor: palette.warning, borderLeftWidth: 3 }]}>
         <Text variant="caption" color="secondary">{clientName} vous doit</Text>
-        <Text variant="amountLarge" style={{ color: palette.textPrimary }} numberOfLines={1} adjustsFontSizeToFit minimumFontScale={0.5}>{fmt(remaining, currency)}</Text>
+        <Money variant="amountLarge" style={{ color: palette.textPrimary }} amount={remaining} currency={currency} />
       </Card>
 
       {/* Amount */}
@@ -323,7 +324,7 @@ function PaymentSheet({ visible, sale, currency, onClose, onConfirm, saving }: P
             style={styles.solderBtn}
             onPress={() => setAmountStr(formatAmountInput(String(Math.round(remaining)), currency))}
           >
-            <Text variant="label" style={{ color: palette.primary }} numberOfLines={1} adjustsFontSizeToFit minimumFontScale={0.5}>Tout régler : {fmt(remaining, currency)}</Text>
+            <MoneyText variant="label" style={{ color: palette.primary }}>Tout régler : {fmt(remaining, currency)}</MoneyText>
           </Pressable>
         </View>
       </View>
@@ -663,18 +664,13 @@ function DetailModal({ sale, currency, businessName, singleVendor, role, onClose
         {(displayState === 'credit' || displayState === 'partiel') && (
           <View style={styles.heroCredit}>
             <Text variant="caption" color="secondary">Reste à payer</Text>
-            <Text
+            <Money
               variant="amountLarge"
-              style={styles.heroCreditAmount}
-              adjustsFontSizeToFit
-              numberOfLines={1}
-            >
-              {fmt(displayState === 'partiel' ? remaining : sale.total_amount - discount, currency)}
-            </Text>
+              style={styles.heroCreditAmount} amount={displayState === 'partiel' ? remaining : sale.total_amount - discount} currency={currency} />
             {displayState === 'partiel' && (
-              <Text variant="caption" color="secondary" numberOfLines={1} adjustsFontSizeToFit minimumFontScale={0.5}>
+              <MoneyText variant="caption" color="secondary">
                 sur {fmt(sale.total_amount - discount, currency)}
-              </Text>
+              </MoneyText>
             )}
             <Button
               label="Enregistrer un paiement"
@@ -747,7 +743,7 @@ function DetailModal({ sale, currency, businessName, singleVendor, role, onClose
                     <View key={l.id} style={styles.lineRow}>
                       <Text variant="body" style={{ flex: 1 }}>{l.product_name}{l.variant_name ? ` · ${l.variant_name}` : ''}</Text>
                       <Text variant="caption" color="secondary">×{l.qty}</Text>
-                      <Text variant="label" numberOfLines={1} adjustsFontSizeToFit minimumFontScale={0.5}>{fmt(l.unit_price * l.qty, currency)}</Text>
+                      <Money variant="label" amount={l.unit_price * l.qty} currency={currency} />
                     </View>
                   ))}
                   {discount > 0 && (
@@ -755,7 +751,7 @@ function DetailModal({ sale, currency, businessName, singleVendor, role, onClose
                       <View style={styles.divider} />
                       <View style={styles.lineRow}>
                         <Text variant="body" style={{ flex: 1, color: palette.warning }}>Rabais accordé</Text>
-                        <Text variant="label" style={{ color: palette.textPrimary }} numberOfLines={1} adjustsFontSizeToFit minimumFontScale={0.5}>− {fmt(discount, currency)}</Text>
+                        <MoneyText variant="label" style={{ color: palette.textPrimary }}>− {fmt(discount, currency)}</MoneyText>
                       </View>
                     </>
                   )}
@@ -786,7 +782,7 @@ function DetailModal({ sale, currency, businessName, singleVendor, role, onClose
                     <View key={i} style={styles.lineRow}>
                       <Text variant="body" style={{ flex: 1 }}>{methodLabel(p.method)}</Text>
                       <Text variant="caption" color="secondary">{fmtDate(p.date)}</Text>
-                      <Text variant="label" numberOfLines={1} adjustsFontSizeToFit minimumFontScale={0.5}>{fmt(p.amount, currency)}</Text>
+                      <Money variant="label" amount={p.amount} currency={currency} />
                     </View>
                   ))}
                 </View>
@@ -803,13 +799,13 @@ function DetailModal({ sale, currency, businessName, singleVendor, role, onClose
                     <>
                       <View style={styles.row}>
                         <Text variant="caption" color="secondary">Coût d'achat</Text>
-                        <Text variant="label" numberOfLines={1} adjustsFontSizeToFit minimumFontScale={0.5}>{fmt(totalCost, currency)}</Text>
+                        <Money variant="label" amount={totalCost} currency={currency} />
                       </View>
                       <View style={[styles.row, { paddingTop: spacing[1], borderTopWidth: 1, borderTopColor: palette.border }]}>
                         <Text variant="label">Bénéfice net</Text>
-                        <Text variant="label" style={{ color: palette.textPrimary }} numberOfLines={1} adjustsFontSizeToFit minimumFontScale={0.5}>
+                        <MoneyText variant="label" style={{ color: palette.textPrimary }}>
                           {formatSignedAmount(totalProfit, currency)} ({formatMargin(totalProfit, effectiveRevenue)})
-                        </Text>
+                        </MoneyText>
                       </View>
                     </>
                   ) : (
@@ -862,9 +858,9 @@ function DetailModal({ sale, currency, businessName, singleVendor, role, onClose
                       keyboardType="numeric"
                       placeholderTextColor={palette.textDisabled}
                     />
-                    <Text variant="caption" color="secondary" numberOfLines={1} adjustsFontSizeToFit minimumFontScale={0.5}>
+                    <MoneyText variant="caption" color="secondary">
                       Total : {fmt(parseAmountInput(editLinePrices[l.id] ?? '', currency) * l.qty, currency)}
-                    </Text>
+                    </MoneyText>
                   </View>
                 ))}
 
@@ -1344,15 +1340,9 @@ export default function VentesScreen() {
       {/* Inline summary line */}
       {sales.length > 0 && (
         <View style={styles.summaryLine}>
-          <Text
-            variant="caption"
-            color="secondary"
-            numberOfLines={1}
-            adjustsFontSizeToFit
-            style={{ flex: 1 }}
-          >
+          <MoneyText variant="caption" color="secondary" fit="full" style={{ flex: 1 }}>
             {summaryLine}
-          </Text>
+          </MoneyText>
         </View>
       )}
 
@@ -1430,11 +1420,11 @@ export default function VentesScreen() {
                 >
                   <View style={{ flex: 1 }}>
                     <Text variant="label" style={styles.dayLabel}>{item.label}</Text>
-                    <Text variant="caption" color="secondary" numberOfLines={1} adjustsFontSizeToFit minimumFontScale={0.5}>
+                    <MoneyText variant="caption" color="secondary">
                       {item.count === 1
                         ? `${item.soloName ? `${item.soloName} · ` : ''}${fmt(item.total, currency)}`
                         : `${item.count} ventes · ${fmt(item.total, currency)}`}
-                    </Text>
+                    </MoneyText>
                   </View>
                   <Ionicons
                     name={expanded ? 'chevron-down' : 'chevron-forward'}
@@ -1460,14 +1450,12 @@ export default function VentesScreen() {
                     <Text variant="label" numberOfLines={1} style={{ flex: 1, color: palette.textPrimary }}>
                       {sale.customer_name}
                     </Text>
-                    <Text
+                    <MoneyText
                       variant="label"
                       style={{ color: palette.textPrimary }}
-                      adjustsFontSizeToFit
-                      numberOfLines={1}
                     >
                       {isCredit ? `Reste ${fmt(remaining, currency)}` : fmt(sale.total_amount - (sale.discount_amount ?? 0), currency)}
-                    </Text>
+                    </MoneyText>
                   </View>
                   {!singleVendor && (
                     <View style={{ flexDirection: 'row', justifyContent: 'flex-end' }}>

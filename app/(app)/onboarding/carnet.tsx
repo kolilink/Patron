@@ -23,6 +23,7 @@ import { generateId } from '@/lib/id';
 import { supabase } from '@/lib/supabase';
 import { haptics } from '@/lib/haptics';
 import { ensureClient } from '@/lib/writeFunnel';
+import { Money, MoneyText } from '@/src/components/ui/Money';
 
 interface CarnetEntry {
   id: string;
@@ -165,9 +166,7 @@ export default function CarnetScreen() {
           renderItem={({ item }) => (
             <View style={styles.entryRow}>
               <Text variant="label" style={{ flex: 1 }} numberOfLines={1}>{item.name}</Text>
-              <Text variant="label" numberOfLines={1} adjustsFontSizeToFit minimumFontScale={0.5}>
-                {formatAmount(item.amountCents / 100, currency)}
-              </Text>
+              <Money variant="label" amount={item.amountCents / 100} currency={currency} />
               <Pressable onPress={() => handleRemove(item.id)} hitSlop={10}>
                 <Text variant="body" color="secondary" style={{ paddingLeft: spacing[3] }}>×</Text>
               </Pressable>
@@ -183,9 +182,9 @@ export default function CarnetScreen() {
           ListFooterComponent={
         <View style={styles.footer}>
           {entries.length > 0 && (
-            <Text variant="caption" color="secondary" style={styles.total} numberOfLines={1} adjustsFontSizeToFit minimumFontScale={0.5}>
+            <MoneyText variant="caption" color="secondary" style={styles.total}>
               {entries.length} personne{entries.length > 1 ? 's' : ''} · {formatAmount(totalCents / 100, currency)}
-            </Text>
+            </MoneyText>
           )}
           {error && (
             <Text variant="caption" color="danger" style={{ textAlign: 'center', marginBottom: spacing[2] }}>

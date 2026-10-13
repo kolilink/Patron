@@ -43,10 +43,14 @@ describe('Part 1: tabular money', () => {
 });
 
 describe('Part 3: money never truncates', () => {
-  it('every money Text has numberOfLines={1} adjustsFontSizeToFit minimumFontScale (shrinks, never "…")', () => {
+  it('no <Text> renders money any more: every amount goes through <Money>/<MoneyText> (owns one line, no ellipsis, fit)', () => {
     const offenders: string[] = [];
-    for (const f of files) for (const t of moneyTexts(fs.readFileSync(path.join(root, f), 'utf8'))) {
-      if (!(/adjustsFontSizeToFit/.test(t.attrs) && /numberOfLines=\{1\}/.test(t.attrs))) offenders.push(`${f}:${t.line}`);
+    for (const f of files) {
+      if (f.endsWith('ui/Money.tsx')) continue;
+      const src = fs.readFileSync(path.join(root, f), 'utf8');
+      const re = /<(?:RN)?Text\b((?:[^>{]|\{(?:[^{}]|\{(?:[^{}]|\{[^{}]*\})*\})*\})*?)>([\s\S]*?)<\/(?:RN)?Text>/g;
+      let m: RegExpExecArray | null;
+      while ((m = re.exec(src))) if (MONEY.test(m[2])) offenders.push(`${f}:${src.slice(0, m.index).split('\n').length}`);
     }
     expect(offenders).toEqual([]);
   });

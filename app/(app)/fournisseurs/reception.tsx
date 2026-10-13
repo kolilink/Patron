@@ -35,6 +35,7 @@ import { isUnlinkedNamedLine, linkedLinePatch } from '@/src/utils/receptionLink'
 import { Input } from '@/src/components/ui/Input';
 import { PhoneInput } from '@/src/components/ui/PhoneInput';
 import { appAlert } from '@/src/utils/appAlert';
+import { Money, MoneyText } from '@/src/components/ui/Money';
 
 // ── "Nouvelle livraison" — replaces the old "commande" 2-phase flow. ────────
 // A livraison is what actually arrived, recorded once, atomically. There is
@@ -874,9 +875,9 @@ function QuoiStep({
               )}
 
               {parseQty(line.qty) && parseAmountInput(line.unitCost, currency) > 0 && !line.hasVariants && (
-                <Text variant="caption" color="secondary" numberOfLines={1} adjustsFontSizeToFit minimumFontScale={0.5}>
+                <MoneyText variant="caption" color="secondary">
                   Total : {formatAmount(parseQty(line.qty)! * parseAmountInput(line.unitCost, currency), currency)}
-                </Text>
+                </MoneyText>
               )}
 
               {parseQty(line.qty) && !(parseAmountInput(line.unitCost, currency) > 0) && !line.hasVariants && (
@@ -896,7 +897,7 @@ function QuoiStep({
         <View style={styles.checkCard}>
           <View style={styles.checkRow}>
             <Text variant="label">Total</Text>
-            <Text variant="label" numberOfLines={1} adjustsFontSizeToFit minimumFontScale={0.5}>{formatAmount(linesTotal, currency)}</Text>
+            <Money variant="label" amount={linesTotal} currency={currency} />
           </View>
         </View>
         {/* CTA ends the form: in the content flow, one spacing below the last element (no dead gap) */}
@@ -1021,7 +1022,7 @@ function RecapStep({
         <View style={styles.checkCard}>
           <View style={styles.checkRow}>
             <Text variant="label">Total</Text>
-            <Text variant="label" numberOfLines={1} adjustsFontSizeToFit minimumFontScale={0.5}>{formatAmount(linesTotal, currency)}</Text>
+            <Money variant="label" amount={linesTotal} currency={currency} />
           </View>
         </View>
 
@@ -1073,9 +1074,9 @@ function ConfirmeStep({ draft, currency, linesTotal, pending, supplierName, onCh
         <Ionicons name="checkmark" size={36} color={palette.textInverse} />
       </View>
       <Text variant="h2" style={{ textAlign: 'center' }}>{itemCount} produit{itemCount > 1 ? 's' : ''} enregistré{itemCount > 1 ? 's' : ''}</Text>
-      <Text variant="body" color="secondary" style={{ textAlign: 'center' }} numberOfLines={1} adjustsFontSizeToFit minimumFontScale={0.5}>
+      <MoneyText variant="body" color="secondary" style={{ textAlign: 'center' }}>
         stock mis à jour · Total {formatAmount(linesTotal, currency)}
-      </Text>
+      </MoneyText>
       {pending && (
         <Text variant="caption" color="secondary" style={{ textAlign: 'center' }}>
           Pas encore envoyée. Elle partira dès que le téléphone sera connecté.

@@ -1,4 +1,5 @@
 import { useEffect, useMemo, useRef, useState } from 'react';
+import { MoneyText } from '@/src/components/ui/Money';
 import { Pressable, ScrollView, StyleSheet, View } from 'react-native';
 import { Image } from 'expo-image';
 import { Ionicons } from '@expo/vector-icons';
@@ -22,6 +23,7 @@ import {
 } from '@/src/utils/expenseUtils';
 import type { CreateExpenseData } from '@/stores/expenses';
 import type { Expense } from '@/src/types';
+import { Money } from '@/src/components/ui/Money';
 
 export type SheetMode = 'add' | 'detail' | 'edit';
 
@@ -196,9 +198,7 @@ export function ExpenseSheet(props: Props) {
         }
       >
         <View style={styles.detailHead}>
-          <Text variant="h1" style={styles.bigAmount} numberOfLines={1} adjustsFontSizeToFit>
-            {formatAmount(expense.amount, currency)}
-          </Text>
+          <Money variant="h1" style={styles.bigAmount} amount={expense.amount} currency={currency} />
           {pending ? <Text variant="caption" color="secondary">En attente du gérant</Text> : null}
           {expense.status === 'rejete' ? <Text variant="caption" color="secondary">Refusée</Text> : null}
         </View>
@@ -284,9 +284,9 @@ export function ExpenseSheet(props: Props) {
       }
     >
       <View style={styles.amountBox}>
-        <Text variant="h1" style={styles.bigAmount} numberOfLines={1} adjustsFontSizeToFit accessibilityLabel="Montant">
+        <MoneyText variant="h1" style={styles.bigAmount} fit="full" accessibilityLabel="Montant">
           {raw === '' ? `0 ${currency}` : `${formatAmountInput(raw, currency)} ${currency}`}
-        </Text>
+        </MoneyText>
       </View>
 
       <ExpenseKeypad currency={currency} onKey={onKey} />
@@ -297,7 +297,7 @@ export function ExpenseSheet(props: Props) {
           <ScrollView horizontal showsHorizontalScrollIndicator={false} keyboardShouldPersistTaps="handled" contentContainerStyle={{ gap: spacing[2] }}>
             {templates.map((t, i) => (
               <Pressable key={i} onPress={() => applyTemplate(t)} style={styles.chip} accessibilityRole="button">
-                <Text variant="label" style={{ color: palette.textPrimary }} numberOfLines={1} adjustsFontSizeToFit minimumFontScale={0.5}>{formatAmount(t.amount, currency)}</Text>
+                <Money variant="label" style={{ color: palette.textPrimary }} amount={t.amount} currency={currency} />
                 {(t.product_name || t.note) ? (
                   <Text variant="caption" color="secondary" numberOfLines={1}>{t.product_name ?? t.note}</Text>
                 ) : null}

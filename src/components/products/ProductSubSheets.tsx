@@ -16,6 +16,7 @@ import type { ProductStats } from '@/stores/products';
 import { haptics } from '@/lib/haptics';
 import { LoadingStatus } from '@/src/components/ui/LoadingStatus';
 import { formatAmount, formatAmountValue, formatSignedAmount } from '@/src/utils/format';
+import { Money, MoneyText } from '@/src/components/ui/Money';
 
 // Stock adjustment ("Ajuster") and per-product profitability ("Rentabilité") sheets — moved
 // verbatim from the old Produits tab; they are opened from Gérer mode and from the edit sheet.
@@ -187,29 +188,23 @@ export function ProductStatsModal({ visible, product, onClose, businessId, curre
         <Card style={{ gap: 0 }}>
           <View style={styles.statsRow}>
             <Text variant="body" color="secondary">Encaissé</Text>
-            <Text variant="body" style={{ fontFamily: 'System', fontWeight: '600' }} numberOfLines={1} adjustsFontSizeToFit minimumFontScale={0.5}>
-              {formatAmount(stats.revenue, currency)}
-            </Text>
+            <Money variant="body" style={{ fontFamily: 'System', fontWeight: '600' }} amount={stats.revenue} currency={currency} />
           </View>
           <View style={[styles.statsRow, styles.statsRowBorder]}>
             <Text variant="body" color="secondary">Coût d'achat</Text>
-            <Text variant="body" style={{ fontFamily: 'System', fontWeight: '600' }} numberOfLines={1} adjustsFontSizeToFit minimumFontScale={0.5}>
-              {formatAmount(stats.capital, currency)}
-            </Text>
+            <Money variant="body" style={{ fontFamily: 'System', fontWeight: '600' }} amount={stats.capital} currency={currency} />
           </View>
           {stats.linkedExpenses > 0 && (
             <View style={[styles.statsRow, styles.statsRowBorder]}>
               <Text variant="body" color="secondary">Dépenses liées</Text>
-              <Text variant="body" style={{ fontFamily: 'System', fontWeight: '600' }} numberOfLines={1} adjustsFontSizeToFit minimumFontScale={0.5}>
-                {formatAmount(stats.linkedExpenses, currency)}
-              </Text>
+              <Money variant="body" style={{ fontFamily: 'System', fontWeight: '600' }} amount={stats.linkedExpenses} currency={currency} />
             </View>
           )}
           <View style={[styles.statsRow, styles.statsRowBorder]}>
             <Text variant="body">Bénéfice</Text>
-            <Text variant="body" style={{ fontFamily: 'System', fontWeight: '700', color: profitColor }} numberOfLines={1} adjustsFontSizeToFit minimumFontScale={0.5}>
+            <MoneyText variant="body" style={{ fontFamily: 'System', fontWeight: '700', color: profitColor }}>
               {stats.profit == null ? '—' : formatSignedAmount(stats.profit, currency)}
-            </Text>
+            </MoneyText>
           </View>
         </Card>
       ) : (

@@ -26,6 +26,7 @@ import { supabase } from '@/lib/supabase';
 import { haptics } from '@/lib/haptics';
 import { trackEvent } from '@/lib/analytics';
 import { ensureClient } from '@/lib/writeFunnel';
+import { MoneyText } from '@/src/components/ui/Money';
 
 interface Props {
   businessId: string;
@@ -288,14 +289,14 @@ export function FirstRunHeroOverlay({ businessId, userId, currency, onDone }: Pr
                     Noté <Text variant="h2" style={{ color: palette.primary }}>✓</Text>
                   </Text>
                   {lastEntry && (
-                    <Text variant="body" style={styles.sub} numberOfLines={1} adjustsFontSizeToFit minimumFontScale={0.5}>
+                    <MoneyText variant="body" style={styles.sub}>
                       {lastEntry.name} vous doit {formatAmount(lastEntry.amountCents / 100, currency)}.
-                    </Text>
+                    </MoneyText>
                   )}
                 </View>
-                <Text variant="body" color="secondary" style={[styles.sub, styles.totalLine]} numberOfLines={1} adjustsFontSizeToFit minimumFontScale={0.5}>
+                <MoneyText variant="body" color="secondary" style={[styles.sub, styles.totalLine]}>
                   Total à recevoir : {formatAmount(totalCents / 100, currency)}
-                </Text>
+                </MoneyText>
 
                 <View style={styles.payoffSpacer} />
 

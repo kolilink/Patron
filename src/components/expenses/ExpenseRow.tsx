@@ -9,6 +9,7 @@ import type { Palette } from '@/src/theme';
 import { useReduceMotion } from '@/src/hooks/useReduceMotion';
 import { formatAmount } from '@/src/utils/format';
 import type { Expense } from '@/src/types';
+import { Money } from '@/src/components/ui/Money';
 
 const GENERIC = 'Dépense';
 
@@ -40,9 +41,7 @@ export const ExpenseRow = memo(function ExpenseRow({ expense, currency, canModif
   const body = (
     <Pressable onPress={onPress} style={styles.row} accessibilityRole="button">
       <View style={{ flex: 1, gap: 2 }}>
-        <Text variant="label" style={[styles.amount, rejected && { color: palette.textSecondary }]} numberOfLines={1} adjustsFontSizeToFit minimumFontScale={0.5}>
-          {formatAmount(expense.amount, currency)}
-        </Text>
+        <Money variant="label" style={[styles.amount, rejected && { color: palette.textSecondary }]} amount={expense.amount} currency={currency} />
         {subtitle ? <Text variant="caption" color="secondary" numberOfLines={1}>{subtitle}</Text> : null}
         {rejected ? <Text variant="caption" style={{ color: palette.textSecondary, fontWeight: '600' }}>Refusée</Text> : null}
         {expense.status === 'en_attente' ? <Text variant="caption" color="secondary">En attente</Text> : null}

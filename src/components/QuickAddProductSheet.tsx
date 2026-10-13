@@ -38,6 +38,7 @@ import {
   type QuickAddPayload,
   type QuickAddState,
 } from '@/src/utils/quickAddProduct';
+import { Money, MoneyText } from '@/src/components/ui/Money';
 
 interface Props {
   visible: boolean;
@@ -445,7 +446,7 @@ export function QuickAddProductSheet({
                   accessibilityLabel={`Ouvrir ${p.name}`}
                 >
                   <Text variant="body" style={{ flex: 1, fontFamily: FF.medium }} numberOfLines={1}>{p.name}</Text>
-                  <Text variant="caption" color="secondary" numberOfLines={1} adjustsFontSizeToFit minimumFontScale={0.5}>{formatAmount(p.sale_price, currency)}</Text>
+                  <Money variant="caption" color="secondary" amount={p.sale_price} currency={currency} />
                 </Pressable>
               ))}
             </View>
@@ -670,14 +671,14 @@ export function QuickAddProductSheet({
           </Card>
           {cost && (
             <View style={styles.costLine}>
-              <Text style={[styles.costText, { color: cost.profit != null && cost.profit < 0 ? palette.warning : palette.success }]} numberOfLines={1} adjustsFontSizeToFit minimumFontScale={0.5}>
+              <MoneyText style={[styles.costText, { color: cost.profit != null && cost.profit < 0 ? palette.warning : palette.success }]}>
                 {`Coût réel par pièce : ${formatAmount(cost.unitCost, currency)}`}
                 {cost.profit != null
                   ? cost.profit >= 0
                     ? ` · Vous gagnez ${formatAmount(cost.profit, currency)}`
                     : ` · Vous perdez ${formatAmount(-cost.profit, currency)}`
                   : ''}
-              </Text>
+              </MoneyText>
             </View>
           )}
           {!supplierCtx && (

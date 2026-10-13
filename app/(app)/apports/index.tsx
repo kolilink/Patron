@@ -24,6 +24,7 @@ import { haptics } from '@/lib/haptics';
 import { toast } from '@/stores/toast';
 import { FAILURE_COPY } from '@/src/utils/failureCopy';
 import { formatDate } from '@/src/utils/dates';
+import { MoneyText } from '@/src/components/ui/Money';
 
 // iOS-only: suppresses the OS's auto-injected floating "Done" pill above
 // the numeric keyboard — this form already has a persistent, always-
@@ -228,9 +229,9 @@ function ApportFormModal({ visible, mode, editing, businessId, currency, saving,
               <Text style={styles.viewMicroLabel}>{(editing?.amount ?? 0) < 0 ? 'Montant retiré' : 'Montant apporté'}</Text>
               {/* Same direction encoding as the list row — signed and
                     colored, never a neutral unsigned amount. */}
-              <Text style={[styles.viewAmount, { color: (editing?.amount ?? 0) < 0 ? palette.apportsAmber : palette.apportsGreen }]} numberOfLines={1} adjustsFontSizeToFit minimumFontScale={0.5}>
+              <MoneyText style={[styles.viewAmount, { color: (editing?.amount ?? 0) < 0 ? palette.apportsAmber : palette.apportsGreen }]} fit="full">
                 {(editing?.amount ?? 0) < 0 ? '− ' : '+ '}{formatAmount(Math.abs(editing?.amount ?? 0), currency)}
-              </Text>
+              </MoneyText>
             </View>
 
             <View style={styles.viewDetails}>
@@ -571,18 +572,16 @@ export default function AportsScreen() {
           </Text>
           {!loading && apports.length > 0 && (
             <>
-              <Text
+              <MoneyText
                 style={[styles.totalText, { color: palette.apportsGreen, fontSize: totalFontSize, lineHeight: totalFontSize + 8 }]}
-                numberOfLines={1}
-                adjustsFontSizeToFit
-                minimumFontScale={0.6}
+                fit="full"
               >
                 {displayTotal}
-              </Text>
+              </MoneyText>
               {filterMemberId && (
-                <Text variant="caption" style={{ color: palette.apportsSecondary }} numberOfLines={1} adjustsFontSizeToFit minimumFontScale={0.5}>
+                <MoneyText variant="caption" style={{ color: palette.apportsSecondary }}>
                   sur {formatAmount(total, currency)} au total
-                </Text>
+                </MoneyText>
               )}
             </>
           )}
@@ -676,14 +675,11 @@ export default function AportsScreen() {
                   </Text>
                   <Text style={styles.rowMeta} numberOfLines={1}>{meta}</Text>
                 </View>
-                <Text
+                <MoneyText
                   style={[styles.rowAmount, { color: isWithdrawal ? palette.apportsAmber : palette.apportsGreen }]}
-                  numberOfLines={1}
                 >
-                  {isWithdrawal ? '− ' : '+ '}
-                  {numericPart}
-                  <Text style={[styles.rowCurrency, { color: isWithdrawal ? palette.apportsAmber : palette.apportsGreen }]}> {currency}</Text>
-                </Text>
+                  {`${isWithdrawal ? '− ' : '+ '}${numericPart} ${currency}`}
+                </MoneyText>
               </Pressable>
             );
           }}
