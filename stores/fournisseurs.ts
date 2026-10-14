@@ -332,7 +332,21 @@ export const useFournisseursStore = create<FournisseursStore>((set, get) => ({
 
   fetchFournisseurs: async (businessId) => {
     if (isStaleBusiness(businessId)) return;
-    set({ loading: true });
+    // Cache-first (Launch Bar #3, the apports pattern): when this business has
+    // no list in memory yet, paint the cached one instantly and let the network
+    // refresh land behind it. `loading` is set only when there is truly nothing
+    // to show — never a skeleton flash over data that exists.
+    if (get().fournisseurs.length === 0 || _baseFournisseurs?.businessId !== businessId) {
+      const cachedHead = await getFournisseurCache(businessId) as Fournisseur[] | null;
+      if (isStaleBusiness(businessId)) return;
+      if (cachedHead) {
+        _baseFournisseurs = { businessId, list: cachedHead };
+        await publishFournisseurs(businessId);
+        await loadDebtsFromCache(businessId);
+        if (isStaleBusiness(businessId)) return;
+      }
+    }
+    if (get().fournisseurs.length === 0) set({ loading: true });
     const [suppliersRes, debtsRes] = await Promise.all([
       withNetworkRetry(() => supabase.from('suppliers').select('*').eq('business_id', businessId).order('name'))
         .catch(err => ({ data: null, error: err })),
@@ -575,7 +589,19 @@ export const useFournisseursStore = create<FournisseursStore>((set, get) => ({
 
   fetchCommandes: async (businessId) => {
     if (isStaleBusiness(businessId)) return;
-    set({ loading: true });
+    // Cache-first (Launch Bar #3, the apports pattern): paint the cached
+    // commandes instantly when this business has none in memory; `loading`
+    // only when there is truly nothing to show.
+    if (get().commandes.length === 0 || _baseCommandes?.businessId !== businessId) {
+      const cachedHead = await getCommandeCache(businessId) as CommandeAchat[] | null;
+      if (isStaleBusiness(businessId)) return;
+      if (cachedHead) {
+        _baseCommandes = { businessId, list: cachedHead };
+        await publishCommandes(businessId);
+        if (isStaleBusiness(businessId)) return;
+      }
+    }
+    if (get().commandes.length === 0) set({ loading: true });
     const { data, error } = await withNetworkRetry(() =>
       supabase
         .from('purchase_orders')
@@ -779,6 +805,12 @@ export const useFournisseursStore = create<FournisseursStore>((set, get) => ({
   },
 
   fetchDebts: async (businessId) => {
+    // Cache-first (Launch Bar #3): paint the cached ledger (base + queued ops)
+    // before the network round-trip; the refresh below replaces it on landing.
+    if (!_baseDebts || _baseDebts.businessId !== businessId) {
+      await loadDebtsFromCache(businessId);
+      if (isStaleBusiness(businessId)) return;
+    }
     try {
       const { data, error } = await withTimeout(
         supabase

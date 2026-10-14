@@ -72,7 +72,11 @@ describe('fetchFournisseurs — stale business mid-fetch', () => {
     it('resolves loading:false when the business is switched while the network is in flight', async () => {
         const fetchPromise = useFournisseursStore.getState().fetchFournisseurs('biz-1');
 
-        // Flush microtasks so Promise.all has registered its resolvers.
+        // fetchFournisseurs seeds from cache first (Launch Bar #3, the apports
+        // pattern — resolve null -> sets loading:true), then starts the network
+        // queries. Flush past both awaits so Promise.all has registered its
+        // resolvers.
+        await Promise.resolve();
         await Promise.resolve();
         expect(useFournisseursStore.getState().loading).toBe(true);
 
@@ -89,6 +93,8 @@ describe('fetchCommandes — stale business mid-fetch', () => {
     it('resolves loading:false when the business is switched while the network is in flight', async () => {
         const fetchPromise = useFournisseursStore.getState().fetchCommandes('biz-1');
 
+        // Same cache-first seeding as fetchFournisseurs: flush past both awaits.
+        await Promise.resolve();
         await Promise.resolve();
         expect(useFournisseursStore.getState().loading).toBe(true);
 
