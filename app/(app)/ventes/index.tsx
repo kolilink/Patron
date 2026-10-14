@@ -20,7 +20,7 @@ import { activeSalesTotals } from '@/src/utils/salesTotals';
 import { formatAmount, formatAmountInput, parseAmountInput, formatSignedAmount, formatMargin } from '@/src/utils/format';
 import { useAuthStore } from '@/stores/auth';
 import { useVentesStore, type Vente, type EditSaleParams, type SaleEdit } from '@/stores/ventes';
-import { SaleReceiptSheet } from '@/src/components/SaleReceiptSheet';
+import { ReceiptPanel } from '@/src/components/ReceiptPanel';
 import { receiptSourceFromVente } from '@/src/utils/saleReceipt';
 import { haptics } from '@/lib/haptics';
 import { supabase } from '@/lib/supabase';
@@ -636,11 +636,11 @@ function DetailModal({ sale, currency, businessName, singleVendor, role, onClose
     <>
       <FormSheet
         visible
-        onClose={onClose}
-        title={`Vente du ${headerDate}`}
+        onClose={showReceipt ? () => setShowReceipt(false) : onClose}
+        title={showReceipt ? 'Reçu' : `Vente du ${headerDate}`}
         cancelLabel="Fermer"
         contentContainerStyle={styles.pad}
-        headerRight={showMenuButton ? (
+        headerRight={!showReceipt && showMenuButton ? (
           <Pressable hitSlop={8} onPress={showMenu} style={{ minWidth: 40, alignItems: 'flex-end' }}>
             <Text variant="body" color="secondary">⋯</Text>
           </Pressable>
@@ -648,6 +648,22 @@ function DetailModal({ sale, currency, businessName, singleVendor, role, onClose
           <View style={{ minWidth: 40 }} />
         )}
       >
+        {/* Receipt renders IN PLACE inside this sheet (the QuickCaptureSheet
+            pattern): SaleReceiptSheet is a second Modal, and two Modals must
+            never be presenting at once — opened from here it silently never
+            appeared on iOS, which is why "Partager le reçu" looked dead. */}
+        {showReceipt && receiptSource ? (
+          <ReceiptPanel
+            key={`${receiptSource.kind}:${receiptSource.key ?? receiptSource.date.getTime()}`}
+            source={receiptSource}
+            onRequestSyncedEdit={canEditSale ? () => {
+              if (offline) { showOfflineEditHint(); return; }
+              setShowReceipt(false);
+              openEditSale();
+            } : undefined}
+          />
+        ) : (
+        <>
         {toast ? (
           <View style={styles.toast}>
             <Text variant="label" style={{ color: palette.textInverse }}>{toast}</Text>
@@ -958,9 +974,9 @@ function DetailModal({ sale, currency, businessName, singleVendor, role, onClose
           </View>
         )}
 
-        {/* Receipt lives behind this button — tapping it opens the preview
-              sheet the merchant shares from, instead of duplicating the sale
-              inline on this scroll. */}
+        {/* Receipt lives behind this button — tapping it swaps this sheet's
+              content to the receipt the merchant shares from (in place, never
+              a second Modal), instead of duplicating the sale inline here. */}
         {receiptSource && sale.status !== 'annule' && (
           <View style={styles.receiptSection}>
             <View style={styles.receiptDivider} />
@@ -968,6 +984,8 @@ function DetailModal({ sale, currency, businessName, singleVendor, role, onClose
               <Button label="Partager le reçu" onPress={() => setShowReceipt(true)} fullWidth variant="outline" />
             </View>
           </View>
+        )}
+        </>
         )}
       </FormSheet>
 
@@ -980,16 +998,6 @@ function DetailModal({ sale, currency, businessName, singleVendor, role, onClose
         saving={saving}
       />
 
-      {/* Receipt preview, pre-send correction (pending items) and share. */}
-      <SaleReceiptSheet
-        source={showReceipt ? receiptSource : null}
-        onClose={() => setShowReceipt(false)}
-        onRequestSyncedEdit={canEditSale ? () => {
-          if (offline) { showOfflineEditHint(); return; }
-          setShowReceipt(false);
-          openEditSale();
-        } : undefined}
-      />
     </>
   );
 }
