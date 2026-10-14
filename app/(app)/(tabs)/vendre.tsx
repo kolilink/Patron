@@ -25,6 +25,7 @@ import type { ReceiptSource, SaleReceiptSource } from '@/src/utils/saleReceipt';
 import { useTheme, radius, spacing, shadow, fontFamily, FLOATING_TAB_BAR_CLEARANCE, floatingTabBarClearance, CLIENT_AVATAR_PALETTE, SEARCH_VISIBILITY_THRESHOLD } from '@/src/theme';
 import { useAnimateLayoutChange } from '@/src/hooks/useAnimateLayoutChange';
 import { useQuickClients } from '@/src/hooks/useQuickClients';
+import { mergeQuickClients, pendingNameActivity, salesNameActivity } from '@/src/utils/quickClients';
 import { QuickCaptureSheet } from '@/src/components/QuickCaptureSheet';
 import { ProductManager } from '@/src/components/products/ProductManager';
 import { useProductSheets } from '@/src/components/products/useProductSheets';
@@ -44,7 +45,7 @@ import { useVentesStore } from '@/stores/ventes';
 import { toast } from '@/stores/toast';
 import { creditSaleConfirmation, cashSaleConfirmation } from '@/src/utils/saveConfirmationCopy';
 import { supabase } from '@/lib/supabase';
-import { getKV, setKV } from '@/lib/db';
+import { getKV, setKV, getAllQueueItemsForOverlay } from '@/lib/db';
 import { haptics } from '@/lib/haptics';
 import { SkeletonList } from '@/src/components/ui/SkeletonPlaceholder';
 import { trackEvent } from '@/lib/analytics';
@@ -366,7 +367,34 @@ function PaymentModal({
       .map((r: { customer_name: string }) => r.customer_name?.trim())
       .filter((n): n is string => Boolean(n) && !knownNames.has(n))
       .map(name => ({ name, phone: null }));
-    const all = [...fromClients, ...fromSales].sort((a, b) => a.name.localeCompare(b.name));
+    let all: { id?: string; name: string; phone?: string | null }[] = [...fromClients, ...fromSales].sort((a, b) => a.name.localeCompare(b.name));
+    if (all.length === 0) {
+      // Airplane mode (Launch Bar #5): these two reads were the last
+      // network-only step in the sell flow — offline they both come back
+      // empty and this picker would show nobody, not even the client she
+      // sold to an hour ago. Fall back to the same local truth the credit
+      // "Qui" picker ranks (useQuickClients): names on the sales this phone
+      // holds + names still queued in the outbox. Picking one passes its
+      // name (and id when known) exactly like a server row; ensureClient
+      // and the drain's name-link keep the books straight.
+      try {
+        const localSales = useVentesStore.getState().sales.filter(v => v.business_id === businessId);
+        let pendingActs: ReturnType<typeof pendingNameActivity> = [];
+        try {
+          const { ok } = await getAllQueueItemsForOverlay();
+          const ops = ok.flatMap(i => {
+            try { return [{ operation: i.operation, payload: JSON.parse(i.payload) as Record<string, unknown>, queuedAt: i.queued_at ?? null, status: i.status }]; }
+            catch { // failure: silent — one unreadable queued op is skipped; the rest still feed the picker
+              return []; }
+          });
+          pendingActs = pendingNameActivity(ops, businessId);
+        } catch { // failure: silent — unreadable outbox: the sales names alone still beat an empty picker
+        }
+        all = mergeQuickClients({ server: [], sales: salesNameActivity(localSales), pending: pendingActs })
+          .map(c => ({ id: c.id, name: c.name, phone: c.phone ?? null }));
+      } catch { // failure: silent — local sources unreadable: keep the empty list, the new-client form still completes the sale
+      }
+    }
     const seen = new Set<string>();
     setClients(all.filter(c => { if (seen.has(c.name)) return false; seen.add(c.name); return true; }));
   };
