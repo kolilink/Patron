@@ -1400,7 +1400,7 @@ function VariantPickerSheet({ visible, product, variants, cartQtyByVariant, curr
         </ScrollView>
         <View style={{ paddingTop: spacing[4] }}>
           <Button
-            label="Confirmer"
+            label="Ajouter au panier"
             onPress={confirm}
             fullWidth
             size="lg"

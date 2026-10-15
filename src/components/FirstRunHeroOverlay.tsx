@@ -260,7 +260,7 @@ export function FirstRunHeroOverlay({ businessId, userId, currency, onDone }: Pr
                   </View>
 
                   <Button
-                    label="Enregistrer"
+                    label="Enregistrer ce crédit"
                     onPress={handleSave}
                     loading={saving}
                     disabled={!canSubmit}

@@ -29,7 +29,9 @@ export function NoResultsState({ query, createLabel, onCreate, style }: NoResult
         <Ionicons name="search-outline" size={40} color={palette.textDisabled} />
         <Text variant="h4" style={styles.title}>Aucun résultat pour « {query} »</Text>
         <Text variant="body" color="secondary" style={styles.subtitle}>
-          Vérifiez l'orthographe ou créez-le.
+          {/* Never promise a creation the screen doesn't offer: without a
+              create action the subtitle stops at the spelling check. */}
+          {hasCreate ? "Vérifiez l'orthographe ou créez-le." : "Vérifiez l'orthographe."}
         </Text>
         {hasCreate && (
           <Button
