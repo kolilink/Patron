@@ -5,6 +5,7 @@ import { Animated, InputAccessoryView, Linking, Platform, Pressable, ScrollView,
 import { Ionicons } from '@expo/vector-icons';
 import { haptics } from '@/lib/haptics';
 import { Screen } from '@/src/components/ui/Screen';
+import { LoadingStatus } from '@/src/components/ui/LoadingStatus';
 import { FormSheet } from '@/src/components/ui/FormSheet';
 import { router, useLocalSearchParams } from 'expo-router';
 import { Text } from '@/src/components/ui/Text';
@@ -772,9 +773,9 @@ export default function ClientLedgerScreen() {
           <Text variant="h4" style={{ flex: 1, textAlign: 'center' }} numberOfLines={1}>{displayName}</Text>
           <View style={{ width: 60 }} />
         </View>
-        <Text variant="body" color="secondary" style={{ textAlign: 'center', marginTop: spacing[8] }}>
-          Chargement…
-        </Text>
+        <View style={{ alignItems: 'center', marginTop: spacing[8] }}>
+          <LoadingStatus word="Chargement" color={palette.textSecondary} />
+        </View>
       </Screen>
     );
   }
@@ -810,7 +811,7 @@ export default function ClientLedgerScreen() {
             {/* Plain, calm foreground — this is her own receivable, not a
                 loss; color lives on the age line below, not the amount. */}
             {!paymentsResolved && allPayments.length === 0 ? (
-              <Text style={styles.bannerAmount}>Chargement…</Text>
+              <LoadingStatus word="Chargement" textStyle={styles.bannerAmount} color={palette.textSecondary} />
             ) : (
               <Money style={styles.bannerAmount} amount={totalOwed} currency={currency} />
             )}
