@@ -93,7 +93,7 @@ export function ProductStatsModal({ visible, product, onClose, businessId, curre
 
       {loading ? (
         <View style={{ alignItems: 'center', paddingVertical: 32 }}>
-          <Text variant="body" color="secondary">Chargement…</Text>
+          <LoadingStatus word="Chargement" color={palette.textSecondary} />
         </View>
       ) : stats ? (
         <Card style={{ gap: 0 }}>

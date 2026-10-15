@@ -3,6 +3,7 @@ import { trackEvent } from '@/lib/analytics';
 import { View, StyleSheet } from 'react-native';
 import { router } from 'expo-router';
 import { Text } from '@/src/components/ui/Text';
+import { LoadingStatus } from '@/src/components/ui/LoadingStatus';
 import { useTheme, spacing } from '@/src/theme';
 import type { Palette } from '@/src/theme';
 import { useAuthStore } from '@/stores/auth';
@@ -49,7 +50,7 @@ export function InviteArrival({ inviterId }: { inviterId: string }) {
 
     return (
         <View style={styles.center}>
-            <Text variant="body" color="secondary">Chargement…</Text>
+            <LoadingStatus word="Chargement" color={palette.textSecondary} />
         </View>
     );
 }

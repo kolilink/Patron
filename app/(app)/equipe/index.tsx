@@ -14,7 +14,6 @@ import { AppSheet } from '@/src/components/ui/AppSheet';
 import { SkeletonList } from '@/src/components/ui/SkeletonPlaceholder';
 import { OfflineNotice } from '@/src/components/ui/OfflineNotice';
 import { EmptyState } from '@/src/components/ui/EmptyState';
-import { NoResultsState } from '@/src/components/ui/NoResultsState';
 import { Button } from '@/src/components/ui/Button';
 import { Card } from '@/src/components/ui/Card';
 import { Input } from '@/src/components/ui/Input';
@@ -513,9 +512,7 @@ function MemberDetailSheet({
 
             <View style={[styles.scopeRow, { flexDirection: 'column', alignItems: 'flex-start', gap: spacing[1] }]}>
               <Text variant="caption" color="secondary">Part des bénéfices accumulée</Text>
-              {/* balance is null until loaded — NaN renders « — » via
-                  amountText, never a fake 0 she would believe. */}
-              <Money style={{ fontFamily: FF.bold, fontSize: 22, lineHeight: 30, color: palette.textPrimary }} amount={balance ?? NaN} currency={currency} />
+              <Money style={{ fontFamily: FF.bold, fontSize: 22, lineHeight: 30, color: palette.textPrimary }} amount={balance ?? 0} currency={currency} />
             </View>
 
             {/* Pending payout request */}
@@ -607,7 +604,7 @@ function MemberDetailSheet({
 
             {(!scopeAll || isInvestisseur) && (
               loadingScope ? (
-                <Text variant="caption" color="secondary">Chargement…</Text>
+                <LoadingStatus word="Chargement" variant="caption" color={palette.textSecondary} />
               ) : (
                 scope.map(s => (
                   <AnimatedRow key={s.product_id} id={s.product_id} style={[styles.scopeRow, isInvestisseur && { flexDirection: 'column', alignItems: 'stretch', gap: spacing[3] }]}>
@@ -1128,15 +1125,18 @@ export default function EquipeScreen() {
           <Text variant="body" color="secondary" style={styles.center}>Données non disponibles hors ligne</Text>
         ) : filteredMembres.length === 0 ? (
           search.trim() ? (
-            <NoResultsState query={search} />
+            <View style={styles.empty}>
+              <Ionicons name="search-outline" size={40} color={palette.textDisabled} />
+              <Text variant="body" color="secondary" style={{ marginTop: spacing[3] }}>Aucun résultat pour « {search} »</Text>
+            </View>
           ) : (
-            <EmptyState
-              icon="people-outline"
-              title="Aucun membre pour le moment"
-              subtitle="Invitez un vendeur ou un gérant pour partager le travail"
-              actionLabel="+ Inviter quelqu'un"
-              onAction={() => setShowNewCode(true)}
-            />
+            <View style={styles.empty}>
+              <Text variant="body" color="secondary">Aucun membre pour l'instant</Text>
+              <Text variant="caption" color="secondary" style={{ textAlign: 'center', marginTop: spacing[1] }}>
+                Invitez un vendeur ou un gérant pour partager le travail
+              </Text>
+              <Button label="+ Inviter quelqu'un" size="sm" onPress={() => setShowNewCode(true)} style={{ marginTop: spacing[3] }} />
+            </View>
           )
         ) : (
           // Grouped by role instead of one flat list — who can do what reads
