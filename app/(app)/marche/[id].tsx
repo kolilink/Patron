@@ -10,6 +10,7 @@ import {
   View,
 } from 'react-native';
 import { Screen } from '@/src/components/ui/Screen';
+import { LoadingStatus } from '@/src/components/ui/LoadingStatus';
 import { FormSheet } from '@/src/components/ui/FormSheet';
 import { router, useLocalSearchParams, useFocusEffect } from 'expo-router';
 import { Ionicons } from '@expo/vector-icons';
@@ -409,7 +410,7 @@ export default function PostDetailScreen() {
       <KeyboardAvoidingView style={{ flex: 1, backgroundColor: palette.background }} behavior={Platform.OS === 'ios' ? 'padding' : undefined}>
         {loadingDetail ? (
           <View style={styles.centered}>
-            <Text variant="body" color="secondary">Chargement…</Text>
+            <LoadingStatus word="Chargement" color={palette.textSecondary} />
           </View>
         ) : detailError ? (
           <View style={styles.centered}>

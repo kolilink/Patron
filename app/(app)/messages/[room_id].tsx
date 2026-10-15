@@ -6,6 +6,7 @@ import * as FileSystem from 'expo-file-system/legacy';
 import * as ImagePicker from 'expo-image-picker';
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
 import { Screen } from '@/src/components/ui/Screen';
+import { LoadingStatus } from '@/src/components/ui/LoadingStatus';
 import { FormSheet } from '@/src/components/ui/FormSheet';
 import { router, useLocalSearchParams } from 'expo-router';
 import { Ionicons } from '@expo/vector-icons';
@@ -495,7 +496,7 @@ export default function DmChatScreen() {
         {/* Message list */}
         {loading ? (
           <View style={styles.empty}>
-            <Text variant="body" color="secondary">Chargement…</Text>
+            <LoadingStatus word="Chargement" color={palette.textSecondary} />
           </View>
         ) : loadError ? (
           <View style={styles.empty}>
