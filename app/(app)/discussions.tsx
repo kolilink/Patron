@@ -463,7 +463,7 @@ export default function DiscussionsScreen() {
 
   // ─── Partnerships store (Amis tab) ─────────────────────────────────────────
   const {
-    partners, pending: partnerPending,
+    partners, pending: partnerPending, partnersFetchedFor,
     loading: partnersLoading, error: partnersError,
     inviteCode, inviteCodeLoading,
     offline: partnersOffline,
@@ -473,7 +473,7 @@ export default function DiscussionsScreen() {
 
   // ─── Market store (Le Marché forum — independent) ─────────────────────────
   const {
-    posts, loading: marketLoading, creating, error: marketError,
+    posts, postsFetchedFor, loading: marketLoading, creating, error: marketError,
     fetchPosts, createPost, prependPost, markVisited,
     likedPostIds, lastVisitedAt, toggleLike,
     userLevel, offline: marketOffline,
@@ -1369,7 +1369,7 @@ export default function DiscussionsScreen() {
                 </Pressable>
               </View>
 
-              {partnersLoading && partners.length === 0 && partnerPending.length === 0 ? (
+              {(partnersLoading || partnersFetchedFor !== businessId) && partners.length === 0 && partnerPending.length === 0 ? (
                 <View style={styles.empty}>
                   <Text variant="body" color="secondary">Chargement…</Text>
                 </View>
@@ -1483,7 +1483,7 @@ export default function DiscussionsScreen() {
             /* ── Le Marché (forum) ── */
             <>
               {/* Post list */}
-              {marketLoading && posts.length === 0 ? (
+              {(marketLoading || postsFetchedFor !== userId) && posts.length === 0 ? (
                 <SkeletonList count={5} />
               ) : filteredPosts.length === 0 ? (
                 marketOffline && posts.length === 0 ? (
