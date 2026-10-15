@@ -1396,7 +1396,7 @@ export default function VentesScreen() {
               Aucune vente ne correspond à ce filtre.
             </Text>
             <Pressable onPress={() => setFilter('all')} hitSlop={8} style={{ marginTop: spacing[3] }}>
-              <Text variant="label" style={{ color: palette.primary }}>Effacer</Text>
+              <Text variant="label" style={{ color: palette.primary }}>Voir toutes les ventes</Text>
             </Pressable>
           </View>
         )
