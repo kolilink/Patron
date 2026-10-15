@@ -270,11 +270,12 @@ describe('offline create drains with the same UUID', () => {
 void drainQueue;
 
 describe('between adds (the rapid loop)', () => {
-  it('quantity is sticky; price, name, fees, supplier are cleared; Modèles resets to off', () => {
+  it('quantity restarts at 1; price, name, fees, supplier are cleared; Modèles resets to off', () => {
     let s = st({ name: 'Riz', price: '5 000', qty: '7', purchasePrice: '1 000', fees: '500', supplierId: 'sup' });
     s = setModels(s, true);
     const next = afterAdd(s);
-    expect(next.qty).toBe('7');
+    // The next product must never inherit the previous product's stock count.
+    expect(next.qty).toBe('1');
     expect(next).toMatchObject({ name: '', price: '', purchasePrice: '', fees: '', supplierId: '', models: false, variants: [] });
   });
   it('the price is NEVER carried over, however many adds', () => {

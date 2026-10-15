@@ -1,4 +1,4 @@
-import { useEffect, useMemo, useRef, useState } from 'react';
+import { useEffect, useMemo, useState } from 'react';
 import { MoneyText } from '@/src/components/ui/Money';
 import { Pressable, ScrollView, StyleSheet, View } from 'react-native';
 import { Image } from 'expo-image';
@@ -17,10 +17,11 @@ import { haptics } from '@/lib/haptics';
 import { formatAmount, formatAmountInput } from '@/src/utils/format';
 import { formatDate } from '@/src/utils/dates';
 import {
-  pressKey, keypadValue, recentTemplates, searchProducts, rankLinkedProducts, pinRecents,
+  pressKey, keypadValue, recentTemplates, searchProducts, browseProducts, rankLinkedProducts, pinRecents,
   type KeypadKey, type RepeatTemplate,
   showProductRow,
 } from '@/src/utils/expenseUtils';
+import { LoadingStatus } from '@/src/components/ui/LoadingStatus';
 import type { CreateExpenseData } from '@/stores/expenses';
 import type { Expense } from '@/src/types';
 import { Money } from '@/src/components/ui/Money';
@@ -35,6 +36,8 @@ const yesterdayIso = () => { const d = new Date(); d.setDate(d.getDate() - 1); r
 
 const GENERIC_DESCRIPTION = 'Dépense';
 const RECENTS_LIMIT = 6;
+/** Browse list cap: past this, the search box is faster than the scroll (weak phones). */
+const BROWSE_LIMIT = 50;
 
 /** What the form's note field starts with when editing (legacy rows kept their text in `description`). */
 function noteOf(e: Expense | null): string {
@@ -80,22 +83,25 @@ export function ExpenseSheet(props: Props) {
   const [dateMode, setDateMode] = useState<'hier' | 'aujourdhui' | 'autre'>('aujourdhui');
   const [picking, setPicking] = useState(false);
   const [query, setQuery] = useState('');
-  const [saved, setSaved] = useState(false);
   const [pinned, setPinned] = useState<string[]>([]);
-  const closing = useRef(false);
 
   const { products, fetchProducts, productsFetchedFor } = useProductStore();
-  const activeProducts = useMemo(() => products.filter(p => !p.archived), [products]);
+  // The store is cache-first and holds ONE business at a time: until it has resolved
+  // for THIS business, its rows may be another business's catalogue — never present
+  // them here as this business's products.
+  const productsResolved = productsFetchedFor === businessId;
+  const activeProducts = useMemo(
+    () => (productsResolved ? products.filter(p => !p.archived) : []),
+    [products, productsResolved],
+  );
 
   useEffect(() => {
-    if (visible && products.length === 0 && businessId) void fetchProducts(businessId, userId);
-  }, [visible, businessId]);
+    if (visible && businessId && productsFetchedFor !== businessId) void fetchProducts(businessId, userId);
+  }, [visible, businessId, productsFetchedFor]);
 
   // Reset whenever the sheet (re)opens or switches record/mode.
   useEffect(() => {
     if (!visible) return;
-    closing.current = false;
-    setSaved(false);
     setPicking(false);
     setQuery('');
     const e = mode === 'add' ? null : expense;
@@ -127,6 +133,7 @@ export function ExpenseSheet(props: Props) {
   const amount = keypadValue(raw);
   const templates = useMemo(() => recentTemplates(expenses), [expenses]);
   const results = useMemo(() => searchProducts(activeProducts, query, 20), [activeProducts, query]);
+  const browse = useMemo(() => browseProducts(activeProducts), [activeProducts]);
   const pinnedProducts = useMemo(
     () => pinned.map(id => activeProducts.find(p => p.id === id)).filter((p): p is NonNullable<typeof p> => !!p),
     [pinned, activeProducts],
@@ -151,7 +158,7 @@ export function ExpenseSheet(props: Props) {
   };
 
   const handleSave = async () => {
-    if (amount <= 0 || saving || saved) return;
+    if (amount <= 0 || saving) return;
     const ok = await onSave(
       {
         amount, category: null, due_date: null, date,
@@ -162,10 +169,10 @@ export function ExpenseSheet(props: Props) {
       mode === 'edit' && expense ? expense.id : null,
     );
     if (!ok) return;
-    setSaved(true);
     haptics.success();
-    // ~300ms: let the check on the button register, then close.
-    setTimeout(() => { if (!closing.current) { closing.current = true; onClose(); } }, 300);
+    // The confirmation is the host's toast — the shared floating pill with its
+    // « Annuler ». The sheet itself just closes; no in-button morph, no delay.
+    onClose();
   };
 
   // ── Detail ─────────────────────────────────────────────────────────────────
@@ -235,14 +242,37 @@ export function ExpenseSheet(props: Props) {
           returnKeyType="search"
         />
         {query.trim() === '' ? (
-          pinnedProducts.length > 0 ? (
-            <View style={{ gap: spacing[2] }}>
-              <Text variant="label" color="secondary">Récents</Text>
-              {pinnedProducts.map(p => (
-                <ProductRow key={p.id} name={p.name} onPress={() => pickProduct(p.id, p.name)} styles={styles} />
-              ))}
+          !productsResolved ? (
+            <View style={{ alignItems: 'center', paddingTop: spacing[4] }}>
+              <LoadingStatus word="Chargement" color={palette.textSecondary} />
             </View>
-          ) : null
+          ) : browse.length === 0 ? (
+            <View style={{ paddingTop: spacing[4] }}>
+              <Text variant="body" style={{ textAlign: 'center' }}>Aucun produit pour le moment</Text>
+            </View>
+          ) : (
+            <View style={{ gap: spacing[4] }}>
+              {pinnedProducts.length > 0 ? (
+                <View style={{ gap: spacing[2] }}>
+                  <Text variant="label" color="secondary">Récents</Text>
+                  {pinnedProducts.map(p => (
+                    <ProductRow key={p.id} name={p.name} onPress={() => pickProduct(p.id, p.name)} styles={styles} />
+                  ))}
+                </View>
+              ) : null}
+              <View style={{ gap: spacing[2] }}>
+                <Text variant="label" color="secondary">Tous les produits</Text>
+                {browse.slice(0, BROWSE_LIMIT).map(p => (
+                  <ProductRow key={p.id} name={p.name} onPress={() => pickProduct(p.id, p.name)} styles={styles} />
+                ))}
+                {browse.length > BROWSE_LIMIT ? (
+                  <Text variant="bodySmall" color="secondary" style={{ textAlign: 'center' }}>
+                    {`… et ${browse.length - BROWSE_LIMIT} autres — utilisez la recherche`}
+                  </Text>
+                ) : null}
+              </View>
+            </View>
+          )
         ) : results.length > 0 ? (
           <View style={{ gap: spacing[2] }}>
             {results.map(p => (
@@ -271,9 +301,8 @@ export function ExpenseSheet(props: Props) {
       footer={
         <View style={styles.footer}>
           <Button
-            label={saved ? 'Enregistré' : 'Enregistrer'}
+            label="Enregistrer"
             loadingLabel="Enregistrement"
-            icon={saved ? <Ionicons name="checkmark" size={20} color={palette.textInverse} /> : undefined}
             onPress={handleSave}
             loading={saving}
             disabled={amount <= 0}

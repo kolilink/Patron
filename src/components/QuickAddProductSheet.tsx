@@ -320,7 +320,8 @@ export function QuickAddProductSheet({
   };
 
   // The rapid loop: the sheet stays open, fields fade-clear, Nom is focused again (keyboard never
-  // dismisses). Quantité is sticky; everything else — notably the price — is cleared.
+  // dismisses). Every field restarts fresh — quantity back to 1, price cleared: the next product
+  // must never inherit the previous product's numbers.
   const resetForNext = () => {
     const apply = () => {
       setS(prev => afterAdd(prev));

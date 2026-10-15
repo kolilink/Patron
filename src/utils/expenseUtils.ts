@@ -148,6 +148,11 @@ export function searchProducts<T extends { id: string; name: string }>(products:
   return [...starts.sort(byName), ...contains.sort(byName)].slice(0, limit);
 }
 
+/** The full catalogue for browsing (no query typed): alphabetical, French collation. Never mutates the input. */
+export function browseProducts<T extends { id: string; name: string }>(products: T[]): T[] {
+  return [...products].sort((a, b) => a.name.localeCompare(b.name, 'fr'));
+}
+
 /** Product ids ranked by how often they are linked to a live expense. */
 export function rankLinkedProducts(expenses: Expense[]): string[] {
   const counts = new Map<string, number>();

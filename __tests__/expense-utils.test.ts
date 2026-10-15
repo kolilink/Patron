@@ -1,6 +1,6 @@
 import {
   pressKey, keypadValue, dayLabel, groupByMonthAndDay, sumApproved, recentTemplates,
-  searchProducts, rankLinkedProducts, pinRecents,
+  searchProducts, browseProducts, rankLinkedProducts, pinRecents,
 } from '@/src/utils/expenseUtils';
 import type { Expense } from '@/src/types';
 
@@ -101,6 +101,12 @@ describe('product search / récents', () => {
   });
   it('no match → empty (UI shows "Aucun produit")', () => {
     expect(searchProducts(products, 'zzz')).toEqual([]);
+  });
+  it('browse (no query typed) lists the whole catalogue alphabetically — the picker is never blank when products exist', () => {
+    expect(browseProducts(products).map(p => p.id)).toEqual(['4', '1', '2', '3']);
+    expect(browseProducts([])).toEqual([]);
+    // input order is not mutated
+    expect(products.map(p => p.id)).toEqual(['1', '2', '3', '4']);
   });
   it('ranks by link count and pins order', () => {
     const rows = [exp({ product_id: 'a' }), exp({ product_id: 'b' }), exp({ product_id: 'b' }), exp({ product_id: null })];
