@@ -10,8 +10,8 @@ import { EmptyState } from '@/src/components/ui/EmptyState';
 import { ExpenseRow } from '@/src/components/expenses/ExpenseRow';
 import { ExpenseSheet, type SheetMode } from '@/src/components/expenses/ExpenseSheet';
 import { CountUpAmount } from '@/src/components/expenses/CountUpAmount';
-import { UndoBar, type UndoBarState } from '@/src/components/expenses/UndoBar';
 import { ReceiptPhotoChip } from '@/src/components/expenses/ReceiptPhotoChip';
+import { toast } from '@/stores/toast';
 import { useTheme, spacing, radius } from '@/src/theme';
 import type { Palette } from '@/src/theme';
 import { useAuthStore } from '@/stores/auth';
@@ -25,6 +25,9 @@ import { expenseSubtitle } from '@/src/components/expenses/ExpenseRow';
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
 
 // ─── Main Screen ──────────────────────────────────────────────────────────────
+
+/** How long the « Annuler » on a save/delete confirmation stays available. */
+const EXPENSE_UNDO_MS = 10_000;
 
 type Sheet = { mode: SheetMode; id: string | null } | null;
 
@@ -46,13 +49,12 @@ export default function DepensesScreen() {
   const lastSyncedAt = useSyncStore(s => s.lastSyncedAt);
 
   const [sheet, setSheet] = useState<Sheet>(null);
-  const [undoBar, setUndoBar] = useState<UndoBarState | null>(null);
   const [photoChip, setPhotoChip] = useState<string | null>(null);
   const [newId, setNewId] = useState<string | null>(null);
   const [openMonths, setOpenMonths] = useState<Record<string, boolean>>({});
-  const barSeq = useRef(0);
   // After the undo window closes on a fresh create, offer the receipt photo.
-  const pendingPhotoFor = useRef<{ barId: number; expenseId: string } | null>(null);
+  const pendingPhotoFor = useRef<{ expenseId: string } | null>(null);
+  const photoTimer = useRef<ReturnType<typeof setTimeout> | null>(null);
 
   useEffect(() => {
     if (businessId) fetchExpenses(businessId);
@@ -76,20 +78,42 @@ export default function DepensesScreen() {
     [expenses],
   );
 
-  const showBar = useCallback((message: string, onUndo: () => void | Promise<void>, photoFor?: string) => {
-    const id = ++barSeq.current;
-    pendingPhotoFor.current = photoFor ? { barId: id, expenseId: photoFor } : null;
-    setUndoBar({ id, text: message, onUndo });
+  const clearPendingPhoto = useCallback(() => {
+    if (photoTimer.current) clearTimeout(photoTimer.current);
+    photoTimer.current = null;
+    pendingPhotoFor.current = null;
   }, []);
 
-  const onBarExpire = useCallback((id: number) => {
-    setUndoBar(cur => (cur && cur.id === id ? null : cur));
-    const p = pendingPhotoFor.current;
-    if (p && p.barId === id) {
-      pendingPhotoFor.current = null;
-      setPhotoChip(p.expenseId);
+  // Confirmations ride the shared toast — the floating pill designed for the whole
+  // app: the result in words + a real « Annuler » for the action window. On a fresh
+  // create, when that window closes WITHOUT an undo, the receipt-photo offer takes
+  // the pill's place — and only if the expense still exists by then (an undo, or a
+  // delete from elsewhere, must never resurrect the offer for a gone expense).
+  const showUndoToast = useCallback((message: string, onUndo: () => void | Promise<void>, photoFor?: string) => {
+    clearPendingPhoto();
+    if (photoFor) {
+      pendingPhotoFor.current = { expenseId: photoFor };
+      photoTimer.current = setTimeout(() => {
+        photoTimer.current = null;
+        const p = pendingPhotoFor.current;
+        pendingPhotoFor.current = null;
+        if (!p) return;
+        if (!useExpensesStore.getState().expenses.some(e => e.id === p.expenseId)) return;
+        setPhotoChip(p.expenseId);
+      }, EXPENSE_UNDO_MS);
     }
-  }, []);
+    toast.show({
+      message,
+      tone: 'success',
+      action: {
+        label: 'Annuler',
+        windowMs: EXPENSE_UNDO_MS,
+        run: async () => { clearPendingPhoto(); await onUndo(); },
+      },
+    });
+  }, [clearPendingPhoto]);
+
+  useEffect(() => () => clearPendingPhoto(), [clearPendingPhoto]);
 
   const barLabel = (e: Expense | null, data: CreateExpenseData) => {
     const detail = e ? expenseSubtitle(e) : (data.note ?? '');
@@ -106,7 +130,7 @@ export default function DepensesScreen() {
           amount: prev.amount, description: prev.description, category: prev.category, date: prev.date,
           due_date: prev.due_date, note: prev.note, product_id: prev.product_id ?? null,
         };
-        showBar('Dépense modifiée', async () => { await updateExpense(editingId, businessId, prior); });
+        showUndoToast('Dépense modifiée', async () => { await updateExpense(editingId, businessId, prior); });
       }
       return true;
     }
@@ -115,12 +139,11 @@ export default function DepensesScreen() {
     setNewId(id);
     // Same code path as a delete: Annuler soft-deletes the row just created.
     const productLine = useExpensesStore.getState().expenses.find(e => e.id === id);
-    showBar(barLabel(productLine ?? null, data), async () => {
-      pendingPhotoFor.current = null;
+    showUndoToast(barLabel(productLine ?? null, data), async () => {
       await deleteExpense(id, businessId);
     }, id);
     return true;
-  }, [expenses, businessId, userId, isManager, createExpense, updateExpense, deleteExpense, showBar]);
+  }, [expenses, businessId, userId, isManager, createExpense, updateExpense, deleteExpense, showUndoToast]);
 
   const handleDelete = useCallback(async (e: Expense) => {
     setSheet(null);
@@ -128,8 +151,9 @@ export default function DepensesScreen() {
     if (!ok) { haptics.error(); return; }
     haptics.tap();
     if (photoChip === e.id) setPhotoChip(null);
-    showBar('Dépense supprimée', async () => { await restoreExpense(e.id, businessId); });
-  }, [businessId, deleteExpense, restoreExpense, showBar, photoChip]);
+    if (pendingPhotoFor.current?.expenseId === e.id) clearPendingPhoto();
+    showUndoToast('Dépense supprimée', async () => { await restoreExpense(e.id, businessId); });
+  }, [businessId, deleteExpense, restoreExpense, showUndoToast, photoChip, clearPendingPhoto]);
 
   const handleApprove = useCallback(async (e: Expense) => {
     setSheet(null);
@@ -257,7 +281,7 @@ export default function DepensesScreen() {
         </View>
       )}
 
-      {photoChip && !undoBar ? (
+      {photoChip ? (
         <View style={[styles.chipWrap, { bottom: insets.bottom + spacing[6] }]} pointerEvents="box-none">
           <ReceiptPhotoChip
             expenseId={photoChip}
@@ -268,8 +292,6 @@ export default function DepensesScreen() {
           />
         </View>
       ) : null}
-
-      <UndoBar state={undoBar} onExpire={onBarExpire} />
     </Screen>
   );
 }
