@@ -26,6 +26,7 @@ import Animated, {
 } from 'react-native-reanimated';
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
 import { Screen } from '@/src/components/ui/Screen';
+import { LoadingStatus } from '@/src/components/ui/LoadingStatus';
 import { FormSheet } from '@/src/components/ui/FormSheet';
 import { EmptyState } from '@/src/components/ui/EmptyState';
 import { router, useFocusEffect, useLocalSearchParams } from 'expo-router';
@@ -1162,9 +1163,11 @@ export default function DiscussionsScreen() {
                 <SkeletonList count={6} />
               ) : !boutiqueRoom ? (
                 <View style={styles.empty}>
-                  <Text variant="body" color="secondary">
-                    {chatOffline ? 'Données non disponibles hors ligne' : 'Chargement…'}
-                  </Text>
+                  {chatOffline ? (
+                    <Text variant="body" color="secondary">Données non disponibles hors ligne</Text>
+                  ) : (
+                    <LoadingStatus word="Chargement" color={palette.textSecondary} />
+                  )}
                 </View>
               ) : listItems.length === 0 ? (
                 <View style={styles.empty}>
@@ -1371,7 +1374,7 @@ export default function DiscussionsScreen() {
 
               {partnersLoading && partners.length === 0 && partnerPending.length === 0 ? (
                 <View style={styles.empty}>
-                  <Text variant="body" color="secondary">Chargement…</Text>
+                  <LoadingStatus word="Chargement" color={palette.textSecondary} />
                 </View>
               ) : partners.length === 0 && partnerPending.length === 0 ? (
                 partnersOffline ? (
