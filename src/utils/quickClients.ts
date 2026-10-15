@@ -1,1 +1,116 @@
-Ly8gVGhlIHF1aWNrLWNsaWVudCBwaWNrZXIncyBsaXN0LCBidWlsdCBmcm9tIExPQ0FMIHRydXRoIGZpcnN0OgovLyAgIOKAoiBzZXJ2ZXIgIOKAlCB0aGUgbGFzdCByYW5rZWQgY2xpZW50cyBsaXN0IHNlZW4gb25saW5lIChvciB0aGUgbGl2ZSBvbmUpOwovLyAgIOKAoiBzYWxlcyAgIOKAlCBjdXN0b21lciBuYW1lcyBvbiB0aGUgc2FsZXMgdGhlIHBob25lIGFscmVhZHkgaG9sZHMgKGNhY2hlICsgdGhlCi8vICAgICAgICAgICAgICAgb3V0Ym94IG92ZXJsYXkpLCB3aXRoIHdoZW4gdGhleSBsYXN0IGJvdWdodC9vd2VkOwovLyAgIOKAoiBwZW5kaW5nIOKAlCBuYW1lcyByZWNvcmRlZCBPRkZMSU5FIHRoYXQgaGF2ZSBub3Qgc3luY2VkIHlldCAoc3RpbGwgaW4gdGhlIG91dGJveCkuCi8vIEEgbmFtZSBqdXN0IHJlY29yZGVkIG11c3QgYmUgaW4gdGhlIHBpY2tlciBpbnN0YW50bHkgYWZ0ZXIgIuKckyBBam91dMOpIiDigJQgYmVmb3JlCi8vIGFueSBuZXR3b3JrIHJvdW5kIHRyaXAsIGFuZCB3aXRoIG5vIG5ldHdvcmsgYXQgYWxsLiBNZXJnZWQgYnkgbm9ybWFsaXplZCBuYW1lIHNvCi8vIGEgY2xpZW50IHJlY29yZGVkIG9mZmxpbmUsIHRoZW4gc3luY2VkLCBuZXZlciBhcHBlYXJzIHR3aWNlLgpleHBvcnQgaW50ZXJmYWNlIFF1aWNrQ2xpZW50IHsKICBpZD86IHN0cmluZzsKICBuYW1lOiBzdHJpbmc7CiAgcGhvbmU/OiBzdHJpbmcgfCBudWxsOwp9CgpleHBvcnQgaW50ZXJmYWNlIE5hbWVBY3Rpdml0eSB7CiAgbmFtZTogc3RyaW5nOwogIC8qKiBJU08gdGltZXN0YW1wIG9mIHRoZSBhY3Rpdml0eSAoc2FsZSBjcmVhdGVkIC8gb3AgcXVldWVkKS4gKi8KICBhdDogc3RyaW5nOwogIGNsaWVudElkPzogc3RyaW5nIHwgbnVsbDsKfQoKZXhwb3J0IGNvbnN0IG5vcm1hbGl6ZUNsaWVudE5hbWUgPSAobjogc3RyaW5nKTogc3RyaW5nID0+IG4udHJpbSgpLnJlcGxhY2UoL1xzKy9nLCAnICcpLnRvTG93ZXJDYXNlKCk7CgpleHBvcnQgZnVuY3Rpb24gbWVyZ2VRdWlja0NsaWVudHMoYXJnczogewogIHNlcnZlcjogUXVpY2tDbGllbnRbXTsKICBzYWxlczogTmFtZUFjdGl2aXR5W107CiAgcGVuZGluZzogTmFtZUFjdGl2aXR5W107Cn0pOiBRdWlja0NsaWVudFtdIHsKICBjb25zdCBieUtleSA9IG5ldyBNYXA8c3RyaW5nLCBRdWlja0NsaWVudCAmIHsgX2F0OiBzdHJpbmc7IF9vcmRlcjogbnVtYmVyIH0+KCk7CiAgYXJncy5zZXJ2ZXIuZm9yRWFjaCgoYywgaSkgPT4gewogICAgY29uc3Qga2V5ID0gbm9ybWFsaXplQ2xpZW50TmFtZShjLm5hbWUpOwogICAgaWYgKGtleSAmJiAhYnlLZXkuaGFzKGtleSkpIGJ5S2V5LnNldChrZXksIHsgLi4uYywgX2F0OiAnJywgX29yZGVyOiBpIH0pOwogIH0pOwogIGNvbnN0IG5vdGUgPSAoYTogTmFtZUFjdGl2aXR5KSA9PiB7CiAgICBjb25zdCBrZXkgPSBub3JtYWxpemVDbGllbnROYW1lKGEubmFtZSk7CiAgICBpZiAoIWtleSkgcmV0dXJuOwogICAgY29uc3QgY3VyID0gYnlLZXkuZ2V0KGtleSk7CiAgICBpZiAoY3VyKSB7CiAgICAgIGlmIChhLmF0ID4gY3VyLl9hdCkgY3VyLl9hdCA9IGEuYXQ7CiAgICAgIGlmICghY3VyLmlkICYmIGEuY2xpZW50SWQpIGN1ci5pZCA9IGEuY2xpZW50SWQ7CiAgICB9IGVsc2UgewogICAgICBieUtleS5zZXQoa2V5LCB7IGlkOiBhLmNsaWVudElkID8/IHVuZGVmaW5lZCwgbmFtZTogYS5uYW1lLnRyaW0oKS5yZXBsYWNlKC9ccysvZywgJyAnKSwgX2F0OiBhLmF0LCBfb3JkZXI6IE51bWJlci5NQVhfU0FGRV9JTlRFR0VSIH0pOwogICAgfQogIH07CiAgYXJncy5zYWxlcy5mb3JFYWNoKG5vdGUpOwogIGFyZ3MucGVuZGluZy5mb3JFYWNoKG5vdGUpOwogIHJldHVybiBbLi4uYnlLZXkudmFsdWVzKCldCiAgICAuc29ydCgoYSwgYikgPT4gewogICAgICBpZiAoYS5fYXQgJiYgYi5fYXQpIHJldHVybiBhLl9hdCA8IGIuX2F0ID8gMSA6IGEuX2F0ID4gYi5fYXQgPyAtMSA6IGEuX29yZGVyIC0gYi5fb3JkZXI7CiAgICAgIGlmIChhLl9hdCkgcmV0dXJuIC0xOwogICAgICBpZiAoYi5fYXQpIHJldHVybiAxOwogICAgICByZXR1cm4gYS5fb3JkZXIgLSBiLl9vcmRlciB8fCBhLm5hbWUubG9jYWxlQ29tcGFyZShiLm5hbWUpOwogICAgfSkKICAgIC5tYXAoKHsgX2F0LCBfb3JkZXIsIC4uLmMgfSkgPT4gYyk7Cn0KCi8qKiBDdXN0b21lciBuYW1lcyBjYXJyaWVkIGJ5IHRoZSBzYWxlcyBsaXN0IChjcmVkaXQvbGVkZ2VyIGN1c3RvbWVycyBvbmx5IG1hdHRlciwgYnV0IGFueSBuYW1lZCBidXllciBpcyBhIGNsaWVudCkuICovCmV4cG9ydCBmdW5jdGlvbiBzYWxlc05hbWVBY3Rpdml0eShzYWxlczogeyBjdXN0b21lcl9uYW1lPzogc3RyaW5nIHwgbnVsbDsgY2xpZW50X2lkPzogc3RyaW5nIHwgbnVsbDsgY3JlYXRlZF9hdDogc3RyaW5nOyBzdGF0dXM/OiBzdHJpbmcgfVtdKTogTmFtZUFjdGl2aXR5W10gewogIGNvbnN0IG91dDogTmFtZUFjdGl2aXR5W10gPSBbXTsKICBmb3IgKGNvbnN0IHMgb2Ygc2FsZXMpIHsKICAgIGlmICghcy5jdXN0b21lcl9uYW1lIHx8IHMuc3RhdHVzID09PSAnYW5udWxlJykgY29udGludWU7CiAgICBvdXQucHVzaCh7IG5hbWU6IHMuY3VzdG9tZXJfbmFtZSwgYXQ6IHMuY3JlYXRlZF9hdCwgY2xpZW50SWQ6IHMuY2xpZW50X2lkID8/IG51bGwgfSk7CiAgfQogIHJldHVybiBvdXQ7Cn0KCi8qKiBOYW1lcyBjYXJyaWVkIGJ5IHN0aWxsLXF1ZXVlZCBvcHMgKG9mZmxpbmUgY3JlZGl0cywgY3JlZGl0IHNhbGVzLCBwYXltZW50cykuICovCmV4cG9ydCBmdW5jdGlvbiBwZW5kaW5nTmFtZUFjdGl2aXR5KAogIG9wczogeyBvcGVyYXRpb246IHN0cmluZzsgcGF5bG9hZDogUmVjb3JkPHN0cmluZywgdW5rbm93bj47IHF1ZXVlZEF0OiBzdHJpbmcgfCBudWxsOyBzdGF0dXM/OiBzdHJpbmcgfVtdLAogIGJ1c2luZXNzSWQ6IHN0cmluZywKKTogTmFtZUFjdGl2aXR5W10gewogIGNvbnN0IG91dDogTmFtZUFjdGl2aXR5W10gPSBbXTsKICBmb3IgKGNvbnN0IG9wIG9mIG9wcykgewogICAgaWYgKG9wLnN0YXR1cyA9PT0gJ2ZhaWxlZF9wZXJtYW5lbnQnIHx8IG9wLnN0YXR1cyA9PT0gJ2ZhaWxlZF9jb3JydXB0JykgY29udGludWU7CiAgICBpZiAob3Aub3BlcmF0aW9uICE9PSAnc3VibWl0X2Nhcm5ldF9kZWJ0JyAmJiBvcC5vcGVyYXRpb24gIT09ICdzdWJtaXRfc2FsZScgJiYgb3Aub3BlcmF0aW9uICE9PSAncmVjb3JkX2NsaWVudF9wYXltZW50JykgY29udGludWU7CiAgICBjb25zdCBiaXogPSBvcC5wYXlsb2FkLnBfYnVzaW5lc3NfaWQgIT0gbnVsbCA/IFN0cmluZyhvcC5wYXlsb2FkLnBfYnVzaW5lc3NfaWQpIDogbnVsbDsKICAgIGlmIChiaXogJiYgYml6ICE9PSBidXNpbmVzc0lkKSBjb250aW51ZTsKICAgIGNvbnN0IG5hbWUgPSBvcC5wYXlsb2FkLnBfY3VzdG9tZXJfbmFtZTsKICAgIGlmICh0eXBlb2YgbmFtZSAhPT0gJ3N0cmluZycgfHwgIW5hbWUudHJpbSgpKSBjb250aW51ZTsKICAgIG91dC5wdXNoKHsgbmFtZSwgYXQ6IG9wLnF1ZXVlZEF0ID8/IG5ldyBEYXRlKCkudG9JU09TdHJpbmcoKSwgY2xpZW50SWQ6IChvcC5wYXlsb2FkLnBfY2xpZW50X2lkIGFzIHN0cmluZyB8IG51bGwpID8/IG51bGwgfSk7CiAgfQogIHJldHVybiBvdXQ7Cn0KCi8qKgogKiBTZXNzaW9uLWZyb3plbiBwaWNrZXIgb3JkZXIuIFRoZSByYW5raW5nIGFib3ZlIHJlLXNvcnRzIHRoZSBpbnN0YW50IGEgbmV3CiAqIGNyZWRpdCBsYW5kcyAodGhlIGNsaWVudCBqdXN0IHNlcnZlZCBqdW1wcyB0byB0aGUgZnJvbnQpIOKAlCBjb3JyZWN0IGZvciB0aGUKICogTkVYVCBzZXNzaW9uLCBkaXNvcmllbnRpbmcgaW5zaWRlIHRoZSBjdXJyZW50IG9uZTogZmFjZXMgc2hlIG5hdmlnYXRlcyBieQogKiBwbGFjZSBzaWxlbnRseSB0cmFkZSBjZWxscywgd2hpY2ggcmVhZHMgYXMgYSBidWcsIG5vdCBhcyBhIHJhbmtpbmcuCiAqCiAqIFNvIGEgY2FwdHVyZSBzZXNzaW9uIHBpbnMgdGhlIG9yZGVyIGl0IG9wZW5lZCB3aXRoLiBOYW1lcyB0aGUgcmFua2luZyBzdGlsbAogKiByZXR1cm5zIGtlZXAgdGhlaXIgcGlubmVkIHBsYWNlcyAod2l0aCB0aGVpciBmcmVzaGVzdCByZWNvcmQg4oCUIGEgbmV3IGlkIG9yCiAqIHBob25lIGZsb3dzIHRocm91Z2gpLCBuYW1lcyB0aGF0IHZhbmlzaGVkIGRyb3Agb3V0LCBhbmQgbmFtZXMgdGhhdCBhcmUgbmV3CiAqIHNpbmNlIHRoZSBwaW4gKGEgY2xpZW50IGp1c3QgcmVjb3JkZWQpIGFwcGVuZCBhdCB0aGUgZW5kIGluIHJhbmtpbmcgb3JkZXIKICogaW5zdGVhZCBvZiB0ZWxlcG9ydGluZyB0byB0aGUgZnJvbnQuIFRoZSByZS1yYW5rIGxhbmRzIHdoZW4gdGhlIHNlc3Npb24KICogZW5kcyBhbmQgdGhlIHBpY2tlciBuZXh0IG9wZW5zLgogKi8KZXhwb3J0IGZ1bmN0aW9uIGZyZWV6ZUdyaWRPcmRlcihmcm96ZW46IFF1aWNrQ2xpZW50W10sIGluY29taW5nOiBRdWlja0NsaWVudFtdKTogUXVpY2tDbGllbnRbXSB7CiAgY29uc3QgYnlLZXkgPSBuZXcgTWFwPHN0cmluZywgUXVpY2tDbGllbnQ+KCk7CiAgZm9yIChjb25zdCBjIG9mIGluY29taW5nKSB7CiAgICBjb25zdCBrZXkgPSBub3JtYWxpemVDbGllbnROYW1lKGMubmFtZSk7CiAgICBpZiAoa2V5ICYmICFieUtleS5oYXMoa2V5KSkgYnlLZXkuc2V0KGtleSwgYyk7CiAgfQogIGNvbnN0IG91dDogUXVpY2tDbGllbnRbXSA9IFtdOwogIGNvbnN0IHVzZWQgPSBuZXcgU2V0PHN0cmluZz4oKTsKICBmb3IgKGNvbnN0IGYgb2YgZnJvemVuKSB7CiAgICBjb25zdCBrZXkgPSBub3JtYWxpemVDbGllbnROYW1lKGYubmFtZSk7CiAgICBjb25zdCBjdXIgPSBrZXkgPyBieUtleS5nZXQoa2V5KSA6IHVuZGVmaW5lZDsKICAgIGlmIChjdXIgJiYgIXVzZWQuaGFzKGtleSkpIHsgb3V0LnB1c2goY3VyKTsgdXNlZC5hZGQoa2V5KTsgfQogIH0KICBmb3IgKGNvbnN0IGMgb2YgaW5jb21pbmcpIHsKICAgIGNvbnN0IGtleSA9IG5vcm1hbGl6ZUNsaWVudE5hbWUoYy5uYW1lKTsKICAgIGlmIChrZXkgJiYgIXVzZWQuaGFzKGtleSkpIHsgb3V0LnB1c2goYyk7IHVzZWQuYWRkKGtleSk7IH0KICB9CiAgcmV0dXJuIG91dDsKfQo=
+// The quick-client picker's list, built from LOCAL truth first:
+//   • server  — the last ranked clients list seen online (or the live one);
+//   • sales   — customer names on the sales the phone already holds (cache + the
+//               outbox overlay), with when they last bought/owed;
+//   • pending — names recorded OFFLINE that have not synced yet (still in the outbox).
+// A name just recorded must be in the picker instantly after "✓ Ajouté" — before
+// any network round trip, and with no network at all. Merged by normalized name so
+// a client recorded offline, then synced, never appears twice.
+export interface QuickClient {
+  id?: string;
+  name: string;
+  phone?: string | null;
+}
+
+export interface NameActivity {
+  name: string;
+  /** ISO timestamp of the activity (sale created / op queued). */
+  at: string;
+  clientId?: string | null;
+}
+
+export const normalizeClientName = (n: string): string => n.trim().replace(/\s+/g, ' ').toLowerCase();
+
+export function mergeQuickClients(args: {
+  server: QuickClient[];
+  sales: NameActivity[];
+  pending: NameActivity[];
+}): QuickClient[] {
+  const byKey = new Map<string, QuickClient & { _at: string; _order: number }>();
+  args.server.forEach((c, i) => {
+    const key = normalizeClientName(c.name);
+    if (key && !byKey.has(key)) byKey.set(key, { ...c, _at: '', _order: i });
+  });
+  const note = (a: NameActivity) => {
+    const key = normalizeClientName(a.name);
+    if (!key) return;
+    const cur = byKey.get(key);
+    if (cur) {
+      if (a.at > cur._at) cur._at = a.at;
+      if (!cur.id && a.clientId) cur.id = a.clientId;
+    } else {
+      byKey.set(key, { id: a.clientId ?? undefined, name: a.name.trim().replace(/\s+/g, ' '), _at: a.at, _order: Number.MAX_SAFE_INTEGER });
+    }
+  };
+  args.sales.forEach(note);
+  args.pending.forEach(note);
+  return [...byKey.values()]
+    .sort((a, b) => {
+      if (a._at && b._at) return a._at < b._at ? 1 : a._at > b._at ? -1 : a._order - b._order;
+      if (a._at) return -1;
+      if (b._at) return 1;
+      return a._order - b._order || a.name.localeCompare(b.name);
+    })
+    .map(({ _at, _order, ...c }) => c);
+}
+
+/** Customer names carried by the sales list (credit/ledger customers only matter, but any named buyer is a client). */
+export function salesNameActivity(sales: { customer_name?: string | null; client_id?: string | null; created_at: string; status?: string }[]): NameActivity[] {
+  const out: NameActivity[] = [];
+  for (const s of sales) {
+    if (!s.customer_name || s.status === 'annule') continue;
+    out.push({ name: s.customer_name, at: s.created_at, clientId: s.client_id ?? null });
+  }
+  return out;
+}
+
+/** Names carried by still-queued ops (offline credits, credit sales, payments). */
+export function pendingNameActivity(
+  ops: { operation: string; payload: Record<string, unknown>; queuedAt: string | null; status?: string }[],
+  businessId: string,
+): NameActivity[] {
+  const out: NameActivity[] = [];
+  for (const op of ops) {
+    if (op.status === 'failed_permanent' || op.status === 'failed_corrupt') continue;
+    if (op.operation !== 'submit_carnet_debt' && op.operation !== 'submit_sale' && op.operation !== 'record_client_payment') continue;
+    const biz = op.payload.p_business_id != null ? String(op.payload.p_business_id) : null;
+    if (biz && biz !== businessId) continue;
+    const name = op.payload.p_customer_name;
+    if (typeof name !== 'string' || !name.trim()) continue;
+    out.push({ name, at: op.queuedAt ?? new Date().toISOString(), clientId: (op.payload.p_client_id as string | null) ?? null });
+  }
+  return out;
+}
+
+/**
+ * Session-frozen picker order. The ranking above re-sorts the instant a new
+ * credit lands (the client just served jumps to the front) — correct for the
+ * NEXT session, disorienting inside the current one: faces she navigates by
+ * place silently trade cells, which reads as a bug, not as a ranking.
+ *
+ * So a capture session pins the order it opened with. Names the ranking still
+ * returns keep their pinned places (with their freshest record — a new id or
+ * phone flows through), names that vanished drop out, and names that are new
+ * since the pin (a client just recorded) append at the end in ranking order
+ * instead of teleporting to the front. The re-rank lands when the session
+ * ends and the picker next opens.
+ */
+export function freezeGridOrder(frozen: QuickClient[], incoming: QuickClient[]): QuickClient[] {
+  const byKey = new Map<string, QuickClient>();
+  for (const c of incoming) {
+    const key = normalizeClientName(c.name);
+    if (key && !byKey.has(key)) byKey.set(key, c);
+  }
+  const out: QuickClient[] = [];
+  const used = new Set<string>();
+  for (const f of frozen) {
+    const key = normalizeClientName(f.name);
+    const cur = key ? byKey.get(key) : undefined;
+    if (cur && !used.has(key)) { out.push(cur); used.add(key); }
+  }
+  for (const c of incoming) {
+    const key = normalizeClientName(c.name);
+    if (key && !used.has(key)) { out.push(c); used.add(key); }
+  }
+  return out;
+}
