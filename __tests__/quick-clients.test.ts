@@ -1,6 +1,6 @@
 import fs from 'fs';
 import path from 'path';
-import { mergeQuickClients, normalizeClientName, pendingNameActivity, salesNameActivity } from '@/src/utils/quickClients';
+import { freezeGridOrder, mergeQuickClients, normalizeClientName, pendingNameActivity, salesNameActivity } from '@/src/utils/quickClients';
 
 const read = (p: string) => fs.readFileSync(path.resolve(__dirname, '..', p), 'utf8');
 
@@ -69,5 +69,52 @@ describe('wiring', () => {
   });
   it('a debt synced for a new name creates (or reuses) the client by (business, name) — never a duplicate', () => {
     expect(read('lib/sync.ts')).toMatch(/onConflict: 'business_id,name'/);
+  });
+});
+
+describe('freezeGridOrder — a capture session keeps the places it opened with', () => {
+  const frozen = [
+    { id: '1', name: 'Awa' },
+    { id: '2', name: 'Moussa' },
+    { id: '3', name: 'Fanta' },
+  ];
+
+  it('a re-rank underneath does not move any face mid-session', () => {
+    // The ranking after adding a credit to Fanta: she jumps to the front.
+    const reranked = [
+      { id: '3', name: 'Fanta' },
+      { id: '1', name: 'Awa' },
+      { id: '2', name: 'Moussa' },
+    ];
+    expect(freezeGridOrder(frozen, reranked).map(c => c.name)).toEqual(['Awa', 'Moussa', 'Fanta']);
+  });
+
+  it('a client recorded mid-session appends at the end instead of teleporting to the front', () => {
+    const withNew = [
+      { id: '9', name: 'Nouvelle' },
+      { id: '1', name: 'Awa' },
+      { id: '2', name: 'Moussa' },
+      { id: '3', name: 'Fanta' },
+    ];
+    expect(freezeGridOrder(frozen, withNew).map(c => c.name)).toEqual(['Awa', 'Moussa', 'Fanta', 'Nouvelle']);
+  });
+
+  it('a vanished name drops out; a kept name carries its freshest record (new id/phone)', () => {
+    const shifted = [
+      { id: '2b', name: 'Moussa', phone: '+224600000000' },
+      { id: '1', name: 'Awa' },
+    ];
+    const out = freezeGridOrder(frozen, shifted);
+    expect(out.map(c => c.name)).toEqual(['Awa', 'Moussa']);
+    expect(out[1]).toEqual({ id: '2b', name: 'Moussa', phone: '+224600000000' });
+  });
+
+  it('matching is by normalized name (case/spacing do not reshuffle or duplicate)', () => {
+    const messy = [{ name: '  moussa ' }, { name: 'AWA' }, { name: 'Fanta' }];
+    expect(freezeGridOrder(frozen, messy).map(c => c.name)).toEqual(['AWA', '  moussa ', 'Fanta']);
+  });
+
+  it('an empty pin (picker opened with no clients yet) passes the ranking through', () => {
+    expect(freezeGridOrder([], frozen).map(c => c.name)).toEqual(['Awa', 'Moussa', 'Fanta']);
   });
 });

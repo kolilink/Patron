@@ -3,7 +3,7 @@ import { isKnownOffline } from '@/lib/connectivity';
 import { withTimeout } from '@/lib/sync';
 import { SilentKeyboardAccessory } from '@/src/components/ui/SilentKeyboardAccessory';
 import { TRUST_LINE } from '@/src/utils/trustLine';
-import { Animated, Platform, Pressable, ScrollView, StyleSheet, TextInput, View } from 'react-native';
+import { Animated, Easing, Platform, Pressable, ScrollView, StyleSheet, TextInput, View } from 'react-native';
 import { Ionicons } from '@expo/vector-icons';
 import { Button } from '@/src/components/ui/Button';
 import { Text } from '@/src/components/ui/Text';
@@ -12,6 +12,8 @@ import type { Palette } from '@/src/theme';
 import { formatAmountInput, parseAmountInput, formatAmount } from '@/src/utils/format';
 import { readyDebtEntry, nextWalkInLabel } from '@/src/utils/debtEntry';
 import { useQuickClients, type QuickClient } from '@/src/hooks/useQuickClients';
+import { freezeGridOrder, normalizeClientName } from '@/src/utils/quickClients';
+import { useReduceMotion } from '@/src/hooks/useReduceMotion';
 import { useSalesStore } from '@/stores/sales';
 import { supabase } from '@/lib/supabase';
 import { haptics } from '@/lib/haptics';
@@ -59,6 +61,13 @@ const GRID_PLACEHOLDER_HEIGHT = 78;
 // the slow/offline case only.
 const GRID_GATE_MAX_MS = 1500;
 const AMOUNT_SILENT_ACCESSORY_ID = 'creditRapideAmountSilentAccessory';
+// How long the landing ring on the just-credited face takes to bloom and
+// fade once the grid comes back — long enough for the eye to catch WHERE the
+// credit landed, short enough to stay a whisper, not a celebration.
+const PULSE_MS = 1100;
+// When the pulse mark clears: the 900 ms "✓ Ajouté" hold, then the ring's
+// own PULSE_MS, plus slack so the ring never pops out mid-fade.
+const PULSE_CLEAR_MS = 900 + PULSE_MS + 400;
 // Longer than the sheet's slide-up, for focus calls that fire at mount.
 const SHEET_SETTLE_MS = 450;
 // Longest the optional client-row upsert may delay recording a debt.
@@ -93,6 +102,41 @@ interface CreditRapideCaptureProps {
   onReceipt?: (source: CreditReceiptSource) => void;
 }
 
+/**
+ * One-shot landing ring around the face that just received a credit. The
+ * grid order is frozen mid-session (see frozenOrder below), so this ring is
+ * the ONLY thing that moves when she comes back to the faces — deliberately:
+ * it answers "did it count, and for whom?" at the exact spot her eye already
+ * knows, instead of the whole grid silently re-dealing itself.
+ */
+function PulseRing({ color, reduce }: { color: string; reduce: boolean }) {
+  const v = useRef(new Animated.Value(0)).current;
+  useEffect(() => {
+    if (reduce) return;
+    v.setValue(0);
+    const anim = Animated.timing(v, {
+      toValue: 1,
+      duration: PULSE_MS,
+      easing: Easing.out(Easing.quad),
+      useNativeDriver: true,
+    });
+    anim.start();
+    return () => { anim.stop(); };
+  }, [reduce, v]);
+  if (reduce) return null;
+  return (
+    <Animated.View
+      pointerEvents="none"
+      style={{
+        position: 'absolute', top: -3, left: -3, right: -3, bottom: -3,
+        borderRadius: 999, borderWidth: 2, borderColor: color,
+        opacity: v.interpolate({ inputRange: [0, 0.2, 1], outputRange: [0, 0.9, 0] }),
+        transform: [{ scale: v.interpolate({ inputRange: [0, 1], outputRange: [1, 1.22] }) }],
+      }}
+    />
+  );
+}
+
 function initialsAvatar(name: string) {
   const sum = name ? name.split('').reduce((acc, ch) => acc + ch.charCodeAt(0), 0) : 0;
   const pair = CLIENT_AVATAR_PALETTE[sum % CLIENT_AVATAR_PALETTE.length];
@@ -116,6 +160,33 @@ export function CreditRapideCapture({ businessId, userId, currency, onViewClient
   // false for the same business) — a refreshKey refetch after an add keeps
   // showing the previous list until the new one swaps in atomically.
   const { clients, loaded: clientsLoaded } = useQuickClients(businessId, refreshKey);
+  const reduceMotion = useReduceMotion();
+  // The grid's order is PINNED to the ranking this session opened with. The
+  // hook re-ranks on every add (the client just served owns the newest
+  // timestamp, so she would teleport to cell #1 and every other face would
+  // shift) — right inside the rapid loop where she navigates by place. The
+  // pin holds places steady; a client recorded mid-session appends at the
+  // end; the re-rank lands next session. See freezeGridOrder.
+  const [frozenOrder, setFrozenOrder] = useState<QuickClient[] | null>(null);
+  const frozenForRef = useRef<string | undefined>(undefined);
+  useEffect(() => {
+    if (!clientsLoaded) return;
+    if (frozenForRef.current !== businessId) {
+      frozenForRef.current = businessId;
+      setFrozenOrder(clients);
+    }
+    // Deliberately NOT re-pinning when `clients` changes — that stability is
+    // the whole point. A business switch re-pins via frozenForRef.
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [clientsLoaded, businessId]);
+  const gridClients = useMemo(
+    () => (frozenOrder ? freezeGridOrder(frozenOrder, clients) : clients),
+    [frozenOrder, clients],
+  );
+  // Normalized name of the client whose credit just landed — her face gets
+  // the one-shot ring when the grid returns (see PulseRing).
+  const [pulseName, setPulseName] = useState<string | null>(null);
+  const pulseTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
   const [gateTimedOut, setGateTimedOut] = useState(false);
   useEffect(() => {
     const t = setTimeout(() => setGateTimedOut(true), GRID_GATE_MAX_MS);
@@ -160,6 +231,7 @@ export function CreditRapideCapture({ businessId, userId, currency, onViewClient
   useEffect(() => () => {
     cancelFocus();
     if (resetTimerRef.current) clearTimeout(resetTimerRef.current);
+    if (pulseTimerRef.current) clearTimeout(pulseTimerRef.current);
   }, []);
 
   // Mirrors pickClient's own focus behavior — initialClient lands directly
@@ -175,9 +247,9 @@ export function CreditRapideCapture({ businessId, userId, currency, onViewClient
   const searching = search.trim().length > 0;
   const filteredClients = useMemo(() => {
     const q = search.trim().toLowerCase();
-    if (!q) return clients.slice(0, MAX_GRID_CLIENTS);
-    return clients.filter(c => c.name.toLowerCase().includes(q) || (c.phone ?? '').includes(q));
-  }, [clients, search]);
+    if (!q) return gridClients.slice(0, MAX_GRID_CLIENTS);
+    return gridClients.filter(c => c.name.toLowerCase().includes(q) || (c.phone ?? '').includes(q));
+  }, [gridClients, search]);
 
   // Steady highlight on the amount box while a name is set but nothing's been
   // typed yet — a wordless "this is the next thing to do" nudge, ported
@@ -303,6 +375,11 @@ export function CreditRapideCapture({ businessId, userId, currency, onViewClient
       setReceipt(creditReceiptFromSubmit(submitted, { businessName, currency }));
     }
     setSuccess(true);
+    // Her face rings once when the grid returns — the visible landing of
+    // THIS credit, in the place she already knows (the order is pinned).
+    setPulseName(normalizeClientName(trimmedName));
+    if (pulseTimerRef.current) clearTimeout(pulseTimerRef.current);
+    pulseTimerRef.current = setTimeout(() => { pulseTimerRef.current = null; setPulseName(null); }, PULSE_CLEAR_MS);
     setSessionCount(c => c + 1);
     setRefreshKey(k => k + 1);
     resetTimerRef.current = setTimeout(() => {
@@ -343,6 +420,9 @@ export function CreditRapideCapture({ businessId, userId, currency, onViewClient
                     <Text allowFontScaling={false} style={{ fontFamily: fontFamily.bold, fontSize: 18, lineHeight: 22, color: avatarText }}>
                       {initial}
                     </Text>
+                    {pulseName !== null && normalizeClientName(c.name) === pulseName
+                      ? <PulseRing color={palette.success} reduce={reduceMotion} />
+                      : null}
                   </View>
                   <Text variant="caption" numberOfLines={1} style={{ fontFamily: fontFamily.semibold, maxWidth: 84 }}>
                     {c.name}

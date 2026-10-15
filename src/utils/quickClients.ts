@@ -81,3 +81,36 @@ export function pendingNameActivity(
   }
   return out;
 }
+
+/**
+ * Session-frozen picker order. The ranking above re-sorts the instant a new
+ * credit lands (the client just served jumps to the front) — correct for the
+ * NEXT session, disorienting inside the current one: faces she navigates by
+ * place silently trade cells, which reads as a bug, not as a ranking.
+ *
+ * So a capture session pins the order it opened with. Names the ranking still
+ * returns keep their pinned places (with their freshest record — a new id or
+ * phone flows through), names that vanished drop out, and names that are new
+ * since the pin (a client just recorded) append at the end in ranking order
+ * instead of teleporting to the front. The re-rank lands when the session
+ * ends and the picker next opens.
+ */
+export function freezeGridOrder(frozen: QuickClient[], incoming: QuickClient[]): QuickClient[] {
+  const byKey = new Map<string, QuickClient>();
+  for (const c of incoming) {
+    const key = normalizeClientName(c.name);
+    if (key && !byKey.has(key)) byKey.set(key, c);
+  }
+  const out: QuickClient[] = [];
+  const used = new Set<string>();
+  for (const f of frozen) {
+    const key = normalizeClientName(f.name);
+    const cur = key ? byKey.get(key) : undefined;
+    if (cur && !used.has(key)) { out.push(cur); used.add(key); }
+  }
+  for (const c of incoming) {
+    const key = normalizeClientName(c.name);
+    if (key && !used.has(key)) { out.push(c); used.add(key); }
+  }
+  return out;
+}
