@@ -89,7 +89,7 @@ export default function ClientsScreen() {
   const isInvestisseur = role === 'investisseur';
 
   const { filter: filterParam } = useLocalSearchParams<{ filter?: FilterType }>();
-  const { sales, loading, error, offline, offlineSince, fetchSales } = useVentesStore();
+  const { sales, loading, salesFetchedFor, error, offline, offlineSince, fetchSales } = useVentesStore();
   // "En dette" is the default — this screen's job is collection, not a plain
   // directory. An explicit ?filter= param (including 'tous') is still honored.
   const [filter, setFilter] = useState<FilterType>(
@@ -284,7 +284,7 @@ export default function ClientsScreen() {
         />
       )}
 
-      {loading && allClients.length === 0 ? (
+      {(loading || salesFetchedFor !== businessId) && allClients.length === 0 ? (
         <SkeletonList count={6} />
       ) : !loading && allClients.length === 0 && error ? (
         <View style={styles.empty}>
