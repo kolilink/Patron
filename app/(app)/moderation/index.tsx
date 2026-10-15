@@ -49,7 +49,7 @@ export default function ModerationScreen() {
     const session = useAuthStore(s => s.session);
     const isFounder = isFounderPhone(session?.user.phone);
 
-    const { reports, loading, updating, error, fetchReports, setReportEtat, deletePost, blockUser } =
+    const { reports, loading, reportsFetched, updating, error, fetchReports, setReportEtat, deletePost, blockUser } =
         useModerationStore();
 
     const [active, setActive] = useState<Report | null>(null);
@@ -163,7 +163,7 @@ export default function ModerationScreen() {
                 <View style={{ width: 60 }} />
             </View>
 
-            {loading && reports.length === 0 ? (
+            {(loading || !reportsFetched) && reports.length === 0 ? (
                 <SkeletonList count={6} />
             ) : reports.length === 0 ? (
                 <EmptyState

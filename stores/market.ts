@@ -24,6 +24,11 @@ function normalizePostCategory(post: MarketPost): MarketPost {
 
 interface MarketStore {
   posts: MarketPost[];
+  // User id fetchPosts last reached a terminal result for — null until
+  // then. Screens gate their empty state on it so "confirmed no posts"
+  // is never confused with "haven't loaded yet" (same pattern as
+  // productsFetchedFor / salesFetchedFor).
+  postsFetchedFor: string | null;
   loading: boolean;
   creating: boolean;
   error: string | null;
@@ -60,6 +65,7 @@ interface MarketStore {
 
 const initialState = {
   posts: [],
+  postsFetchedFor: null as string | null,
   loading: false,
   creating: false,
   error: null,
@@ -159,6 +165,7 @@ export const useMarketStore = create<MarketStore>((set, get) => ({
         loading: false,
         offline: false,
         offlineSince: null,
+        postsFetchedFor: userId,
       });
     } catch (err) {
       if (isNetworkError(err)) {
@@ -166,13 +173,13 @@ export const useMarketStore = create<MarketStore>((set, get) => ({
         const cached = await getMarketCache() as MarketPost[] | null;
         if (cached) {
           const ts = await getCacheTimestamp('market_cache');
-          set({ posts: cached.map(normalizePostCategory), loading: false, error: null, offline: true, offlineSince: ts });
+          set({ posts: cached.map(normalizePostCategory), loading: false, error: null, offline: true, offlineSince: ts, postsFetchedFor: userId });
           return;
         }
-        set({ loading: false, error: null, offline: true, offlineSince: null }); // show empty state, not an error
+        set({ loading: false, error: null, offline: true, offlineSince: null, postsFetchedFor: userId }); // show empty state, not an error
         return;
       }
-      set({ loading: false, error: translateError(err, "Le chargement n'a pas abouti.") });
+      set({ loading: false, error: translateError(err, "Le chargement n'a pas abouti."), postsFetchedFor: userId });
     }
   },
 

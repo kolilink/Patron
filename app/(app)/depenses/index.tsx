@@ -40,7 +40,7 @@ export default function DepensesScreen() {
   const isManager = role === 'administrateur' || role === 'manager';
 
   const {
-    expenses, loading, saving, error, offline, offlineSince,
+    expenses, loading, expensesFetchedFor, saving, error, offline, offlineSince,
     fetchExpenses, createExpense, updateExpense, deleteExpense, restoreExpense, approveExpense, rejectExpense,
   } = useExpensesStore();
   const lastSyncedAt = useSyncStore(s => s.lastSyncedAt);
@@ -171,7 +171,7 @@ export default function DepensesScreen() {
         <OfflineNotice offlineSince={offlineSince} onRetry={() => fetchExpenses(businessId)} />
       )}
 
-      {loading && isEmpty ? (
+      {(loading || expensesFetchedFor !== businessId) && isEmpty ? (
         <SkeletonList count={6} />
       ) : !loading && isEmpty && error ? (
         <View style={styles.empty}>

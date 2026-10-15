@@ -187,6 +187,12 @@ interface FournisseursStore {
   error: string | null;
   offline: boolean;
   offlineSince: number | null;
+  // Business id fetchFournisseurs last reached a terminal result for — null
+  // until then. `fournisseurs.length === 0` is ambiguous between "confirmed
+  // no suppliers" and "haven't loaded yet"; screens gate their empty state
+  // on this marker so it can never flash before the load resolves (same
+  // pattern as productsFetchedFor / salesFetchedFor).
+  fournisseursFetchedFor: string | null;
 
   fetchFournisseurs: (businessId: string) => Promise<void>;
   createFournisseur: (businessId: string, userId: string, d: SupplierDraft) => Promise<string | null>;
@@ -329,6 +335,7 @@ export const useFournisseursStore = create<FournisseursStore>((set, get) => ({
   error: null,
   offline: false,
   offlineSince: null,
+  fournisseursFetchedFor: null,
 
   fetchFournisseurs: async (businessId) => {
     if (isStaleBusiness(businessId)) return;
@@ -363,15 +370,15 @@ export const useFournisseursStore = create<FournisseursStore>((set, get) => ({
           const ts = await getCacheTimestamp('fournisseur_cache', businessId);
           if (isStaleBusiness(businessId)) return;
           _baseFournisseurs = { businessId, list: cached };
-          set({ loading: false, offline: true, offlineSince: ts, error: null });
+          set({ loading: false, offline: true, offlineSince: ts, error: null, fournisseursFetchedFor: businessId });
           await publishFournisseurs(businessId);
           await loadDebtsFromCache(businessId);
           return;
         }
-        set({ loading: false, offline: true, offlineSince: null, error: null });
+        set({ loading: false, offline: true, offlineSince: null, error: null, fournisseursFetchedFor: businessId });
         return;
       }
-      set({ loading: false, error: translateError(suppliersRes.error, "Le chargement n'a pas abouti.") });
+      set({ loading: false, error: translateError(suppliersRes.error, "Le chargement n'a pas abouti."), fournisseursFetchedFor: businessId });
       return;
     }
     const fournisseurs = (suppliersRes.data ?? []) as Fournisseur[];
@@ -379,7 +386,7 @@ export const useFournisseursStore = create<FournisseursStore>((set, get) => ({
     void saveFournisseurCache(businessId, fournisseurs as unknown[]);
     if (debtsRes.error) {
       // Suppliers loaded but debts didn't: keep what we know (cache) rather than blank them.
-      set({ loading: false, offline: false, offlineSince: null });
+      set({ loading: false, offline: false, offlineSince: null, fournisseursFetchedFor: businessId });
       await publishFournisseurs(businessId);
       await loadDebtsFromCache(businessId);
       return;
@@ -389,7 +396,7 @@ export const useFournisseursStore = create<FournisseursStore>((set, get) => ({
     void saveClientLedgerCache(debtsCacheKey(businessId), baseDebts);
     const v = await supplierView(businessId);
     if (isStaleBusiness(businessId)) return;
-    set({ debts: v.debts, loading: false, offline: false, offlineSince: null });
+    set({ debts: v.debts, loading: false, offline: false, offlineSince: null, fournisseursFetchedFor: businessId });
     await publishFournisseurs(businessId);
   },
 
@@ -897,5 +904,5 @@ export const useFournisseursStore = create<FournisseursStore>((set, get) => ({
   },
 
   clearError: () => set({ error: null }),
-  reset: () => { _baseFournisseurs = null; _baseCommandes = null; _baseDebts = null; _basePayments = null; set({ fournisseurs: [], commandes: [], debts: [], payments: [], loading: false, saving: false, error: null, offline: false, offlineSince: null }); },
+  reset: () => { _baseFournisseurs = null; _baseCommandes = null; _baseDebts = null; _basePayments = null; set({ fournisseurs: [], commandes: [], debts: [], payments: [], loading: false, saving: false, error: null, offline: false, offlineSince: null, fournisseursFetchedFor: null }); },
 }));

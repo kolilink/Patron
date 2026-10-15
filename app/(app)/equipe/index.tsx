@@ -1028,7 +1028,7 @@ export default function EquipeScreen() {
     }
   }, [role]);
 
-  const { membres, codes, redeemedCodes, loading, saving, error, hasFetched, offline, offlineSince, fetchMembres, fetchCodes, createCode, revokeCode } = useEquipeStore();
+  const { membres, codes, redeemedCodes, loading, saving, error, hasFetched, codesFetched, offline, offlineSince, fetchMembres, fetchCodes, createCode, revokeCode } = useEquipeStore();
   const { products, fetchProducts } = useProductStore();
 
   const [tab, setTab] = useState<'membres' | 'codes'>('membres');
@@ -1194,6 +1194,8 @@ export default function EquipeScreen() {
             })}
           </ScrollView>
         )
+      ) : (loading || !codesFetched) && codes.length === 0 ? (
+        <SkeletonList count={5} />
       ) : !loading && codes.length === 0 && error ? (
         <Text variant="body" color="secondary" style={styles.center}>Données non disponibles hors ligne</Text>
       ) : (

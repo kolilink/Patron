@@ -91,6 +91,11 @@ interface ExpensesStore {
   error: string | null;
   offline: boolean;
   offlineSince: number | null;
+  // Business id fetchExpenses last reached a terminal result for — null
+  // until then. Screens gate their empty state on it so "confirmed no
+  // expenses" is never confused with "haven't loaded yet" (same pattern
+  // as productsFetchedFor / salesFetchedFor).
+  expensesFetchedFor: string | null;
 
   fetchExpenses: (businessId: string) => Promise<void>;
   // Returns the new expense id (both online and offline-queued) so a photo
@@ -156,6 +161,7 @@ export const useExpensesStore = create<ExpensesStore>((set, get) => {
   error: null,
   offline: false,
   offlineSince: null,
+  expensesFetchedFor: null,
 
   fetchExpenses: async (businessId) => {
     set({ loading: true, error: null });
@@ -213,6 +219,7 @@ export const useExpensesStore = create<ExpensesStore>((set, get) => {
         baseline: result,
         expenses: applyExpenseOverlay(result, ops, overlayContext()),
         loading: false, offline: false, offlineSince: null,
+        expensesFetchedFor: businessId,
       });
     } catch (err) {
       if (isNetworkError(err)) {
@@ -228,6 +235,7 @@ export const useExpensesStore = create<ExpensesStore>((set, get) => {
             baseline: cached,
             expenses: applyExpenseOverlay(cached, ops, overlayContext()),
             loading: false, offline: true, offlineSince: ts, error: null,
+            expensesFetchedFor: businessId,
           });
           return;
         }
@@ -235,11 +243,12 @@ export const useExpensesStore = create<ExpensesStore>((set, get) => {
           error: 'Pas de connexion. Ouvrez l\'application en ligne une première fois pour activer le mode hors ligne.',
           loading: false,
           offline: true,
+          expensesFetchedFor: businessId,
         });
         return;
       }
       if (isStaleBusiness(businessId)) return;
-      set({ error: translateError(err, "Le chargement n'a pas abouti."), loading: false });
+      set({ error: translateError(err, "Le chargement n'a pas abouti."), loading: false, expensesFetchedFor: businessId });
     }
   },
 
@@ -347,6 +356,6 @@ export const useExpensesStore = create<ExpensesStore>((set, get) => {
   rejectExpense: async (id, userId) => decideExpense('reject_expense', 'rejete', id, userId),
 
   clearError: () => set({ error: null }),
-  reset: () => { snapshots.clear(); cancelledCreates.clear(); set({ baseline: [], expenses: [], loading: false, saving: false, error: null, offline: false, offlineSince: null }); },
+  reset: () => { snapshots.clear(); cancelledCreates.clear(); set({ baseline: [], expenses: [], loading: false, saving: false, error: null, offline: false, offlineSince: null, expensesFetchedFor: null }); },
   });
 });

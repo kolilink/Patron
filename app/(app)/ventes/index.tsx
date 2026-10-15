@@ -1108,7 +1108,7 @@ export default function VentesScreen() {
   const fabOpacity = useRef(new Animated.Value(1)).current;
 
 
-  const { sales, loading, saving, error, offline, offlineSince, fetchSales, loadDetail, recordPayment, cancelSale, updateSaleClient, editSale } = useVentesStore();
+  const { sales, loading, salesFetchedFor, saving, error, offline, offlineSince, fetchSales, loadDetail, recordPayment, cancelSale, updateSaleClient, editSale } = useVentesStore();
   const [selected, setSelected] = useState<Vente | null>(null);
   const [filter, setFilter] = useState<'all' | 'paye' | 'credit' | 'annule'>('all');
   const [refreshing, setRefreshing] = useState(false);
@@ -1375,7 +1375,7 @@ export default function VentesScreen() {
         />
       )}
 
-      {loading && sales.length === 0 ? (
+      {(loading || salesFetchedFor !== businessId) && sales.length === 0 ? (
         <SkeletonList count={7} />
       ) : !loading && sales.length === 0 && error ? (
         <View style={styles.emptyState}>

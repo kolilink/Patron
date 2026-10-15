@@ -402,7 +402,7 @@ export default function AportsScreen() {
   const userId = session?.user?.id;
   const canWrite = role === 'administrateur' || role === 'manager';
 
-  const { apports, loading, saving, offline, offlineSince, fetchApports, addApport, editApport, recordWithdrawal, editWithdrawal } = useAportsStore();
+  const { apports, loading, apportsFetchedFor, saving, offline, offlineSince, fetchApports, addApport, editApport, recordWithdrawal, editWithdrawal } = useAportsStore();
   const fetchMembres = useEquipeStore(s => s.fetchMembres);
   const [showForm, setShowForm] = useState(false);
   const [formMode, setFormMode] = useState<FormMode>('add');
@@ -588,7 +588,7 @@ export default function AportsScreen() {
         </View>
       )}
 
-      {loading && apports.length === 0 ? (
+      {(loading || apportsFetchedFor !== businessId) && apports.length === 0 ? (
         <SkeletonList count={4} />
       ) : !loading && apports.length === 0 && offline ? (
         <View style={styles.empty}>
