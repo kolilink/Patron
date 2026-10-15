@@ -53,7 +53,7 @@ import { useSalesStore } from '@/stores/sales';
 import { useProductStore } from '@/stores/products';
 import { useVentesStore } from '@/stores/ventes';
 import { useAuthStore } from '@/stores/auth';
-import { useToastStore, toast } from '@/stores/toast';
+import { useToastStore, toast, TOAST_EXIT_MS } from '@/stores/toast';
 import { saleToastSpec } from '@/src/utils/saleToast';
 
 const BIZ = 'biz-1';
@@ -109,7 +109,9 @@ describe('the post-sale toast: "Annuler" is a real reversal', () => {
     // 3. the sale shows as cancelled, and is no longer revenue
     const sale = useVentesStore.getState().sales.find(s => s.id === key);
     expect(sale?.status).toBe('annule');
-    // 4. the pill is gone
+    // 4. the pill leaves: its exit starts at once, and it is out of the list after the exit window
+    expect(useToastStore.getState().toasts[0].exiting).toBe(true);
+    await new Promise(r => setTimeout(r, TOAST_EXIT_MS + 50));
     expect(useToastStore.getState().toasts).toHaveLength(0);
   });
 
