@@ -1,7 +1,7 @@
 // The one toast: a floating pill that stacks, auto-dismisses, can be swiped away, and carries a real undo.
 import fs from 'fs';
 import path from 'path';
-import { useToastStore, toast, TOAST_DURATION_MS, TOAST_ACTION_WINDOW_MS, MAX_VISIBLE_TOASTS } from '@/stores/toast';
+import { useToastStore, toast, TOAST_DURATION_MS, TOAST_ACTION_WINDOW_MS, TOAST_EXIT_MS, MAX_VISIBLE_TOASTS } from '@/stores/toast';
 
 const read = (p: string) => fs.readFileSync(path.join(__dirname, '..', p), 'utf8');
 const st = () => useToastStore.getState();
@@ -15,15 +15,22 @@ describe('appears and auto-dismisses', () => {
     expect(st().toasts.map(t => t.message)).toEqual(['Enregistré — vente de 2 000 GNF.']);
     jest.advanceTimersByTime(TOAST_DURATION_MS - 1);
     expect(st().toasts).toHaveLength(1);
+    expect(st().toasts[0].exiting).toBe(false);
     jest.advanceTimersByTime(2);
+    expect(st().toasts).toHaveLength(1); // the clock starts the exit; the pill fades, it does not pop
+    expect(st().toasts[0].exiting).toBe(true);
+    jest.advanceTimersByTime(TOAST_EXIT_MS);
     expect(st().toasts).toHaveLength(0);
   });
-  it('swipe-up dismiss (dismiss(id)) removes it early and cancels its timer', () => {
+  it('swipe-up dismiss (dismiss(id)) starts its exit early and cancels its timer', () => {
     const id = toast.info('x');
     st().dismiss(id);
+    expect(st().toasts).toHaveLength(1);
+    expect(st().toasts[0].exiting).toBe(true);
+    jest.advanceTimersByTime(TOAST_EXIT_MS);
     expect(st().toasts).toHaveLength(0);
     toast.info('y');
-    jest.advanceTimersByTime(TOAST_DURATION_MS + 1);   // the first one's timer must not take 'y' down early or throw
+    jest.advanceTimersByTime(TOAST_DURATION_MS + TOAST_EXIT_MS + 1);   // the first one's timer must not take 'y' down early or throw
     expect(st().toasts).toHaveLength(0);
   });
 });
@@ -35,6 +42,9 @@ describe('a second toast never clobbers the first', () => {
     toast.warning('second');
     expect(st().toasts.map(t => t.message)).toEqual(['premier', 'second']);
     jest.advanceTimersByTime(TOAST_DURATION_MS - 1500 + 1);
+    expect(st().toasts.map(t => t.message)).toEqual(['premier', 'second']); // 'premier' is on its way out
+    expect(st().toasts[0].exiting).toBe(true);
+    jest.advanceTimersByTime(TOAST_EXIT_MS);
     expect(st().toasts.map(t => t.message)).toEqual(['second']);
   });
   it(`at most ${MAX_VISIBLE_TOASTS} at once; the oldest plain one makes room, an undo is never dropped for a plain toast`, () => {
@@ -54,6 +64,8 @@ describe('the "Annuler" action', () => {
     expect(st().toasts[0].action?.label).toBe('Annuler');
     await st().runAction(id);
     expect(run).toHaveBeenCalledTimes(1);
+    expect(st().toasts[0].exiting).toBe(true); // the pill fades out after the undo, same exit as a timeout
+    jest.advanceTimersByTime(TOAST_EXIT_MS);
     expect(st().toasts).toHaveLength(0);
   });
   it('stays available for ~5s, then the action is gone and the pill leaves', () => {
@@ -61,6 +73,8 @@ describe('the "Annuler" action', () => {
     jest.advanceTimersByTime(TOAST_ACTION_WINDOW_MS - 1);
     expect(st().toasts.find(t => t.id === id)?.actionExpired).toBe(false);
     jest.advanceTimersByTime(2);
+    expect(st().toasts.find(t => t.id === id)?.exiting).toBe(true);
+    jest.advanceTimersByTime(TOAST_EXIT_MS);
     expect(st().toasts).toHaveLength(0);
   });
   it('a double tap runs the undo once', async () => {
@@ -72,6 +86,8 @@ describe('the "Annuler" action', () => {
   it('a failing undo still clears the pill (no stuck spinner)', async () => {
     const id = toast.saved({ message: 'vente', undo: jest.fn().mockRejectedValue(new Error('boom')) });
     await expect(st().runAction(id)).rejects.toThrow('boom');
+    expect(st().toasts[0].exiting).toBe(true);
+    jest.advanceTimersByTime(TOAST_EXIT_MS);
     expect(st().toasts).toHaveLength(0);
   });
   it('"Modifier" follow-up replaces Annuler after the window and lives a normal display time', () => {
@@ -82,7 +98,63 @@ describe('the "Annuler" action', () => {
     expect(t.actionExpired).toBe(true);
     expect(t.followUp?.label).toBe('Modifier');
     jest.advanceTimersByTime(TOAST_DURATION_MS + 1);
+    expect(st().toasts.find(t => t.id === id)?.exiting).toBe(true);
+    jest.advanceTimersByTime(TOAST_EXIT_MS);
     expect(st().toasts).toHaveLength(0);
+  });
+});
+
+describe('repeats coalesce into the pill already up', () => {
+  it('the same plain toast pushed twice stays one pill, and the repeat restarts its clock', () => {
+    const first = toast.success('Produit ajouté');
+    jest.advanceTimersByTime(3000);
+    const second = toast.success('Produit ajouté');
+    expect(second).toBe(first);
+    expect(st().toasts).toHaveLength(1);
+    expect(st().toasts[0].repeats).toBe(2);
+    jest.advanceTimersByTime(1500); // past the FIRST push's deadline — still up on the restarted clock
+    expect(st().toasts).toHaveLength(1);
+    expect(st().toasts[0].exiting).toBe(false);
+    jest.advanceTimersByTime(TOAST_DURATION_MS - 1500 + 1);
+    expect(st().toasts[0].exiting).toBe(true);
+    jest.advanceTimersByTime(TOAST_EXIT_MS);
+    expect(st().toasts).toHaveLength(0);
+  });
+  it('a different message or a different tone does not coalesce', () => {
+    toast.success('Produit ajouté');
+    toast.success('Vente enregistrée');
+    toast.warning('Produit ajouté');
+    expect(st().toasts).toHaveLength(3);
+  });
+  it('a toast carrying "Annuler" never coalesces and is never coalesced into', () => {
+    toast.saved({ message: 'vente', undo: jest.fn() });
+    toast.saved({ message: 'vente', undo: jest.fn() });
+    expect(st().toasts).toHaveLength(2);
+    toast.success('vente'); // same words as the undo pill — still its own pill
+    expect(st().toasts).toHaveLength(3);
+  });
+});
+
+describe('the exit is animated, never a pop', () => {
+  it('dismiss flags exiting first; removal follows after TOAST_EXIT_MS', () => {
+    const id = toast.info('x');
+    st().dismiss(id);
+    expect(st().toasts).toHaveLength(1);
+    jest.advanceTimersByTime(TOAST_EXIT_MS - 1);
+    expect(st().toasts).toHaveLength(1);
+    jest.advanceTimersByTime(1);
+    expect(st().toasts).toHaveLength(0);
+  });
+  it('the component drives entry and exit from the exiting flag, with a glide for the stack', () => {
+    const src = read('src/components/ui/Toast.tsx');
+    expect(src).toContain('TOAST_EXIT_MS');
+    expect(src).toContain('exiting');
+    expect(src).toContain('LayoutAnimation');
+    expect(src).not.toContain('ENTER_OFFSET = -90'); // no more 90px spring drop
+    expect(src).toContain('ENTER_OFFSET = -8');
+  });
+  it('the quick-add sheet pill crossfades on a repeat add (keyed by product name)', () => {
+    expect(read('src/components/QuickAddProductSheet.tsx')).toContain('key={toastName}');
   });
 });
 
