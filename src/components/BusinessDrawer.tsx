@@ -19,6 +19,7 @@ import Animated, {
   Extrapolation,
   Easing,
 } from 'react-native-reanimated';
+import { NoResultsState } from '@/src/components/ui/NoResultsState';
 import { useReduceMotion } from '@/src/hooks/useReduceMotion';
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
 import { router } from 'expo-router';
@@ -290,9 +291,7 @@ export function BusinessDrawer() {
             })}
 
             {filtered.length === 0 && search.length > 0 && (
-              <View style={styles.emptySearch}>
-                <Text style={styles.emptySearchText}>Aucun résultat pour « {search} »</Text>
-              </View>
+              <NoResultsState query={search} />
             )}
           </ScrollView>
 
@@ -453,14 +452,6 @@ function makeStyles(p: Palette) {
     },
     roleLabel: {
       fontSize: 12,
-      color: p.textSecondary,
-    },
-    emptySearch: {
-      padding: spacing[6],
-      alignItems: 'center',
-    },
-    emptySearchText: {
-      fontSize: 13,
       color: p.textSecondary,
     },
     footer: {
