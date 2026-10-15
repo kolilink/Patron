@@ -129,9 +129,9 @@ export default function FournisseurProfile() {
   const userId = session?.user.id ?? '';
   const role = session?.activeMembership?.role;
 
-  const { products, fetchProducts } = useProductStore();
+  const { products, fetchProducts, productsFetchedFor } = useProductStore();
   const {
-    fournisseurs, commandes, debts, payments, offline,
+    fournisseurs, commandes, debts, payments, offline, fournisseursFetchedFor,
     fetchFournisseurs, fetchCommandes, fetchPayments,
     loadCommandeLines, deleteFournisseur, payDebt,
   } = useFournisseursStore();
@@ -144,9 +144,16 @@ export default function FournisseurProfile() {
   const [showProductLink, setShowProductLink] = useState(false);
   const [linkingProducts, setLinkingProducts] = useState(false);
 
-  const linkedProducts = products.filter(p =>
+  // Until the products store has resolved for THIS business, its rows may be
+  // another business's catalogue — never display them as this supplier's
+  // products, and never offer them for linking.
+  const productsResolved = productsFetchedFor === businessId;
+  const linkedProducts = productsResolved ? products.filter(p =>
     (p.supplier_id === id || extraProductIds.has(p.id)) && !p.archived,
-  );
+  ) : [];
+  const linkableProducts = productsResolved
+    ? products.filter(p => !p.archived && !linkedProducts.some(lp => lp.id === p.id))
+    : [];
 
   // A livraison is a purchase_order that made it all the way to 'recu' — no
   // pending/partial order is ever created going forward under the new model,
@@ -173,11 +180,14 @@ export default function FournisseurProfile() {
 
   useEffect(() => {
     if (!businessId || !id) return;
-    if (fournisseurs.length === 0) fetchFournisseurs(businessId);
-    if (products.length === 0) fetchProducts(businessId, userId, session?.activeMembership?.id, session?.activeMembership?.role);
+    // Fetch whenever the store has not resolved for THIS business — never gate
+    // on "the list is empty": after a business switch the list is non-empty but
+    // holds the PREVIOUS business's rows.
+    if (fournisseursFetchedFor !== businessId) fetchFournisseurs(businessId);
+    if (productsFetchedFor !== businessId) fetchProducts(businessId, userId, session?.activeMembership?.id, session?.activeMembership?.role);
     fetchCommandes(businessId);
     fetchPayments(businessId, id);
-  }, [businessId, id]);
+  }, [businessId, id, fournisseursFetchedFor, productsFetchedFor]);
 
   useEffect(() => {
     if (!id) return;
@@ -371,7 +381,7 @@ export default function FournisseurProfile() {
 
           {showProductLink && (
             <ScrollView horizontal showsHorizontalScrollIndicator={false} style={{ flexGrow: 0, marginBottom: spacing[3] }}>
-              {products.filter(p => !p.archived && !linkedProducts.some(lp => lp.id === p.id)).map(p => (
+              {linkableProducts.map(p => (
                 <Pressable
                   key={p.id}
                   onPress={() => { void linkProduct(p.id); }}
