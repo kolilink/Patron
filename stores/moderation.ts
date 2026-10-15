@@ -11,6 +11,12 @@ interface ModerationStore {
     loading: boolean;
     updating: boolean;
     error: string | null;
+    // True once fetchReports has reached a terminal result. The screen
+    // gates its empty state on it so "no reports" is never shown before
+    // the queue has actually been checked (same resolution pattern as
+    // productsFetchedFor / salesFetchedFor, boolean flavour — this queue
+    // is not business-scoped).
+    reportsFetched: boolean;
     blockedIds: string[];
     myBlockedIds: string[];
 
@@ -29,6 +35,7 @@ const initialState = {
     loading: false,
     updating: false,
     error: null as string | null,
+    reportsFetched: false,
     blockedIds: [] as string[],
     myBlockedIds: [] as string[],
 };
@@ -43,14 +50,14 @@ export const useModerationStore = create<ModerationStore>((set, get) => ({
                 supabase.rpc('list_reports'),
             );
             if (error) throw error;
-            set({ reports: (data ?? []) as Report[], loading: false });
+            set({ reports: (data ?? []) as Report[], loading: false, reportsFetched: true });
         } catch (err) {
             if (isNetworkError(err)) {
                 reportOfflineFallback('moderation.fetchReports', err);
-                set({ loading: false, error: 'Hors ligne — impossible de charger la file.' });
+                set({ loading: false, error: 'Hors ligne — impossible de charger la file.', reportsFetched: true });
                 return;
             }
-            set({ loading: false, error: translateError(err, "Le chargement n'a pas abouti.") });
+            set({ loading: false, error: translateError(err, "Le chargement n'a pas abouti."), reportsFetched: true });
         }
     },
 

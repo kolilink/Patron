@@ -36,6 +36,11 @@ interface AportsStore {
   error: string | null;
   offline: boolean;
   offlineSince: number | null;
+  // Business id fetchApports last reached a terminal result for — null
+  // until then. Screens gate their empty state on it so "confirmed no
+  // apports" is never confused with "haven't loaded yet" (same pattern
+  // as productsFetchedFor / salesFetchedFor).
+  apportsFetchedFor: string | null;
   fetchApports: (businessId: string) => Promise<void>;
   addApport: (params: {
     businessId: string;
@@ -81,6 +86,7 @@ export const useAportsStore = create<AportsStore>((set, get) => ({
   error: null,
   offline: false,
   offlineSince: null,
+  apportsFetchedFor: null,
 
   fetchApports: async (businessId) => {
     if (isStaleBusiness(businessId)) return;
@@ -113,13 +119,13 @@ export const useAportsStore = create<AportsStore>((set, get) => ({
         if (cached) {
           const ts = await getCacheTimestamp('apports_cache', businessId);
           if (isStaleBusiness(businessId)) return;
-          set({ apports: cached, loading: false, offline: true, offlineSince: ts, error: null });
+          set({ apports: cached, loading: false, offline: true, offlineSince: ts, error: null, apportsFetchedFor: businessId });
           return;
         }
-        set({ loading: false, offline: true, offlineSince: null, error: null });
+        set({ loading: false, offline: true, offlineSince: null, error: null, apportsFetchedFor: businessId });
         return;
       }
-      set({ loading: false, error: translateError(error, "Le chargement n'a pas abouti.") });
+      set({ loading: false, error: translateError(error, "Le chargement n'a pas abouti."), apportsFetchedFor: businessId });
       return;
     }
 
@@ -144,7 +150,7 @@ export const useAportsStore = create<AportsStore>((set, get) => ({
 
     void saveApportsCache(businessId, apports as unknown[]);
     if (isStaleBusiness(businessId)) { set({ loading: false }); return; }
-    set({ apports, loading: false, offline: false, offlineSince: null });
+    set({ apports, loading: false, offline: false, offlineSince: null, apportsFetchedFor: businessId });
   },
 
   addApport: async ({ businessId, amount, injectedById, sourceName, note, injectedAt }) => {
@@ -255,5 +261,5 @@ export const useAportsStore = create<AportsStore>((set, get) => ({
     }
   },
 
-  reset: () => set({ apports: [], loading: false, saving: false, error: null, offline: false, offlineSince: null }),
+  reset: () => set({ apports: [], loading: false, saving: false, error: null, offline: false, offlineSince: null, apportsFetchedFor: null }),
 }));
