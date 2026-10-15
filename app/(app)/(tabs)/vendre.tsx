@@ -1476,7 +1476,7 @@ export default function VendreScreen() {
   // A non-manager can never be left in Gérer (role change / business switch).
   useEffect(() => { if (!canManage && gerer) exitGerer(); }, [canManage, gerer, exitGerer]);
 
-  const { products: allProducts, vendeurProductScope, vendeurScopeAll, variantsByProduct, loading, offline, offlineSince, fetchProducts, fetchVariants } = useProductStore();
+  const { products: allProducts, vendeurProductScope, vendeurScopeAll, variantsByProduct, loading, productsFetchedFor, offline, offlineSince, fetchProducts, fetchVariants } = useProductStore();
 
   // Apply vendeur product scope. Fix C(2): scope_all_products=true → see all;
   // scope_all_products=false → ONLY the assigned products (so zero assigned =
@@ -1896,7 +1896,7 @@ export default function VendreScreen() {
   // products at all, so blocking it behind a product-shaped skeleton was
   // showing unrelated content before the real destination, not a genuine
   // loading state for what was actually about to render.
-  if (loading && products.length === 0) {
+  if ((loading || productsFetchedFor !== businessId) && products.length === 0) {
     return (
       <Screen tab>
         <SkeletonList count={9} />
