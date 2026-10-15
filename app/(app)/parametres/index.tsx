@@ -21,8 +21,9 @@ import { useAuthStore } from '@/stores/auth';
 import { generateFallbackName } from '@/lib/id';
 import { supabase } from '@/lib/supabase';
 import { translateError } from '@/lib/errors';
-import { haptics, setEnabled, isHapticsEnabled, HAPTICS_KV_KEY } from '@/lib/haptics';
-import { getKV, setKV, wipeAccountLocalData } from '@/lib/db';
+import { haptics } from '@/lib/haptics';
+import { useModerationStore } from '@/stores/moderation';
+import { wipeAccountLocalData } from '@/lib/db';
 import { toast } from '@/stores/toast';
 import { checkNotificationPermission, requestNotificationPermission } from '@/src/components/NotificationSetup';
 import { toUnicodeBold } from '@/src/utils/format';
@@ -119,46 +120,32 @@ export default function ParametresScreen() {
   const [saving, setSaving] = useState(false);
   const [hasSales, setHasSales] = useState<boolean | null>(null);
 
-  // Haptics master switch — default ON, persisted in the KV store (same
-  // getKV/setKV channel as ThemeContext). Flipping it off cuts every haptic
-  // at the single chokepoint in lib/haptics.ts — no per-call-site work.
-  const [hapticsEnabled, setHapticsEnabled] = useState(isHapticsEnabled());
+  // Blocked users — the unblock path that had no UI (half-done audit,
+  // 2026-10-14): blockUser was reachable from post menus, but nothing in
+  // the app consumed fetchMyBlocks/unblockUser, so a block was forever.
+  // Names resolve best-effort from profiles; the id list itself comes
+  // from the moderation store (list_my_blocks).
+  const { myBlockedIds, fetchMyBlocks, unblockUser } = useModerationStore();
+  const [blockedNames, setBlockedNames] = useState<Record<string, string>>({});
+  useEffect(() => { void fetchMyBlocks(); }, [fetchMyBlocks]);
   useEffect(() => {
-    getKV(HAPTICS_KV_KEY).then(v => {
-      const on = v !== 'false';
-      setEnabled(on);
-      setHapticsEnabled(on);
-    }).catch(() => { });
-  }, []);
-  const handleToggleHaptics = (value: boolean) => {
-    setEnabled(value);
-    setHapticsEnabled(value);
-    void setKV(HAPTICS_KV_KEY, value ? 'true' : 'false');
-    // State first, then fire: turning off lands silent, turning on lands a tick.
-    haptics.toggle(value);
-  };
-
-  // Per-sale push opt-out — see migration_v184.sql. Optimistic toggle with
-  // rollback on failure, same shape as every other one-tap preference in
-  // this screen; the underlying update is a plain profiles row update,
-  // already permitted by the existing "Modifier son profil" RLS policy
-  // (auth.uid() = id) — no RPC needed, same as resetUnreadBadge.
-  const [notifyEverySale, setNotifyEverySale] = useState(session?.user.notify_on_every_sale ?? true);
-  const handleToggleNotifyEverySale = async (value: boolean) => {
-    setNotifyEverySale(value);
-    haptics.toggle(value);
-    try {
-      await writeRow(
-        { table: 'profiles', op: 'update', values: { notify_on_every_sale: value }, match: { id: userId } },
-        { applyLocal: () => useAuthStore.setState(state =>
-          state.session ? { session: { ...state.session, user: { ...state.session.user, notify_on_every_sale: value } } } : {}) },
-      );
-    } catch {
-      // failure: speaks — the write was refused before it could be queued
-      setNotifyEverySale(!value);
-      failAlert('settingNotChanged', { why: NO_CONNECTION_WHY, label: 'Réessayer', onPress: () => { void handleToggleNotifyEverySale(value); } });
-    }
-  };
+    if (myBlockedIds.length === 0) { setBlockedNames({}); return; }
+    let cancelled = false;
+    void (async () => {
+      try {
+        const { data } = await supabase.from('profiles').select('id, name').in('id', myBlockedIds);
+        if (cancelled) return;
+        const names: Record<string, string> = {};
+        for (const p of (data ?? []) as { id: string; name: string | null }[]) {
+          names[p.id] = p.name || generateFallbackName(p.id);
+        }
+        setBlockedNames(names);
+      } catch {
+        // failure: silent — name resolution is best-effort; the fallback name renders instead
+      }
+    })();
+    return () => { cancelled = true; };
+  }, [myBlockedIds]);
 
   // "Rappels de paiement" — gated by TWO independent things, and the switch
   // is only "on" when both are true: the OS notification permission (owned by
@@ -863,44 +850,15 @@ export default function ParametresScreen() {
           </Card>
 
 
-          {/* Retour haptique — master switch (default ON). Cuts every haptic
-              at the single chokepoint in lib/haptics.ts. */}
-          <Card style={styles.section}>
-            <Text variant="label" color="secondary">Retour haptique</Text>
-            <View style={styles.linkRow}>
-              <View style={{ flex: 1, marginRight: spacing[3] }}>
-                <Text variant="body">Vibrations</Text>
-                <Text variant="caption" color="secondary">
-                  Un léger retour au toucher sur les actions clés
-                </Text>
-              </View>
-              <Switch
-                value={hapticsEnabled}
-                onValueChange={handleToggleHaptics}
-                trackColor={{ false: palette.border, true: palette.primary }}
-                thumbColor={palette.surface}
-              />
-            </View>
-          </Card>
-
-          {/* Notifications */}
+          {/* Notifications — the per-sale switch that used to sit here was
+              a placebo (profiles.notify_on_every_sale was persisted and
+              never read by any sender); removed 2026-10-14 rather than
+              honored: notification/haptics preferences are not user
+              toggles in Patron. Vibrations/haptics are always on, same
+              decision — the haptics master switch is gone too. */}
           <Card style={styles.section}>
             <Text variant="label" color="secondary">Notifications</Text>
             <View style={styles.linkRow}>
-              <View style={{ flex: 1, marginRight: spacing[3] }}>
-                <Text variant="body">Une notification à chaque vente</Text>
-                <Text variant="caption" color="secondary">
-                  Reçue pour chaque vente faite par vous ou votre équipe
-                </Text>
-              </View>
-              <Switch
-                value={notifyEverySale}
-                onValueChange={handleToggleNotifyEverySale}
-                trackColor={{ false: palette.border, true: palette.primary }}
-                thumbColor={palette.surface}
-              />
-            </View>
-            <View style={[styles.linkRow, { marginTop: spacing[3] }]}>
               <View style={{ flex: 1, marginRight: spacing[3] }}>
                 <Text variant="body">Rappels de paiement</Text>
                 <Text variant="caption" color="secondary">
@@ -915,6 +873,24 @@ export default function ParametresScreen() {
               />
             </View>
           </Card>
+
+          {/* Bloqués — unblock path (see the hook above). Rendered only
+              when there is someone to unblock. */}
+          {myBlockedIds.length > 0 && (
+            <Card style={styles.section}>
+              <Text variant="label" color="secondary">Bloqués</Text>
+              {myBlockedIds.map((id, i) => (
+                <View key={id} style={[styles.linkRow, i > 0 && { marginTop: spacing[3] }]}>
+                  <Text variant="body" style={{ flex: 1, marginRight: spacing[3] }}>
+                    {blockedNames[id] ?? generateFallbackName(id)}
+                  </Text>
+                  <Pressable onPress={() => { void unblockUser(id); }} hitSlop={8}>
+                    <Text variant="label" style={{ color: palette.primary }}>Débloquer</Text>
+                  </Pressable>
+                </View>
+              ))}
+            </Card>
+          )}
 
           {/* À propos */}
           {/* Sécurité — lost/stolen-phone flow (security audit 2026-09-27,
