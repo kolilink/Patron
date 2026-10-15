@@ -51,6 +51,7 @@ import { todayIso, localTimeZone } from '@/src/utils/dates';
 import { homeComparison, businessAgeDays } from '@/src/utils/dashboardNarrative';
 import { getKpiSnapshot, setKpiSnapshot } from '@/src/utils/kpiSnapshot';
 import { Money, MoneyText } from '@/src/components/ui/Money';
+import { amountText } from '@/src/utils/moneyText';
 
 
 interface KPIs {
@@ -868,14 +869,16 @@ export default function AccueilScreen() {
                   <View style={styles.investorHeroRow}>
                     <View style={{ flex: 1, gap: spacing[1] }}>
                       <Text variant="caption" color="secondary">Vos gains</Text>
+                      {/* balance is null until loaded — NaN renders « — » via
+                          amountText, never a fake 0 she would believe. */}
                       <Money
                         variant="amountLarge"
-                        style={{ color: palette.textPrimary, fontSize: 44, lineHeight: 56 }} amount={balance ?? 0} currency={currency} />
+                        style={{ color: palette.textPrimary, fontSize: 44, lineHeight: 56 }} amount={balance ?? NaN} currency={currency} />
                     </View>
-                    {(balance ?? 0) > 0 && (
+                    {balance !== null && balance > 0 && (
                       <Pressable
                         onPress={() => {
-                          setWithdrawAmountStr(formatAmountInput(String(Math.round(balance ?? 0)), currency));
+                          setWithdrawAmountStr(formatAmountInput(String(Math.round(balance)), currency));
                           setShowWithdrawSheet(true);
                         }}
                         style={[styles.withdrawBtn, { borderColor: palette.primary }]}
@@ -1095,7 +1098,7 @@ export default function AccueilScreen() {
               <View style={[styles.sheetHandle, { backgroundColor: palette.border }]} />
               <Text variant="h4" style={styles.sheetTitle}>Retirer mes gains</Text>
               <MoneyText variant="caption" color="secondary" style={styles.sheetBody}>
-                Disponible : {formatAmount(balance ?? 0, currency)}
+                Disponible : {amountText(balance, currency)}
               </MoneyText>
 
               {/* Amount input */}
@@ -1124,8 +1127,8 @@ export default function AccueilScreen() {
                 onPress={async () => {
                   const amt = parseAmountInput(withdrawAmountStr, currency);
                   if (!amt || amt <= 0) { toast.warning('Entrez un montant valide'); return; }
-                  const balanceVal = balance ?? 0;
-                  if (amt > balanceVal) { toast.warning('Montant supérieur à votre solde'); return; }
+                  if (balance === null) { toast.warning('Solde indisponible — réessayez'); return; }
+                  if (amt > balance) { toast.warning('Montant supérieur à votre solde'); return; }
                   const amtCents = BigInt(Math.round(amt * 100));
                   const ok = await requestPayout(businessId, amtCents);
                   if (ok) {
