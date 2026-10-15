@@ -1,1 +1,120 @@
-aW1wb3J0IGZzIGZyb20gJ2ZzJzsKaW1wb3J0IHBhdGggZnJvbSAncGF0aCc7CmltcG9ydCB7IGZyZWV6ZUdyaWRPcmRlciwgbWVyZ2VRdWlja0NsaWVudHMsIG5vcm1hbGl6ZUNsaWVudE5hbWUsIHBlbmRpbmdOYW1lQWN0aXZpdHksIHNhbGVzTmFtZUFjdGl2aXR5IH0gZnJvbSAnQC9zcmMvdXRpbHMvcXVpY2tDbGllbnRzJzsKCmNvbnN0IHJlYWQgPSAocDogc3RyaW5nKSA9PiBmcy5yZWFkRmlsZVN5bmMocGF0aC5yZXNvbHZlKF9fZGlybmFtZSwgJy4uJywgcCksICd1dGY4Jyk7CgpkZXNjcmliZSgncXVpY2stY2xpZW50IHBpY2tlciDigJQgbG9jYWwgdHJ1dGggZmlyc3QnLCAoKSA9PiB7CiAgaXQoJ2EgbmFtZSByZWNvcmRlZCBvZmZsaW5lIChzdGlsbCBpbiB0aGUgb3V0Ym94KSBpcyBpbiB0aGUgcGlja2VyIGluc3RhbnRseSwgcmFua2VkIEZJUlNUJywgKCkgPT4gewogICAgY29uc3QgcGVuZGluZyA9IHBlbmRpbmdOYW1lQWN0aXZpdHkoWwogICAgICB7IG9wZXJhdGlvbjogJ3N1Ym1pdF9jYXJuZXRfZGVidCcsIHBheWxvYWQ6IHsgcF9idXNpbmVzc19pZDogJ2InLCBwX2N1c3RvbWVyX25hbWU6ICdUZXN0JyB9LCBxdWV1ZWRBdDogJzIwMjYtMTAtMDdUMTI6MDA6MDBaJyB9LAogICAgXSwgJ2InKTsKICAgIGNvbnN0IGxpc3QgPSBtZXJnZVF1aWNrQ2xpZW50cyh7CiAgICAgIHNlcnZlcjogW3sgaWQ6ICcxJywgbmFtZTogJ0F3YScgfSwgeyBpZDogJzInLCBuYW1lOiAnTW91c3NhJyB9XSwKICAgICAgc2FsZXM6IFt7IG5hbWU6ICdBd2EnLCBhdDogJzIwMjYtMTAtMDZUMTA6MDA6MDBaJyB9XSwKICAgICAgcGVuZGluZywKICAgIH0pOwogICAgZXhwZWN0KGxpc3QubWFwKGMgPT4gYy5uYW1lKSkudG9FcXVhbChbJ1Rlc3QnLCAnQXdhJywgJ01vdXNzYSddKTsKICB9KTsKCiAgaXQoJ25vIG5ldHdvcmssIG5vIGNhY2hlLCBubyBzZXJ2ZXIgbGlzdDogc2FsZXMtZGVyaXZlZCBhbmQgcGVuZGluZyBuYW1lcyBzdGlsbCBmaWxsIHRoZSBwaWNrZXInLCAoKSA9PiB7CiAgICBjb25zdCBsaXN0ID0gbWVyZ2VRdWlja0NsaWVudHMoewogICAgICBzZXJ2ZXI6IFtdLAogICAgICBzYWxlczogc2FsZXNOYW1lQWN0aXZpdHkoW3sgY3VzdG9tZXJfbmFtZTogJ0ZhbnRhJywgY2xpZW50X2lkOiBudWxsLCBjcmVhdGVkX2F0OiAnMjAyNi0xMC0wNVQwMDowMDowMFonLCBzdGF0dXM6ICdjcmVkaXQnIH1dKSwKICAgICAgcGVuZGluZzogcGVuZGluZ05hbWVBY3Rpdml0eShbeyBvcGVyYXRpb246ICdzdWJtaXRfc2FsZScsIHBheWxvYWQ6IHsgcF9idXNpbmVzc19pZDogJ2InLCBwX2N1c3RvbWVyX25hbWU6ICdUZXN0JyB9LCBxdWV1ZWRBdDogJzIwMjYtMTAtMDdUMDA6MDA6MDBaJyB9XSwgJ2InKSwKICAgIH0pOwogICAgZXhwZWN0KGxpc3QubWFwKGMgPT4gYy5uYW1lKSkudG9FcXVhbChbJ1Rlc3QnLCAnRmFudGEnXSk7CiAgfSk7CgogIGl0KCdhZnRlciBpdCBzeW5jcywgdGhlIHNhbWUgbmFtZSBpcyBPTkUgY2xpZW50IChzZXJ2ZXIgcm93ICsgb3V0Ym94L3NhbGVzIGFjdGl2aXR5IG1lcmdlIGJ5IG5vcm1hbGl6ZWQgbmFtZSknLCAoKSA9PiB7CiAgICBjb25zdCBsaXN0ID0gbWVyZ2VRdWlja0NsaWVudHMoewogICAgICBzZXJ2ZXI6IFt7IGlkOiAnc3J2LTEnLCBuYW1lOiAnVGVzdCcgfV0sCiAgICAgIHNhbGVzOiBbeyBuYW1lOiAnIHRlc3QgJywgYXQ6ICcyMDI2LTEwLTA3VDEyOjAwOjAwWicgfV0sCiAgICAgIHBlbmRpbmc6IFt7IG5hbWU6ICdURVNUJywgYXQ6ICcyMDI2LTEwLTA3VDEyOjAwOjAxWicgfV0sCiAgICB9KTsKICAgIGV4cGVjdChsaXN0KS50b0hhdmVMZW5ndGgoMSk7CiAgICBleHBlY3QobGlzdFswXSkudG9NYXRjaE9iamVjdCh7IGlkOiAnc3J2LTEnLCBuYW1lOiAnVGVzdCcgfSk7CiAgICBleHBlY3Qobm9ybWFsaXplQ2xpZW50TmFtZSgnICBBw69zc2F0b3UgICBEaWFsbG8gJykpLnRvQmUoJ2HDr3NzYXRvdSBkaWFsbG8nKTsKICB9KTsKCiAgaXQoJ2lnbm9yZXMgY2FuY2VsbGVkIHNhbGVzLCBvdGhlciBidXNpbmVzc2VzLCByZWZ1c2VkIG9wcyBhbmQgdW5uYW1lZCByZWNvcmRzJywgKCkgPT4gewogICAgZXhwZWN0KHNhbGVzTmFtZUFjdGl2aXR5KFt7IGN1c3RvbWVyX25hbWU6ICdYJywgY3JlYXRlZF9hdDogJ2EnLCBzdGF0dXM6ICdhbm51bGUnIH0sIHsgY3VzdG9tZXJfbmFtZTogbnVsbCwgY3JlYXRlZF9hdDogJ2InIH1dKSkudG9FcXVhbChbXSk7CiAgICBleHBlY3QocGVuZGluZ05hbWVBY3Rpdml0eShbCiAgICAgIHsgb3BlcmF0aW9uOiAnc3VibWl0X2Nhcm5ldF9kZWJ0JywgcGF5bG9hZDogeyBwX2J1c2luZXNzX2lkOiAnb3RoZXInLCBwX2N1c3RvbWVyX25hbWU6ICdZJyB9LCBxdWV1ZWRBdDogJ2EnIH0sCiAgICAgIHsgb3BlcmF0aW9uOiAnc3VibWl0X2Nhcm5ldF9kZWJ0JywgcGF5bG9hZDogeyBwX2J1c2luZXNzX2lkOiAnYicsIHBfY3VzdG9tZXJfbmFtZTogJ1onIH0sIHF1ZXVlZEF0OiAnYScsIHN0YXR1czogJ2ZhaWxlZF9wZXJtYW5lbnQnIH0sCiAgICAgIHsgb3BlcmF0aW9uOiAnc3VibWl0X3F1aWNrX3NhbGUnLCBwYXlsb2FkOiB7IHBfYnVzaW5lc3NfaWQ6ICdiJyB9LCBxdWV1ZWRBdDogJ2EnIH0sCiAgICAgIHsgb3BlcmF0aW9uOiAnc3VibWl0X2Nhcm5ldF9kZWJ0JywgcGF5bG9hZDogeyBwX2J1c2luZXNzX2lkOiAnYicsIHBfY3VzdG9tZXJfbmFtZTogJyAgJyB9LCBxdWV1ZWRBdDogJ2EnIH0sCiAgICBdLCAnYicpKS50b0VxdWFsKFtdKTsKICB9KTsKCiAgaXQoJ2NsaWVudHMgd2l0aG91dCBhbnkgaGlzdG9yeSBrZWVwIHRoZSBzZXJ2ZXIgb3JkZXIgYWZ0ZXIgdGhvc2Ugd2l0aCBhY3Rpdml0eScsICgpID0+IHsKICAgIGNvbnN0IGxpc3QgPSBtZXJnZVF1aWNrQ2xpZW50cyh7IHNlcnZlcjogW3sgbmFtZTogJ0InIH0sIHsgbmFtZTogJ0EnIH0sIHsgbmFtZTogJ0MnIH1dLCBzYWxlczogW3sgbmFtZTogJ0MnLCBhdDogJzIwMjYtMTAtMDFUMDA6MDA6MDBaJyB9XSwgcGVuZGluZzogW10gfSk7CiAgICBleHBlY3QobGlzdC5tYXAoYyA9PiBjLm5hbWUpKS50b0VxdWFsKFsnQycsICdCJywgJ0EnXSk7CiAgfSk7Cn0pOwoKZGVzY3JpYmUoJ3dpcmluZycsICgpID0+IHsKICBpdCgndGhlIGhvb2sgcmVhZHMgdGhlIG91dGJveCArIHNhbGVzIGxvY2FsbHkgQkVGT1JFIGFueSBuZXR3b3JrLCBza2lwcyB0aGUgbmV0d29yayB3aGVuIGtub3duLW9mZmxpbmUsIGFuZCB0cmFja3MgdGhlIG91dGJveCBsaXZlJywgKCkgPT4gewogICAgY29uc3QgaCA9IHJlYWQoJ3NyYy9ob29rcy91c2VRdWlja0NsaWVudHMudHMnKTsKICAgIGV4cGVjdChoKS50b01hdGNoKC9yZWFkUGVuZGluZ05hbWVzLyk7CiAgICBleHBlY3QoaCkudG9NYXRjaCgvaWYgXChpc0tub3duT2ZmbGluZVwoXClcKSBceyBzZXRMb2FkaW5nXChmYWxzZVwpOyByZXR1cm47IFx9Lyk7CiAgICBleHBlY3QoaCkudG9NYXRjaCgvXFtidXNpbmVzc0lkLCBwZW5kaW5nQ291bnQsIHJlZnJlc2hLZXlcXS8pOwogICAgZXhwZWN0KGgpLnRvTWF0Y2goL3VzZVZlbnRlc1N0b3JlXChzID0+IHNcLnNhbGVzXCkvKTsKICAgIC8vIHRoZSBjYWNoZSBob2xkcyB0aGUgU0VSVkVSIGxpc3Qgb25seTsgcGVuZGluZyBuYW1lcyBhcmUgbWVyZ2VkIGF0IHJlYWQgdGltZQogICAgZXhwZWN0KGgpLnRvTWF0Y2goL3NhdmVDbGllbnRMZWRnZXJDYWNoZVwoY2FjaGVLZXksIHJhbmtlZFwpLyk7CiAgfSk7CiAgaXQoJ2JvdGggc2NyZWVucyB1c2UgdGhlIG9uZSBob29rJywgKCkgPT4gewogICAgZXhwZWN0KHJlYWQoJ3NyYy9jb21wb25lbnRzL0NyZWRpdFJhcGlkZUNhcHR1cmUudHN4JykpLnRvTWF0Y2goL3VzZVF1aWNrQ2xpZW50c1woLyk7CiAgICBleHBlY3QocmVhZCgnYXBwLyhhcHApLyh0YWJzKS92ZW5kcmUudHN4JykpLnRvTWF0Y2goL3VzZVF1aWNrQ2xpZW50c1woLyk7CiAgfSk7CiAgaXQoJ2EgZGVidCBzeW5jZWQgZm9yIGEgbmV3IG5hbWUgY3JlYXRlcyAob3IgcmV1c2VzKSB0aGUgY2xpZW50IGJ5IChidXNpbmVzcywgbmFtZSkg4oCUIG5ldmVyIGEgZHVwbGljYXRlJywgKCkgPT4gewogICAgZXhwZWN0KHJlYWQoJ2xpYi9zeW5jLnRzJykpLnRvTWF0Y2goL29uQ29uZmxpY3Q6ICdidXNpbmVzc19pZCxuYW1lJy8pOwogIH0pOwp9KTsKCmRlc2NyaWJlKCdmcmVlemVHcmlkT3JkZXIg4oCUIGEgY2FwdHVyZSBzZXNzaW9uIGtlZXBzIHRoZSBwbGFjZXMgaXQgb3BlbmVkIHdpdGgnLCAoKSA9PiB7CiAgY29uc3QgZnJvemVuID0gWwogICAgeyBpZDogJzEnLCBuYW1lOiAnQXdhJyB9LAogICAgeyBpZDogJzInLCBuYW1lOiAnTW91c3NhJyB9LAogICAgeyBpZDogJzMnLCBuYW1lOiAnRmFudGEnIH0sCiAgXTsKCiAgaXQoJ2EgcmUtcmFuayB1bmRlcm5lYXRoIGRvZXMgbm90IG1vdmUgYW55IGZhY2UgbWlkLXNlc3Npb24nLCAoKSA9PiB7CiAgICAvLyBUaGUgcmFua2luZyBhZnRlciBhZGRpbmcgYSBjcmVkaXQgdG8gRmFudGE6IHNoZSBqdW1wcyB0byB0aGUgZnJvbnQuCiAgICBjb25zdCByZXJhbmtlZCA9IFsKICAgICAgeyBpZDogJzMnLCBuYW1lOiAnRmFudGEnIH0sCiAgICAgIHsgaWQ6ICcxJywgbmFtZTogJ0F3YScgfSwKICAgICAgeyBpZDogJzInLCBuYW1lOiAnTW91c3NhJyB9LAogICAgXTsKICAgIGV4cGVjdChmcmVlemVHcmlkT3JkZXIoZnJvemVuLCByZXJhbmtlZCkubWFwKGMgPT4gYy5uYW1lKSkudG9FcXVhbChbJ0F3YScsICdNb3Vzc2EnLCAnRmFudGEnXSk7CiAgfSk7CgogIGl0KCdhIGNsaWVudCByZWNvcmRlZCBtaWQtc2Vzc2lvbiBhcHBlbmRzIGF0IHRoZSBlbmQgaW5zdGVhZCBvZiB0ZWxlcG9ydGluZyB0byB0aGUgZnJvbnQnLCAoKSA9PiB7CiAgICBjb25zdCB3aXRoTmV3ID0gWwogICAgICB7IGlkOiAnOScsIG5hbWU6ICdOb3V2ZWxsZScgfSwKICAgICAgeyBpZDogJzEnLCBuYW1lOiAnQXdhJyB9LAogICAgICB7IGlkOiAnMicsIG5hbWU6ICdNb3Vzc2EnIH0sCiAgICAgIHsgaWQ6ICczJywgbmFtZTogJ0ZhbnRhJyB9LAogICAgXTsKICAgIGV4cGVjdChmcmVlemVHcmlkT3JkZXIoZnJvemVuLCB3aXRoTmV3KS5tYXAoYyA9PiBjLm5hbWUpKS50b0VxdWFsKFsnQXdhJywgJ01vdXNzYScsICdGYW50YScsICdOb3V2ZWxsZSddKTsKICB9KTsKCiAgaXQoJ2EgdmFuaXNoZWQgbmFtZSBkcm9wcyBvdXQ7IGEga2VwdCBuYW1lIGNhcnJpZXMgaXRzIGZyZXNoZXN0IHJlY29yZCAobmV3IGlkL3Bob25lKScsICgpID0+IHsKICAgIGNvbnN0IHNoaWZ0ZWQgPSBbCiAgICAgIHsgaWQ6ICcyYicsIG5hbWU6ICdNb3Vzc2EnLCBwaG9uZTogJysyMjQ2MDAwMDAwMDAnIH0sCiAgICAgIHsgaWQ6ICcxJywgbmFtZTogJ0F3YScgfSwKICAgIF07CiAgICBjb25zdCBvdXQgPSBmcmVlemVHcmlkT3JkZXIoZnJvemVuLCBzaGlmdGVkKTsKICAgIGV4cGVjdChvdXQubWFwKGMgPT4gYy5uYW1lKSkudG9FcXVhbChbJ0F3YScsICdNb3Vzc2EnXSk7CiAgICBleHBlY3Qob3V0WzFdKS50b0VxdWFsKHsgaWQ6ICcyYicsIG5hbWU6ICdNb3Vzc2EnLCBwaG9uZTogJysyMjQ2MDAwMDAwMDAnIH0pOwogIH0pOwoKICBpdCgnbWF0Y2hpbmcgaXMgYnkgbm9ybWFsaXplZCBuYW1lIChjYXNlL3NwYWNpbmcgZG8gbm90IHJlc2h1ZmZsZSBvciBkdXBsaWNhdGUpJywgKCkgPT4gewogICAgY29uc3QgbWVzc3kgPSBbeyBuYW1lOiAnICBtb3Vzc2EgJyB9LCB7IG5hbWU6ICdBV0EnIH0sIHsgbmFtZTogJ0ZhbnRhJyB9XTsKICAgIGV4cGVjdChmcmVlemVHcmlkT3JkZXIoZnJvemVuLCBtZXNzeSkubWFwKGMgPT4gYy5uYW1lKSkudG9FcXVhbChbJ0FXQScsICcgIG1vdXNzYSAnLCAnRmFudGEnXSk7CiAgfSk7CgogIGl0KCdhbiBlbXB0eSBwaW4gKHBpY2tlciBvcGVuZWQgd2l0aCBubyBjbGllbnRzIHlldCkgcGFzc2VzIHRoZSByYW5raW5nIHRocm91Z2gnLCAoKSA9PiB7CiAgICBleHBlY3QoZnJlZXplR3JpZE9yZGVyKFtdLCBmcm96ZW4pLm1hcChjID0+IGMubmFtZSkpLnRvRXF1YWwoWydBd2EnLCAnTW91c3NhJywgJ0ZhbnRhJ10pOwogIH0pOwp9KTsK
+import fs from 'fs';
+import path from 'path';
+import { freezeGridOrder, mergeQuickClients, normalizeClientName, pendingNameActivity, salesNameActivity } from '@/src/utils/quickClients';
+
+const read = (p: string) => fs.readFileSync(path.resolve(__dirname, '..', p), 'utf8');
+
+describe('quick-client picker — local truth first', () => {
+  it('a name recorded offline (still in the outbox) is in the picker instantly, ranked FIRST', () => {
+    const pending = pendingNameActivity([
+      { operation: 'submit_carnet_debt', payload: { p_business_id: 'b', p_customer_name: 'Test' }, queuedAt: '2026-10-07T12:00:00Z' },
+    ], 'b');
+    const list = mergeQuickClients({
+      server: [{ id: '1', name: 'Awa' }, { id: '2', name: 'Moussa' }],
+      sales: [{ name: 'Awa', at: '2026-10-06T10:00:00Z' }],
+      pending,
+    });
+    expect(list.map(c => c.name)).toEqual(['Test', 'Awa', 'Moussa']);
+  });
+
+  it('no network, no cache, no server list: sales-derived and pending names still fill the picker', () => {
+    const list = mergeQuickClients({
+      server: [],
+      sales: salesNameActivity([{ customer_name: 'Fanta', client_id: null, created_at: '2026-10-05T00:00:00Z', status: 'credit' }]),
+      pending: pendingNameActivity([{ operation: 'submit_sale', payload: { p_business_id: 'b', p_customer_name: 'Test' }, queuedAt: '2026-10-07T00:00:00Z' }], 'b'),
+    });
+    expect(list.map(c => c.name)).toEqual(['Test', 'Fanta']);
+  });
+
+  it('after it syncs, the same name is ONE client (server row + outbox/sales activity merge by normalized name)', () => {
+    const list = mergeQuickClients({
+      server: [{ id: 'srv-1', name: 'Test' }],
+      sales: [{ name: ' test ', at: '2026-10-07T12:00:00Z' }],
+      pending: [{ name: 'TEST', at: '2026-10-07T12:00:01Z' }],
+    });
+    expect(list).toHaveLength(1);
+    expect(list[0]).toMatchObject({ id: 'srv-1', name: 'Test' });
+    expect(normalizeClientName('  Aïssatou   Diallo ')).toBe('aïssatou diallo');
+  });
+
+  it('ignores cancelled sales, other businesses, refused ops and unnamed records', () => {
+    expect(salesNameActivity([{ customer_name: 'X', created_at: 'a', status: 'annule' }, { customer_name: null, created_at: 'b' }])).toEqual([]);
+    expect(pendingNameActivity([
+      { operation: 'submit_carnet_debt', payload: { p_business_id: 'other', p_customer_name: 'Y' }, queuedAt: 'a' },
+      { operation: 'submit_carnet_debt', payload: { p_business_id: 'b', p_customer_name: 'Z' }, queuedAt: 'a', status: 'failed_permanent' },
+      { operation: 'submit_quick_sale', payload: { p_business_id: 'b' }, queuedAt: 'a' },
+      { operation: 'submit_carnet_debt', payload: { p_business_id: 'b', p_customer_name: '  ' }, queuedAt: 'a' },
+    ], 'b')).toEqual([]);
+  });
+
+  it('clients without any history keep the server order after those with activity', () => {
+    const list = mergeQuickClients({ server: [{ name: 'B' }, { name: 'A' }, { name: 'C' }], sales: [{ name: 'C', at: '2026-10-01T00:00:00Z' }], pending: [] });
+    expect(list.map(c => c.name)).toEqual(['C', 'B', 'A']);
+  });
+});
+
+describe('wiring', () => {
+  it('the hook reads the outbox + sales locally BEFORE any network, skips the network when known-offline, and tracks the outbox live', () => {
+    const h = read('src/hooks/useQuickClients.ts');
+    expect(h).toMatch(/readPendingNames/);
+    expect(h).toMatch(/if \(isKnownOffline\(\)\) \{ setLoading\(false\); return; \}/);
+    expect(h).toMatch(/\[businessId, pendingCount, refreshKey\]/);
+    expect(h).toMatch(/useVentesStore\(s => s\.sales\)/);
+    // the cache holds the SERVER list only; pending names are merged at read time
+    expect(h).toMatch(/saveClientLedgerCache\(cacheKey, ranked\)/);
+  });
+  it('both screens use the one hook', () => {
+    expect(read('src/components/CreditRapideCapture.tsx')).toMatch(/useQuickClients\(/);
+    expect(read('app/(app)/(tabs)/vendre.tsx')).toMatch(/useQuickClients\(/);
+  });
+  it('a debt synced for a new name creates (or reuses) the client by (business, name) — never a duplicate', () => {
+    expect(read('lib/sync.ts')).toMatch(/onConflict: 'business_id,name'/);
+  });
+});
+
+describe('freezeGridOrder — a capture session keeps the places it opened with', () => {
+  const frozen = [
+    { id: '1', name: 'Awa' },
+    { id: '2', name: 'Moussa' },
+    { id: '3', name: 'Fanta' },
+  ];
+
+  it('a re-rank underneath does not move any face mid-session', () => {
+    // The ranking after adding a credit to Fanta: she jumps to the front.
+    const reranked = [
+      { id: '3', name: 'Fanta' },
+      { id: '1', name: 'Awa' },
+      { id: '2', name: 'Moussa' },
+    ];
+    expect(freezeGridOrder(frozen, reranked).map(c => c.name)).toEqual(['Awa', 'Moussa', 'Fanta']);
+  });
+
+  it('a client recorded mid-session appends at the end instead of teleporting to the front', () => {
+    const withNew = [
+      { id: '9', name: 'Nouvelle' },
+      { id: '1', name: 'Awa' },
+      { id: '2', name: 'Moussa' },
+      { id: '3', name: 'Fanta' },
+    ];
+    expect(freezeGridOrder(frozen, withNew).map(c => c.name)).toEqual(['Awa', 'Moussa', 'Fanta', 'Nouvelle']);
+  });
+
+  it('a vanished name drops out; a kept name carries its freshest record (new id/phone)', () => {
+    const shifted = [
+      { id: '2b', name: 'Moussa', phone: '+224600000000' },
+      { id: '1', name: 'Awa' },
+    ];
+    const out = freezeGridOrder(frozen, shifted);
+    expect(out.map(c => c.name)).toEqual(['Awa', 'Moussa']);
+    expect(out[1]).toEqual({ id: '2b', name: 'Moussa', phone: '+224600000000' });
+  });
+
+  it('matching is by normalized name (case/spacing do not reshuffle or duplicate)', () => {
+    const messy = [{ name: '  moussa ' }, { name: 'AWA' }, { name: 'Fanta' }];
+    expect(freezeGridOrder(frozen, messy).map(c => c.name)).toEqual(['AWA', '  moussa ', 'Fanta']);
+  });
+
+  it('an empty pin (picker opened with no clients yet) passes the ranking through', () => {
+    expect(freezeGridOrder([], frozen).map(c => c.name)).toEqual(['Awa', 'Moussa', 'Fanta']);
+  });
+});
