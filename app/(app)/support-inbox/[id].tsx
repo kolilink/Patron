@@ -5,6 +5,7 @@ import * as ImagePicker from 'expo-image-picker';
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
 import { failAlert } from '@/src/components/ui/FailureView';
 import { Screen } from '@/src/components/ui/Screen';
+import { LoadingStatus } from '@/src/components/ui/LoadingStatus';
 import { router, useLocalSearchParams } from 'expo-router';
 import { Ionicons } from '@expo/vector-icons';
 import { Text } from '@/src/components/ui/Text';
@@ -156,7 +157,7 @@ export default function SupportInboxDetailScreen() {
         </View>
 
         {founderDetailLoading && founderMessages.length === 0 ? (
-          <View style={styles.empty}><Text variant="body" color="secondary">Chargement…</Text></View>
+          <View style={styles.empty}><LoadingStatus word="Chargement" color={palette.textSecondary} /></View>
         ) : (
           <FlatList
             data={listItems}

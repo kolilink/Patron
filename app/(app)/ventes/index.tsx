@@ -1044,7 +1044,7 @@ function FilterSheet({ visible, availableProducts, loadingProducts, selectedProd
               {selectedProducts.length > 0 ? `Produits · ${selectedProducts.length} sélectionné${selectedProducts.length > 1 ? 's' : ''}` : 'Produits'}
             </Text>
             {loadingProducts ? (
-              <Text variant="caption" color="secondary">Chargement…</Text>
+              <LoadingStatus word="Chargement" variant="caption" color={palette.textSecondary} />
             ) : availableProducts.length === 0 ? (
               <Text variant="caption" color="secondary">Aucun produit trouvé</Text>
             ) : (

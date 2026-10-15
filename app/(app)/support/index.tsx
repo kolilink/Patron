@@ -6,6 +6,7 @@ import { failAlert, FailureView } from '@/src/components/ui/FailureView';
 import { buildFailure, failureReason } from '@/src/utils/failure';
 import { FAILURE_COPY } from '@/src/utils/failureCopy';
 import { Screen } from '@/src/components/ui/Screen';
+import { LoadingStatus } from '@/src/components/ui/LoadingStatus';
 import { router, useFocusEffect } from 'expo-router';
 import { Ionicons } from '@expo/vector-icons';
 import { Text } from '@/src/components/ui/Text';
@@ -168,7 +169,7 @@ export default function SupportScreen() {
 
         {loading && messages.length === 0 ? (
           <View style={styles.empty}>
-            <Text variant="body" color="secondary">Chargement…</Text>
+            <LoadingStatus word="Chargement" color={palette.textSecondary} />
           </View>
         ) : !loading && messages.length === 0 && offline ? (
           <View style={styles.empty}>

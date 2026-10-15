@@ -25,9 +25,8 @@ import {
 } from '@expo-google-fonts/inter';
 import { PostHogProvider } from 'posthog-react-native';
 import { useAuthStore } from '@/stores/auth';
-import { getKV, openDb } from '@/lib/db';
+import { openDb } from '@/lib/db';
 import { capturePendingInviterId } from '@/lib/inviteLink';
-import { setEnabled, HAPTICS_KV_KEY } from '@/lib/haptics';
 import { ThemeProvider } from '@/src/theme';
 import { ConfirmSheetHost } from '@/src/components/ui/ConfirmSheet';
 import { ThemedStack, ThemedRootView } from '@/src/components/ui/ThemedStack';
@@ -178,9 +177,9 @@ function RootLayout() {
       // a missing token just means a normal sign-up, never a dead end.
       return capturePendingInviterId();
     }).then(async () => {
-      // Haptics master switch — hydrate the persisted preference once the KV
-      // store is open. Default ON: only an explicit stored 'false' silences.
-      await getKV(HAPTICS_KV_KEY).then(v => setEnabled(v !== 'false')).catch(() => { });
+      // Haptics are always on (2026-10-14): the user-facing master switch
+      // and its persisted 'false' are gone — lib/haptics defaults to on
+      // and nothing in the app turns it off anymore.
       // Measurement (docs/measurement.md): first-open install record, the
       // cold-start app_opened, and a retry of any funnel steps still queued.
       await loadDeviceTestFlag();

@@ -10,15 +10,15 @@ const read = (f: string) => fs.readFileSync(path.join(root, f), 'utf8');
 const lines = (f: string) => read(f).split('\n');
 
 describe('item 1 — switches fire haptics.toggle with the new value', () => {
-  it('parametres: haptics master sets state first, then toggles', () => {
+  it('parametres: no haptics master switch and no per-sale notify switch remain (2026-10-14 — haptics always on, preferences are not user toggles)', () => {
     const s = read('app/(app)/parametres/index.tsx');
-    const body = s.slice(s.indexOf('const handleToggleHaptics'), s.indexOf('Per-sale push opt-out'));
-    expect(body.indexOf('setEnabled(value)')).toBeGreaterThan(-1);
-    expect(body.indexOf('haptics.toggle(value)')).toBeGreaterThan(body.indexOf('setEnabled(value)'));
+    expect(s).not.toContain('handleToggleHaptics');
+    expect(s).not.toContain('handleToggleNotifyEverySale');
+    expect(s).not.toContain('setEnabled(');
+    expect(s).not.toContain('Une notification à chaque vente');
   });
-  it('parametres: notify-every-sale and payment reminders toggle', () => {
+  it('parametres: payment reminders toggle still fires its haptic', () => {
     const s = read('app/(app)/parametres/index.tsx');
-    expect(s).toMatch(/setNotifyEverySale\(value\);\s*haptics\.toggle\(value\)/);
     expect(s).toMatch(/savePaymentRemindersPref\(true\)\) \{ haptics\.toggle\(true\)/);
   });
   it('Modèles (add/edit sheet) + partner share-stock switches', () => {

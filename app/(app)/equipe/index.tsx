@@ -607,7 +607,7 @@ function MemberDetailSheet({
 
             {(!scopeAll || isInvestisseur) && (
               loadingScope ? (
-                <Text variant="caption" color="secondary">Chargement…</Text>
+                <LoadingStatus word="Chargement" variant="caption" color={palette.textSecondary} />
               ) : (
                 scope.map(s => (
                   <AnimatedRow key={s.product_id} id={s.product_id} style={[styles.scopeRow, isInvestisseur && { flexDirection: 'column', alignItems: 'stretch', gap: spacing[3] }]}>

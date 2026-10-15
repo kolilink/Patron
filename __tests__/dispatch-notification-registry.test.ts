@@ -48,10 +48,15 @@ describe('notification registry — allowlist', () => {
     expect(EVENT_REGISTRY.price_changed.built).toBe(false);
   });
 
-  it('dormant engines (no schema/cron/UI at all) are marked built:false', () => {
-    const dormant = ['sale_edited', 'alpha_quota_reset', 'revenue_milestone'];
-    for (const type of dormant) {
-      expect(EVENT_REGISTRY[type].built).toBe(false);
+  it('sale_edited, alpha_quota_reset, revenue_milestone have real engines — built:true (corrected 2026-10-14)', () => {
+    // This test previously asserted the opposite, encoding the registry's
+    // own stale notBuiltReason claims as fact. The engines exist and were
+    // dispatching into a closed gate: sale_edited has a client caller
+    // (stores/ventes.ts editSale), alpha_quota_reset and revenue_milestone
+    // have edge senders + pg_cron (v138/v174). built:false made the edge
+    // function answer skipped:'not_built' to every one of them.
+    for (const type of ['sale_edited', 'alpha_quota_reset', 'revenue_milestone']) {
+      expect(EVENT_REGISTRY[type].built).toBe(true);
     }
   });
 

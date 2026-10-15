@@ -6,6 +6,7 @@ import {
   View,
 } from 'react-native';
 import { Screen } from '@/src/components/ui/Screen';
+import { LoadingStatus } from '@/src/components/ui/LoadingStatus';
 import { router, useLocalSearchParams } from 'expo-router';
 import { Ionicons } from '@expo/vector-icons';
 import { Text } from '@/src/components/ui/Text';
@@ -98,7 +99,7 @@ export default function PartnerStockScreen() {
 
       {loading ? (
         <View style={styles.center}>
-          <Text variant="body" color="secondary">Chargement…</Text>
+          <LoadingStatus word="Chargement" color={palette.textSecondary} />
         </View>
       ) : error ? (
         <View style={styles.center}>
