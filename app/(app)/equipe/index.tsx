@@ -1029,7 +1029,11 @@ export default function EquipeScreen() {
   }, [role]);
 
   const { membres, codes, redeemedCodes, loading, saving, error, hasFetched, codesFetched, offline, offlineSince, fetchMembres, fetchCodes, createCode, revokeCode } = useEquipeStore();
-  const { products, fetchProducts } = useProductStore();
+  const { products: rawProducts, fetchProducts, productsFetchedFor } = useProductStore();
+  // Until the products store has resolved for THIS business, its rows may be
+  // another business's catalogue — every consumer below (invite-code scope
+  // picker included) only ever sees this business's products.
+  const products = productsFetchedFor === businessId ? rawProducts : [];
 
   const [tab, setTab] = useState<'membres' | 'codes'>('membres');
   const [showNewCode, setShowNewCode] = useState(false);
@@ -1070,7 +1074,7 @@ export default function EquipeScreen() {
       if (!businessId) return;
       fetchMembres(businessId);
       fetchCodes(businessId);
-      if (products.length === 0) fetchProducts(businessId, userId);
+      if (productsFetchedFor !== businessId) fetchProducts(businessId, userId);
     }, [businessId]),
   );
 
