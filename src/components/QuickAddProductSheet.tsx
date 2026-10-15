@@ -392,8 +392,11 @@ export function QuickAddProductSheet({
       accessory={
         <>
           <SilentKeyboardAccessory nativeID={SILENT_ID} />
+          {/* Keyed by name below: a repeat add remounts the pill, so the old name fades out as the new one
+              fades in (entering/exiting pair) instead of the text swapping mid-pill. */}
           {toastName != null && (
             <ReAnimated.View
+              key={toastName}
               pointerEvents="none"
               entering={reduce ? undefined : FadeInDown.duration(200)}
               exiting={reduce ? undefined : FadeOut.duration(200)}
