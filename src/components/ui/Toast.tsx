@@ -1,51 +1,69 @@
 import { useEffect, useMemo, useRef } from 'react';
-import { Animated, PanResponder, Platform, Pressable, StyleSheet, View } from 'react-native';
+import { Animated, Easing, LayoutAnimation, PanResponder, Platform, Pressable, StyleSheet, UIManager, View } from 'react-native';
 import { BlurView } from 'expo-blur';
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
 import { Ionicons } from '@expo/vector-icons';
 import { Text } from './Text';
-import { useToastStore, type ToastItem } from '@/stores/toast';
+import { useToastStore, TOAST_EXIT_MS, type ToastItem } from '@/stores/toast';
 import { useTheme, radius, spacing } from '@/src/theme';
 import { useReduceMotion } from '@/src/hooks/useReduceMotion';
 
 // THE toast. A compact floating pill, centered at the top, translucent (blur over a tint — never a slab), that
 // takes only the room its words need. Swipe it up to dismiss; it also goes away by itself (see stores/toast.ts).
-// An optional action ("Annuler") lives inside the pill. Several toasts stack; a new one never replaces another.
+// An optional action ("Annuler") lives inside the pill. Distinct toasts stack; a repeat of the same plain
+// toast coalesces into the pill already up (see stores/toast.ts).
 // Mounted once in (app)/_layout.tsx. No per-screen toasts, no full-width banners.
+//
+// Motion (modeled on the Muse.ai "Copied to clipboard" pill): in = fade + an 8px settle over 200ms, no
+// spring and no long drop; out = the mirror image over TOAST_EXIT_MS, driven by the store's `exiting` flag
+// so a timeout leaves exactly like a swipe; when a pill joins or leaves, the others glide to their new slot
+// (LayoutAnimation) instead of jumping.
 
 const SWIPE_DISMISS_DY = -24;
-const ENTER_OFFSET = -90;
+const ENTER_OFFSET = -8;
+const ENTER_MS = 200;
+const STACK_GLIDE_MS = 200;
+
+if (Platform.OS === 'android' && UIManager.setLayoutAnimationEnabledExperimental) {
+  UIManager.setLayoutAnimationEnabledExperimental(true);
+}
 
 function ToastPill({ item }: { item: ToastItem }) {
   const { palette, resolvedScheme } = useTheme();
   const reduce = useReduceMotion();
   const { message: toastText } = item;
   const dismiss = useToastStore(s => s.dismiss);
+  const remove = useToastStore(s => s.remove);
   const runAction = useToastStore(s => s.runAction);
   const y = useRef(new Animated.Value(reduce ? 0 : ENTER_OFFSET)).current;
   const opacity = useRef(new Animated.Value(reduce ? 1 : 0)).current;
+  const exiting = item.exiting;
 
   useEffect(() => {
-    if (reduce) return;
+    if (reduce) { y.setValue(0); opacity.setValue(1); return; }
     Animated.parallel([
-      Animated.spring(y, { toValue: 0, useNativeDriver: true, tension: 90, friction: 13 }),
-      Animated.timing(opacity, { toValue: 1, duration: 140, useNativeDriver: true }),
+      Animated.timing(y, { toValue: 0, duration: ENTER_MS, easing: Easing.out(Easing.cubic), useNativeDriver: true }),
+      Animated.timing(opacity, { toValue: 1, duration: ENTER_MS, easing: Easing.out(Easing.cubic), useNativeDriver: true }),
     ]).start();
   }, [reduce, y, opacity]);
 
-  const flyAway = () => {
+  // The store flags `exiting` (timeout, swipe, action done): animate out over the same window the store
+  // counts before removing the pill, so the list never pops. Reduced motion skips straight to removal.
+  useEffect(() => {
+    if (!exiting) return;
+    if (reduce) { remove(item.id); return; }
     Animated.parallel([
-      Animated.timing(y, { toValue: ENTER_OFFSET, duration: 160, useNativeDriver: true }),
-      Animated.timing(opacity, { toValue: 0, duration: 160, useNativeDriver: true }),
-    ]).start(() => dismiss(item.id));
-  };
+      Animated.timing(y, { toValue: ENTER_OFFSET, duration: TOAST_EXIT_MS, easing: Easing.in(Easing.cubic), useNativeDriver: true }),
+      Animated.timing(opacity, { toValue: 0, duration: TOAST_EXIT_MS, easing: Easing.in(Easing.cubic), useNativeDriver: true }),
+    ]).start();
+  }, [exiting, reduce, y, opacity, remove, item.id]);
 
   const pan = useMemo(() => PanResponder.create({
     // Only an upward drag claims the gesture, so taps on "Annuler" still work.
     onMoveShouldSetPanResponder: (_e, g) => g.dy < -4 && Math.abs(g.dy) > Math.abs(g.dx),
     onPanResponderMove: (_e, g) => { if (g.dy < 0) y.setValue(g.dy); },
     onPanResponderRelease: (_e, g) => {
-      if (g.dy <= SWIPE_DISMISS_DY || g.vy < -0.5) flyAway();
+      if (g.dy <= SWIPE_DISMISS_DY || g.vy < -0.5) dismiss(item.id);
       else Animated.spring(y, { toValue: 0, useNativeDriver: true }).start();
     },
   // eslint-disable-next-line react-hooks/exhaustive-deps
@@ -106,6 +124,18 @@ function ToastPill({ item }: { item: ToastItem }) {
 export function ToastHost() {
   const toasts = useToastStore(s => s.toasts);
   const insets = useSafeAreaInsets();
+  const reduce = useReduceMotion();
+  const ids = toasts.map(t => t.id).join(',');
+  const firstRender = useRef(true);
+
+  // When the stack changes (a pill joins, or one finishes exiting and is removed), glide the remaining
+  // pills to their new positions instead of letting them jump. Skipped on first mount and for reduced motion.
+  useEffect(() => {
+    if (firstRender.current) { firstRender.current = false; return; }
+    if (reduce) return;
+    LayoutAnimation.configureNext(LayoutAnimation.create(STACK_GLIDE_MS, LayoutAnimation.Types.easeInEaseOut, LayoutAnimation.Properties.opacity));
+  }, [ids, reduce]);
+
   if (toasts.length === 0) return null;
   return (
     // The wrapper ignores touches so only the pills themselves are interactive.
@@ -129,3 +159,4 @@ const styles = StyleSheet.create({
   label: { flexShrink: 1, fontWeight: '600' as const },
   action: { minHeight: 44, justifyContent: 'center', paddingLeft: spacing[2] },
 });
+
