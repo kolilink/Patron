@@ -81,6 +81,10 @@ interface EquipeStore {
   saving: boolean;
   error: string | null;
   hasFetched: boolean;
+  // fetchCodes' own resolution flag (hasFetched tracks fetchMembres).
+  // The codes tab gates its « Aucun code actif » empty state on it so the
+  // state can never render before the codes load has resolved.
+  codesFetched: boolean;
   offline: boolean;
   offlineSince: number | null;
 
@@ -107,6 +111,7 @@ export const useEquipeStore = create<EquipeStore>((set, get) => ({
   saving: false,
   error: null,
   hasFetched: false,
+  codesFetched: false,
   offline: false,
   offlineSince: null,
 
@@ -192,7 +197,7 @@ export const useEquipeStore = create<EquipeStore>((set, get) => ({
       .select('*')
       .eq('business_id', businessId)
       .order('created_at', { ascending: false });
-    if (error) { set({ loading: false, error: translateError(error, "Le chargement n'a pas abouti.") }); return; }
+    if (error) { set({ loading: false, error: translateError(error, "Le chargement n'a pas abouti."), codesFetched: true }); return; }
 
     const all = (data ?? []) as CodeInvitation[];
     const now = new Date();
@@ -237,6 +242,7 @@ export const useEquipeStore = create<EquipeStore>((set, get) => ({
         redeemed_by_name: c.redeemed_by ? (namesById[c.redeemed_by] ?? generateFallbackName(c.redeemed_by)) : null,
       })),
       loading: false,
+      codesFetched: true,
     });
   },
 
@@ -390,5 +396,5 @@ export const useEquipeStore = create<EquipeStore>((set, get) => ({
   },
 
   clearError: () => set({ error: null }),
-  reset: () => set({ membres: [], codes: [], redeemedCodes: [], loading: false, saving: false, error: null, hasFetched: false, offline: false, offlineSince: null }),
+  reset: () => set({ membres: [], codes: [], redeemedCodes: [], loading: false, saving: false, error: null, hasFetched: false, codesFetched: false, offline: false, offlineSince: null }),
 }));

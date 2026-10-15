@@ -15,6 +15,11 @@ interface PartnershipsStore {
   pending: PendingRequest[];
   loading: boolean;
   error: string | null;
+  // Business id loadPartnerships last reached a terminal result for —
+  // null until then. Screens gate their empty state on it so "confirmed
+  // no partners" is never confused with "haven't loaded yet" (same
+  // pattern as productsFetchedFor / salesFetchedFor).
+  partnersFetchedFor: string | null;
   inviteCode: PartnerInviteCode | null;
   inviteCodeLoading: boolean;
   offline: boolean;
@@ -57,6 +62,7 @@ const initialState = {
   pending: [] as PendingRequest[],
   loading: false,
   error: null as string | null,
+  partnersFetchedFor: null as string | null,
   inviteCode: null as PartnerInviteCode | null,
   inviteCodeLoading: false,
   offline: false,
@@ -169,20 +175,20 @@ export const usePartnershipsStore = create<PartnershipsStore>((set, get) => ({
       });
 
       void savePartnershipsCache(businessId, { partners, pending });
-      set({ partners, pending, loading: false, offline: false, offlineSince: null });
+      set({ partners, pending, loading: false, offline: false, offlineSince: null, partnersFetchedFor: businessId });
     } catch (err) {
       if (isNetworkError(err)) {
         reportOfflineFallback('partnerships.loadPartnerships', err);
         const cached = await getPartnershipsCache(businessId) as { partners: PartnerData[]; pending: PendingRequest[] } | null;
         if (cached) {
           const ts = await getCacheTimestamp('partnerships_cache', businessId);
-          set({ partners: cached.partners, pending: cached.pending, loading: false, offline: true, offlineSince: ts });
+          set({ partners: cached.partners, pending: cached.pending, loading: false, offline: true, offlineSince: ts, partnersFetchedFor: businessId });
           return;
         }
-        set({ loading: false, offline: true, offlineSince: null });
+        set({ loading: false, offline: true, offlineSince: null, partnersFetchedFor: businessId });
         return;
       }
-      set({ loading: false, error: translateError(err, 'Impossible de charger vos amis') });
+      set({ loading: false, error: translateError(err, 'Impossible de charger vos amis'), partnersFetchedFor: businessId });
     }
   },
 
