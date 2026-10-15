@@ -128,6 +128,15 @@ function ApportFormModal({ visible, mode, editing, businessId, currency, saving,
     setPhoto(null);
   };
 
+  // Opening a FRESH entry (add / withdraw) always starts from a blank form.
+  // The host closes this modal after a save without going through handleClose,
+  // and the component stays mounted — without this reset, the previous entry's
+  // amount, member, note and photo would still be sitting in the fields on the
+  // next open, one tap away from a duplicate record carrying the old photo.
+  useEffect(() => {
+    if (visible && (mode === 'add' || mode === 'withdraw')) reset();
+  }, [visible, mode]);
+
   // Prefill when opening on an existing entry (edit, editWithdrawal or view)
   useEffect(() => {
     if (visible && (mode === 'edit' || mode === 'editWithdrawal' || mode === 'view') && editing) {
