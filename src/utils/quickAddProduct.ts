@@ -319,9 +319,14 @@ export function isEditDirty(current: QuickAddState, saved: QuickAddState): boole
   });
 }
 
-/** Next sheet state after a successful add: everything cleared EXCEPT the quantity (sticky). */
-export function afterAdd(s: QuickAddState): QuickAddState {
-  return { ...EMPTY_QUICK_ADD, qty: s.qty };
+/**
+ * Next sheet state after a successful add: EVERYTHING restarts fresh — quantity back
+ * to "1" included. A carried-over quantity silently became the NEXT product's stock
+ * count (add 50 Riz, then Huile is born with 50 too); a fresh "1" costs one tap when
+ * the run really is same-quantity, a wrong inherited stock costs an inventory lie.
+ */
+export function afterAdd(_s: QuickAddState): QuickAddState {
+  return { ...EMPTY_QUICK_ADD };
 }
 
 /** Edit mode: the sheet's starting state for a stored product (its stock is seeded here; the stepper moves it). */
