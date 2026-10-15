@@ -76,7 +76,8 @@ describe('the carnet screen no longer blanks on a slow payments read', () => {
         const banner = DETAIL.slice(DETAIL.indexOf('{totalOwed > 0 ?'), DETAIL.indexOf('{totalOwed > 0 ?') + 700);
         expect(banner).toMatch(/!paymentsResolved && allPayments\.length === 0 \?/);
         // The full page renders around it — the gate is inside the banner, not around the screen.
-        expect(banner).toMatch(/Chargement…/);
+        // (Since 2026-10-14 the placeholder is the animated LoadingStatus, per the loading law.)
+        expect(banner).toMatch(/<LoadingStatus word="Chargement"/);
         // The amount text is rendered inside the same banner's else-branch.
         expect(banner).toMatch(/amount=\{totalOwed\}/);
     });
