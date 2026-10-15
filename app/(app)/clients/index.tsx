@@ -308,9 +308,6 @@ export default function ClientsScreen() {
             icon="checkmark-circle-outline"
             title="Aucune dette"
             subtitle="Aucun client ne vous doit."
-            actionLabel="Effacer"
-            actionVariant="outline"
-            onAction={() => setFilter('tous')}
           />
         ) : (
           <EmptyState
