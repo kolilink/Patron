@@ -72,14 +72,13 @@ export const EVENT_REGISTRY: Record<string, EventDef> = {
     allowedDataKeys: ['sale_id'],
   },
   sale_edited: {
-    built: false,
-    notBuiltReason: 'No client caller for edit_sale exists in this repo — edit-sale UI is not built.',
+    built: true,
     category: 'money',
     subtitle: null,
     body: generic('Une vente a été modifiée. Touchez pour voir.'),
     route: routeWithId('/(app)/ventes', 'sale_id'),
     urgent: false,
-    allowedDataKeys: ['sale_id'],
+    allowedDataKeys: ['sale_id', 'editor', 'amount'],
   },
   low_stock: {
     built: true,
@@ -202,12 +201,14 @@ export const EVENT_REGISTRY: Record<string, EventDef> = {
     allowedDataKeys: ['sender'],
   },
 
-  // ── 11-17 — activation_nudge_1/2 and second_action_reminder are now live
-  // (migration_v155.sql); alpha_quota_reset, revenue_milestone, and
-  // debt_aging_reminder remain dormant, no engine exists yet ─────────────
+  // ── 11-17 — activation_nudge_1/2 and second_action_reminder are live
+  // (migration_v155.sql); alpha_quota_reset and revenue_milestone have
+  // live senders too (send-alpha-quota-reminders + pg_cron v138,
+  // send-revenue-milestone-reminders + pg_cron v174) — their registry
+  // entries were the last closed gate (built:false dropped every
+  // dispatch until 2026-10-14). ────────────────────────────────────────
   alpha_quota_reset: {
-    built: false,
-    notBuiltReason: 'No schema/cron exists — alpha_quota tracking + reset detection never built.',
+    built: true,
     category: 'ordinary',
     subtitle: null,
     body: generic('Vous pouvez parler à Alpha maintenant.'),
@@ -270,8 +271,7 @@ export const EVENT_REGISTRY: Record<string, EventDef> = {
     allowedDataKeys: ['action_type'],
   },
   revenue_milestone: {
-    built: false,
-    notBuiltReason: 'No cumulative-sales/threshold-ladder tracking exists.',
+    built: true,
     category: 'ordinary',
     subtitle: null,
     body: generic('Fier de vous, patron — continuez comme ça.'),

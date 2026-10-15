@@ -21,12 +21,14 @@ import * as Haptics from 'expo-haptics';
 // swallow broken-motor failures silently.
 // ---------------------------------------------------------------------------
 
-// Persisted master-switch key (read at startup by app/_layout.tsx, toggled in
-// parametres/index.tsx).
+// Legacy persisted master-switch key. Since 2026-10-14 haptics are NOT a
+// user preference: the parametres switch and the startup restore are gone,
+// nothing reads or writes this key, and `enabled` below simply stays at
+// its default. Kept exported only so old references resolve.
 export const HAPTICS_KV_KEY = 'app_haptics_enabled';
 
-// Master switch — default ON. The single chokepoint every helper routes
-// through; flipping it off silences every haptic in the app at once.
+// Master gate — default ON, and no longer user-toggleable (see above).
+// The single chokepoint every helper routes through.
 let enabled = true;
 export function setEnabled(value: boolean): void {
   enabled = value;

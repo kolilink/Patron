@@ -994,7 +994,7 @@ export const useVentesStore = create<VentesStore>((set, get) => ({
         eventType: 'sale_edited',
         // Net of discount (RPC returns both in cents), matching the net figure
         // sale_completed showed — not the recomputed catalog gross.
-        payload: { editor: editorName, amount: formatAmount((updated.total_amount - updated.discount_amount) / 100, currency) },
+        payload: { sale_id: saleId, editor: editorName, amount: formatAmount((updated.total_amount - updated.discount_amount) / 100, currency) },
         targetRoles: ['administrateur', 'manager'],
         excludeUserId: useAuthStore.getState().session?.user?.id,
       });
