@@ -296,9 +296,10 @@ describe('offline contract: every Gérer action goes through the outbox and show
 
   it('add → edit → stock adjust → archive → restore, all offline: queued, no network, reflected before any sync', async () => {
     const st = useProductStore.getState();
-    // add
-    expect(await st.createProduct('b', 'u', { name: 'Savon', unit: 'pcs', cost_price: 0, sale_price: 0, reorder_level: 0, initial_stock: 3 })).toBe(true);
+    // add — createProduct returns the created product's id (the contract handleAdd attaches models to)
+    const createdId = await st.createProduct('b', 'u', { name: 'Savon', unit: 'pcs', cost_price: 0, sale_price: 0, reorder_level: 0, initial_stock: 3 });
     const created = useProductStore.getState().products.find(p => p.name === 'Savon')!;
+    expect(createdId).toBe(created.id);
     expect(created).toBeTruthy();
     expect(needsSalePrice(created)).toBe(true);
     // edit (price fix)
