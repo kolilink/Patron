@@ -108,7 +108,7 @@ function FournisseurForm({ visible, editing, products, fournisseurs, businessId,
   const sheetSupplierId = editing && !editing._pending ? editing.id : null;
   const createForSupplier = async (payload: QuickAddPayload): Promise<{ ok: boolean }> => {
     const productId = generateId();
-    const ok = await createProduct(businessId, userId, { ...payload.data, id: productId });
+    const ok = (await createProduct(businessId, userId, { ...payload.data, id: productId })) != null;
     if (!ok) {
       haptics.error();
       showFailureAlert(buildFailure({
