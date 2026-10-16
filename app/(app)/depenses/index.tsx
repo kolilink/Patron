@@ -163,7 +163,11 @@ export default function DepensesScreen() {
 
   const handleReject = useCallback(async (e: Expense) => {
     setSheet(null);
-    await rejectExpense(e.id, userId);
+    // Same contract as handleApprove: the result is checked and the outcome is felt. Rejecting
+    // used to ignore it entirely — success and failure closed the sheet identically, and a failed
+    // rejection left the expense « en attente » with no signal anywhere.
+    const ok = await rejectExpense(e.id, userId);
+    if (ok) haptics.success(); else haptics.error();
   }, [rejectExpense, userId]);
 
   const handleAdd = () => setSheet({ mode: 'add', id: null });
