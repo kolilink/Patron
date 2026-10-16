@@ -344,7 +344,7 @@ export default function ReceptionScreen() {
     if (!sheetTarget) return { ok: false };
     const { localId } = sheetTarget;
     const productId = generateId();
-    const ok = await createProduct(businessId, userId, { ...payload.data, id: productId });
+    const ok = (await createProduct(businessId, userId, { ...payload.data, id: productId })) != null;
     if (!ok) {
       haptics.error();
       showFailureAlert(buildFailure({

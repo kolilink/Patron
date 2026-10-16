@@ -89,9 +89,9 @@ export function useProductSheets(): { api: ProductSheetsApi; sheets: React.React
   };
 
   const handleAdd = useCallback(
-    async ({ data, hasVariants, variants, stockQty }: QuickAddPayload): Promise<{ ok: boolean }> => {
-      const ok = await createProduct(businessId, userId, data);
-      if (!ok) {
+    async ({ data, hasVariants, variants, stockQty }: QuickAddPayload): Promise<{ ok: boolean; modelsPending?: boolean; createdProductId?: string }> => {
+      const createdId = await createProduct(businessId, userId, data);
+      if (!createdId) {
         haptics.error();
         showFailureAlert(buildFailure({
           what: FAILURE_COPY.productNotSaved.what,
@@ -100,15 +100,19 @@ export function useProductSheets(): { api: ProductSheetsApi; sheets: React.React
         }));
         return { ok: false };
       }
-      const nameLower = data.name.trim().toLowerCase();
-      const created = useProductStore.getState().products.find(p => p.name.trim().toLowerCase() === nameLower) ?? null;
-      if (created && hasVariants && variants.length > 0) {
-        // Online-only call. Never assume it ran: the product is already queued, so say exactly that.
-        const variantsOk = isKnownOffline() ? false : await upsertVariants(businessId, created.id, userId, variants);
-        if (!variantsOk) modelsNotSavedAlert();
-      }
-      if (created) setPulseId(created.id);
+      setPulseId(createdId);
       addedCount.current += 1;
+      if (hasVariants && variants.length > 0) {
+        // Online-only call, attached by the id createProduct returned — never re-found by name.
+        // The old name lookup was a silent trap: when it missed, this whole block was skipped and
+        // the models vanished while the sheet celebrated (Bic, 2026-10-16). Never assume it ran:
+        // the product is already queued, so say exactly that, and park the entry as a draft.
+        const variantsOk = isKnownOffline() ? false : await upsertVariants(businessId, createdId, userId, variants);
+        if (!variantsOk) {
+          modelsNotSavedAlert();
+          return { ok: true, modelsPending: true, createdProductId: createdId };
+        }
+      }
       return { ok: true };
     },
     [businessId, userId, createProduct, upsertVariants],

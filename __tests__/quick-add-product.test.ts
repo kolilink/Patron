@@ -213,7 +213,7 @@ describe('offline create (phone-first, same UUID)', () => {
   it('writes to the outbox only, product is visible locally, no network call', async () => {
     const payload = toQuickAddPayload(st({ name: 'Riz', price: '5 000', qty: '2' }), C);
     const ok = await useProductStore.getState().createProduct('biz', 'user', payload.data);
-    expect(ok).toBe(true);
+    expect(ok).toBe(enqueued[0].payload.product.id);
     expect(rpcCalls).toEqual([]);
     expect(enqueued).toHaveLength(1);
     expect(enqueued[0].op).toBe('create_product');
@@ -229,7 +229,7 @@ describe('name-only create', () => {
   beforeEach(() => { enqueued.length = 0; rpcCalls.length = 0; });
   it('goes through the outbox with sale_price 0 and lands in the grid as a "Prix à fixer" product', async () => {
     const payload = toQuickAddPayload(st({ name: 'Savon' }), C);
-    expect(await useProductStore.getState().createProduct('biz', 'user', payload.data)).toBe(true);
+    expect(await useProductStore.getState().createProduct('biz', 'user', payload.data)).toBe(enqueued[0].payload.product.id);
     expect(rpcCalls).toEqual([]);
     expect(enqueued).toHaveLength(1);
     expect(enqueued[0].payload.product).toMatchObject({ name: 'Savon', sale_price: 0 });
@@ -478,7 +478,7 @@ describe('rapid loop wiring (source-level: this repo has no component-render har
     const body = h.slice(h.indexOf('const handleAdd'), h.indexOf('const handleEdit'));
     expect(body).toContain('createProduct(businessId, userId, data)');
     expect(body).not.toContain('setAddOpen(false)');
-    expect(body).toContain('setPulseId(created.id)');
+    expect(body).toContain('setPulseId(createdId)');
   });
   it('a product with no sale price shows a tappable "Prix à fixer", never a 0 price', () => {
     const pm = read('src/components/products/ProductManager.tsx');

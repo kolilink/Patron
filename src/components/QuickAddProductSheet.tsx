@@ -46,7 +46,7 @@ interface Props {
   visible: boolean;
   onClose: () => void;
   /** Add: createProduct via the outbox (sheet stays open). Edit: updateProduct (host closes the sheet on ok). */
-  onSubmit: (payload: QuickAddPayload) => Promise<{ ok: boolean; modelsPending?: boolean }>;
+  onSubmit: (payload: QuickAddPayload) => Promise<{ ok: boolean; modelsPending?: boolean; createdProductId?: string }>;
   /** She tapped an existing product in the suggestions: open it, don't duplicate it. */
   onPickExisting: (product: Product) => void;
   saving: boolean;
@@ -371,6 +371,17 @@ export function QuickAddProductSheet({
     }
     if (isEdit || isDelivery) return; // edit / delivery: the host closes the sheet and confirms
     if (supplierCtx) return; // supplier form: the host links the product and closes the sheet
+    if (res.modelsPending && res.createdProductId) {
+      // The product was created but the online-only models save did not run: no celebration, no
+      // reset. The entry lands as an edit draft on the created product — resuming reopens it in
+      // the edit sheet, whose save retries the models by id — and this add draft is retired, so
+      // a resume can never create a duplicate of the product that already exists.
+      added.current = true; // the product IS added: handleClose must not re-save this state as an add draft
+      void saveQuickAddDraft(businessId, editDraftId(res.createdProductId), sRef.current, { productId: res.createdProductId }).catch(() => {}); // failure: silent — draft is best-effort
+      void removeQuickAddDraft(businessId, draftId.current).catch(() => {}); // failure: silent — draft is best-effort
+      onClose();
+      return;
+    }
     added.current = true;
     showToast(name);
     resetForNext();

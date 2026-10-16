@@ -100,7 +100,8 @@ interface ProductStore {
   fetchArchivedProducts: (businessId: string) => Promise<void>;
   fetchVariants: (productId: string, businessId: string) => Promise<ProductVariant[]>;
   upsertVariants: (businessId: string, productId: string, userId: string, variants: DraftVariant[]) => Promise<boolean>;
-  createProduct: (businessId: string, userId: string, data: CreateProductData) => Promise<boolean>;
+  /** The created product's id on success (the client-generated id the outbox sends), null when the local write failed. Callers that attach follow-up writes (models) must use this id — never re-find the product by name. */
+  createProduct: (businessId: string, userId: string, data: CreateProductData) => Promise<string | null>;
   updateProduct: (businessId: string, userId: string, id: string, data: Partial<CreateProductData>) => Promise<boolean>;
   /** true = archived. The caller offers Annuler (restoreProduct) on success. */
   archiveProduct: (id: string, businessId: string) => Promise<boolean>;
@@ -427,7 +428,7 @@ export const useProductStore = create<ProductStore>((set, get) => ({
     } catch (err) {
       console.error('[createProduct] local write failed', err);
       set({ error: isOutboxValidationError(err) ? null : "Impossible d'enregistrer sur cet appareil. Réessayez.", saving: false });
-      return false;
+      return null;
     }
     try { await rebuildProducts(businessId); } catch (err) { console.error('[createProduct] rebuild failed (write already succeeded)', err); }
     void afterProductEnqueue();
@@ -437,7 +438,7 @@ export const useProductStore = create<ProductStore>((set, get) => ({
       has_category: !!(data.category),
     });
     set({ saving: false });
-    return true;
+    return productId;
   },
 
   updateProduct: async (businessId, userId, id, data) => {
