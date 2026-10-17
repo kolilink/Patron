@@ -1,4 +1,4 @@
-import { useEffect, useMemo, useRef, useState } from 'react';
+import { useEffect, useMemo, useState } from 'react';
 import {
   Alert,
   BackHandler,
@@ -9,7 +9,6 @@ import {
   TextInput,
   View,
 } from 'react-native';
-import { Gesture, GestureDetector } from 'react-native-gesture-handler';
 import Animated, {
   useSharedValue,
   useAnimatedStyle,
@@ -29,21 +28,28 @@ import type { Palette } from '@/src/theme';
 import { useAuthStore } from '@/stores/auth';
 import { useSupportChatStore } from '@/stores/supportChat';
 import { isFounderPhone } from '@/src/utils/founder';
-import { DRAWER_SPRING, clampDrawerX, drawerReleaseTarget } from '@/src/utils/drawerPhysics';
+import { DRAWER_SPRING } from '@/src/utils/drawerPhysics';
 import type { Role } from '@/src/types';
 import { isTeamsEnabled } from '@/src/utils/teamsFlag';
 
 const DRAWER_WIDTH = Dimensions.get('window').width * 0.78;
 
 // Physics, not a fixed-duration timing: a timing curve always took its
-// full 260/300 ms whatever the finger did — a hard flick and a gentle
-// release animated identically, which is what read as "resistant". Every
-// settle now runs on DRAWER_SPRING (src/utils/drawerPhysics.ts), which
-// starts fast and, on a gesture release, inherits the finger's velocity.
-// The wobble an earlier spring showed was under-damping; this spring is
-// near-critically damped, so it settles with no visible overshoot.
-// Width of the left-edge strip that grabs the swipe-to-open when closed.
-const EDGE_STRIP_WIDTH = 28;
+// full 260/300 ms whatever the command was — every open and close read
+// identically "resistant". Every settle now runs on DRAWER_SPRING
+// (src/utils/drawerPhysics.ts). The wobble an earlier spring showed was
+// under-damping; this spring is near-critically damped, so it settles
+// with no visible overshoot.
+//
+// NO PAN GESTURE lives on this drawer (incident of 2026-10-16/17): the
+// edge swipe-to-open strip and the panel drag shipped in PR 151, and on
+// device every pan attempt on this component — edge or panel, every
+// tab — coincided with the app closing, through two hotfixes aimed at
+// the gesture's lifecycle and its release threshold. Taps never failed.
+// Until the mechanism is proven on a dev build, open/close are commands
+// (hamburger, X, backdrop, row, Android back) settled by the spring
+// below; the drag maths in drawerPhysics.ts stays tested for the
+// rebuild.
 
 const DRAWER_AVATAR_PALETTE = BUSINESS_AVATAR_PALETTE;
 
@@ -72,7 +78,6 @@ export function BusinessDrawer() {
   const session = useAuthStore(s => s.session);
   const businessDrawerOpen = useAuthStore(s => s.businessDrawerOpen);
   const closeBusinessDrawer = useAuthStore(s => s.closeBusinessDrawer);
-  const openBusinessDrawer = useAuthStore(s => s.openBusinessDrawer);
   const selectBusiness = useAuthStore(s => s.selectBusiness);
   const insets = useSafeAreaInsets();
   const isFounder = isFounderPhone(session?.user.phone);
@@ -80,33 +85,16 @@ export function BusinessDrawer() {
 
   const reduceMotion = useReduceMotion();
   const translateX = useSharedValue(-DRAWER_WIDTH);
-  const dragStartX = useSharedValue(-DRAWER_WIDTH);
   // The drawer is always mounted, parked off-screen; `interactive` is its
-  // pointer-events gate. It turns on the moment the drawer opens or a drag
-  // grabs it, and off only when a close has fully settled — re-checked
-  // against the store at settle time, so a close interrupted by a re-open
-  // never strands the gate either way (the Modal version of this bug left a
-  // transparent modal mounted, eating every touch on screen).
+  // pointer-events gate. It turns on the moment the drawer opens, and off
+  // only when a close has fully settled — re-checked against the store at
+  // settle time, so a close interrupted by a re-open never strands the
+  // gate either way (the Modal version of this bug left a transparent
+  // modal mounted, eating every touch on screen).
   const [interactive, setInteractive] = useState(false);
   const [search, setSearch] = useState('');
   const deactivateIfClosed = () => {
     if (!useAuthStore.getState().businessDrawerOpen) setInteractive(false);
-  };
-  // Set by a gesture release just before it flips the store flag: the
-  // gesture has already sprung the panel with the finger's velocity, so the
-  // effect below must not restart the animation and throw that velocity away.
-  const gestureTargetRef = useRef<number | null>(null);
-
-  const springTo = (target: number, velocity: number) => {
-    'worklet';
-    if (reduceMotion) {
-      translateX.value = target;
-      runOnJS(deactivateIfClosed)();
-      return;
-    }
-    translateX.value = withSpring(target, { ...DRAWER_SPRING, velocity }, () => {
-      runOnJS(deactivateIfClosed)();
-    });
   };
 
   useEffect(() => {
@@ -115,10 +103,6 @@ export function BusinessDrawer() {
       setInteractive(true);
     }
     const target = businessDrawerOpen ? 0 : -DRAWER_WIDTH;
-    if (gestureTargetRef.current === target) {
-      gestureTargetRef.current = null;
-      return;
-    }
     if (reduceMotion) {
       translateX.value = target;
       deactivateIfClosed();
@@ -139,47 +123,6 @@ export function BusinessDrawer() {
     });
     return () => sub.remove();
   }, [businessDrawerOpen]);
-
-  const finishGesture = (target: number) => {
-    gestureTargetRef.current = target;
-    if (target === 0) openBusinessDrawer();
-    else closeBusinessDrawer();
-  };
-
-  // One drag logic for both grab points — the open panel (swipe to close, or
-  // pull back open mid-drag) and the left screen edge when closed (swipe to
-  // open). The panel follows the finger 1:1 in both directions; on release
-  // the spring inherits the finger's velocity. Small failOffsetY thresholds
-  // mirror the swipe-to-reply gesture in discussions.tsx so a simple tap or
-  // a vertical scroll inside the list isn't mistaken for a drag.
-  const makeDragGesture = () =>
-    Gesture.Pan()
-      .onStart(() => {
-        dragStartX.value = translateX.value;
-        runOnJS(setInteractive)(true);
-      })
-      .onUpdate((e) => {
-        translateX.value = clampDrawerX(dragStartX.value + e.translationX, DRAWER_WIDTH);
-      })
-      .onEnd((e) => {
-        const target = drawerReleaseTarget(translateX.value, e.velocityX, dragStartX.value, DRAWER_WIDTH);
-        springTo(target, e.velocityX);
-        runOnJS(finishGesture)(target);
-      });
-
-  const panelDragGesture = makeDragGesture()
-    .activeOffsetX([-10, 10])
-    .failOffsetY([-15, 15]);
-  // activeOffsetX was [10, 10]: at rest the translation (0) is already
-  // below the start bound, so any touch jitter inside the strip's column
-  // activated the pan and the Pressable underneath never saw the tap
-  // (RNGH's own validation warns the first element should be negative).
-  // [-10, 10] is a real dead zone, same as the panel's; direction is
-  // decided on release by drawerReleaseTarget.
-  const edgeOpenGesture = makeDragGesture()
-    .enabled(!businessDrawerOpen)
-    .activeOffsetX([-10, 10])
-    .failOffsetY([-12, 12]);
 
   // Fully closed = fully invisible. The panel carries a shadow that reaches past its right edge, so
   // parked at -DRAWER_WIDTH it would otherwise leave a dark rounded strip on the screen's left edge.
@@ -261,7 +204,6 @@ export function BusinessDrawer() {
       </Animated.View>
 
       {/* Drawer panel */}
-      <GestureDetector gesture={panelDragGesture}>
         <Animated.View style={[
           styles.drawer,
           {
@@ -403,24 +345,7 @@ export function BusinessDrawer() {
           </View>
 
         </Animated.View>
-      </GestureDetector>
     </View>
-    {/* The strip is NEVER unmounted: it used to render only while closed,
-        so its own open gesture's completion flipped the state that removed
-        its GestureDetector — tearing the native handler down in the same
-        transaction as the gesture's END, which hard-crashed the app on
-        device (invisible in jest, where gesture-handler is fully mocked).
-        It is gated instead: enabled + pointerEvents follow the store flag.
-        Its top starts below the header row (56 = the Accueil header row
-        height the edgeSwipeCatcher already offsets by) so the strip can
-        never cover the hamburger. */}
-    <GestureDetector gesture={edgeOpenGesture}>
-      <View
-        style={[styles.edgeStrip, { top: insets.top + 56 }]}
-        collapsable={false}
-        pointerEvents={businessDrawerOpen ? 'none' : 'auto'}
-      />
-    </GestureDetector>
     </>
   );
 }
@@ -429,13 +354,6 @@ function makeStyles(p: Palette) {
   return StyleSheet.create({
     backdrop: {
       backgroundColor: 'rgba(0,0,0,0.45)',
-    },
-    edgeStrip: {
-      position: 'absolute',
-      left: 0,
-      top: 0,
-      bottom: 0,
-      width: EDGE_STRIP_WIDTH,
     },
     drawer: {
       position: 'absolute',

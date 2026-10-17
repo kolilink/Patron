@@ -59,10 +59,10 @@ describe('drawerPhysics — drawerReleaseTarget', () => {
 describe('BusinessDrawer — native-feel wiring (source contracts)', () => {
   const src = read('src/components/BusinessDrawer.tsx');
 
-  it('every settle is a spring that can inherit velocity — no fixed-duration timing remains', () => {
+  it('every settle is the tested spring, driven by the store effect — no fixed-duration timing', () => {
     expect(src).toContain('withSpring');
     expect(src).toMatch(/velocity: 0/);
-    expect(src).toMatch(/springTo\(target, e\.velocityX\)/);
+    expect(src).toContain('businessDrawerOpen ? 0 : -DRAWER_WIDTH');
     expect(src).not.toContain('withTiming');
     expect(src).not.toMatch(/DRAWER_(OPEN|CLOSE)_DURATION/);
   });
@@ -70,17 +70,6 @@ describe('BusinessDrawer — native-feel wiring (source contracts)', () => {
   it('the spring configuration comes from the tested util, not a local copy', () => {
     expect(src).toContain("from '@/src/utils/drawerPhysics'");
     expect(src).toContain('...DRAWER_SPRING');
-  });
-
-  it('the drag follows the finger 1:1 in both directions (clamp, never one-way)', () => {
-    expect(src).toContain('clampDrawerX(dragStartX.value + e.translationX, DRAWER_WIDTH)');
-    expect(src).not.toContain('if (e.translationX < 0)');
-  });
-
-  it('release target is the tested rule, fed position + velocity + drag start', () => {
-    expect(src).toContain(
-      'drawerReleaseTarget(translateX.value, e.velocityX, dragStartX.value, DRAWER_WIDTH)',
-    );
   });
 
   it('no Modal in the open path: always mounted, pointer-events gated by `interactive`', () => {
@@ -96,24 +85,20 @@ describe('BusinessDrawer — native-feel wiring (source contracts)', () => {
     );
   });
 
-  it('a gesture settle is not restarted by the store effect (velocity survives the flag flip)', () => {
-    expect(src).toContain('gestureTargetRef.current === target');
-    expect(src).toContain('gestureTargetRef.current = target');
-  });
-
-  it('closed state offers a left-edge swipe to open; open state drags the panel', () => {
-    expect(src).toContain('edgeOpenGesture');
-    expect(src).toContain('panelDragGesture');
-    // The strip is never unmounted: unmounting its GestureDetector as a
-    // direct consequence of its own gesture's completion raced the native
-    // handler teardown and hard-crashed the app on device. It is gated by
-    // enabled + pointerEvents instead, with a real [-10, 10] dead zone.
-    expect(src).not.toContain('{!businessDrawerOpen && (');
-    expect(src).toContain('styles.edgeStrip');
-    expect(src).toContain("pointerEvents={businessDrawerOpen ? 'none' : 'auto'}");
-    expect(src).toContain(
-      'const edgeOpenGesture = makeDragGesture()\n    .enabled(!businessDrawerOpen)\n    .activeOffsetX([-10, 10])',
-    );
+  it('NO pan gesture exists on this drawer (incident 2026-10-16/17: every pan on device closed the app)', () => {
+    // PR 151 shipped an edge swipe-to-open strip + a panel drag. On the
+    // founder's device, every pan attempt on this component — edge or
+    // panel, on every tab — coincided with the app closing, through the
+    // PR 158 lifecycle hotfix and the PR 159 threshold fix; taps never
+    // failed. Both GestureDetectors are gone until the mechanism is
+    // proven on a dev build: open/close are commands settled by the
+    // store effect's spring. The drag maths stays in drawerPhysics.ts
+    // (unit-tested above) for the rebuild.
+    expect(src).not.toContain('GestureDetector');
+    expect(src).not.toContain('Gesture.Pan');
+    expect(src).not.toContain('makeDragGesture');
+    expect(src).not.toContain('edgeStrip');
+    expect(src).not.toContain('dragStartX');
   });
 
   it('Android back closes the drawer (the removed Modal used to own this)', () => {
