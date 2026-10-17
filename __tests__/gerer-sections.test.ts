@@ -210,8 +210,8 @@ describe('drawer artifact', () => {
   it('the closed drawer is fully invisible (its shadow used to leave a strip on the left edge)', () => {
     expect(d).toMatch(/opacity: translateX\.value <= -DRAWER_WIDTH \+ 1 \? 0 : 1/);
   });
-  it('an interrupted close can no longer leave the modal mounted', () => {
-    expect(d).toMatch(/runOnJS\(unmountIfClosed\)\(\)/);
-    expect(d).toMatch(/if \(!useAuthStore\.getState\(\)\.businessDrawerOpen\) setModalVisible\(false\)/);
+  it('an interrupted close can no longer strand the drawer gate (the Modal is gone; the gate is pointer-events)', () => {
+    expect(d).toMatch(/runOnJS\(deactivateIfClosed\)\(\)/);
+    expect(d).toMatch(/if \(!useAuthStore\.getState\(\)\.businessDrawerOpen\) setInteractive\(false\)/);
   });
 });
