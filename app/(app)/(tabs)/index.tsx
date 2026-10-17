@@ -3,9 +3,7 @@ import { onTabReselect, resolveReselect } from '@/src/utils/tabReselect';
 import { RefusedOpsNotice } from '@/src/components/RefusedOpsNotice';
 import { useReduceMotion } from '@/src/hooks/useReduceMotion';
 import { InputAccessoryView, KeyboardAvoidingView, Modal, Platform, Pressable, ScrollView, Share, StyleSheet, TextInput, View } from 'react-native';
-import { Gesture, GestureDetector } from 'react-native-gesture-handler';
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
-import { runOnJS } from 'react-native-reanimated';
 import { Screen } from '@/src/components/ui/Screen';
 import { OfflineNotice } from '@/src/components/ui/OfflineNotice';
 import { QuickCaptureSheet } from '@/src/components/QuickCaptureSheet';
@@ -102,21 +100,6 @@ function debtAgeColor(days: number, palette: Palette): string {
   return palette.textSecondary;
 }
 
-// Invisible strip along the left edge that catches the swipe-to-open-drawer
-// gesture — matches the touch-target width iOS itself uses for its own
-// edge-swipe-back gesture. activeOffsetX(15)/failOffsetY(20) mirror the
-// swipe-to-reply gesture in discussions.tsx: a small horizontal threshold
-// before claiming the gesture, generous vertical tolerance so it doesn't
-// fight the KPI ScrollView underneath.
-const EDGE_SWIPE_WIDTH = 24;
-// Approximate height of the header row (menu icon + business name) below
-// the safe area — the catcher starts after insets.top + this, not a flat
-// guess, so it can't creep into the header's own tap targets on devices
-// with a taller inset.
-const HEADER_ROW_HEIGHT = 56;
-const EDGE_SWIPE_OPEN_DISTANCE = 40;
-const EDGE_SWIPE_OPEN_VELOCITY = 600;
-
 // iOS-only: suppresses the OS's auto-injected floating "Done" pill above
 // the numeric keyboard — the withdraw sheet's "Envoyer la demande" button
 // sits immediately below the field, always visible with no scrolling.
@@ -183,16 +166,6 @@ export default function AccueilScreen() {
   // fresh as soon as the founder opens Accueil, not only after they've
   // visited the inbox once this session.
   const loadFounderConversations = useSupportChatStore(s => s.loadFounderConversations);
-
-  const edgeSwipeOpenDrawer = Gesture.Pan()
-    .activeOffsetX([15, 999])
-    .failOffsetY([-20, 20])
-    .onEnd((e) => {
-      if (e.translationX > EDGE_SWIPE_OPEN_DISTANCE || e.velocityX > EDGE_SWIPE_OPEN_VELOCITY) {
-        runOnJS(openBusinessPicker)();
-        runOnJS(haptics.tap)();
-      }
-    });
 
   useEffect(() => {
     if (isFounder) void loadFounderConversations();
@@ -768,20 +741,6 @@ export default function AccueilScreen() {
   return (
     <KeyboardAvoidingView style={{ flex: 1, backgroundColor: palette.background }} behavior={Platform.OS === 'ios' ? 'padding' : undefined}>
       <Screen tab>
-        {/* Swipe right from the left edge to open the business drawer —
-          complements the header menu icon's tap-to-open. */}
-        <GestureDetector gesture={edgeSwipeOpenDrawer}>
-          {/* top was a flat 64 — didn't account for the device's real safe-area
-            inset, so on a phone with a taller inset (Dynamic Island models
-            especially) this could still reach up into the header row and
-            steal the hamburger icon's taps before the underlying Pressable
-            ever saw them — reported as the icon having zero press feedback,
-            not just "opens nothing", which pointed at a touch being
-            intercepted rather than a broken onPress. insets.top is measured
-            fresh per device now, not guessed. */}
-          <View style={[styles.edgeSwipeCatcher, { top: insets.top + HEADER_ROW_HEIGHT }]} pointerEvents="box-only" />
-        </GestureDetector>
-
         {isOffline && <OfflineNotice offlineSince={null} onRetry={() => loadAll()} />}
 
         <ScrollView ref={homeScrollRef} onScroll={e => { homeOffsetRef.current = e.nativeEvent.contentOffset.y; }} scrollEventThrottle={32} style={{ flex: 1 }} contentContainerStyle={styles.content} showsVerticalScrollIndicator={false}>
@@ -1215,15 +1174,6 @@ export default function AccueilScreen() {
 function makeStyles(p: Palette, bottomInset: number) {
   return StyleSheet.create({
     safe: { flex: 1, backgroundColor: p.background },
-    edgeSwipeCatcher: {
-      // top is set inline (insets.top + HEADER_ROW_HEIGHT) at the call site
-      // — device-aware, not a flat guess. See the comment there.
-      position: 'absolute',
-      left: 0,
-      bottom: 0,
-      width: EDGE_SWIPE_WIDTH,
-      zIndex: 20,
-    },
     content: { padding: spacing[5], gap: spacing[4], paddingBottom: spacing[10] },
     quickCaptureFab: {
       position: 'absolute', bottom: floatingTabBarClearance(bottomInset) + spacing[4], right: spacing[4], zIndex: 10,
