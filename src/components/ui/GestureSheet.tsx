@@ -10,7 +10,8 @@ import { useTheme, spacing, radius } from '@/src/theme';
 import { useReduceMotion } from '@/src/hooks/useReduceMotion';
 import { DISMISS_FRACTION, DISMISS_VELOCITY } from '@/src/utils/sheetGesture';
 
-import { footerPlacement, scrollBottomPadding, type FooterMode } from '@/src/utils/ctaLayout';
+import { useDockedFooter } from '@/src/hooks/useDockedFooter';
+import type { FooterMode } from '@/src/utils/ctaLayout';
 
 // One physical language with every surface that follows the finger
 // (BusinessDrawer's spring in src/utils/drawerPhysics.ts): the sheet starts
@@ -29,7 +30,7 @@ interface Props {
   cancelLabel?: string;
   headerRight?: ReactNode;
   /** The primary CTA. Default ('flow'): ends the form inside the scroll content; docks above the keyboard while it is open. */
-  footer?: ReactNode;
+  footer?: ReactNode | ((keyboardOpen: boolean) => ReactNode);
   /** 'sticky' = always docked (with a fade, no slab); requires `stickyReason`. */
   footerMode?: FooterMode;
   /** One-line reason the CTA must stay visible while the user reviews long scrolling content. */
@@ -64,8 +65,6 @@ export const GestureSheet = forwardRef<ScrollView, Props>(function GestureSheet(
   const styles = useMemo(() => makeStyles(palette), [palette]);
 
   const [rendered, setRendered] = useState(visible);
-  const [footerHeight, setFooterHeight] = useState(0); // the DOCKED CTA's measured height, reserved as scroll padding
-  const [keyboardOpen, setKeyboardOpen] = useState(false);
   if (__DEV__ && footerMode === 'sticky' && !stickyReason) console.warn('GestureSheet: footerMode="sticky" needs a stickyReason');
   const translateY = useSharedValue(screenH);
   const sheetHeight = useSharedValue(screenH);
@@ -73,16 +72,15 @@ export const GestureSheet = forwardRef<ScrollView, Props>(function GestureSheet(
 
   const finishClose = useCallback(() => {
     closing.current = false;
+    // The keyboard never outlives its sheet — every close path (Annuler, backdrop, fling, Android back) ends here.
+    Keyboard.dismiss();
     onClose();
   }, [onClose]);
 
-  useEffect(() => {
-    const show = Keyboard.addListener(Platform.OS === 'ios' ? 'keyboardWillShow' : 'keyboardDidShow', () => setKeyboardOpen(true));
-    const hide = Keyboard.addListener(Platform.OS === 'ios' ? 'keyboardWillHide' : 'keyboardDidHide', () => setKeyboardOpen(false));
-    return () => { show.remove(); hide.remove(); };
-  }, []);
-  const placement = footerPlacement({ hasFooter: !!footer, mode: footerMode, keyboardOpen });
-  const reservedPadding = scrollBottomPadding(placement, footerHeight, spacing[4]);
+  // Keyboard + CTA placement + the measured room the scroll content reserves for a docked CTA (single source of truth).
+  const { keyboardOpen, placement, reservedPadding, onFlowLayout, onDockLayout } =
+    useDockedFooter({ hasFooter: !!footer, mode: footerMode, gap: spacing[4] });
+  const footerNode = typeof footer === 'function' ? footer(keyboardOpen) : footer;
 
   // Opening: mount off-screen (translateY starts at screenH), then slide up.
   useEffect(() => {
@@ -92,6 +90,7 @@ export const GestureSheet = forwardRef<ScrollView, Props>(function GestureSheet(
       if (reduce) translateY.value = 0;
       else translateY.value = withSpring(0, { ...SHEET_SPRING, velocity: 0 });
     } else if (rendered) {
+      Keyboard.dismiss(); // closed programmatically (e.g. after a save): the keyboard leaves with the sheet
       // Closed by the parent (e.g. after a save): slide away, then unmount. No onClose echo.
       if (reduce) {
         translateY.value = screenH;
@@ -107,6 +106,7 @@ export const GestureSheet = forwardRef<ScrollView, Props>(function GestureSheet(
   const requestClose = useCallback(() => {
     if (closing.current) return;
     closing.current = true;
+    Keyboard.dismiss(); // start dropping the keyboard together with the slide-out, not after it
     if (reduce) {
       translateY.value = screenH;
       finishClose();
@@ -194,14 +194,14 @@ export const GestureSheet = forwardRef<ScrollView, Props>(function GestureSheet(
               keyboardDismissMode={keyboardDismissMode}
             >
               {children}
-              {placement === 'flow' ? footer : null}
+              {placement === 'flow' ? <View onLayout={onFlowLayout}>{footerNode}</View> : null}
             </ScrollView>
             {/* Docked only while the keyboard is open or for a sticky CTA. No container: the button floats at the sheet's
                 bottom edge, the scroll content reserves its measured height, and only a fade (transparent → background)
                 sits above it — never a band or slab (CLAUDE.md CTA rules). */}
             {placement === 'docked' ? (
-              <View style={styles.footerDock} pointerEvents="box-none" onLayout={e => setFooterHeight(e.nativeEvent.layout.height)}>
-                <CtaFade>{footer}</CtaFade>
+              <View style={styles.footerDock} pointerEvents="box-none" onLayout={onDockLayout}>
+                <CtaFade>{footerNode}</CtaFade>
               </View>
             ) : null}
             {accessory}

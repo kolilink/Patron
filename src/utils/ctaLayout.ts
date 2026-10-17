@@ -17,3 +17,12 @@ export function footerPlacement(o: { hasFooter: boolean; mode?: FooterMode; keyb
 export function scrollBottomPadding(placement: FooterPlacement, dockedFooterHeight: number, gap: number): number | null {
   return placement === 'docked' ? dockedFooterHeight + gap : null;
 }
+
+/**
+ * Height to reserve for a docked CTA: the last height measured WHILE docked, else the height it had in the
+ * flow (measured before the keyboard ever opened, so the very first docked frame already reserves the right
+ * room instead of reserving 0 and correcting a frame later), else 0.
+ */
+export function reservedFooterHeight(dockedHeight: number | null, flowHeight: number | null): number {
+  return dockedHeight ?? flowHeight ?? 0;
+}

@@ -84,7 +84,7 @@ describe('(d) payment is pinned, only the list scrolls', () => {
   });
   it('FormSheet keeps a sticky footer above the safe area, with a fade not a slab', () => {
     const fs_ = read('src/components/ui/FormSheet.tsx');
-    expect(fs_).toContain('<CtaFade style={{ paddingBottom: rootInsets.bottom }}>{footer}</CtaFade>');
+    expect(fs_).toContain('<CtaFade style={{ paddingBottom: rootInsets.bottom }}>{footerNode}</CtaFade>');
   });
 });
 
