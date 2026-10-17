@@ -26,6 +26,8 @@ export interface ReceiptLineContent {
   qty: number;
   unitPrice: string;
   lineTotal: string;
+  /** Sold at an agreed price (differs from the catalogue price of the moment): the view adds « · convenu ». */
+  agreed?: boolean;
 }
 
 export interface ReceiptTotalsContent {
