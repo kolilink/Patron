@@ -36,7 +36,7 @@ export function cashSaleConfirmation(amount: number, currency: string): string {
 
 // ── Deletes: undo where it exists, otherwise a message naming exactly what went ──
 export function archivedConfirmation(productName: string): string {
-  return `${productName} archivé.`;
+  return `${productName} désactivé.`;
 }
 
 export function saleCancelledConfirmation(amount: number, currency: string, customer?: string | null): string {
