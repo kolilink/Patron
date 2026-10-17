@@ -1,11 +1,12 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
-import { Pressable, ScrollView, StyleSheet, View } from 'react-native';
+import { Pressable, SectionList, StyleSheet, View, type SectionListData } from 'react-native';
 import { Ionicons } from '@expo/vector-icons';
 import { Screen } from '@/src/components/ui/Screen';
 import { router } from 'expo-router';
 import { Text } from '@/src/components/ui/Text';
 import { OfflineNotice } from '@/src/components/ui/OfflineNotice';
 import { SkeletonList } from '@/src/components/ui/SkeletonPlaceholder';
+import { LoadingStatus } from '@/src/components/ui/LoadingStatus';
 import { EmptyState } from '@/src/components/ui/EmptyState';
 import { ExpenseRow } from '@/src/components/expenses/ExpenseRow';
 import { ExpenseSheet, type SheetMode } from '@/src/components/expenses/ExpenseSheet';
@@ -20,6 +21,7 @@ import { useSyncStore } from '@/stores/sync';
 import type { Expense } from '@/src/types';
 import { haptics } from '@/lib/haptics';
 import { formatAmount } from '@/src/utils/format';
+import { formatDate } from '@/src/utils/dates';
 import { groupByMonthAndDay } from '@/src/utils/expenseUtils';
 import { expenseSubtitle } from '@/src/components/expenses/ExpenseRow';
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
@@ -30,6 +32,25 @@ import { useSafeAreaInsets } from 'react-native-safe-area-context';
 const EXPENSE_UNDO_MS = 10_000;
 
 type Sheet = { mode: SheetMode; id: string | null } | null;
+
+// ─── Virtualized list model ──────────────────────────────────────────────────
+// The old render mapped the whole (unbounded) history into one ScrollView.
+// Sections virtualize: the pending badge block + one section per month, each
+// month an accordion whose rows mount only when opened. A section's `data`
+// flattens its day groups into day-label rows + expense rows — the visual
+// grouping is unchanged, only the mounting is.
+type DayLabelRow = { kind: 'day'; key: string; label: string };
+type ExpenseListRow = { kind: 'row'; key: string; expense: Expense };
+type ListRowItem = DayLabelRow | ExpenseListRow;
+interface ExpenseSection {
+  key: string;
+  isPending: boolean;
+  monthLabel: string;
+  monthTotal: number;
+  monthOpen: boolean;
+  onToggleMonth: () => void;
+  data: ListRowItem[];
+}
 
 export default function DepensesScreen() {
   const insets = useSafeAreaInsets();
@@ -44,7 +65,8 @@ export default function DepensesScreen() {
 
   const {
     expenses, loading, expensesFetchedFor, saving, error, offline, offlineSince,
-    fetchExpenses, createExpense, updateExpense, deleteExpense, restoreExpense, approveExpense, rejectExpense,
+    expensesWindowStart, expensesBeyondWindow,
+    fetchExpenses, extendExpensesWindow, createExpense, updateExpense, deleteExpense, restoreExpense, approveExpense, rejectExpense,
   } = useExpensesStore();
   const lastSyncedAt = useSyncStore(s => s.lastSyncedAt);
 
@@ -76,6 +98,46 @@ export default function DepensesScreen() {
   const months = useMemo(
     () => groupByMonthAndDay(expenses.filter(e => e.status !== 'en_attente')),
     [expenses],
+  );
+
+  const toggleMonth = useCallback((monthKey: string) => {
+    setOpenMonths(o => {
+      const open = !(o[monthKey] ?? false);
+      haptics.toggle(open);
+      return { ...o, [monthKey]: open };
+    });
+  }, []);
+
+  const sections = useMemo<SectionListData<ListRowItem, ExpenseSection>[]>(
+    () => {
+      const list: SectionListData<ListRowItem, ExpenseSection>[] = [];
+      if (pendingExpenses.length > 0) {
+        list.push({
+          key: 'pending',
+          isPending: true, monthLabel: '', monthTotal: 0, monthOpen: true,
+          onToggleMonth: () => {},
+          data: pendingExpenses.map(e => ({ kind: 'row', key: e.id, expense: e })),
+        });
+      }
+      for (const m of months) {
+        const open = openMonths[m.key] ?? false;
+        const data: ListRowItem[] = [];
+        if (open) {
+          for (const d of m.days) {
+            data.push({ kind: 'day', key: d.key, label: d.label });
+            for (const e of d.items) data.push({ kind: 'row', key: e.id, expense: e });
+          }
+        }
+        list.push({
+          key: m.key,
+          isPending: false, monthLabel: m.label, monthTotal: m.total, monthOpen: open,
+          onToggleMonth: () => toggleMonth(m.key),
+          data,
+        });
+      }
+      return list;
+    },
+    [pendingExpenses, months, openMonths, toggleMonth],
   );
 
   const clearPendingPhoto = useCallback(() => {
@@ -187,6 +249,70 @@ export default function DepensesScreen() {
     />
   );
 
+  const renderItem = ({ item }: { item: ListRowItem }) => {
+    if (item.kind === 'day') {
+      return (
+        <Text variant="caption" color="secondary" style={[styles.dayLabel, { paddingTop: spacing[1] }]}>
+          {item.label}
+        </Text>
+      );
+    }
+    return renderRow(item.expense);
+  };
+
+  const renderSectionHeader = ({ section }: { section: SectionListData<ListRowItem, ExpenseSection> }) => {
+    if (section.isPending) {
+      return (
+        <View style={styles.pendingBadge}>
+          <Text variant="caption" style={{ color: palette.warning, fontWeight: '700' }}>
+            EN ATTENTE · {pendingExpenses.length}
+          </Text>
+        </View>
+      );
+    }
+    return (
+      <View style={{ marginTop: spacing[2] }}>
+        <Pressable
+          onPress={section.onToggleMonth}
+          style={styles.monthHeader}
+          accessibilityRole="button"
+          accessibilityLabel={`${section.monthLabel}, ${section.monthOpen ? 'replier' : 'déplier'}`}
+        >
+          <Text variant="label" style={styles.monthLabel}>{section.monthLabel}</Text>
+          <View style={{ flexDirection: 'row', alignItems: 'center', gap: spacing[2] }}>
+            <CountUpAmount value={section.monthTotal} currency={currency} style={{ color: palette.textPrimary }} />
+            <Text variant="caption" color="secondary">{section.monthOpen ? '▲' : '▼'}</Text>
+          </View>
+        </Pressable>
+      </View>
+    );
+  };
+
+  const renderFooter = () => {
+    if (loading) {
+      // An extend in flight — the initial load is covered by the skeleton
+      // branch, so this only ever appears under an already-shown list.
+      return <LoadingStatus word="Chargement" color={palette.textSecondary} />;
+    }
+    if (!expensesBeyondWindow) return null;
+    return (
+      <View style={{ marginTop: spacing[4] }}>
+        <Pressable
+          onPress={() => { haptics.tap(); void extendExpensesWindow(businessId); }}
+          style={({ pressed }) => [styles.cancelBtn, pressed && { opacity: 0.7 }]}
+          accessibilityRole="button"
+          accessibilityLabel="Charger les mois précédents"
+        >
+          <Text variant="label" style={{ color: palette.primary }}>Charger les mois précédents</Text>
+        </Pressable>
+      </View>
+    );
+  };
+
+  // The honest empty state: the window shows nothing but older expenses exist
+  // outside it — « Aucune dépense » would be a lie.
+  const windowMonthLabel = expensesWindowStart ? formatDate(expensesWindowStart, 'monthYear') : '';
+
   return (
     <Screen>
       <View style={styles.hdr}>
@@ -205,6 +331,22 @@ export default function DepensesScreen() {
         <View style={styles.empty}>
           <Text variant="body" color="secondary" style={{ textAlign: 'center' }}>Données non disponibles hors ligne</Text>
         </View>
+      ) : !loading && isEmpty && expensesBeyondWindow ? (
+        <View style={styles.empty}>
+          <Text variant="body" color="secondary" style={{ textAlign: 'center' }}>
+            {windowMonthLabel
+              ? `Aucune dépense récente — mais il y en a avant ${windowMonthLabel}.`
+              : 'Aucune dépense récente — mais il y en a de plus anciennes.'}
+          </Text>
+          <Pressable
+            onPress={() => { haptics.tap(); void extendExpensesWindow(businessId); }}
+            style={({ pressed }) => [styles.cancelBtn, pressed && { opacity: 0.7 }]}
+            accessibilityRole="button"
+            accessibilityLabel="Charger les mois précédents"
+          >
+            <Text variant="label" style={{ color: palette.primary }}>Charger les mois précédents</Text>
+          </Pressable>
+        </View>
       ) : isEmpty ? (
         <EmptyState
           icon="wallet-outline"
@@ -214,42 +356,17 @@ export default function DepensesScreen() {
           onAction={handleAdd}
         />
       ) : (
-        <ScrollView contentContainerStyle={styles.list} showsVerticalScrollIndicator={false}>
-          {pendingExpenses.length > 0 && (
-            <View style={styles.pendingSection}>
-              <View style={styles.pendingBadge}>
-                <Text variant="caption" style={{ color: palette.warning, fontWeight: '700' }}>
-                  EN ATTENTE · {pendingExpenses.length}
-                </Text>
-              </View>
-              {pendingExpenses.map(renderRow)}
-            </View>
-          )}
-
-          {months.map(m => {
-            const open = openMonths[m.key] ?? false;
-            return (
-              <View key={m.key} style={styles.monthBlock}>
-                <Pressable
-                  onPress={() => { haptics.toggle(!open); setOpenMonths(o => ({ ...o, [m.key]: !open })); }}
-                  style={styles.monthHeader}
-                >
-                  <Text variant="label" style={styles.monthLabel}>{m.label}</Text>
-                  <View style={{ flexDirection: 'row', alignItems: 'center', gap: spacing[2] }}>
-                    <CountUpAmount value={m.total} currency={currency} style={{ color: palette.textPrimary }} />
-                    <Text variant="caption" color="secondary">{open ? '▲' : '▼'}</Text>
-                  </View>
-                </Pressable>
-                {open && m.days.map(d => (
-                  <View key={d.key} style={styles.dayBlock}>
-                    <Text variant="caption" color="secondary" style={styles.dayLabel}>{d.label}</Text>
-                    {d.items.map(renderRow)}
-                  </View>
-                ))}
-              </View>
-            );
-          })}
-        </ScrollView>
+        <SectionList<ListRowItem, ExpenseSection>
+          sections={sections}
+          keyExtractor={item => item.key}
+          renderItem={renderItem}
+          renderSectionHeader={renderSectionHeader}
+          ItemSeparatorComponent={() => <View style={{ height: spacing[2] }} />}
+          ListFooterComponent={renderFooter}
+          contentContainerStyle={styles.list}
+          showsVerticalScrollIndicator={false}
+          removeClippedSubviews
+        />
       )}
 
       <ExpenseSheet
@@ -307,10 +424,9 @@ function makeStyles(p: Palette) {
       flexDirection: 'row', alignItems: 'center', justifyContent: 'space-between',
       padding: spacing[5], borderBottomWidth: 1, borderBottomColor: p.border,
     },
-    list: { padding: spacing[5], gap: spacing[4], paddingBottom: spacing[24] },
+    list: { padding: spacing[5], paddingBottom: spacing[24] },
 
-    // Pending section
-    pendingSection: { gap: spacing[2] },
+    // Pending badge
     pendingBadge: {
       alignSelf: 'flex-start',
       backgroundColor: p.warning + '20',
@@ -322,16 +438,13 @@ function makeStyles(p: Palette) {
     },
 
     // Month accordion
-    monthBlock: { gap: 0 },
     monthHeader: {
       flexDirection: 'row', justifyContent: 'space-between', alignItems: 'center',
       paddingVertical: spacing[3], paddingHorizontal: spacing[1],
       borderBottomWidth: 1, borderBottomColor: p.border,
     },
     monthLabel: { textTransform: 'capitalize' },
-    monthItems: { gap: spacing[2], paddingTop: spacing[2] },
 
-    dayBlock: { gap: spacing[2], paddingTop: spacing[3] },
     dayLabel: { paddingHorizontal: spacing[1] },
     chipWrap: { position: 'absolute', left: 0, right: 0, bottom: spacing[6], alignItems: 'center' },
 
