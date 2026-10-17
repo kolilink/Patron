@@ -38,6 +38,8 @@ export interface OverlayLine {
   variant_name?: string | null;
   qty: number;
   unit_price: number;
+  /** Catalogue unit price at sale time (v246); null when unknown. */
+  catalog_unit_price?: number | null;
   is_bulk: boolean;
   cost_price: number;
 }
@@ -110,6 +112,7 @@ const PATCH_OPS = new Set(['cancel_sale', 'record_client_payment', 'record_payme
 
 type RawCartLine = {
   product_id: string; product_name: string; qty: number; unit_price: number;
+  catalog_unit_price?: number | null;
   is_bulk?: boolean; variant_id?: string | null; variant_name?: string | null;
 };
 
@@ -204,6 +207,7 @@ export function projectNewSale(
         id: generatePlaceholderId(idempotencyKey, i),
         product_id: l.product_id, product_name: l.product_name,
         qty: l.qty, unit_price: l.unit_price / 100,
+        catalog_unit_price: l.catalog_unit_price != null ? l.catalog_unit_price / 100 : null,
         is_bulk: l.is_bulk ?? false, cost_price: 0,
         variant_id: l.variant_id ?? null, variant_name: l.variant_name ?? null,
       })),

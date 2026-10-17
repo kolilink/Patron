@@ -30,6 +30,8 @@ export interface VenteLigne {
   variant_name?: string | null;
   qty: number;
   unit_price: number;
+  /** Catalogue unit price at sale time (v246); null on rows that predate it. */
+  catalog_unit_price?: number | null;
   is_bulk: boolean;
   cost_price: number;
 }
@@ -540,6 +542,7 @@ export const useVentesStore = create<VentesStore>((set, get) => ({
       variant_name: (l.variant_name as string | null) ?? null,
       qty: l.qty as number,
       unit_price: (l.unit_price as number) / 100,
+      catalog_unit_price: (l.catalog_unit_price as number | null) != null ? (l.catalog_unit_price as number) / 100 : null,
       is_bulk: (l.is_bulk as boolean) ?? false,
       // Use snapshotted cost (v81+); fall back to live variant/product cost for pre-v81 rows
       cost_price: ((l.cost_price_at_sale as number | null) ?? (l.variant as VariantJoin)?.cost_price ?? (l.product as ProductJoin)?.cost_price ?? 0) / 100,

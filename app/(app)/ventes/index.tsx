@@ -757,7 +757,14 @@ function DetailModal({ sale, currency, businessName, singleVendor, role, onClose
                   <Text variant="label" color="secondary">Articles</Text>
                   {sale.lines.map(l => (
                     <View key={l.id} style={styles.lineRow}>
-                      <Text variant="body" style={{ flex: 1 }}>{l.product_name}{l.variant_name ? ` · ${l.variant_name}` : ''}</Text>
+                      <View style={{ flex: 1 }}>
+                        <Text variant="body">{l.product_name}{l.variant_name ? ` · ${l.variant_name}` : ''}</Text>
+                        {l.catalog_unit_price != null && Math.abs(l.catalog_unit_price - l.unit_price) > 0.001 && (
+                          <MoneyText variant="caption" color="secondary">
+                            Prix convenu · {fmt(l.unit_price, currency)} / unité au lieu de {fmt(l.catalog_unit_price, currency)}
+                          </MoneyText>
+                        )}
+                      </View>
                       <Text variant="caption" color="secondary">×{l.qty}</Text>
                       <Money variant="label" amount={l.unit_price * l.qty} currency={currency} />
                     </View>

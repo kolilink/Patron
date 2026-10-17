@@ -27,6 +27,27 @@ export interface CartLine {
   variant_stock_qty?: number;
 }
 
+/**
+ * The submit_sale cart payload. `unit_price` is the price actually charged
+ * (the agreed price where one was set, ratio-scaled when a total override
+ * distributes across lines). `catalog_unit_price` is the catalogue price of
+ * the moment, sent alongside so the receipt and the sale detail can show
+ * that a price was agreed — and to what (migration v246 stores it on
+ * so_lines; without it the two are indistinguishable after submit).
+ */
+export function buildCartJson(cart: CartLine[], priceRatio: number) {
+  return cart.map(l => ({
+    product_id: l.product.id,
+    qty: l.qty,
+    unit_price: Math.round(effectiveUnitPrice(l) * priceRatio * 100),
+    catalog_unit_price: Math.round(l.unit_price * 100),
+    is_bulk: l.is_bulk,
+    product_name: l.product.name,
+    variant_id: l.variant_id ?? null,
+    variant_name: l.variant_name ?? null,
+  }));
+}
+
 export interface SalePayment {
   method: PaymentMethod;
   amount: number;
@@ -397,15 +418,7 @@ export const useSalesStore = create<SalesStore>((set, get) => ({
       ? overrideTotalAmount / catalogTotal
       : 1;
 
-    const cartJson = cartSnapshot.map(l => ({
-      product_id:   l.product.id,
-      qty:          l.qty,
-      unit_price:   Math.round(effectiveUnitPrice(l) * priceRatio * 100),
-      is_bulk:      l.is_bulk,
-      product_name: l.product.name,
-      variant_id:   l.variant_id ?? null,
-      variant_name: l.variant_name ?? null,
-    }));
+    const cartJson = buildCartJson(cartSnapshot, priceRatio);
 
     const rpcPayload = {
       p_business_id:      businessId,

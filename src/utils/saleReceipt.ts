@@ -33,7 +33,13 @@ export interface CreditReceiptSource extends ReceiptSourceBase {
   amount: number;
 }
 
-export interface SaleReceiptLineInput { name: string; qty: number; unitPrice: number }
+export interface SaleReceiptLineInput {
+  name: string;
+  qty: number;
+  unitPrice: number;
+  /** Catalogue unit price at sale time; the line is marked « convenu » when it differs from the price charged. */
+  catalogUnitPrice?: number | null;
+}
 
 /** Variant A — a cart sale. `paid` is what was received at sale time. */
 export interface SaleReceiptSource extends ReceiptSourceBase {
@@ -119,6 +125,7 @@ function buildLined(src: SaleReceiptSource): DebtReceiptContent {
     qty: l.qty,
     unitPrice: formatAmount(l.unitPrice, cur),
     lineTotal: formatAmount(l.unitPrice * l.qty, cur),
+    agreed: l.catalogUnitPrice != null && Math.abs(l.catalogUnitPrice - l.unitPrice) > 0.001,
   }));
   const shown = all.length > MAX_RECEIPT_LINES ? all.slice(0, MAX_RECEIPT_LINES - 1) : all;
   const hidden = all.length - shown.length;
@@ -198,7 +205,7 @@ export interface ReceiptVente {
   customer_name?: string | null;
   created_at: string;
   _pending?: boolean;
-  lines?: { product_id?: string; product_name: string; variant_name?: string | null; qty: number; unit_price: number }[];
+  lines?: { product_id?: string; product_name: string; variant_name?: string | null; qty: number; unit_price: number; catalog_unit_price?: number | null }[];
   payments?: { method: string; amount: number }[];
 }
 
@@ -240,7 +247,7 @@ export function receiptSourceFromVente(
     kind: 'sale', ...common,
     lines: lines.map(l => ({
       name: l.variant_name ? `${l.product_name} · ${l.variant_name}` : l.product_name,
-      qty: l.qty, unitPrice: l.unit_price,
+      qty: l.qty, unitPrice: l.unit_price, catalogUnitPrice: l.catalog_unit_price ?? null,
     })),
     discount,
     // A closed (paye) sale is fully paid by definition — fetchSales leaves amount_paid

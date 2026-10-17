@@ -283,3 +283,19 @@ describe('rebuildPendingOverlay — the full fold, in queue order', () => {
     expect(result.sales[0].amount_paid).toBe(0);
   });
 });
+
+describe('projectNewSale — catalogue price of the moment (v246)', () => {
+  test('submit_sale: a pending line keeps catalog_unit_price, converted from cents', () => {
+    const s = projectNewSale('submit_sale', {
+      p_business_id: 'biz-1', p_seller_id: 'user-1', p_customer_name: null,
+      p_total_amount: 400000, p_discount_amount: 0, p_is_credit: false,
+      p_pay_method: 'especes', p_pay_amount: 400000,
+      p_cart: [
+        { product_id: 'p1', product_name: 'Riz 5kg', qty: 1, unit_price: 400000, catalog_unit_price: 450000, is_bulk: false },
+        { product_id: 'p2', product_name: 'Huile', qty: 1, unit_price: 300000, is_bulk: false },
+      ],
+    }, '2026-10-17T10:00:00.000Z', ctx, 'idem-convenu');
+    expect(s!.lines[0].catalog_unit_price).toBe(4500);
+    expect(s!.lines[1].catalog_unit_price).toBeNull();
+  });
+});
