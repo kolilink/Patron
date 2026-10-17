@@ -15,6 +15,7 @@ import { useProductStore } from '@/stores/products';
 import { notifyEvent } from '@/src/utils/notifications';
 import { useAuthStore } from '@/stores/auth';
 import { formatAmount } from '@/src/utils/format';
+import { localDateISO } from '@/src/utils/dates';
 import type { Expense, ExpenseStatus } from '@/src/types';
 
 // See stores/products.ts for the full explanation.
@@ -30,6 +31,22 @@ export interface CreateExpenseData {
   due_date?: string | null;
   note?: string | null;
   product_id?: string | null;
+}
+
+// The Dépenses list is windowed by date: an unbounded fetch + an unbounded
+// ScrollView made the screen slower with every month of business age. Pending
+// expenses (status 'en_attente') are ALWAYS in the window — an old expense
+// awaiting approval must never be windowed out.
+
+/** First day of the month, 5 months back — the initial fetch window. */
+export function initialExpenseWindowStart(now: Date = new Date()): string {
+  return localDateISO(new Date(now.getFullYear(), now.getMonth() - 5, 1));
+}
+
+/** First day of the month, 6 months before a window start — one « charger plus » step. */
+export function previousExpenseWindowStart(windowStart: string): string {
+  const [y, m] = windowStart.split('-').map(Number);
+  return localDateISO(new Date(y, m - 1 - 6, 1));
 }
 
 // Rows removed by a delete that can still be undone. `cancelledCreates` holds
@@ -96,8 +113,17 @@ interface ExpensesStore {
   // expenses" is never confused with "haven't loaded yet" (same pattern
   // as productsFetchedFor / salesFetchedFor).
   expensesFetchedFor: string | null;
+  // The date window the shown list covers (ISO first-day-of-month), and the
+  // business it was fetched for. extendExpensesWindow widens it by 6 months.
+  // `expensesBeyondWindow` is true when the business HAS expenses but the
+  // current window shows none — so the empty state never lies to a vendor
+  // whose whole history predates the window.
+  expensesWindowStart: string | null;
+  expensesWindowFor: string | null;
+  expensesBeyondWindow: boolean;
 
   fetchExpenses: (businessId: string) => Promise<void>;
+  extendExpensesWindow: (businessId: string) => Promise<void>;
   // Returns the new expense id (both online and offline-queued) so a photo
   // picked during creation can be attached to it; null on hard failure.
   createExpense: (businessId: string, userId: string, data: CreateExpenseData, isManager: boolean) => Promise<string | null>;
@@ -153,6 +179,99 @@ export const useExpensesStore = create<ExpensesStore>((set, get) => {
   }
 }
 
+  // Core loader for ONE date window: network fetch + creator-name enrichment.
+  // Throws on failure (no catch) so each caller chooses its own fallback.
+  const fetchExpensesWindow = async (businessId: string, windowStart: string) => {
+    const { data, error } = await withNetworkRetry(() =>
+      supabase
+        .from('expenses')
+        .select('*, product:products(name)')
+        .eq('business_id', businessId)
+        // The window is a floor on `date`, but pending expenses are always
+        // fetched whatever their date: an old expense awaiting approval must
+        // never be windowed out of the manager's queue.
+        .or(`date.gte.${windowStart},status.eq.en_attente`)
+        .order('date', { ascending: false })
+        .order('created_at', { ascending: false }),
+    );
+
+    if (error) throw error;
+
+    const expenses = (data ?? []) as Expense[];
+    const fromCents = (e: Expense) => ({ ...e, amount: e.amount / 100 });
+
+    const creatorIds = [...new Set(expenses.map(e => e.created_by))];
+    let result: Expense[];
+    if (creatorIds.length > 0) {
+      // Best-effort enrichment — a hang or failure here must never block
+      // the main list (which already fetched successfully) from ever
+      // clearing `loading`. See CLAUDE.md's "withTimeout() sweep" note.
+      let profiles: { id: string; name: string }[] | null = null;
+      try {
+        const res = await withTimeout(
+          supabase.from('profiles').select('id, name').in('id', creatorIds),
+        );
+        profiles = res.data as { id: string; name: string }[] | null;
+      } catch {
+        profiles = null;
+      }
+
+      const pm: Record<string, string> = {};
+      for (const p of (profiles ?? [])) pm[p.id] = p.name;
+
+      result = expenses.map(e => ({
+        ...fromCents(e),
+        creator_name: pm[e.created_by] ?? 'Inconnu',
+        product_name: (e as any).product?.name ?? null,
+      }));
+    } else {
+      result = expenses.map(e => ({
+        ...fromCents(e),
+        product_name: (e as any).product?.name ?? null,
+      }));
+    }
+    return result;
+  };
+
+  // Commits one fetched window: the offline cache stores the window ALONGSIDE
+  // the rows (legacy caches held rows only), so an offline restart restores
+  // exactly what was last shown — never a narrower surprise.
+  const commitFetched = async (businessId: string, result: Expense[], windowStart: string) => {
+    void saveExpenseCache(businessId, { rows: result, windowStart } as unknown as unknown[]);
+    if (isStaleBusiness(businessId)) return;
+    const ops = await readExpenseOps();
+    if (isStaleBusiness(businessId)) return;
+    set({
+      baseline: result,
+      expenses: applyExpenseOverlay(result, ops, overlayContext()),
+      loading: false, offline: false, offlineSince: null,
+      expensesFetchedFor: businessId,
+      expensesWindowStart: windowStart, expensesWindowFor: businessId,
+      expensesBeyondWindow: false,
+    });
+  };
+
+  // Cheap existence probe (no rows transferred): true when the business has
+  // non-pending expenses OLDER than the window — i.e. « Charger les mois
+  // précédents » would actually load something. Pending rows are always in
+  // the window already, so they must not flip this flag.
+  const probeBeyondWindow = async (businessId: string, windowStart: string): Promise<boolean> => {
+    try {
+      const { count, error } = await withTimeout(
+        supabase.from('expenses').select('id', { count: 'exact', head: true })
+          .eq('business_id', businessId)
+          .lt('date', windowStart)
+          .neq('status', 'en_attente'),
+      );
+      if (error || isStaleBusiness(businessId)) return false;
+      return (count ?? 0) > 0;
+    // failure: silent — the probe is best-effort; worst case the empty state
+    // and the « Charger les mois précédents » footer stay conservative.
+    } catch {
+      return false;
+    }
+  };
+
   return ({
   baseline: [],
   expenses: [],
@@ -162,80 +281,54 @@ export const useExpensesStore = create<ExpensesStore>((set, get) => {
   offline: false,
   offlineSince: null,
   expensesFetchedFor: null,
+  expensesWindowStart: null,
+  expensesWindowFor: null,
+  expensesBeyondWindow: false,
 
   fetchExpenses: async (businessId) => {
     set({ loading: true, error: null });
+    // A refresh (sync drain, screen refocus, cache warmup) keeps the window
+    // the vendor already widened; only a first fetch — or a new business —
+    // starts from the initial window.
+    const stored = get().expensesWindowFor === businessId ? get().expensesWindowStart : null;
+    const windowStart = stored ?? initialExpenseWindowStart();
     try {
-      const { data, error } = await withNetworkRetry(() =>
-        supabase
-          .from('expenses')
-          .select('*, product:products(name)')
-          .eq('business_id', businessId)
-          .order('date', { ascending: false })
-          .order('created_at', { ascending: false }),
-      );
-
-      if (error) throw error;
+      const result = await fetchExpensesWindow(businessId, windowStart);
       if (isStaleBusiness(businessId)) return;
-
-      const expenses = (data ?? []) as Expense[];
-      const fromCents = (e: Expense) => ({ ...e, amount: e.amount / 100 });
-
-      const creatorIds = [...new Set(expenses.map(e => e.created_by))];
-      let result: Expense[];
-      if (creatorIds.length > 0) {
-        // Best-effort enrichment — a hang or failure here must never block
-        // the main list (which already fetched successfully) from ever
-        // clearing `loading`. See CLAUDE.md's "withTimeout() sweep" note.
-        let profiles: { id: string; name: string }[] | null = null;
-        try {
-          const res = await withTimeout(
-            supabase.from('profiles').select('id, name').in('id', creatorIds),
-          );
-          profiles = res.data as { id: string; name: string }[] | null;
-        } catch {
-          profiles = null;
-        }
-
-        const pm: Record<string, string> = {};
-        for (const p of (profiles ?? [])) pm[p.id] = p.name;
-
-        result = expenses.map(e => ({
-          ...fromCents(e),
-          creator_name: pm[e.created_by] ?? 'Inconnu',
-          product_name: (e as any).product?.name ?? null,
-        }));
-      } else {
-        result = expenses.map(e => ({
-          ...fromCents(e),
-          product_name: (e as any).product?.name ?? null,
-        }));
+      await commitFetched(businessId, result, windowStart);
+      // One cheap head-count probe per fetch keeps the empty state honest and
+      // the « Charger les mois précédents » footer real: the flag is true only
+      // when older expenses actually exist outside the window.
+      if (!isStaleBusiness(businessId)) {
+        const beyond = await probeBeyondWindow(businessId, windowStart);
+        if (!isStaleBusiness(businessId)) set({ expensesBeyondWindow: beyond });
       }
-      void saveExpenseCache(businessId, result as unknown[]);
-      if (isStaleBusiness(businessId)) return;
-      const ops = await readExpenseOps();
-      if (isStaleBusiness(businessId)) return;
-      set({
-        baseline: result,
-        expenses: applyExpenseOverlay(result, ops, overlayContext()),
-        loading: false, offline: false, offlineSince: null,
-        expensesFetchedFor: businessId,
-      });
     } catch (err) {
       if (isNetworkError(err)) {
         reportOfflineFallback('expenses.fetchExpenses', err);
-        const cached = await getExpenseCache(businessId) as Expense[] | null;
+        const cachedRaw = await getExpenseCache(businessId) as unknown;
+        // Cache envelope: the rows PLUS the window they were fetched for, so
+        // an offline restart restores exactly what was last shown. Caches
+        // written before the window held rows only — still readable.
+        const cachedRows: Expense[] | null = Array.isArray(cachedRaw)
+          ? (cachedRaw as Expense[])
+          : (((cachedRaw as { rows?: Expense[] } | null)?.rows) ?? null);
+        const cachedWindow: string | null = Array.isArray(cachedRaw)
+          ? null
+          : (((cachedRaw as { windowStart?: string } | null)?.windowStart) ?? null);
         if (isStaleBusiness(businessId)) return;
-        if (cached) {
+        if (cachedRows) {
           const ts = await getCacheTimestamp('expense_cache', businessId);
           if (isStaleBusiness(businessId)) return;
           const ops = await readExpenseOps();
           if (isStaleBusiness(businessId)) return;
           set({
-            baseline: cached,
-            expenses: applyExpenseOverlay(cached, ops, overlayContext()),
+            baseline: cachedRows,
+            expenses: applyExpenseOverlay(cachedRows, ops, overlayContext()),
             loading: false, offline: true, offlineSince: ts, error: null,
             expensesFetchedFor: businessId,
+            expensesWindowStart: cachedWindow ?? get().expensesWindowStart ?? initialExpenseWindowStart(),
+            expensesWindowFor: businessId,
           });
           return;
         }
@@ -249,6 +342,38 @@ export const useExpensesStore = create<ExpensesStore>((set, get) => {
       }
       if (isStaleBusiness(businessId)) return;
       set({ error: translateError(err, "Le chargement n'a pas abouti."), loading: false, expensesFetchedFor: businessId });
+    }
+  },
+
+  // Widens the date window by 6 months (« Charger les mois précédents »).
+  // The already-shown window is never narrowed: on failure the baseline is
+  // left untouched and only the failure is reported.
+  extendExpensesWindow: async (businessId) => {
+    if (get().loading) return;
+    const wider = previousExpenseWindowStart(get().expensesWindowStart ?? initialExpenseWindowStart());
+    set({ loading: true, error: null });
+    try {
+      const result = await fetchExpensesWindow(businessId, wider);
+      if (isStaleBusiness(businessId)) return;
+      const freshIds = new Set(result.map(e => e.id));
+      // Rows inside the overlap range are authoritative from the new fetch
+      // (a server-side delete between fetches must disappear); rows older
+      // than the new window start survive from the previous fetch.
+      const carried = get().baseline.filter(e => !freshIds.has(e.id) && e.date < wider);
+      await commitFetched(businessId, [...result, ...carried], wider);
+      if (!isStaleBusiness(businessId)) {
+        const beyond = await probeBeyondWindow(businessId, wider);
+        if (!isStaleBusiness(businessId)) set({ expensesBeyondWindow: beyond });
+      }
+    } catch (err) {
+      if (isStaleBusiness(businessId)) return;
+      // failure: speaks — the shown window stays; the failure is reported,
+      // and the offline banner appears when the cause is the network.
+      set({
+        loading: false,
+        offline: isNetworkError(err),
+        error: translateError(err, "Le chargement n'a pas abouti."),
+      });
     }
   },
 
@@ -356,6 +481,6 @@ export const useExpensesStore = create<ExpensesStore>((set, get) => {
   rejectExpense: async (id, userId) => decideExpense('reject_expense', 'rejete', id, userId),
 
   clearError: () => set({ error: null }),
-  reset: () => { snapshots.clear(); cancelledCreates.clear(); set({ baseline: [], expenses: [], loading: false, saving: false, error: null, offline: false, offlineSince: null, expensesFetchedFor: null }); },
+  reset: () => { snapshots.clear(); cancelledCreates.clear(); set({ baseline: [], expenses: [], loading: false, saving: false, error: null, offline: false, offlineSince: null, expensesFetchedFor: null, expensesWindowStart: null, expensesWindowFor: null, expensesBeyondWindow: false }); },
   });
 });
