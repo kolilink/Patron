@@ -180,7 +180,7 @@ function renderSale(
           {c.lines.map((l, i) => (
             <View key={i} style={[row, { marginBottom: 10 * k }]}>
               <Text {...T} {...shrink} style={[{ ...reg, color: paper.soft, flex: 1, marginRight: 12 * k }, sz(17)]}>
-                {`${l.name} × ${l.qty}`}
+                {`${l.name} × ${l.qty}${l.agreed ? ' · convenu' : ''}`}
               </Text>
               <Text {...T} {...shrink} style={[{ ...reg, ...TABULAR, color: paper.soft }, sz(17)]}>{l.lineTotal}</Text>
             </View>
