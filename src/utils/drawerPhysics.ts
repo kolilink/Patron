@@ -25,6 +25,16 @@ export const DRAWER_FLING_VELOCITY = 500;
 /** Fraction of the drawer's width a drag must travel to flip its state. */
 export const DRAWER_TRAVEL_FRACTION = 0.35;
 
+/**
+ * Fraction an EDGE drag (started closed) must travel to open the drawer.
+ * Deliberately lower than the close fraction: the strip is a deliberate
+ * grab — a fifth of the panel already peeking means intent — while the
+ * 35% close rule vendors already know stays untouched. At 35% both ways,
+ * a natural 50–80 px swipe tracked the panel then snapped it shut, which
+ * read as "the swipe doesn't work".
+ */
+export const DRAWER_OPEN_TRAVEL_FRACTION = 0.2;
+
 /** The panel follows the finger 1:1, clamped between fully closed and fully open. */
 export function clampDrawerX(x: number, width: number): number {
   return Math.min(0, Math.max(-width, x));
@@ -32,10 +42,11 @@ export function clampDrawerX(x: number, width: number): number {
 
 /**
  * Where a released drag settles: 0 (open) or -width (closed).
- * A fling decides first; otherwise the drag must have travelled
- * DRAWER_TRAVEL_FRACTION of the width FROM THE STATE IT STARTED IN —
- * an open drawer closes past 35% dragged shut (the behaviour vendors
- * already know), a closed one opens past 35% dragged in.
+ * A fling decides first; otherwise the drag must have travelled the
+ * fraction of the width FOR THE STATE IT STARTED IN — an open drawer
+ * closes past 35% dragged shut (the behaviour vendors already know),
+ * a closed one opens past 20% dragged in (the edge grab is deliberate,
+ * so opening is eager; see DRAWER_OPEN_TRAVEL_FRACTION).
  */
 export function drawerReleaseTarget(
   currentX: number,
@@ -49,5 +60,5 @@ export function drawerReleaseTarget(
   if (startedOpen) {
     return currentX < -width * DRAWER_TRAVEL_FRACTION ? -width : 0;
   }
-  return currentX > -width * (1 - DRAWER_TRAVEL_FRACTION) ? 0 : -width;
+  return currentX > -width * (1 - DRAWER_OPEN_TRAVEL_FRACTION) ? 0 : -width;
 }

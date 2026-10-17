@@ -45,9 +45,9 @@ describe('drawerPhysics — drawerReleaseTarget', () => {
     expect(drawerReleaseTarget(-250, 600, 0, W)).toBe(0);
   });
 
-  it('started closed (edge drag): opens only past 35% of the travel', () => {
-    expect(drawerReleaseTarget(-200, 0, -W, W)).toBe(-W);
-    expect(drawerReleaseTarget(-190, 0, -W, W)).toBe(0);
+  it('started closed (edge drag): opens past 20% of the travel — a natural swipe is enough', () => {
+    expect(drawerReleaseTarget(-250, 0, -W, W)).toBe(-W);
+    expect(drawerReleaseTarget(-230, 0, -W, W)).toBe(0);
   });
 
   it('started closed: a fling decides whatever the distance', () => {
