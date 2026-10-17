@@ -750,18 +750,25 @@ export default function DiscussionsScreen() {
   }, [lastVisitedAt]);
 
   // ─── Handlers ─────────────────────────────────────────────────────────────
+  // The tab switches FIRST and synchronously — the vendor never waits on an
+  // animation to see the new tab, and an interrupted animation can never
+  // swallow a tab tap (the old 80ms fade-out gated the state switch on the
+  // animation's `finished` callback).
   const switchTabAndFadeIn = useCallback((tab: Tab) => {
     setActiveTab(tab);
     if (businessId && (tab === 'boutique' || tab === 'marche')) markRead(tab as 'boutique' | 'marche', businessId);
-    contentAlpha.value = reduceMotion ? 1 : withTiming(1, { duration: 140 });
+    // Entrance fade for the NEW content only — never a gate on the switch.
+    if (reduceMotion) {
+      contentAlpha.value = 1;
+    } else {
+      contentAlpha.value = 0;
+      contentAlpha.value = withTiming(1, { duration: 140 });
+    }
   }, [businessId, reduceMotion]);
 
   const handleTabChange = useCallback((tab: Tab) => {
-    if (reduceMotion) { switchTabAndFadeIn(tab); return; }
-    contentAlpha.value = withTiming(0, { duration: 80 }, (finished) => {
-      if (finished) runOnJS(switchTabAndFadeIn)(tab);
-    });
-  }, [switchTabAndFadeIn, reduceMotion]);
+    switchTabAndFadeIn(tab);
+  }, [switchTabAndFadeIn]);
 
   const scrollToMessage = useCallback((msgId: string) => {
     const index = listItems.findIndex(item => !isSep(item) && item.id === msgId);
