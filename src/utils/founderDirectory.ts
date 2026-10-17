@@ -15,9 +15,10 @@ export interface DirectoryRow {
   lost: boolean;
 }
 
-export type DirectoryFilter = 'tous' | 'perdus' | 'nouveaux';
+export type DirectoryFilter = 'contact' | 'tous' | 'perdus' | 'nouveaux';
 
 export const DIRECTORY_FILTERS: { key: DirectoryFilter; label: string }[] = [
+  { key: 'contact', label: 'À contacter' },
   { key: 'tous', label: 'Tous' },
   { key: 'perdus', label: 'Perdus' },
   { key: 'nouveaux', label: 'Nouveaux (7 j)' },
@@ -27,10 +28,11 @@ const DAY_MS = 86400000;
 
 export function parseFilter(raw: string | string[] | undefined): DirectoryFilter {
   const v = Array.isArray(raw) ? raw[0] : raw;
-  return v === 'perdus' || v === 'nouveaux' ? v : 'tous';
+  return v === 'contact' || v === 'perdus' || v === 'nouveaux' ? v : 'tous';
 }
 
 export function filterRows(rows: DirectoryRow[], filter: DirectoryFilter, now: number = Date.now()): DirectoryRow[] {
+  // 'contact' needs the care state (founderCare.contactRows); the screen handles it.
   if (filter === 'perdus') return rows.filter(r => r.lost);
   if (filter === 'nouveaux') return rows.filter(r => now - new Date(r.created_at).getTime() <= 7 * DAY_MS);
   return rows;
@@ -54,11 +56,11 @@ export function whatsappMessage(row: DirectoryRow, now: number = Date.now()): st
   return `${hello}, ici l'équipe Patron. Comment se passe l'utilisation de Patron pour${shop || ' votre commerce'} ? Dites-nous ce qu'on peut améliorer.`;
 }
 
-/** wa.me link, or null when the row has no usable phone number. */
-export function whatsappUrl(row: DirectoryRow, now: number = Date.now()): string | null {
+/** wa.me link, or null when the row has no usable phone number. `message` overrides the generic text. */
+export function whatsappUrl(row: DirectoryRow, now: number = Date.now(), message?: string): string | null {
   const digits = (row.owner_phone ?? '').replace(/\D/g, '');
   if (!digits) return null;
-  return `https://wa.me/${digits}?text=${encodeURIComponent(whatsappMessage(row, now))}`;
+  return `https://wa.me/${digits}?text=${encodeURIComponent(message ?? whatsappMessage(row, now))}`;
 }
 
 export function daysAgoLabel(iso: string | null, now: number = Date.now()): string {
