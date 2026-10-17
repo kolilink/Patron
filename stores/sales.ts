@@ -11,12 +11,15 @@ import { trackEvent } from '@/lib/analytics';
 import { haptics } from '@/lib/haptics';
 import { toast } from '@/stores/toast';
 import type { PaymentMethod, Product, ProductVariant } from '@/src/types';
+import { cartSum, effectiveUnitPrice, normalizeAgreedPrice } from '@/src/utils/cartMath';
 import { isOutboxValidationError } from '@/lib/outboxValidation';
 
 export interface CartLine {
   product: Product;
   qty: number;
   unit_price: number;
+  /** Price per piece agreed with the customer; absent = catalogue price. Never written back to the product. */
+  agreed_unit_price?: number;
   is_bulk: boolean;
   variant_id?: string;
   variant_name?: string;
@@ -74,6 +77,7 @@ interface SalesStore {
   removeFromCart: (productId: string, isBulk?: boolean, variantId?: string) => void;
   setQty: (productId: string, qty: number, isBulk?: boolean, variantId?: string) => void;
   toggleBulk: (productId: string, isBulk?: boolean) => void;
+  setAgreedPrice: (productId: string, isBulk: boolean, variantId: string | undefined, price: number | null) => void;
   clearCart: () => void;
   submitCarnetDebt: (businessId: string, userId: string, customerName: string, amountCents: number, clientId: string | null) => Promise<CarnetDebtResult>;
   submitQuickSale: (businessId: string, userId: string, unitPriceCents: number, qty: number, label?: string) => Promise<QuickSaleResult>;
@@ -228,11 +232,20 @@ export const useSalesStore = create<SalesStore>((set, get) => ({
       set({
         cart: cart.map(l =>
           l.product.id === productId && l.is_bulk === currentIsBulk
-            ? { ...l, is_bulk: newBulk, unit_price }
+            ? { ...l, is_bulk: newBulk, unit_price, agreed_unit_price: undefined }
             : l
         ),
       });
     }
+  },
+
+  setAgreedPrice: (productId, isBulk, variantId, price) => {
+    set(state => ({
+      cart: state.cart.map(l => {
+        const match = variantId !== undefined ? l.variant_id === variantId : (l.product.id === productId && l.is_bulk === isBulk && !l.variant_id);
+        return match ? { ...l, agreed_unit_price: normalizeAgreedPrice(l.unit_price, price) } : l;
+      }),
+    }));
   },
 
   clearCart: () => set({ cart: [] }),
@@ -368,7 +381,8 @@ export const useSalesStore = create<SalesStore>((set, get) => ({
     const idempotencyKey = generateId();
     set({ submitting: true, error: null });
 
-    const catalogTotal = cartSnapshot.reduce((sum, l) => sum + l.unit_price * l.qty, 0);
+    // Effective prices (agreed price where one was set) — the catalogue product is never written.
+    const catalogTotal = cartSum(cartSnapshot);
     const totalAmount = overrideTotalAmount ?? catalogTotal;
     const isFullCredit = payment === null;
     const discount = discountAmount ?? 0;
@@ -386,7 +400,7 @@ export const useSalesStore = create<SalesStore>((set, get) => ({
     const cartJson = cartSnapshot.map(l => ({
       product_id:   l.product.id,
       qty:          l.qty,
-      unit_price:   Math.round(l.unit_price * priceRatio * 100),
+      unit_price:   Math.round(effectiveUnitPrice(l) * priceRatio * 100),
       is_bulk:      l.is_bulk,
       product_name: l.product.name,
       variant_id:   l.variant_id ?? null,

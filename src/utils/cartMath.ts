@@ -1,7 +1,18 @@
 // The cart's arithmetic, in one place, so what the vendor verifies line by line is exactly what the CTA charges.
-export interface CartMathLine { unit_price: number; qty: number }
+export interface CartMathLine { unit_price: number; qty: number; agreed_unit_price?: number }
 
-export const lineTotal = (l: CartMathLine): number => l.unit_price * l.qty;
+/** The price per piece actually charged: the price agreed out loud with the customer, else the catalogue price. */
+export const effectiveUnitPrice = (l: CartMathLine): number => l.agreed_unit_price ?? l.unit_price;
+export const hasAgreedPrice = (l: CartMathLine): boolean => l.agreed_unit_price != null;
+/** What the line would come to at the catalogue price (shown struck through once a price is agreed). */
+export const catalogLineTotal = (l: CartMathLine): number => l.unit_price * l.qty;
+/** Agreeing the catalogue price again is "no agreement": returns the value to store (undefined = normal state). */
+export function normalizeAgreedPrice(catalogPrice: number, agreed: number | null | undefined): number | undefined {
+  if (agreed == null || !Number.isFinite(agreed) || agreed <= 0) return undefined;
+  return agreed === catalogPrice ? undefined : agreed;
+}
+
+export const lineTotal = (l: CartMathLine): number => effectiveUnitPrice(l) * l.qty;
 export const cartSum = (lines: CartMathLine[]): number => lines.reduce((s, l) => s + lineTotal(l), 0);
 
 /** "Panier · 3 articles" — one article per line she sees listed. */

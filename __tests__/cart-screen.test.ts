@@ -26,10 +26,10 @@ describe('(a) line totals, verified not computed', () => {
     expect(cartSum(lines)).toBe(6900);
     expect(`Encaisser · ${amountText(cartSum(lines), 'GNF')}`).toBe('Encaisser · 6 900 GNF');
   });
-  it('the row renders a bold right-aligned total (Money) and a subdued unit price', () => {
+  it('the row renders a bold right-aligned total (Money) and a unit-price chip (tappable, Prix convenu)', () => {
     expect(cartRow).toContain('amount={lineTotal(line)}');
     expect(cartRow).toMatch(/<Money amount=\{lineTotal\(line\)\}[^>]*variant="amount"/);
-    expect(cartRow).toMatch(/<MoneyText variant="caption" color="secondary"[\s\S]{0,160}formatAmount\(line\.unit_price/);
+    expect(cartRow).toMatch(/<MoneyText variant="caption"[\s\S]{0,160}formatAmount\(effectiveUnitPrice\(line\)/);
   });
   it('the CTA total and the lines come from the same helper', () => {
     expect(V).toContain('const cartTotal = useMemo(() => cartSum(cart), [cart]);');
