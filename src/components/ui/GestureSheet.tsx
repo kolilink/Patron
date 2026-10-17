@@ -1,7 +1,7 @@
 import React, { forwardRef, useCallback, useEffect, useMemo, useRef, useState, type ReactNode } from 'react';
 import { Keyboard, KeyboardAvoidingView, Modal, Platform, Pressable, ScrollView, StyleSheet, View, useWindowDimensions, type ScrollViewProps } from 'react-native';
 import { Gesture, GestureDetector, GestureHandlerRootView } from 'react-native-gesture-handler';
-import Animated, { Easing, runOnJS, useAnimatedStyle, useSharedValue, withSpring, withTiming } from 'react-native-reanimated';
+import Animated, { runOnJS, useAnimatedStyle, useSharedValue, withSpring } from 'react-native-reanimated';
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
 import { ConfirmSheetHost } from '@/src/components/ui/ConfirmSheet';
 import { Text } from '@/src/components/ui/Text';
@@ -9,7 +9,17 @@ import { CtaFade } from '@/src/components/ui/CtaFade';
 import { useTheme, spacing, radius } from '@/src/theme';
 import { useReduceMotion } from '@/src/hooks/useReduceMotion';
 import { DISMISS_FRACTION, DISMISS_VELOCITY } from '@/src/utils/sheetGesture';
+
 import { footerPlacement, scrollBottomPadding, type FooterMode } from '@/src/utils/ctaLayout';
+
+// One physical language with every surface that follows the finger
+// (BusinessDrawer's spring in src/utils/drawerPhysics.ts): the sheet starts
+// fast and, on a release, inherits the finger's own velocity, so a hard
+// fling and a gentle release no longer fall at the same canned pace.
+// Near-critically damped (stiffness 320, damping 34 — ζ ≈ 0.95), so it
+// settles with no visible overshoot; the pair is shared so the app's sheets
+// and drawers feel like one material.
+const SHEET_SPRING = { stiffness: 320, damping: 34 } as const;
 
 interface Props {
   visible: boolean;
@@ -79,12 +89,18 @@ export const GestureSheet = forwardRef<ScrollView, Props>(function GestureSheet(
     if (visible) {
       closing.current = false;
       setRendered(true);
-      translateY.value = withTiming(0, { duration: reduce ? 0 : 300, easing: Easing.out(Easing.cubic) });
+      if (reduce) translateY.value = 0;
+      else translateY.value = withSpring(0, { ...SHEET_SPRING, velocity: 0 });
     } else if (rendered) {
       // Closed by the parent (e.g. after a save): slide away, then unmount. No onClose echo.
-      translateY.value = withTiming(screenH, { duration: reduce ? 0 : 240, easing: Easing.in(Easing.cubic) }, finished => {
-        if (finished) runOnJS(setRendered)(false);
-      });
+      if (reduce) {
+        translateY.value = screenH;
+        setRendered(false);
+      } else {
+        translateY.value = withSpring(screenH, { ...SHEET_SPRING, velocity: 0 }, finished => {
+          if (finished) runOnJS(setRendered)(false);
+        });
+      }
     }
   }, [visible]);
 
@@ -96,7 +112,7 @@ export const GestureSheet = forwardRef<ScrollView, Props>(function GestureSheet(
       finishClose();
       return;
     }
-    translateY.value = withTiming(screenH, { duration: 240, easing: Easing.in(Easing.cubic) }, finished => {
+    translateY.value = withSpring(screenH, { ...SHEET_SPRING, velocity: 0 }, finished => {
       if (finished) runOnJS(finishClose)();
     });
   }, [finishClose, reduce, screenH, translateY]);
@@ -117,11 +133,13 @@ export const GestureSheet = forwardRef<ScrollView, Props>(function GestureSheet(
       .onEnd(e => {
         const h = sheetHeight.value;
         if (e.velocityY >= DISMISS_VELOCITY || translateY.value >= h * DISMISS_FRACTION) {
-          translateY.value = withTiming(screenH, { duration: 200, easing: Easing.out(Easing.quad) }, finished => {
+          // The fling's own velocity continues through the settle: a hard
+          // flick leaves faster than a gentle release pushes.
+          translateY.value = withSpring(screenH, { ...SHEET_SPRING, velocity: e.velocityY }, finished => {
             if (finished) runOnJS(finishClose)();
           });
         } else {
-          translateY.value = withSpring(0, { damping: 24, stiffness: 260, mass: 0.9 });
+          translateY.value = withSpring(0, { ...SHEET_SPRING, velocity: e.velocityY });
         }
       }),
     [finishClose, screenH, sheetHeight, translateY],
