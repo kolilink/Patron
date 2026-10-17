@@ -102,7 +102,4 @@ describe('OTP verification screen contract', () => {
   it.each(screens.filter(([n]) => n !== 'recuperation'))('%s: "Changer de numéro" is inert during the flight', (_n, src) => {
     expect(src).toMatch(/label="Changer de numéro"\s+variant="ghost"\s+disabled=\{loading\}/);
   });
-  it('milestone phone: "Changer de numéro" is inert during the flight', () => {
-    expect(read('app/(app)/milestone/phone.tsx')).toMatch(/label="Changer de numéro"\s+variant="ghost"\s+disabled=\{loading\}/);
-  });
 });
