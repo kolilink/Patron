@@ -74,7 +74,7 @@ interface Props {
    * `null` means the supplier is not saved yet (the supplier save links the product). Closes on Ajouter.
    */
   supplierId?: string | null;
-  /** Edit mode: the sheet owns archiving and restoring (Gérer rows have no buttons of their own). */
+  /** Edit mode: the sheet owns deactivating and reactivating (Gérer rows have no buttons of their own). */
   onArchive?: (product: Product) => void;
   onRestore?: (product: Product) => void;
   /** Edit mode: opens the profitability ("Rentabilité") sheet. */
@@ -655,7 +655,7 @@ export function QuickAddProductSheet({
       </Pressable>
       )}
 
-      {/* Edit mode: this sheet owns everything about the product — archive / restore / profitability. */}
+      {/* Edit mode: this sheet owns everything about the product — deactivate / reactivate / profitability. */}
       {isEdit && editing && (onStats || onArchive || onRestore) && (
         <View style={styles.manageBlock}>
           {onStats && !editing.archived && (
@@ -665,14 +665,14 @@ export function QuickAddProductSheet({
           )}
           {editing.archived ? (
             onRestore && (
-              <Pressable onPress={() => onRestore(editing)} style={styles.manageRow} accessibilityRole="button" accessibilityLabel="Restaurer ce produit">
-                <Text variant="body" style={{ color: palette.primary, fontFamily: FF.semibold }}>Restaurer ce produit</Text>
+              <Pressable onPress={() => onRestore(editing)} style={styles.manageRow} accessibilityRole="button" accessibilityLabel="Réactiver ce produit">
+                <Text variant="body" style={{ color: palette.primary, fontFamily: FF.semibold }}>Réactiver ce produit</Text>
               </Pressable>
             )
           ) : (
             onArchive && (
-              <Pressable onPress={() => onArchive(editing)} style={styles.manageRow} accessibilityRole="button" accessibilityLabel="Archiver ce produit">
-                <Text variant="body" color="secondary">Archiver ce produit</Text>
+              <Pressable onPress={() => onArchive(editing)} style={styles.manageRow} accessibilityRole="button" accessibilityLabel="Désactiver ce produit">
+                <Text variant="body" color="secondary">Désactiver ce produit</Text>
               </Pressable>
             )
           )}
