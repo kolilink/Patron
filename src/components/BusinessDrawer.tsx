@@ -1,8 +1,8 @@
-import { useEffect, useMemo, useState } from 'react';
+import { useEffect, useMemo, useRef, useState } from 'react';
 import {
   Alert,
+  BackHandler,
   Dimensions,
-  Modal,
   Pressable,
   ScrollView,
   StyleSheet,
@@ -13,11 +13,10 @@ import { Gesture, GestureDetector } from 'react-native-gesture-handler';
 import Animated, {
   useSharedValue,
   useAnimatedStyle,
-  withTiming,
+  withSpring,
   runOnJS,
   interpolate,
   Extrapolation,
-  Easing,
 } from 'react-native-reanimated';
 import { NoResultsState } from '@/src/components/ui/NoResultsState';
 import { useReduceMotion } from '@/src/hooks/useReduceMotion';
@@ -30,19 +29,21 @@ import type { Palette } from '@/src/theme';
 import { useAuthStore } from '@/stores/auth';
 import { useSupportChatStore } from '@/stores/supportChat';
 import { isFounderPhone } from '@/src/utils/founder';
+import { DRAWER_SPRING, clampDrawerX, drawerReleaseTarget } from '@/src/utils/drawerPhysics';
 import type { Role } from '@/src/types';
 import { isTeamsEnabled } from '@/src/utils/teamsFlag';
 
 const DRAWER_WIDTH = Dimensions.get('window').width * 0.78;
 
-// Plain eased timing, not a physics spring — a spring has velocity/mass and
-// can overshoot the target and settle back (the back-and-forth wobble the
-// user kept seeing even with overshootClamping). A timing curve has no
-// velocity to overshoot with: it interpolates monotonically to the target
-// every time. Shared by open, cancel-drag spring-back, and drag-confirmed close.
-const DRAWER_EASE = Easing.out(Easing.cubic);
-const DRAWER_OPEN_DURATION = 260;
-const DRAWER_CLOSE_DURATION = 300;
+// Physics, not a fixed-duration timing: a timing curve always took its
+// full 260/300 ms whatever the finger did — a hard flick and a gentle
+// release animated identically, which is what read as "resistant". Every
+// settle now runs on DRAWER_SPRING (src/utils/drawerPhysics.ts), which
+// starts fast and, on a gesture release, inherits the finger's velocity.
+// The wobble an earlier spring showed was under-damping; this spring is
+// near-critically damped, so it settles with no visible overshoot.
+// Width of the left-edge strip that grabs the swipe-to-open when closed.
+const EDGE_STRIP_WIDTH = 28;
 
 const DRAWER_AVATAR_PALETTE = BUSINESS_AVATAR_PALETTE;
 
@@ -71,6 +72,7 @@ export function BusinessDrawer() {
   const session = useAuthStore(s => s.session);
   const businessDrawerOpen = useAuthStore(s => s.businessDrawerOpen);
   const closeBusinessDrawer = useAuthStore(s => s.closeBusinessDrawer);
+  const openBusinessDrawer = useAuthStore(s => s.openBusinessDrawer);
   const selectBusiness = useAuthStore(s => s.selectBusiness);
   const insets = useSafeAreaInsets();
   const isFounder = isFounderPhone(session?.user.phone);
@@ -79,58 +81,98 @@ export function BusinessDrawer() {
   const reduceMotion = useReduceMotion();
   const translateX = useSharedValue(-DRAWER_WIDTH);
   const dragStartX = useSharedValue(-DRAWER_WIDTH);
-  const [modalVisible, setModalVisible] = useState(false);
+  // The drawer is always mounted, parked off-screen; `interactive` is its
+  // pointer-events gate. It turns on the moment the drawer opens or a drag
+  // grabs it, and off only when a close has fully settled — re-checked
+  // against the store at settle time, so a close interrupted by a re-open
+  // never strands the gate either way (the Modal version of this bug left a
+  // transparent modal mounted, eating every touch on screen).
+  const [interactive, setInteractive] = useState(false);
   const [search, setSearch] = useState('');
-  const unmountIfClosed = () => {
-    if (!useAuthStore.getState().businessDrawerOpen) setModalVisible(false);
+  const deactivateIfClosed = () => {
+    if (!useAuthStore.getState().businessDrawerOpen) setInteractive(false);
+  };
+  // Set by a gesture release just before it flips the store flag: the
+  // gesture has already sprung the panel with the finger's velocity, so the
+  // effect below must not restart the animation and throw that velocity away.
+  const gestureTargetRef = useRef<number | null>(null);
+
+  const springTo = (target: number, velocity: number) => {
+    'worklet';
+    if (reduceMotion) {
+      translateX.value = target;
+      runOnJS(deactivateIfClosed)();
+      return;
+    }
+    translateX.value = withSpring(target, { ...DRAWER_SPRING, velocity }, () => {
+      runOnJS(deactivateIfClosed)();
+    });
   };
 
   useEffect(() => {
     if (businessDrawerOpen) {
       setSearch('');
-      setModalVisible(true);
-      translateX.value = reduceMotion
-        ? 0
-        : withTiming(0, { duration: DRAWER_OPEN_DURATION, easing: DRAWER_EASE });
+      setInteractive(true);
+    }
+    const target = businessDrawerOpen ? 0 : -DRAWER_WIDTH;
+    if (gestureTargetRef.current === target) {
+      gestureTargetRef.current = null;
+      return;
+    }
+    if (reduceMotion) {
+      translateX.value = target;
+      deactivateIfClosed();
     } else {
-      if (reduceMotion) {
-        translateX.value = -DRAWER_WIDTH;
-        setModalVisible(false);
-      } else {
-        translateX.value = withTiming(-DRAWER_WIDTH, { duration: DRAWER_CLOSE_DURATION, easing: DRAWER_EASE }, () => {
-          // Unmount whether or not the animation "finished": an interrupted close used to leave the
-          // transparent modal mounted with the panel parked at the screen's left edge. runOnJS
-          // re-checks the store, so a close that was interrupted by a re-open keeps the modal.
-          runOnJS(unmountIfClosed)();
-        });
-      }
+      translateX.value = withSpring(target, { ...DRAWER_SPRING, velocity: 0 }, () => {
+        runOnJS(deactivateIfClosed)();
+      });
     }
   }, [businessDrawerOpen]);
 
-  // Swipe-to-close: drag the open panel left. A quick flick (velocity) or a
-  // drag past ~35% of the drawer width closes it; otherwise it springs back
-  // open. Small activeOffsetX/failOffsetY thresholds mirror the swipe-to-reply
-  // gesture in discussions.tsx so a simple tap or vertical scroll inside the
-  // list isn't mistaken for a close-drag.
-  const closeDragGesture = Gesture.Pan()
-    .activeOffsetX([-10, 10])
-    .failOffsetY([-15, 15])
-    .onStart(() => {
-      dragStartX.value = translateX.value;
-    })
-    .onUpdate((e) => {
-      if (e.translationX < 0) {
-        translateX.value = Math.max(-DRAWER_WIDTH, dragStartX.value + e.translationX);
-      }
-    })
-    .onEnd((e) => {
-      const shouldClose = translateX.value < -DRAWER_WIDTH * 0.35 || e.velocityX < -600;
-      if (shouldClose) {
-        runOnJS(closeBusinessDrawer)();
-      } else {
-        translateX.value = reduceMotion ? 0 : withTiming(0, { duration: 200, easing: DRAWER_EASE });
-      }
+  // Android back closes the drawer (the removed Modal's onRequestClose did
+  // this before; the drawer now lives in the app's own window).
+  useEffect(() => {
+    if (!businessDrawerOpen) return;
+    const sub = BackHandler.addEventListener('hardwareBackPress', () => {
+      closeBusinessDrawer();
+      return true;
     });
+    return () => sub.remove();
+  }, [businessDrawerOpen]);
+
+  const finishGesture = (target: number) => {
+    gestureTargetRef.current = target;
+    if (target === 0) openBusinessDrawer();
+    else closeBusinessDrawer();
+  };
+
+  // One drag logic for both grab points — the open panel (swipe to close, or
+  // pull back open mid-drag) and the left screen edge when closed (swipe to
+  // open). The panel follows the finger 1:1 in both directions; on release
+  // the spring inherits the finger's velocity. Small failOffsetY thresholds
+  // mirror the swipe-to-reply gesture in discussions.tsx so a simple tap or
+  // a vertical scroll inside the list isn't mistaken for a drag.
+  const makeDragGesture = () =>
+    Gesture.Pan()
+      .onStart(() => {
+        dragStartX.value = translateX.value;
+        runOnJS(setInteractive)(true);
+      })
+      .onUpdate((e) => {
+        translateX.value = clampDrawerX(dragStartX.value + e.translationX, DRAWER_WIDTH);
+      })
+      .onEnd((e) => {
+        const target = drawerReleaseTarget(translateX.value, e.velocityX, dragStartX.value, DRAWER_WIDTH);
+        springTo(target, e.velocityX);
+        runOnJS(finishGesture)(target);
+      });
+
+  const panelDragGesture = makeDragGesture()
+    .activeOffsetX([-10, 10])
+    .failOffsetY([-15, 15]);
+  const edgeOpenGesture = makeDragGesture()
+    .activeOffsetX([10, 10])
+    .failOffsetY([-12, 12]);
 
   // Fully closed = fully invisible. The panel carries a shadow that reaches past its right edge, so
   // parked at -DRAWER_WIDTH it would otherwise leave a dark rounded strip on the screen's left edge.
@@ -198,29 +240,21 @@ export function BusinessDrawer() {
   };
 
   return (
-    <Modal
-      visible={modalVisible}
-      transparent
-      animationType="none"
-      onRequestClose={closeBusinessDrawer}
-      // This drawer has its own bespoke gesture-driven presentation — it
-      // doesn't fit <FormSheet>'s full-screen slide-up-sheet shape, so it
-      // keeps a raw Modal. But it still contains a keyboard field (the
-      // business search box below), so it needs the same two props
-      // FormSheet sets centrally — see FormSheet.tsx's docstring and
-      // scripts/lib/consistency-checks.js for why: without them, this
-      // Modal's separate Android window isn't edge-to-edge aware while the
-      // rest of the app is, which is what caused the keyboard-flicker bug.
-      statusBarTranslucent
-      navigationBarTranslucent
-    >
+    <>
+    {/* No Modal: the drawer lives in the app's own window, always mounted
+        and parked off-screen, so opening pays no modal-mount beat before
+        the panel starts moving — and the window is already edge-to-edge,
+        which is what the old Modal's statusBarTranslucent /
+        navigationBarTranslucent props had to work around for its separate
+        window (the keyboard-flicker fix in FormSheet.tsx's docstring). */}
+    <View style={StyleSheet.absoluteFillObject} pointerEvents={interactive ? 'auto' : 'none'}>
       {/* Backdrop */}
       <Animated.View style={[StyleSheet.absoluteFillObject, styles.backdrop, backdropAnimStyle]}>
         <Pressable style={StyleSheet.absoluteFillObject} onPress={closeBusinessDrawer} />
       </Animated.View>
 
       {/* Drawer panel */}
-      <GestureDetector gesture={closeDragGesture}>
+      <GestureDetector gesture={panelDragGesture}>
         <Animated.View style={[
           styles.drawer,
           {
@@ -363,7 +397,13 @@ export function BusinessDrawer() {
 
         </Animated.View>
       </GestureDetector>
-    </Modal>
+    </View>
+    {!businessDrawerOpen && (
+      <GestureDetector gesture={edgeOpenGesture}>
+        <View style={styles.edgeStrip} collapsable={false} />
+      </GestureDetector>
+    )}
+    </>
   );
 }
 
@@ -371,6 +411,13 @@ function makeStyles(p: Palette) {
   return StyleSheet.create({
     backdrop: {
       backgroundColor: 'rgba(0,0,0,0.45)',
+    },
+    edgeStrip: {
+      position: 'absolute',
+      left: 0,
+      top: 0,
+      bottom: 0,
+      width: EDGE_STRIP_WIDTH,
     },
     drawer: {
       position: 'absolute',
