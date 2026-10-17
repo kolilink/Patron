@@ -23,7 +23,6 @@ const PUBLIC_SPACE_FILES = [
     // Shared Le Marché UI.
     'src/components/ui/PostActionsMenu.tsx',
     'src/components/ui/ConductBanner.tsx',
-    'src/components/ui/PrivacyWallSheet.tsx',
     'src/components/ui/PseudoSheet.tsx',
 ];
 
