@@ -35,12 +35,13 @@ describe('vendor directory', () => {
     expect(filterRows(rows, 'perdus', NOW).map(r => r.business_id)).toEqual(['lost']);
     expect(filterRows(rows, 'nouveaux', NOW).map(r => r.business_id)).toEqual(['new']);
     expect(filterRows(rows, 'tous', NOW)).toHaveLength(3);
-    expect(DIRECTORY_FILTERS.map(f => f.key)).toEqual(['tous', 'perdus', 'nouveaux']);
+    expect(DIRECTORY_FILTERS.map(f => f.key)).toEqual(['contact', 'tous', 'perdus', 'nouveaux']);
   });
 
   it('parseFilter tolerates junk and arrays', () => {
     expect(parseFilter('perdus')).toBe('perdus');
     expect(parseFilter(['nouveaux'])).toBe('nouveaux');
+    expect(parseFilter('contact')).toBe('contact');
     expect(parseFilter('nope')).toBe('tous');
     expect(parseFilter(undefined)).toBe('tous');
   });

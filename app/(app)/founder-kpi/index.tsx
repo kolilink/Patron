@@ -1,6 +1,6 @@
-import { useEffect, useMemo } from 'react';
+import { useCallback, useEffect, useMemo } from 'react';
 import { Pressable, ScrollView, StyleSheet, View } from 'react-native';
-import { router } from 'expo-router';
+import { router, useFocusEffect } from 'expo-router';
 import { Screen } from '@/src/components/ui/Screen';
 import { Text } from '@/src/components/ui/Text';
 import { FounderDashboard } from '@/src/components/FounderDashboard';
@@ -8,6 +8,7 @@ import { useTheme, spacing } from '@/src/theme';
 import type { Palette } from '@/src/theme';
 import { useAuthStore } from '@/stores/auth';
 import { isFounderPhone } from '@/src/utils/founder';
+import { refreshMorningReminder } from '@/src/utils/founderCareData';
 
 // Founder-only real-time growth panel — reached from BusinessDrawer's "KPI"
 // footer row, same pattern as "Service client" → support-inbox. FounderDashboard
@@ -25,6 +26,11 @@ export default function FounderKpiScreen() {
       else router.replace('/(app)/(tabs)/');
     }
   }, [isFounder]);
+
+  // Keeps the 08:00 "personnes à contacter" reminder current (founder only).
+  useFocusEffect(useCallback(() => {
+    if (isFounder) void refreshMorningReminder();
+  }, [isFounder]));
 
   if (!isFounder) return null;
 
