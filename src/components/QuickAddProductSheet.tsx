@@ -7,7 +7,6 @@ import { GestureSheet } from '@/src/components/ui/GestureSheet';
 import { Button } from '@/src/components/ui/Button';
 import { Text } from '@/src/components/ui/Text';
 import { QuantityStepper } from '@/src/components/ui/QuantityStepper';
-import { useKeyboardVisible } from '@/src/hooks/useKeyboardVisible';
 import { useTheme, spacing, fontFamily as FF } from '@/src/theme';
 import type { Palette } from '@/src/theme';
 import type { Product, ProductVariant } from '@/src/types';
@@ -173,8 +172,6 @@ export function QuickAddProductSheet({
   const styles = useMemo(() => makeStyles(palette), [palette]);
   const insets = useSafeAreaInsets();
   const reduce = useReduceMotion();
-  // With the keyboard up there is no home indicator to clear: the footer sits flush on the keyboard.
-  const keyboardUp = useKeyboardVisible();
 
   const [s, setS] = useState<QuickAddState>(EMPTY_QUICK_ADD);
   const [expanded, setExpanded] = useState(false);
@@ -420,11 +417,13 @@ export function QuickAddProductSheet({
           )}
         </>
       }
-      footer={
+      footer={keyboardUp => (
+        // With the keyboard up there is no home indicator to clear: the footer sits flush on the keyboard.
+        // `keyboardUp` comes from GestureSheet — the single source of truth for the keyboard.
         <View style={[styles.footer, { paddingBottom: keyboardUp ? spacing[3] : Math.max(insets.bottom, spacing[5]) }]}>
           <Button label={isEdit ? 'Enregistrer' : 'Ajouter'} loadingLabel={isEdit ? 'Enregistrement' : 'Ajout'} onPress={submit} loading={saving} disabled={!canSubmit(s) || (isDelivery && !priceValid(s, currency))} fullWidth size="lg" icon={isEdit && stockDirty && !saving ? <View accessibilityLabel="Modifications non enregistrées" style={{ width: 8, height: 8, borderRadius: 4, backgroundColor: palette.warning }} /> : undefined} />
         </View>
-      }
+      )}
     >
       <Animated.View style={{ opacity: fade }}>
       {error && (

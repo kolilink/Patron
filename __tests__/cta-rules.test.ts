@@ -47,8 +47,8 @@ describe('CTA ends the form (no dead gap)', () => {
   const sheet = read('src/components/ui/FormSheet.tsx');
   it('FormSheet puts the footer inside the scroll content by default and docks it only for sticky or an open keyboard', () => {
     expect(sheet).toContain("footerMode = 'flow'");
-    expect(sheet).toMatch(/\{flowFooter \? footer : null\}\s*<\/ScrollView>/);
-    expect(sheet).toContain('footerPlacement(');
+    expect(sheet).toMatch(/\{flowFooter \? footerNode : null\}\s*<\/ScrollView>/);
+    expect(sheet).toContain('useDockedFooter(');
   });
   it('sticky FormSheets always carry a reason', () => {
     expect(sheet).toContain('needs a stickyReason');
@@ -88,8 +88,9 @@ describe('Nouveau produit sheet: no band behind "Ajouter", above the keyboard or
     const dock = gs.slice(gs.indexOf('footerDock:'), gs.indexOf('footerDock:') + 160);
     expect(dock).toContain("position: 'absolute'");
     expect(dock).not.toMatch(/backgroundColor|border|shadow/);
-    expect(gs).toContain('<CtaFade>{footer}</CtaFade>');
-    expect(gs).toContain('scrollBottomPadding(placement, footerHeight, spacing[4])');
+    expect(gs).toContain('<CtaFade>{footerNode}</CtaFade>');
+    expect(gs).toContain('useDockedFooter(');
+    expect(read('src/hooks/useDockedFooter.ts')).toContain('scrollBottomPadding(placement, reservedFooterHeight(dockedHeight, flowHeight)');
   });
   it('the sheet footer styles of every FormSheet/GestureSheet caller are fill-free (re-audit)', () => {
     for (const [f, n] of FOOTERS) expect(styleBlock(read(f), n)).not.toMatch(/backgroundColor:\s*(p\.|palette\.)|borderTop|shadow\./);

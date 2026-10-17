@@ -29,7 +29,7 @@ describe('Vente exposes focusPrice() and the sheet calls it from onShow', () => 
   });
   it('FormSheet accepts onShow and passes it to the Modal', () => {
     expect(form).toMatch(/onShow\?: \(\) => void;/);
-    expect(form).toMatch(/onRequestClose=\{onClose\}\s*onShow=\{onShow\}/);
+    expect(form).toMatch(/onRequestClose=\{handleClose\}\s*onShow=\{onShow\}/);
   });
   it('QuickCaptureSheet focuses the price only after the modal has presented', () => {
     expect(sheet).toMatch(/onShow=\{\(\) => \{ presentedRef\.current = true; if \(mode === 'vente'\) venteRef\.current\?\.focusPrice\(\); \}\}/);

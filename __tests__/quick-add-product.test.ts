@@ -396,7 +396,9 @@ describe('sheet chrome', () => {
     expect((src.match(/<Button label=/g) || []).length).toBe(1);
     expect(src).toContain('<GestureSheet');
     expect(src).not.toContain('<FormSheet');
-    expect(src).toContain('useKeyboardVisible');
+    // keyboard-aware inset: read from the sheet (single source of truth), not a second local listener
+    expect(src).toContain('footer={keyboardUp => (');
+    expect(src).not.toContain('useKeyboardVisible');
   });
   it('opens FRESH (or with the draft/product it is handed) — no auto-restore of a previous draft', () => {
     const src = sheetSrc();

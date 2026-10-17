@@ -1,4 +1,4 @@
-import React, { forwardRef, useEffect, useMemo, useState, type ReactNode } from 'react';
+import React, { forwardRef, useCallback, useEffect, useMemo, type ReactNode } from 'react';
 import { ConfirmSheetHost } from '@/src/components/ui/ConfirmSheet';
 import {
   Keyboard,
@@ -17,7 +17,7 @@ import { Text } from './Text';
 import { CtaFade } from './CtaFade';
 import { useTheme, spacing } from '@/src/theme';
 import type { Palette } from '@/src/theme';
-import { footerPlacement } from '@/src/utils/ctaLayout';
+import { useDockedFooter } from '@/src/hooks/useDockedFooter';
 
 interface FormSheetProps {
   visible: boolean;
@@ -34,8 +34,9 @@ interface FormSheetProps {
   presentationStyle?: 'pageSheet' | 'formSheet' | 'fullScreen';
   /** The primary CTA. By default it ENDS THE FORM: rendered inside the scroll content, one spacing below the last
    * element (no dead gap). While the keyboard is open it docks above the keyboard (thumb is already there).
-   * It never gets a background — the button's own fill is the button. */
-  footer?: ReactNode;
+   * It never gets a background — the button's own fill is the button. A function receives `keyboardOpen`, so a footer
+   * can adapt (e.g. its bottom padding) without tracking the keyboard itself. */
+  footer?: ReactNode | ((keyboardOpen: boolean) => ReactNode);
   /** 'flow' (default) = end-of-flow. 'sticky' = pinned at the bottom with a fade (no slab); requires `stickyReason`. */
   footerMode?: 'flow' | 'sticky';
   /** One-line reason a CTA must stay visible while the user reviews long scrolling content (e.g. cart checkout). */
@@ -118,14 +119,17 @@ export const FormSheet = forwardRef<ScrollView, FormSheetProps>(function FormShe
   const rootInsets = useSafeAreaInsets();
   if (__DEV__ && footerMode === 'sticky' && !stickyReason) console.warn('FormSheet: footerMode="sticky" needs a stickyReason');
 
-  // Keyboard open → the CTA docks right above it; otherwise it ends the form.
-  const [keyboardOpen, setKeyboardOpen] = useState(false);
-  useEffect(() => {
-    const show = Keyboard.addListener(Platform.OS === 'ios' ? 'keyboardWillShow' : 'keyboardDidShow', () => setKeyboardOpen(true));
-    const hide = Keyboard.addListener(Platform.OS === 'ios' ? 'keyboardWillHide' : 'keyboardDidHide', () => setKeyboardOpen(false));
-    return () => { show.remove(); hide.remove(); };
-  }, []);
-  const placement = footerPlacement({ hasFooter: !!footer, mode: footerMode, keyboardOpen, scrollable });
+  // Keyboard open → the CTA docks right above it; otherwise it ends the form. The docked CTA is a layout SIBLING
+  // of the scroll area (below it in the column), never an overlay, so the scroll viewport already ends where the
+  // CTA begins and nothing can sit underneath it — no extra inset is needed here (GestureSheet, whose dock is
+  // absolutely positioned, is the one that reserves padding; same hook, `reservedPadding`).
+  const { keyboardOpen, placement } = useDockedFooter({ hasFooter: !!footer, mode: footerMode, scrollable });
+  const footerNode = typeof footer === 'function' ? footer(keyboardOpen) : footer;
+
+  // The keyboard never outlives its sheet: Annuler, the Android back button and a programmatic close
+  // (visible → false) all drop it.
+  const handleClose = useCallback(() => { Keyboard.dismiss(); onClose(); }, [onClose]);
+  useEffect(() => { if (!visible) Keyboard.dismiss(); }, [visible]);
   const flowFooter = placement === 'flow';
   const dockedFooter = placement === 'docked';
   const explicitTopInset = Platform.OS === 'ios' && presentationStyle === 'fullScreen' ? rootInsets.top : 0;
@@ -138,7 +142,7 @@ export const FormSheet = forwardRef<ScrollView, FormSheetProps>(function FormShe
       visible={visible}
       animationType="slide"
       presentationStyle={presentationStyle}
-      onRequestClose={onClose}
+      onRequestClose={handleClose}
       onShow={onShow}
       statusBarTranslucent
       navigationBarTranslucent
@@ -153,7 +157,7 @@ export const FormSheet = forwardRef<ScrollView, FormSheetProps>(function FormShe
       >
         <SafeAreaView style={[styles.safe, explicitTopInset > 0 && { paddingTop: explicitTopInset }]} edges={edges}>
           <View style={styles.header}>
-            <Pressable onPress={onClose} style={styles.cancel}>
+            <Pressable onPress={handleClose} style={styles.cancel}>
               <Text variant="body" color="secondary">{cancelLabel}</Text>
             </Pressable>
             <Text variant="h4" numberOfLines={1} style={{ flex: 1, textAlign: 'center' }}>{title}</Text>
@@ -169,7 +173,7 @@ export const FormSheet = forwardRef<ScrollView, FormSheetProps>(function FormShe
               keyboardDismissMode={keyboardDismissMode}
             >
               {children}
-              {flowFooter ? footer : null}
+              {flowFooter ? footerNode : null}
             </ScrollView>
           ) : (
             children
@@ -178,9 +182,9 @@ export const FormSheet = forwardRef<ScrollView, FormSheetProps>(function FormShe
 
         {dockedFooter ? (
           footerMode === 'sticky' && !keyboardOpen ? (
-            <CtaFade style={{ paddingBottom: rootInsets.bottom }}>{footer}</CtaFade>
+            <CtaFade style={{ paddingBottom: rootInsets.bottom }}>{footerNode}</CtaFade>
           ) : (
-            <View style={{ paddingBottom: keyboardOpen ? 0 : rootInsets.bottom }}>{footer}</View>
+            <View style={{ paddingBottom: keyboardOpen ? 0 : rootInsets.bottom }}>{footerNode}</View>
           )
         ) : null}
         {accessory}
