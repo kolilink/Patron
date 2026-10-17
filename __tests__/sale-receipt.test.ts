@@ -369,3 +369,47 @@ describe('(h) sharing: no race, offline, one helper', () => {
     expect(read('src/components/ReceiptPanel.tsx')).toMatch(/captureAndShareReceipt/);
   });
 });
+
+describe('prix convenu — the receipt marks the line (v246)', () => {
+  const sale = (lines: SaleReceiptSource['lines']): SaleReceiptSource => ({
+    kind: 'sale', businessName: 'Boutique Test', currency: 'GNF',
+    date: new Date('2026-10-17T10:00:00Z'), key: null, pending: false,
+    lines, discount: 0, paid: 0, method: 'especes', isCredit: false, clientName: null,
+  });
+
+  it('flags a line sold below its catalogue price of the moment', () => {
+    const c = buildReceiptContent(sale([
+      { name: 'Riz 5kg', qty: 1, unitPrice: 400000, catalogUnitPrice: 450000 },
+      { name: 'Huile', qty: 1, unitPrice: 300000 },
+    ]));
+    expect(c.lines?.[0].agreed).toBe(true);
+    expect(c.lines?.[1].agreed).toBe(false);
+  });
+
+  it('does not flag a line whose catalogue price equals the charged price, or is unknown', () => {
+    const c = buildReceiptContent(sale([
+      { name: 'Riz 5kg', qty: 1, unitPrice: 450000, catalogUnitPrice: 450000 },
+      { name: 'Huile', qty: 1, unitPrice: 300000, catalogUnitPrice: null },
+    ]));
+    expect(c.lines?.every(l => !l.agreed)).toBe(true);
+  });
+
+  it('receiptSourceFromVente carries catalog_unit_price from the stored line into the marker', () => {
+    const src = receiptSourceFromVente({
+      id: 'sale-x', total_amount: 700000, discount_amount: 0, amount_paid: 700000,
+      status: 'paye', is_credit: false, customer_name: null,
+      created_at: '2026-10-17T10:00:00.000Z',
+      lines: [
+        { product_id: 'p1', product_name: 'Riz 5kg', qty: 1, unit_price: 400000, catalog_unit_price: 450000 },
+        { product_id: 'p2', product_name: 'Huile', qty: 1, unit_price: 300000, catalog_unit_price: 300000 },
+      ],
+      payments: [{ method: 'especes', amount: 700000 }],
+    }, { businessName: 'Boutique Test', currency: 'GNF' });
+    expect(src.kind).toBe('sale');
+    if (src.kind !== 'sale') throw new Error('expected a lined sale source');
+    expect(src.lines[0].catalogUnitPrice).toBe(450000);
+    const c = buildReceiptContent(src);
+    expect(c.lines?.[0].agreed).toBe(true);
+    expect(c.lines?.[1].agreed).toBe(false);
+  });
+});

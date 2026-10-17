@@ -43,7 +43,8 @@ jest.mock('@/stores/sync', () => ({
 jest.mock('@/lib/analytics', () => ({ trackEvent: jest.fn() }));
 jest.mock('@/lib/posthog', () => ({ posthog: null }));
 
-import { useSalesStore } from '@/stores/sales';
+import { useSalesStore, buildCartJson } from '@/stores/sales';
+import type { CartLine } from '@/stores/sales';
 import { useVentesStore } from '@/stores/ventes';
 import { useAuthStore } from '@/stores/auth';
 import { enqueue, getAllQueueItemsForOverlay } from '@/lib/db';
@@ -168,5 +169,29 @@ describe('Prix convenu — what is sold and written', () => {
     const l = useSalesStore.getState().cart[0];
     expect(l.agreed_unit_price).toBeUndefined();
     expect(l.unit_price).toBe(450);
+  });
+});
+
+describe('buildCartJson — the catalogue price of the moment rides along (v246)', () => {
+  const line = (over: Partial<CartLine> = {}): CartLine => ({
+    product: mockProduct, qty: 2, unit_price: 450, is_bulk: false, ...over,
+  });
+
+  it('an agreed line sends the charged price as unit_price and the catalogue price separately', () => {
+    const [j] = buildCartJson([line({ agreed_unit_price: 400 })], 1);
+    expect(j.unit_price).toBe(40000);
+    expect(j.catalog_unit_price).toBe(45000);
+  });
+
+  it('a plain line sends the same price in both fields', () => {
+    const [j] = buildCartJson([line()], 1);
+    expect(j.unit_price).toBe(45000);
+    expect(j.catalog_unit_price).toBe(45000);
+  });
+
+  it('an override-total ratio scales the charged price but never the catalogue price', () => {
+    const [j] = buildCartJson([line({ agreed_unit_price: 400 })], 1.1);
+    expect(j.unit_price).toBe(44000);
+    expect(j.catalog_unit_price).toBe(45000);
   });
 });
