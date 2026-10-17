@@ -170,8 +170,15 @@ export function BusinessDrawer() {
   const panelDragGesture = makeDragGesture()
     .activeOffsetX([-10, 10])
     .failOffsetY([-15, 15]);
+  // activeOffsetX was [10, 10]: at rest the translation (0) is already
+  // below the start bound, so any touch jitter inside the strip's column
+  // activated the pan and the Pressable underneath never saw the tap
+  // (RNGH's own validation warns the first element should be negative).
+  // [-10, 10] is a real dead zone, same as the panel's; direction is
+  // decided on release by drawerReleaseTarget.
   const edgeOpenGesture = makeDragGesture()
-    .activeOffsetX([10, 10])
+    .enabled(!businessDrawerOpen)
+    .activeOffsetX([-10, 10])
     .failOffsetY([-12, 12]);
 
   // Fully closed = fully invisible. The panel carries a shadow that reaches past its right edge, so
@@ -398,11 +405,22 @@ export function BusinessDrawer() {
         </Animated.View>
       </GestureDetector>
     </View>
-    {!businessDrawerOpen && (
-      <GestureDetector gesture={edgeOpenGesture}>
-        <View style={styles.edgeStrip} collapsable={false} />
-      </GestureDetector>
-    )}
+    {/* The strip is NEVER unmounted: it used to render only while closed,
+        so its own open gesture's completion flipped the state that removed
+        its GestureDetector — tearing the native handler down in the same
+        transaction as the gesture's END, which hard-crashed the app on
+        device (invisible in jest, where gesture-handler is fully mocked).
+        It is gated instead: enabled + pointerEvents follow the store flag.
+        Its top starts below the header row (56 = the Accueil header row
+        height the edgeSwipeCatcher already offsets by) so the strip can
+        never cover the hamburger. */}
+    <GestureDetector gesture={edgeOpenGesture}>
+      <View
+        style={[styles.edgeStrip, { top: insets.top + 56 }]}
+        collapsable={false}
+        pointerEvents={businessDrawerOpen ? 'none' : 'auto'}
+      />
+    </GestureDetector>
     </>
   );
 }

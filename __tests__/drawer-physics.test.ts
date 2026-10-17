@@ -104,8 +104,16 @@ describe('BusinessDrawer — native-feel wiring (source contracts)', () => {
   it('closed state offers a left-edge swipe to open; open state drags the panel', () => {
     expect(src).toContain('edgeOpenGesture');
     expect(src).toContain('panelDragGesture');
-    expect(src).toContain('{!businessDrawerOpen && (');
+    // The strip is never unmounted: unmounting its GestureDetector as a
+    // direct consequence of its own gesture's completion raced the native
+    // handler teardown and hard-crashed the app on device. It is gated by
+    // enabled + pointerEvents instead, with a real [-10, 10] dead zone.
+    expect(src).not.toContain('{!businessDrawerOpen && (');
     expect(src).toContain('styles.edgeStrip');
+    expect(src).toContain("pointerEvents={businessDrawerOpen ? 'none' : 'auto'}");
+    expect(src).toContain(
+      'const edgeOpenGesture = makeDragGesture()\n    .enabled(!businessDrawerOpen)\n    .activeOffsetX([-10, 10])',
+    );
   });
 
   it('Android back closes the drawer (the removed Modal used to own this)', () => {
