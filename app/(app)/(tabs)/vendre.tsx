@@ -1,6 +1,7 @@
 import React, { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { shouldShowSaleSheet, hasSeenCelebration, markCelebrationSeen } from '@/src/utils/saleSheetPolicy';
-import { lineTotal, cartSum, cartHeaderTitle, lastUsedPayMethod } from '@/src/utils/cartMath';
+import { AgreedPriceSheet } from '@/src/components/sales/AgreedPriceSheet';
+import { lineTotal, cartSum, cartHeaderTitle, lastUsedPayMethod, effectiveUnitPrice, hasAgreedPrice, catalogLineTotal } from '@/src/utils/cartMath';
 import { saleToastSpec } from '@/src/utils/saleToast';
 import { onTabReselect, resolveReselect } from '@/src/utils/tabReselect';
 import { ConfirmSheetHost } from '@/src/components/ui/ConfirmSheet';
@@ -161,14 +162,16 @@ interface CartRowProps {
   onRemove: () => void;
   onToggleBulk: () => void;
   onSetQty: (qty: number) => void;
+  onEditPrice: () => void;
   onEditStart?: () => void;
   onLayout?: (e: import('react-native').LayoutChangeEvent) => void;
 }
 
-function CartRow({ line, currency, onInc, onDec, onRemove, onToggleBulk, onSetQty, onEditStart, onLayout }: CartRowProps) {
+function CartRow({ line, currency, onInc, onDec, onRemove, onToggleBulk, onSetQty, onEditPrice, onEditStart, onLayout }: CartRowProps) {
   const { palette } = useTheme();
   const styles = useMemo(() => makeStyles(palette), [palette]);
   const hasBulk = !!(line.product.bulk_price && line.product.bulk_min_qty);
+  const agreed = hasAgreedPrice(line);
   const [editing, setEditing] = useState(false);
   const [inputVal, setInputVal] = useState('');
   const inputRef = useRef<TextInput>(null);
@@ -188,10 +191,15 @@ function CartRow({ line, currency, onInc, onDec, onRemove, onToggleBulk, onSetQt
 
   return (
     <View style={styles.cartRow} onLayout={onLayout}>
-      {/* Line 1: what it is · what it comes to (bold, right) · remove. She verifies the total, she never computes it. */}
+      {/* Line 1: what it is · what it comes to (bold, right) · remove. She verifies the total, she never computes it.
+          Name, struck-through catalogue total and total share ONE baseline. The struck total is always laid out
+          (invisible unless a price is agreed) so agreeing a price repaints, never re-lays-out. */}
       <View style={styles.cartRowTop}>
-        <Text variant="label" numberOfLines={1} style={{ flex: 1 }}>{line.product.name}{line.variant_name ? ` · ${line.variant_name}` : ''}</Text>
-        <Money amount={lineTotal(line)} currency={currency} variant="amount" fit="half" testID="cart-line-total" />
+        <View style={styles.cartRowTitle}>
+          <Text variant="label" numberOfLines={1} style={{ flex: 1 }}>{line.product.name}{line.variant_name ? ` · ${line.variant_name}` : ''}</Text>
+          <Money amount={catalogLineTotal(line)} currency={currency} variant="caption" color="secondary" fit="half" style={[styles.struckTotal, { opacity: agreed ? 1 : 0 }]} testID="cart-line-catalog-total" />
+          <Money amount={lineTotal(line)} currency={currency} variant="amount" fit="half" testID="cart-line-total" />
+        </View>
         <Pressable onPress={onRemove} hitSlop={4} style={styles.removeLineBtn} accessibilityRole="button" accessibilityLabel="Retirer cette ligne">
           <Ionicons name="close" size={20} color={palette.textSecondary} />
         </Pressable>
@@ -199,9 +207,19 @@ function CartRow({ line, currency, onInc, onDec, onRemove, onToggleBulk, onSetQt
       {/* Line 2: unit price (subdued) · quantity stepper */}
       <View style={styles.cartRowBottom}>
         <View style={{ flex: 1, flexDirection: 'row', alignItems: 'center', gap: spacing[2] }}>
-          <MoneyText variant="caption" color="secondary" style={{ flexShrink: 1 }}>
-            {formatAmount(line.unit_price, currency)} / {line.is_bulk ? 'lot' : line.product.unit}
-          </MoneyText>
+          {/* The price itself is the button: tap to agree a price for this line. */}
+          <Pressable
+            onPress={onEditPrice}
+            hitSlop={{ top: 2, bottom: 2 }}
+            style={styles.priceChip}
+            accessibilityRole="button"
+            accessibilityLabel={`Modifier le prix de ${line.product.name}`}
+          >
+            <Ionicons name="create-outline" size={16} color={palette.primary} />
+            <MoneyText variant="caption" style={{ color: palette.primary, flexShrink: 1 }}>
+              {`${formatAmount(effectiveUnitPrice(line), currency)} / ${line.is_bulk ? 'lot' : line.product.unit}${agreed ? ' · convenu' : ''}`}
+            </MoneyText>
+          </Pressable>
           {hasBulk && (
             <Pressable onPress={onToggleBulk} style={[styles.bulkToggle, line.is_bulk && styles.bulkToggleActive]}>
               <Text variant="caption" style={{ color: line.is_bulk ? palette.textInverse : palette.textSecondary, fontFamily: fontFamily.bold }}>
@@ -1493,7 +1511,7 @@ export default function VendreScreen() {
     setPendingEditId(null);
     productSheets.openEdit(p);
   }, [pendingEditId, products, canManage]);
-  const { cart, submitting, error: saleError, addToCart, addToCartVariant, removeFromCart, setQty, toggleBulk, clearCart, submitSale, submitCarnetDebt, clearError } =
+  const { cart, submitting, error: saleError, addToCart, addToCartVariant, removeFromCart, setQty, toggleBulk, setAgreedPrice, clearCart, submitSale, submitCarnetDebt, clearError } =
     useSalesStore();
 
   const scrollY = useSharedValue(0);
@@ -1542,6 +1560,8 @@ export default function VendreScreen() {
   // empties out from under it (last line removed while the sheet is open)
   // rather than being left open showing nothing to act on.
   const [showCartSheet, setShowCartSheet] = useState(false);
+  // Row key of the cart line whose "Prix convenu" sheet is open (null = closed).
+  const [priceLineKey, setPriceLineKey] = useState<string | null>(null);
   useEffect(() => {
     if (cart.length === 0) setShowCartSheet(false);
   }, [cart.length]);
@@ -1745,7 +1765,7 @@ export default function VendreScreen() {
         lines: cart.map(l => ({
           name: l.variant_name ? `${l.product.name} · ${l.variant_name}` : l.product.name,
           qty: l.qty,
-          unitPrice: l.unit_price,
+          unitPrice: effectiveUnitPrice(l),
         })),
         discount: discountAmount && discountAmount > 0 ? discountAmount : 0,
         // Overage is change handed back, not part of the sale.
@@ -2174,6 +2194,7 @@ export default function VendreScreen() {
               onDec={() => { if (line.qty > 1) setQty(line.product.id, stepQuantity(line.qty, -1, { min: 1 }), line.is_bulk, line.variant_id); }}
               onRemove={() => removeFromCart(line.product.id, line.is_bulk, line.variant_id)}
               onToggleBulk={() => toggleBulk(line.product.id, line.is_bulk)}
+              onEditPrice={() => setPriceLineKey(rowKey)}
               onSetQty={(qty) => setQty(line.product.id, qty, line.is_bulk, line.variant_id)}
               onEditStart={() => {
                 const y = cartRowOffsets.current[rowKey];
@@ -2195,6 +2216,25 @@ export default function VendreScreen() {
         >
           <Text variant="caption" color="secondary">Vider le panier</Text>
         </Pressable>
+        {/* Rendered inside the cart sheet's own tree: a Modal presented from a sibling of an open Modal is dropped by iOS. */}
+        {(() => {
+          const pl = cart.find(l => (l.variant_id ?? `${l.product.id}-${l.is_bulk}`) === priceLineKey);
+          return (
+            <AgreedPriceSheet
+              visible={!!pl}
+              productName={pl ? `${pl.product.name}${pl.variant_name ? ` · ${pl.variant_name}` : ''}` : ''}
+              qty={pl?.qty ?? 1}
+              catalogPrice={pl?.unit_price ?? 0}
+              currentPrice={pl ? effectiveUnitPrice(pl) : 0}
+              currency={currency}
+              onClose={() => setPriceLineKey(null)}
+              onValidate={price => {
+                if (pl) setAgreedPrice(pl.product.id, pl.is_bulk, pl.variant_id, price);
+                setPriceLineKey(null);
+              }}
+            />
+          );
+        })()}
       </FormSheet>
 
       {/* Vente rapide — reached from the empty-catalog "Vente rapide"
@@ -2479,7 +2519,13 @@ function makeStyles(p: Palette) {
       borderBottomWidth: 1, borderBottomColor: p.border, gap: spacing[1],
     },
     cartRowTop: { flexDirection: 'row', alignItems: 'center', gap: spacing[2] },
-    cartRowBottom: { flexDirection: 'row', alignItems: 'center', gap: spacing[2] },
+    cartRowTitle: { flex: 1, flexDirection: 'row', alignItems: 'baseline', gap: spacing[2] },
+    struckTotal: { textDecorationLine: 'line-through' },
+    priceChip: {
+      height: 44, flexShrink: 1, flexDirection: 'row', alignItems: 'center', gap: spacing[1],
+      paddingHorizontal: spacing[3], borderRadius: radius.md, backgroundColor: p.primaryLight,
+    },
+    cartRowBottom: { flexDirection: 'row', alignItems: 'center', gap: spacing[2], height: 44 },
     bulkToggle: {
       paddingHorizontal: spacing[2], paddingVertical: 2, borderRadius: radius.sm,
       borderWidth: 1, borderColor: p.border, backgroundColor: p.surface,
@@ -2487,11 +2533,11 @@ function makeStyles(p: Palette) {
     bulkToggleActive: { backgroundColor: p.warning, borderColor: p.warning },
     qtyControl: {
       flexDirection: 'row', alignItems: 'center', borderWidth: 1, borderColor: p.border,
-      borderRadius: radius.md, overflow: 'hidden',
+      borderRadius: radius.md, overflow: 'hidden', height: 44,
     },
     clearCartLink: { alignSelf: 'center', paddingVertical: spacing[4] },
     removeLineBtn: { width: 48, height: 48, alignItems: 'center', justifyContent: 'center', marginRight: -spacing[2] }, // 48dp target, flush right
-    qtyBtn: { width: 32, height: 32, alignItems: 'center', justifyContent: 'center', backgroundColor: p.background },
+    qtyBtn: { width: 36, height: 42, alignItems: 'center', justifyContent: 'center', backgroundColor: p.background },
     qtyNumPress: { minWidth: 36, alignItems: 'center', paddingHorizontal: 4 },
     qtyNum: { minWidth: 36, textAlign: 'center' },
     qtyInput: {
