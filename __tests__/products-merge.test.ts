@@ -130,8 +130,8 @@ describe('entry-point checklist — every one lands in Vendre, none dangle', () 
   it('8/9. archive / restore and the stats sheet are owned by the edit sheet that Gérer rows open', () => {
     const sheet = read('src/components/QuickAddProductSheet.tsx');
     const hook = read('src/components/products/useProductSheets.tsx');
-    expect(sheet).toContain('Archiver ce produit');
-    expect(sheet).toContain('Restaurer ce produit');
+    expect(sheet).toContain('Désactiver ce produit');
+    expect(sheet).toContain('Réactiver ce produit');
     expect(sheet).toContain('Voir la rentabilité');
     expect(hook).toMatch(/<ProductStatsModal/);
     expect(hook).not.toMatch(/StockAdjustModal/);

@@ -505,7 +505,7 @@ export const useProductStore = create<ProductStore>((set, get) => ({
       try {
         await enqueue('update_product', { id, archived: true });
       } catch (err) {
-        set({ error: isOutboxValidationError(err) ? null : translateError(err, "Impossible d'archiver le produit") });
+        set({ error: isOutboxValidationError(err) ? null : translateError(err, "Impossible de désactiver le produit") });
         return false;
       }
       try { await rebuildProducts(businessId); } catch (err) { console.error('[archiveProduct] rebuild failed (write already succeeded)', err); }

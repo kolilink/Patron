@@ -22,8 +22,8 @@ import type { ProductSheetsApi } from '@/src/components/products/useProductSheet
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
 
 // Gérer mode: plain rows. À compléter (pending drafts, only when there are some) · ONE "Produits" list ·
-// a quiet "Archivés (n)" link at the bottom. No cards, no tabs, no switches, no per-row buttons: tapping a row opens the add/edit sheet, which owns edit, "Ajuster",
-// archiver / restaurer. Everything renders from the local product store (cache + queued ops), so it
+// a quiet "Désactivés (n)" link at the bottom. No cards, no tabs, no switches, no per-row buttons: tapping a row opens the add/edit sheet, which owns edit, "Ajuster",
+// désactiver / réactiver. Everything renders from the local product store (cache + queued ops), so it
 // works offline and every change shows at once.
 
 interface ProductManagerProps {
@@ -188,7 +188,7 @@ export function ProductManager({ sheets, onExit }: ProductManagerProps) {
       if (openSection === 'produits') prods.forEach(p => out.push({ kind: 'row', key: `produits-${p.id}`, product: p, archived: false }));
     }
     if (archives.length > 0) {
-      out.push({ kind: 'acc', key: 'acc-archives', id: 'archives', label: 'Archivés', count: archives.length });
+      out.push({ kind: 'acc', key: 'acc-archives', id: 'archives', label: 'Désactivés', count: archives.length });
       if (openSection === 'archives') archives.forEach(p => out.push({ kind: 'row', key: `archives-${p.id}`, product: p, archived: true }));
     }
     return out;

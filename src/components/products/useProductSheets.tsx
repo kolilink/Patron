@@ -164,16 +164,16 @@ export function useProductSheets(): { api: ProductSheetsApi; sheets: React.React
     [editTarget, businessId, userId, updateProduct, upsertVariants, adjustStock],
   );
 
-  // Archive / restore live in the edit sheet (Gérer rows have no buttons). Both go through the outbox, so
+  // Désactiver / réactiver live in the edit sheet (Gérer rows have no buttons). Both go through the outbox, so
   // they work offline and the lists move at once.
   const handleArchive = useCallback((p: Product) => {
     appAlert(
-      'Archiver ce produit ?',
-      `"${p.name}" ne sera plus proposé à la vente. Vous pourrez le restaurer depuis Gérer.`,
+      'Désactiver ce produit ?',
+      `"${p.name}" ne sera plus proposé à la vente. Vous pourrez le réactiver depuis Gérer.`,
       [
         { text: 'Annuler', style: 'cancel' },
         {
-          text: 'Archiver', style: 'destructive',
+          text: 'Désactiver', style: 'destructive',
           onPress: async () => {
             const done = await archiveProduct(p.id, businessId);
             if (!done) {
@@ -186,7 +186,7 @@ export function useProductSheets(): { api: ProductSheetsApi; sheets: React.React
             }
             haptics.destructive();
             setEditOpen(false);
-            // Archiving is a flag flip, so it can be undone: Annuler = restoreProduct.
+            // Deactivating is a flag flip, so it can be undone: Annuler = restoreProduct.
             toast.saved({
               message: archivedConfirmation(p.name),
               undo: async () => { await restoreProduct(p.id, businessId, userId); },
@@ -201,7 +201,7 @@ export function useProductSheets(): { api: ProductSheetsApi; sheets: React.React
     await restoreProduct(p.id, businessId, userId);
     haptics.success();
     setEditOpen(false);
-    toast.success(`${p.name} restauré ✓`);
+    toast.success(`${p.name} réactivé ✓`);
   }, [restoreProduct, businessId, userId]);
 
   const api: ProductSheetsApi = {

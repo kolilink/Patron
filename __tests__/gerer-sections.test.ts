@@ -1,5 +1,5 @@
 import { nextOpenSection } from '@/src/utils/gererSections';
-// Gérer mode is plain rows — À compléter (pending drafts) · ONE "Produits" list · a quiet "Archivés (n)" link — whose rows open
+// Gérer mode is plain rows — À compléter (pending drafts) · ONE "Produits" list · a quiet "Désactivés (n)" link — whose rows open
 // the add/edit sheet. Pure sectioning and the offline store behaviour are tested for real; the screen
 // structure is pinned at source level (this repo has no component-render harness).
 
@@ -70,7 +70,7 @@ describe('one "Produits" list + archived on the side', () => {
     expect(r.sections[0].label).toBe('Produits');
     expect(JSON.stringify(r)).not.toMatch(/EN VENTE|PRODUITS FINIS|ARCHIVÉS/);
   });
-  it('no products ⇒ no Produits section (the screen shows its empty state / the Archivés link)', () => {
+  it('no products ⇒ no Produits section (the screen shows its empty state / the Désactivés link)', () => {
     expect(buildGererSections({ products: [], archived: [prod({ id: 'z', archived: true })] }).sections).toEqual([]);
     expect(buildGererSections({ products: [], archived: [] })).toEqual({ sections: [], archives: [], total: 0 });
   });
@@ -105,12 +105,12 @@ describe('Gérer screen structure', () => {
   it('"Valeur du stock" is gone from the screen', () => {
     expect(pm).not.toMatch(/Valeur du stock|valueLine|stockValue/);
   });
-  it('every section starts collapsed: À compléter / Produits / Archivés are accordion headers (label + count + chevron)', () => {
+  it('every section starts collapsed: À compléter / Produits / Désactivés are accordion headers (label + count + chevron)', () => {
     expect(pm).toContain("useState<GererAccordionId | null>(null)");
     expect(pm).toMatch(/if \(drafts\.length > 0\) \{/);
     expect(pm).toContain("label: 'À compléter'");
     expect(pm).toContain("label: 'Produits'");
-    expect(pm).toContain("label: 'Archivés'");
+    expect(pm).toContain("label: 'Désactivés'");
     expect(pm).toContain('`${item.label} (${item.count})`');
     expect(pm).toMatch(/openSection === item\.id \? 'chevron-up' : 'chevron-down'/);
     // rows only exist in the data when their section is the open one
@@ -134,7 +134,7 @@ describe('Gérer screen structure', () => {
   it('no EN VENTE / PRODUITS FINIS / ARCHIVÉS uppercase sections', () => {
     expect(pm).not.toMatch(/EN VENTE|PRODUITS FINIS|ARCHIVÉS/);
   });
-  it('archived rows open the edit sheet (which has Restaurer)', () => {
+  it('archived rows open the edit sheet (which has Réactiver)', () => {
     expect(pm).toMatch(/item\.archived \? undefined/);
   });
   it('rows show "12 pcs · 1 500 gnf" and a chevron; tapping opens the add/edit sheet (no per-row buttons)', () => {
@@ -144,13 +144,13 @@ describe('Gérer screen structure', () => {
     expect(pm).toMatch(/onPress=\{\(\) => sheets\.openEdit\(item\.product,/);
     const row = pm.slice(pm.indexOf('function ManagerRow'), pm.indexOf('// ─── Gérer ───'));
     expect((row.match(/<Pressable/g) || []).length).toBe(1);               // one tap target: the row
-    expect(row).not.toMatch(/Archiver|Restaurer|Supprimer|Modifier ·/);
+    expect(row).not.toMatch(/Désactiver|Réactiver|Supprimer|Modifier ·/);
   });
   it('the screen never archives/restores itself — the sheet does', () => {
     expect(pm).not.toMatch(/archiveProduct|restoreProduct|failAlert|appAlert/);
     const sheet = read('src/components/QuickAddProductSheet.tsx');
-    expect(sheet).toContain('Archiver ce produit');
-    expect(sheet).toContain('Restaurer ce produit');
+    expect(sheet).toContain('Désactiver ce produit');
+    expect(sheet).toContain('Réactiver ce produit');
   });
   it('no catalogue-era UI remains: no tabs, no switch, no action sheets, no stats card', () => {
     for (const gone of ['ArchiveSwitch', 'Non actifs', 'ProductActionSheet', 'RestoreActionSheet', 'ProductFormModal', 'StockAdjustModal', 'tabRow', 'switchTrack', 'statsCard', 'Voir</Text>', "tab === 'archives'", "'actifs'"]) {
@@ -173,7 +173,7 @@ describe('airplane mode: the list and the archived link render from the local st
     useProductStore.getState().reset();
   });
 
-  it('Archivés comes from the cache when the network is down, and a failed refresh is not an error', async () => {
+  it('Désactivés comes from the cache when the network is down, and a failed refresh is not an error', async () => {
     await useProductStore.getState().fetchArchivedProducts('b');
     expect(useProductStore.getState().archivedProducts.map(p => p.id)).toEqual(['z']);
     expect(useProductStore.getState().error).toBeNull();
