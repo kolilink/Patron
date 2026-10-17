@@ -114,3 +114,38 @@ describe('BusinessDrawer — native-feel wiring (source contracts)', () => {
     expect(src).toMatch(/if \(reduceMotion\) \{\s+translateX\.value = target;/);
   });
 });
+
+describe('Accueil edge-swipe removed — the drawer is commands-only (after the #160 incident fix)', () => {
+  const accueil = read('app/(app)/(tabs)/index.tsx');
+  const drawer = read('src/components/BusinessDrawer.tsx');
+
+  it('the old canned trigger is gone: no edgeSwipeOpenDrawer anywhere on Accueil', () => {
+    expect(accueil).not.toContain('edgeSwipeOpenDrawer');
+    expect(accueil).not.toContain('EDGE_SWIPE_OPEN_DISTANCE');
+    expect(accueil).not.toContain('EDGE_SWIPE_OPEN_VELOCITY');
+    expect(accueil).not.toContain('edgeSwipeCatcher');
+  });
+
+  it('Accueil has no gesture of any kind that opens the drawer', () => {
+    expect(accueil).not.toContain('Gesture.Pan');
+    expect(accueil).not.toContain('GestureDetector');
+    expect(accueil).not.toContain('edgeOpenGesture');
+  });
+
+  it('the dead trigger left no unused imports behind', () => {
+    expect(accueil).not.toContain("from 'react-native-gesture-handler'");
+    expect(accueil).not.toContain("from 'react-native-reanimated'");
+  });
+
+  it('Accueil still opens the drawer from the header icon (tap path kept)', () => {
+    expect(accueil).toContain('onPress={openBusinessPicker}');
+  });
+
+  it('BusinessDrawer stays gesture-free (post-#160 state preserved, not reintroduced)', () => {
+    expect(drawer).not.toContain('GestureDetector');
+    expect(drawer).not.toContain('Gesture.Pan');
+    expect(drawer).not.toContain('edgeOpenGesture');
+    expect(drawer).not.toContain('EDGE_STRIP_WIDTH');
+    expect(drawer).not.toContain('styles.edgeStrip');
+  });
+});
