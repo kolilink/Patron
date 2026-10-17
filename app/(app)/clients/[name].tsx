@@ -1,7 +1,7 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { appAlert } from '@/src/utils/appAlert';
 import { TRUST_LINE } from '@/src/utils/trustLine';
-import { Animated, InputAccessoryView, Linking, Platform, Pressable, ScrollView, StyleSheet, Text as RNText, TextInput, View } from 'react-native';
+import { Animated, FlatList, InputAccessoryView, Linking, Platform, Pressable, StyleSheet, Text as RNText, TextInput, View } from 'react-native';
 import { Ionicons } from '@expo/vector-icons';
 import { haptics } from '@/lib/haptics';
 import { Screen } from '@/src/components/ui/Screen';
@@ -780,29 +780,13 @@ export default function ClientLedgerScreen() {
     );
   }
 
-  return (
-    <Screen>
-      {/* Header */}
-      <View style={styles.hdr}>
-        <Pressable onPress={() => router.back()}><Text variant="body" color="secondary">‹ Retour</Text></Pressable>
-        <Text variant="h4" style={{ flex: 1, textAlign: 'center' }} numberOfLines={1}>{displayName}</Text>
-        {canEdit ? (
-          <Pressable onPress={openMenu} style={{ width: 60, alignItems: 'flex-end' }} accessibilityLabel="Plus d'options" accessibilityRole="button">
-            <Text variant="body" color="secondary">⋯</Text>
-          </Pressable>
-        ) : (
-          <View style={{ width: 60 }} />
-        )}
-      </View>
-
-      {offline && (
-        <OfflineNotice
-          offlineSince={offlineSince}
-          onRetry={() => { fetchSales(businessId); void loadClientRecord(); }}
-        />
-      )}
-
-      <ScrollView contentContainerStyle={styles.content} showsVerticalScrollIndicator={false}>
+  // The carnet header — everything that sat above the ledger inside
+  // the old ScrollView (status banner, "+ Crédit", contact row). A plain
+  // JSX block closed over the screen's state (the ProductManager
+  // ListHeaderComponent convention), not a component: the rendered tree
+  // is identical to the ScrollView version.
+  const ledgerHeader = (
+    <View style={styles.ledgerHeader}>
 
         {/* Status banner */}
         {totalOwed > 0 ? (
@@ -882,17 +866,15 @@ export default function ClientLedgerScreen() {
           )}
         </View>}
 
-        {/* The carnet page — one continuous list of lines, newest first.
-            No day-grouping, no collapsible sections, no summary rows: a
-            paper page never folds. Each line answers "where did we stand
-            here?" on its own — the whole point of a carnet. */}
-        {ledgerEntries.length > 0 && (
-          <View>
-            {ledgerEntries.map(entry => {
-              const isSettled = entry.reste === 0;
-              return (
+    </View>
+  );
+
+  // One carnet line — the row JSX is identical to the ScrollView version;
+  // virtualization changes how rows mount, never what the page looks like.
+  const renderLedgerRow = ({ item: entry }: { item: LedgerEntry }) => {
+    const isSettled = entry.reste === 0;
+    return (
                 <Pressable
-                  key={entry.key}
                   style={[styles.carnetRow, { borderBottomColor: palette.border }]}
                   onPress={() => setDetailEntry(entry)}
                 >
@@ -917,17 +899,47 @@ export default function ClientLedgerScreen() {
                     )}
                   </View>
                 </Pressable>
-              );
-            })}
-          </View>
-        )}
+    );
+  };
 
-        {ledgerEntries.length === 0 && (
+  return (
+    <Screen>
+      {/* Header */}
+      <View style={styles.hdr}>
+        <Pressable onPress={() => router.back()}><Text variant="body" color="secondary">‹ Retour</Text></Pressable>
+        <Text variant="h4" style={{ flex: 1, textAlign: 'center' }} numberOfLines={1}>{displayName}</Text>
+        {canEdit ? (
+          <Pressable onPress={openMenu} style={{ width: 60, alignItems: 'flex-end' }} accessibilityLabel="Plus d'options" accessibilityRole="button">
+            <Text variant="body" color="secondary">⋯</Text>
+          </Pressable>
+        ) : (
+          <View style={{ width: 60 }} />
+        )}
+      </View>
+
+      {offline && (
+        <OfflineNotice
+          offlineSince={offlineSince}
+          onRetry={() => { fetchSales(businessId); void loadClientRecord(); }}
+        />
+      )}
+
+      <FlatList
+        data={ledgerEntries}
+        keyExtractor={entry => entry.key}
+        renderItem={renderLedgerRow}
+        ListHeaderComponent={ledgerHeader}
+        ListEmptyComponent={
           <Text variant="body" color="secondary" style={{ textAlign: 'center', marginTop: spacing[6] }}>
             Aucun crédit pour le moment.
           </Text>
-        )}
-      </ScrollView>
+        }
+        // styles.content's gap only ever separated the ScrollView's top-level
+        // blocks; rows must stay hairline-adjacent (see carnetRow), so the
+        // gap is zeroed here and the header re-applies its own spacing.
+        contentContainerStyle={[styles.content, { gap: 0 }]}
+        showsVerticalScrollIndicator={false}
+      />
 
       <PayModal
         visible={showPayModal}
@@ -1048,6 +1060,10 @@ function makeStyles(p: Palette) {
       padding: spacing[5], borderBottomWidth: 1, borderBottomColor: p.border,
     },
     content: { paddingHorizontal: spacing[5], paddingTop: 12, paddingBottom: spacing[10], gap: spacing[4] },
+    // Re-applies the spacing the old ScrollView's content gap gave the
+    // header's blocks, since the FlatList zeroes that gap to keep the
+    // ledger rows hairline-adjacent.
+    ledgerHeader: { gap: spacing[4], marginBottom: spacing[4] },
 
     debtCard: {
       backgroundColor: p.surface, borderRadius: radius.lg,
