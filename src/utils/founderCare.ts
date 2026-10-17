@@ -1,6 +1,6 @@
 // Founder care plan J0 → J30 for the Vendeurs screen. Pure: the data comes
 // from get_founder_vendor_directory() + get_founder_care_state()
-// (db/migration_v246.sql). Nothing here sends anything — the founder taps a
+// (db/migration_v247.sql). Nothing here sends anything — the founder taps a
 // row, reads the prepared WhatsApp message, and sends it himself.
 
 import type { DirectoryRow } from './founderDirectory';

@@ -1,4 +1,4 @@
-// migration_v246 — founder care plan RPCs. LOCAL TEST DB ONLY. Run alone:
+// migration_v247 — founder care plan RPCs. LOCAL TEST DB ONLY. Run alone:
 //   npx jest --config jest.integration.config.js founder-care --runInBand
 import { as, tryAs, seedUser, seedBusiness, user, ANON } from './pgrole';
 import { assertLocalDb, becomeFounder, resignFounder, lockFounder, unlockFounder, q } from './pg';
